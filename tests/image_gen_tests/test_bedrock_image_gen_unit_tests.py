@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
 )
 
@@ -22,15 +22,15 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm.llms.bedrock.image.cost_calculator import cost_calculator
+from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
 import os
 
 import litellm
-from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
     AmazonStability3Config,
 )
-from litellm.llms.bedrock.image.amazon_stability1_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability1_transformation import (
     AmazonStabilityConfig,
 )
 from litellm.types.llms.bedrock import (
@@ -38,7 +38,7 @@ from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageResponse,
 )
 from unittest.mock import MagicMock, patch
-from litellm.llms.bedrock.image.image_handler import (
+from litellm.llms.bedrock.image_generation.image_handler import (
     BedrockImageGeneration,
     BedrockImagePreparedRequest,
 )
@@ -119,6 +119,20 @@ def test_transform_response_dict_to_openai_response():
     assert [img.b64_json for img in result.data] == response_dict["images"]
 
 
+def test_transform_response_dict_to_openai_response_from_stability_3_models_with_no_null_finish_reason():
+    # Create a mock response
+    response_dict = {"finish_reasons": ["Filter reason: prompt"]}
+    model_response = ImageResponse()
+
+    with pytest.raises(BedrockError) as exc_info:
+        AmazonStability3Config.transform_response_dict_to_openai_response(
+            model_response, response_dict
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == "Filter reason: prompt"
+
+
 def test_amazon_stability_get_supported_openai_params():
     result = AmazonStabilityConfig.get_supported_openai_params()
     assert result == ["size"]
@@ -168,7 +182,7 @@ def test_get_request_body_stability3():
     model = "stability.sd3-large"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["prompt"] == prompt
@@ -181,7 +195,7 @@ def test_get_request_body_stability():
     model = "stability.stable-diffusion-xl-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["text_prompts"][0]["text"] == prompt
@@ -239,7 +253,7 @@ def test_get_request_body_nova_canvas_default():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -254,7 +268,7 @@ def test_get_request_body_nova_canvas_text_image():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -273,7 +287,7 @@ def test_get_request_body_nova_canvas_color_guided_generation():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "COLOR_GUIDED_GENERATION"
@@ -437,7 +451,7 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
     result = handler._get_request_body(
-        model=nova_model, bedrock_provider=bedrock_provider, prompt=prompt, optional_params=optional_params
+        model=nova_model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -453,7 +467,7 @@ def test_get_request_body_nova_canvas_with_model_id_param():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     # After fix, model_id should not appear in the result
@@ -488,12 +502,9 @@ def test_get_request_body_cross_region_inference_profile():
     # Cross-region inference profile format
     model = "us.amazon.nova-canvas-v1:0"
     
-    # Get the provider using the method from the handler
-    bedrock_provider = handler.get_bedrock_invoke_provider(model=model)
-
     # This should work after the fix - cross-region format should be detected as 'nova'
     result = handler._get_request_body(
-        model=model, bedrock_provider=bedrock_provider, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -508,7 +519,7 @@ def test_backward_compatibility_regular_nova_model():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
+        model=model, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -517,9 +528,11 @@ def test_backward_compatibility_regular_nova_model():
 
 
 def test_amazon_titan_image_gen():
+    """Test Amazon Titan image generation with cost tracking."""
     from litellm import image_generation
 
-    model_id = "bedrock/amazon.titan-image-generator-v1"
+    # Use v2 as v1 has reached end of life
+    model_id = "bedrock/amazon.titan-image-generator-v2:0"
 
     response = litellm.image_generation(
         model=model_id,
@@ -530,3 +543,28 @@ def test_amazon_titan_image_gen():
     print(f"response cost: {response._hidden_params['response_cost']}")
 
     assert response._hidden_params["response_cost"] > 0
+
+
+def test_extract_headers_from_optional_params_with_guardrails():
+    """Test that guardrail parameters are correctly extracted from optional_params and converted to headers"""
+    handler = BedrockImageGeneration()
+    
+    # Test with both guardrail parameters
+    optional_params = {
+        "guardrailIdentifier": "4cf5knqaeq15",
+        "guardrailVersion": "1",
+        "someOtherParam": "value",
+    }
+    
+    headers = handler._extract_headers_from_optional_params(optional_params)
+    
+    # Verify headers are correctly set
+    assert headers["x-amz-bedrock-guardrail-identifier"] == "4cf5knqaeq15"
+    assert headers["x-amz-bedrock-guardrail-version"] == "1"
+    
+    # Verify guardrail params are removed from optional_params
+    assert "guardrailIdentifier" not in optional_params
+    assert "guardrailVersion" not in optional_params
+    
+    # Verify other params remain in optional_params
+    assert optional_params["someOtherParam"] == "value"

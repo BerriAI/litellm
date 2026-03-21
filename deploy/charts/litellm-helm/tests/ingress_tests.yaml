@@ -1,0 +1,45 @@
+suite: Ingress Configuration Tests
+templates:
+  - ingress.yaml
+tests:
+  - it: should not create Ingress by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create Ingress when enabled
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Ingress
+
+  - it: should add custom labels
+    set:
+      ingress.enabled: true
+      ingress.labels:
+        custom-label: "true"
+        another-label: "value"
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: metadata.labels.custom-label
+          value: "true"
+      - equal:
+          path: metadata.labels.another-label
+          value: "value"
+
+  - it: should add annotations
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        kubernetes.io/ingress.class: "nginx"
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+          value: "nginx"

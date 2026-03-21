@@ -39,7 +39,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
   }
 
   return (
-    <Modal visible={visible} onCancel={handleCancel} footer={null} title={"Edit User " + user.user_id} width={1000}>
+    <Modal open={visible} onCancel={handleCancel} footer={null} title={"Edit User " + user.user_id} width={1000}>
       <Form
         form={form}
         onFinish={handleEditSubmit}

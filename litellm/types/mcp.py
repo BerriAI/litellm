@@ -35,6 +35,8 @@ class MCPAuth(str, enum.Enum):
     basic = "basic"
     authorization = "authorization"
     oauth2 = "oauth2"
+    aws_sigv4 = "aws_sigv4"
+    token = "token"
 
 
 # MCP Literals
@@ -50,8 +52,26 @@ MCPAuthType = Optional[
         MCPAuth.basic,
         MCPAuth.authorization,
         MCPAuth.oauth2,
+        MCPAuth.aws_sigv4,
+        MCPAuth.token,
     ]
 ]
+
+
+class MCPPublicServer(BaseModel):
+    """
+    Safe params for public MCP servers
+    """
+
+    server_id: str
+    name: str
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
+    url: Optional[str] = None
+    transport: MCPTransportType
+    spec_path: Optional[str] = None
+    auth_type: Optional[MCPAuthType] = None
+    mcp_info: Optional[Dict[str, Any]] = None
 
 
 class MCPCredentials(TypedDict, total=False):
@@ -74,6 +94,22 @@ class MCPCredentials(TypedDict, total=False):
     """
     OAuth 2.0 scopes to request when exchanging the client credentials
     """
+
+    # AWS SigV4 fields
+    aws_access_key_id: Optional[str]
+    """AWS access key ID for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_secret_access_key: Optional[str]
+    """AWS secret access key for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_session_token: Optional[str]
+    """AWS session token for temporary STS credentials. Optional."""
+
+    aws_region_name: Optional[str]
+    """AWS region for SigV4 signing (e.g., 'us-east-1'). Not a secret — stored unencrypted."""
+
+    aws_service_name: Optional[str]
+    """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
 
 
 class MCPServerCostInfo(TypedDict, total=False):

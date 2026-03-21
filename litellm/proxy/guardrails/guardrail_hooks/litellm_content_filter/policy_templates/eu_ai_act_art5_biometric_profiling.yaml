@@ -1,0 +1,148 @@
+# EU AI Act Article 5.1(d)(g)(h) — Biometric Categorization & Predictive Profiling
+# Prohibits:
+# - Real-time remote biometric identification in public spaces (5.1.d)
+# - Untargeted scraping of facial images for facial recognition databases (5.1.g)
+# - Biometric categorization to infer race, political opinions, religion,
+#   sexual orientation (5.1.h)
+# - Predictive policing based solely on profiling (5.1.d related)
+# Reference: https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_biometric_profiling"
+description: "Art. 5.1(d)(g)(h) — Blocks biometric categorization, facial recognition databases, and predictive profiling"
+default_action: "BLOCK"
+
+identifier_words:
+  # System development actions
+  - "build"
+  - "create"
+  - "develop"
+  - "design"
+  - "implement"
+
+  # Analysis/scoring actions
+  - "score"
+  - "rank"
+  - "rate"
+  - "assess"
+  - "evaluate"
+  - "classify"
+  - "profile"
+  - "grade"
+  - "categorize"
+
+  # Detection/recognition actions
+  - "recognize"
+  - "detect"
+  - "identify"
+  - "infer"
+  - "deduce"
+  - "predict"
+  - "determine"
+  - "analyze"
+  - "scrape"
+  - "collect"
+  - "harvest"
+
+additional_block_words:
+  # Biometric categorization by race/ethnicity
+  - "race from face"
+  - "race from facial"
+  - "race from biometric"
+  - "race from image"
+  - "race from photo"
+  - "ethnicity from face"
+  - "ethnicity from facial"
+  - "ethnicity from biometric"
+  - "ethnicity from image"
+  - "ethnicity from photo"
+  - "racial classification"
+  - "ethnic classification"
+
+  # Biometric categorization by political opinion
+  - "political views from"
+  - "political opinions from"
+  - "political affiliation from"
+  - "political belief from"
+  - "political orientation from"
+
+  # Biometric categorization by sexual orientation
+  - "sexual orientation from"
+  - "sexual preference from"
+
+  # Biometric categorization by religion
+  - "religion from biometric"
+  - "religion from face"
+  - "religious beliefs from"
+  - "religious affiliation from"
+  - "faith from biometric"
+
+  # Facial recognition databases
+  - "facial recognition database"
+  - "facial image database"
+  - "face scraping"
+  - "facial image scraping"
+  - "facial recognition training data"
+  - "biometric database from internet"
+  - "biometric database from cctv"
+
+  # Predictive policing/profiling
+  - "crime prediction"
+  - "criminal behavior"
+  - "criminal prediction"
+  - "recidivism"
+  - "recidivism prediction"
+  - "crime risk score"
+  - "criminal risk assessment"
+  - "crime probability"
+  - "criminal profiling"
+
+  # Employment predictive profiling
+  - "employee performance prediction"
+  - "worker performance prediction"
+  - "termination prediction"
+  - "attrition prediction from behavior"
+
+always_block_keywords:
+  - keyword: "infer race from face"
+    severity: "high"
+  - keyword: "predict race from facial"
+    severity: "high"
+  - keyword: "infer ethnicity from biometric"
+    severity: "high"
+  - keyword: "predict political opinions from"
+    severity: "high"
+  - keyword: "biometric categorization system"
+    severity: "high"
+  - keyword: "predictive policing"
+    severity: "high"
+  - keyword: "predictive policing algorithm"
+    severity: "high"
+  - keyword: "crime prediction algorithm"
+    severity: "high"
+  - keyword: "recidivism prediction"
+    severity: "high"
+  - keyword: "facial recognition database scraping"
+    severity: "high"
+  - keyword: "untargeted facial image scraping"
+    severity: "high"
+  - keyword: "mass biometric surveillance"
+    severity: "high"
+
+exceptions:
+  - "research on"
+  - "study on"
+  - "academic"
+  - "thesis on"
+  - "explain"
+  - "what is"
+  - "article 5"
+  - "prohibited by"
+  - "audit for bias"
+  - "detect discrimination"
+  - "compliance monitoring"
+  - "ethical review"
+  - "fairness testing"
+  - "movie"
+  - "game"
+  - "forensic"
+  - "missing person"
+  - "targeted search"

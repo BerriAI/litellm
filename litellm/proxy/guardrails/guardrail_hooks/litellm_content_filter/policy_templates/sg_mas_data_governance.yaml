@@ -1,0 +1,96 @@
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Data Governance (Financial Data)
+# Blocks requests to mishandle, share, or expose financial customer data
+# without proper governance, lineage, or authorization.
+# Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
+category_name: "sg_mas_data_governance"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance"
+default_action: "BLOCK"
+
+identifier_words:
+  # Financial data types
+  - "customer account"
+  - "account balance"
+  - "transaction history"
+  - "financial record"
+  - "bank statement"
+  - "credit report"
+  - "loan record"
+  - "portfolio data"
+  - "trading record"
+  - "payment history"
+
+  # Singapore financial identifiers
+  - "CPF statement"
+  - "CPF balance"
+  - "MediSave record"
+  - "CDP account"
+  - "SRS account"
+  - "GIRO record"
+
+  # Customer PII in financial context
+  - "customer KYC data"
+  - "customer identity"
+  - "beneficial owner"
+
+additional_block_words:
+  # Unauthorized sharing
+  - "share without consent"
+  - "share externally"
+  - "share with third party"
+  - "expose"
+  - "leak"
+  - "dump"
+  - "exfiltrate"
+
+  # Poor data practices
+  - "without lineage"
+  - "without provenance"
+  - "no audit trail"
+  - "untracked"
+  - "unlogged"
+
+  # Training misuse
+  - "train model on"
+  - "use for training"
+  - "fine-tune on"
+  - "without consent"
+  - "without authorization"
+
+  # Unauthorized aggregation
+  - "scrape"
+  - "harvest"
+  - "bulk extract"
+  - "mass download"
+
+always_block_keywords:
+  - keyword: "exfiltrate customer financial data"
+    severity: "high"
+  - keyword: "dump account balances"
+    severity: "high"
+  - keyword: "leak transaction history"
+    severity: "high"
+  - keyword: "train model on customer data without consent"
+    severity: "high"
+  - keyword: "share KYC data with third party without authorization"
+    severity: "high"
+  - keyword: "scrape CPF statement data"
+    severity: "high"
+  - keyword: "bulk extract bank statement"
+    severity: "high"
+
+exceptions:
+  - "data governance"
+  - "data lineage"
+  - "data provenance"
+  - "audit trail"
+  - "with consent"
+  - "authorized"
+  - "compliance"
+  - "regulatory reporting"
+  - "explain"
+  - "what is"
+  - "research"
+  - "anonymised"
+  - "anonymized"
+  - "aggregated"
+  - "encrypted"

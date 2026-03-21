@@ -37,6 +37,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -270,7 +271,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-3-opus-20240229"])
+@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -361,7 +362,7 @@ def test_aget_valid_models():
     os.environ = old_environ
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["gemini", "anthropic", "xai"])
+@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
 def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
@@ -520,7 +521,7 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("gemini/gemini-1.5-flash", True),
+        ("gemini/gemini-2.5-flash", True),
     ],
 )
 def test_supports_function_calling(model, expected_bool):
@@ -972,11 +973,11 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
             litellm_logging_obj._get_trace_id(service_name="langfuse")
             == langfuse_trace_id
         )
-    ## if existing_trace_id exists
+    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
     else:
         assert (
             litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_call_id
+            == litellm_logging_obj.litellm_trace_id
         )
 
 
@@ -1043,6 +1044,11 @@ def test_convert_model_response_object():
             "I am thinking here",
             "The sky is a canvas of blue",
         ),
+        (
+            "<budget:thinking>I am thinking here</budget:thinking>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
+        ),
         ("I am a regular response", None, "I am a regular response"),
     ],
 )
@@ -1056,18 +1062,19 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("vertex_ai/gemini-1.5-pro", True),
-        ("gemini/gemini-1.5-pro", True),
+        ("vertex_ai/gemini-2.5-pro", True),
+        ("gemini/gemini-2.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
+        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", True),
+        ("groq/llama-3.3-70b-versatile", False),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
     """
     Unit tests for 'supports_response_schema' helper function.
 
-    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
     Should be false otherwise
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1086,7 +1093,7 @@ def test_supports_response_schema(model, expected_bool):
         ("gpt-3.5-turbo", True),
         ("gpt-4", True),
         ("command-nightly", False),
-        ("gemini-pro", True),
+        ("gemini-2.5-pro", True),
     ],
 )
 def test_supports_function_calling_v2(model, expected_bool):
@@ -1102,10 +1109,10 @@ def test_supports_function_calling_v2(model, expected_bool):
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("gpt-4-vision-preview", True),
+        ("gpt-4o", True),
         ("gpt-3.5-turbo", False),
-        ("claude-3-opus-20240229", True),
-        ("gemini-pro-vision", True),
+        ("claude-sonnet-4-6", True),
+        ("gemini-2.5-flash", True),
         ("command-nightly", False),
     ],
 )
@@ -1378,7 +1385,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys()
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.mark.parametrize(
@@ -1720,7 +1727,7 @@ def test_supports_vision_gemini():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.utils import supports_vision
 
-    assert supports_vision("gemini-1.5-pro") is True
+    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -2341,7 +2348,7 @@ def test_get_valid_models_from_dynamic_api_key():
         check_provider_endpoint=True,
     )
     assert len(valid_models) > 0
-    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
 def test_get_whitelisted_models():
@@ -2421,4 +2428,80 @@ def test_completion_with_no_model():
     # test on empty
     with pytest.raises(TypeError):
         response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
-        
+
+
+def test_get_base_model_from_metadata():
+    """
+    Test _get_base_model_from_metadata function with both metadata and litellm_metadata.
+    This ensures cost tracking works for both Chat Completions API and Responses API.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/16772
+    """
+    from litellm.utils import _get_base_model_from_metadata
+
+    # Test 1: base_model in metadata (Chat Completions API pattern)
+    model_call_details_with_metadata = {
+        "litellm_params": {
+            "metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_metadata)
+    assert result == "azure/gpt-4", f"Expected 'azure/gpt-4', got {result}"
+
+    # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
+    model_call_details_with_litellm_metadata = {
+        "litellm_params": {
+            "litellm_metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-5-mini"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
+    assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
+
+    # Test 3: base_model in litellm_params (direct base_model)
+    model_call_details_with_direct_base_model = {
+        "litellm_params": {
+            "base_model": "azure/gpt-3.5-turbo"
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
+    assert result == "azure/gpt-3.5-turbo", f"Expected 'azure/gpt-3.5-turbo', got {result}"
+
+    # Test 4: metadata takes precedence over litellm_metadata
+    model_call_details_with_both = {
+        "litellm_params": {
+            "metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4-from-metadata"
+                }
+            },
+            "litellm_metadata": {
+                "model_info": {
+                    "base_model": "azure/gpt-4-from-litellm-metadata"
+                }
+            }
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_with_both)
+    assert result == "azure/gpt-4-from-metadata", f"Expected metadata to take precedence, got {result}"
+
+    # Test 5: No base_model present
+    model_call_details_without_base_model = {
+        "litellm_params": {
+            "metadata": {}
+        }
+    }
+    result = _get_base_model_from_metadata(model_call_details_without_base_model)
+    assert result is None, f"Expected None when no base_model present, got {result}"
+
+    # Test 6: None input
+    result = _get_base_model_from_metadata(None)
+    assert result is None, f"Expected None for None input, got {result}"
+

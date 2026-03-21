@@ -1,8 +1,21 @@
-# Syncing Models to GitHub model_context_window
+# Auto Sync New Models (Day-0 Launches)
 
-Sync model pricing data from GitHub's `model_prices_and_context_window.json` file outside of the LiteLLM UI.
+Automatically keep your model pricing and context window data up to date without restarting your service. **This allows you to add day-0 support for new models without restarting your service.**
 
-> **📹 Video Tutorial**: [Watch how to sync models via the Admin UI](https://www.loom.com/share/ba41acc1882d41b284bbddbb0e9c27ce?sid=bdae351e-2026-4e39-932b-fcb185ff612c)
+## Overview
+
+When providers like OpenAI or Anthropic release new models (e.g., GPT-5, Claude 4), you typically need to restart your LiteLLM service to get the latest pricing and context window data. 
+
+With auto-sync, LiteLLM automatically pulls the latest model data from GitHub's [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) without requiring a restart. This means:
+
+- **Zero downtime** when new models are released
+- **Always accurate pricing** for cost tracking and budgets
+- **Automatic updates** - set it once and forget it
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/ba41acc1882d41b284bbddbb0e9c27ce?sid=bdae351e-2026-4e39-932b-fcb185ff612c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
 
 ## Quick Start
 

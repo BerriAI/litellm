@@ -13,12 +13,16 @@ import {
   TabPanels,
   TextInput,
 } from "@tremor/react";
-import { Button, Form, Input, Switch, InputNumber } from "antd";
+import { Button, Form, Input, Switch, InputNumber, Select } from "antd";
 import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
+import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
+
+const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+const { Option } = Select;
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
@@ -37,6 +41,8 @@ interface PassThroughEndpoint {
   include_subpath?: boolean;
   cost_per_request?: number;
   auth?: boolean;
+  methods?: string[];
+  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
 }
 
 // Password field component for headers
@@ -68,6 +74,10 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>(initialEndpointData?.methods || []);
+  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>(
+    initialEndpointData?.guardrails || {}
+  );
   const [form] = Form.useForm();
 
   const handleEndpointUpdate = async (values: any) => {
@@ -92,6 +102,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
         auth: premiumUser ? values.auth : undefined,
+        methods: selectedMethods && selectedMethods.length > 0 ? selectedMethods : undefined,
+        guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
       };
 
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
@@ -185,6 +197,23 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       {endpointData.auth ? "Auth Required" : "No Auth"}
                     </Badge>
                   </div>
+                  {endpointData.methods && endpointData.methods.length > 0 && (
+                    <div>
+                      <Text className="text-xs text-gray-500">HTTP Methods:</Text>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {endpointData.methods.map((method) => (
+                          <Badge key={method} color="indigo" size="sm">
+                            {method}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(!endpointData.methods || endpointData.methods.length === 0) && (
+                    <div>
+                      <Text className="text-xs text-gray-500">All HTTP methods supported</Text>
+                    </div>
+                  )}
                   {endpointData.cost_per_request !== undefined && (
                     <div>
                       <Text>Cost per request: ${endpointData.cost_per_request}</Text>
@@ -211,6 +240,33 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
                 <div className="mt-4">
                   <PasswordField value={endpointData.headers} />
+                </div>
+              </Card>
+            )}
+
+            {endpointData.guardrails && Object.keys(endpointData.guardrails).length > 0 && (
+              <Card className="mt-6">
+                <div className="flex justify-between items-center">
+                  <Text className="font-medium">Guardrails</Text>
+                  <Badge color="purple">{Object.keys(endpointData.guardrails).length} guardrails configured</Badge>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {Object.entries(endpointData.guardrails).map(([name, settings]) => (
+                    <div key={name} className="p-3 bg-gray-50 rounded">
+                      <div className="font-medium text-sm">{name}</div>
+                      {settings && (settings.request_fields || settings.response_fields) && (
+                        <div className="mt-2 text-xs text-gray-600 space-y-1">
+                          {settings.request_fields && (
+                            <div>Request fields: {settings.request_fields.join(", ")}</div>
+                          )}
+                          {settings.response_fields && (
+                            <div>Response fields: {settings.response_fields.join(", ")}</div>
+                          )}
+                        </div>
+                      )}
+                      {!settings && <div className="text-xs text-gray-600 mt-1">Uses entire payload</div>}
+                    </div>
+                  ))}
                 </div>
               </Card>
             )}
@@ -244,6 +300,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       include_subpath: endpointData.include_subpath || false,
                       cost_per_request: endpointData.cost_per_request,
                       auth: endpointData.auth || false,
+                      methods: endpointData.methods || [],
                     }}
                     layout="vertical"
                   >
@@ -262,6 +319,31 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       />
                     </Form.Item>
 
+                    <Form.Item 
+                      label="HTTP Methods (Optional)"
+                      name="methods"
+                      extra={
+                        selectedMethods.length === 0 
+                          ? "All HTTP methods supported (default)" 
+                          : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`
+                      }
+                    >
+                      <Select
+                        mode="multiple"
+                        placeholder="Select methods (leave empty for all)"
+                        value={selectedMethods}
+                        onChange={setSelectedMethods}
+                        allowClear
+                        style={{ width: "100%" }}
+                      >
+                        {HTTP_METHODS.map((method) => (
+                          <Option key={method} value={method}>
+                            {method}
+                          </Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+
                     <Form.Item label="Include Subpath" name="include_subpath" valuePropName="checked">
                       <Switch />
                     </Form.Item>
@@ -278,6 +360,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                         form.setFieldsValue({ auth: checked });
                       }}
                     />
+
+                    <div className="mt-4">
+                      <PassThroughGuardrailsSection
+                        accessToken={accessToken || ""}
+                        value={guardrails}
+                        onChange={setGuardrails}
+                      />
+                    </div>
 
                     <div className="flex justify-end gap-2 mt-6">
                       <Button onClick={() => setIsEditing(false)}>Cancel</Button>

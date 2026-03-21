@@ -18,8 +18,11 @@ LiteLLM integrates with vector stores, allowing your models to access your organ
 ## Supported Vector Stores
 - [Bedrock Knowledge Bases](https://aws.amazon.com/bedrock/knowledge-bases/)
 - [OpenAI Vector Stores](https://platform.openai.com/docs/api-reference/vector-stores/search)
-- [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores) (Cannot be directly queried. Only available for calling in Assistants messages. We will be adding Azure AI Search Vector Store API support soon.)
+- [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores) (Cannot be directly queried. Only available for calling in Assistants messages.)
+- [Azure AI Search](/docs/providers/azure_ai_vector_stores) (Vector search with Azure AI Search indexes)
 - [Vertex AI RAG API](https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview)
+- [Gemini File Search](https://ai.google.dev/gemini-api/docs/file-search)
+- [RAGFlow Datasets](/docs/providers/ragflow_vector_store.md) (Dataset management only, search not supported)
 
 ## Quick Start
 

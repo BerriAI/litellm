@@ -4,6 +4,7 @@ import sys
 from typing import Any, Dict, Optional
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -244,6 +245,120 @@ async def test_delete_tag():
 
 
 @pytest.mark.asyncio
+async def test_list_tags_with_dynamic_tags():
+    """
+    Test that list_tags uses group_by to get distinct dynamic tags efficiently
+    and merges them with stored tags, excluding duplicates.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            # Setup stored tags
+            stored_tag = Mock()
+            stored_tag.tag_name = "stored-tag"
+            stored_tag.description = "A stored tag"
+            stored_tag.models = ["model-1"]
+            stored_tag.model_info = {}
+            stored_tag.spend = 0.0
+            stored_tag.budget_id = None
+            stored_tag.created_at = datetime(2025, 1, 1)
+            stored_tag.updated_at = datetime(2025, 1, 1)
+            stored_tag.created_by = "user-123"
+            stored_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
+
+            # Setup dynamic tags via group_by — includes one that overlaps with stored
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[
+                {"tag": "dynamic-tag-1", "_min": {"created_at": datetime(2025, 2, 1)}, "_max": {"updated_at": datetime(2025, 3, 1)}},
+                {"tag": "dynamic-tag-2", "_min": {"created_at": datetime(2025, 2, 2)}, "_max": {"updated_at": datetime(2025, 3, 2)}},
+                {"tag": "stored-tag", "_min": {"created_at": datetime(2025, 1, 1)}, "_max": {"updated_at": datetime(2025, 1, 1)}},  # duplicate, should be excluded
+            ])
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get("/tag/list", headers=headers)
+
+            assert response.status_code == 200
+            result = response.json()
+
+            # Should have 1 stored + 2 dynamic (the duplicate excluded)
+            assert len(result) == 3
+
+            tag_names = [t["name"] for t in result]
+            assert "stored-tag" in tag_names
+            assert "dynamic-tag-1" in tag_names
+            assert "dynamic-tag-2" in tag_names
+
+            # Verify dynamic tags include created_at/updated_at
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
+            assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
+            assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tags_no_dynamic_tags():
+    """
+    Test list_tags when there are no dynamic tags in the spend table.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            stored_tag = Mock()
+            stored_tag.tag_name = "stored-tag"
+            stored_tag.description = "A stored tag"
+            stored_tag.models = []
+            stored_tag.model_info = None
+            stored_tag.spend = 0.0
+            stored_tag.budget_id = None
+            stored_tag.created_at = datetime(2025, 1, 1)
+            stored_tag.updated_at = datetime(2025, 1, 1)
+            stored_tag.created_by = "user-123"
+            stored_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
+
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get("/tag/list", headers=headers)
+
+            assert response.status_code == 200
+            result = response.json()
+            assert len(result) == 1
+            assert result[0]["name"] == "stored-tag"
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id
@@ -331,3 +446,207 @@ async def test_get_deployments_by_model_not_found():
     assert result == []
     mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
     mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+
+
+@pytest.mark.asyncio
+async def test_add_tag_to_deployment_preserves_encrypted_fields():
+    """
+    Test that _add_tag_to_deployment preserves encrypted fields when adding tags
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        _add_tag_to_deployment,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Setup prisma mocks
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        # Mock the database model with encrypted fields
+        db_model = Mock()
+        db_model.model_id = "model-123"
+        db_model.litellm_params = {
+            "model": "gpt-3.5-turbo",
+            "api_key": "encrypted_api_key_value",  # This should be preserved
+            "api_base": "https://api.openai.com",
+            "other_encrypted_field": "encrypted_value",
+        }
+
+        # Mock find_unique to return the db model
+        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_model)
+
+        # Mock update
+        mock_db.litellm_proxymodeltable.update = AsyncMock(return_value=db_model)
+
+        # Create deployment
+        deployment = Deployment(
+            model_name="gpt-3.5-turbo",
+            litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
+            model_info=ModelInfo(id="model-123"),
+        )
+
+        # Call the function
+        await _add_tag_to_deployment(deployment, "test-tag")
+
+        # Verify find_unique was called
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
+            where={"model_id": "model-123"}
+        )
+
+        # Verify update was called with preserved encrypted fields
+        update_call = mock_db.litellm_proxymodeltable.update.call_args
+        assert update_call[1]["where"] == {"model_id": "model-123"}
+
+        # Parse the updated litellm_params
+        updated_params = json.loads(update_call[1]["data"]["litellm_params"])
+
+        # Verify tag was added
+        assert "tags" in updated_params
+        assert "test-tag" in updated_params["tags"]
+
+        # Verify encrypted fields were preserved
+        assert updated_params["api_key"] == "encrypted_api_key_value"
+        assert updated_params["other_encrypted_field"] == "encrypted_value"
+        assert updated_params["model"] == "gpt-3.5-turbo"
+        assert updated_params["api_base"] == "https://api.openai.com"
+
+
+@pytest.mark.asyncio
+async def test_add_tag_to_deployment_with_string_params():
+    """
+    Test that _add_tag_to_deployment handles string litellm_params correctly
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        _add_tag_to_deployment,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Setup prisma mocks
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        # Mock the database model with litellm_params as string
+        db_model = Mock()
+        db_model.model_id = "model-456"
+        db_model.litellm_params = json.dumps({
+            "model": "claude-3",
+            "api_key": "encrypted_claude_key",
+        })
+
+        # Mock find_unique to return the db model
+        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_model)
+
+        # Mock update
+        mock_db.litellm_proxymodeltable.update = AsyncMock(return_value=db_model)
+
+        # Create deployment
+        deployment = Deployment(
+            model_name="claude-3",
+            litellm_params=LiteLLM_Params(model="claude-3"),
+            model_info=ModelInfo(id="model-456"),
+        )
+
+        # Call the function
+        await _add_tag_to_deployment(deployment, "test-tag-2")
+
+        # Verify update was called
+        update_call = mock_db.litellm_proxymodeltable.update.call_args
+        updated_params = json.loads(update_call[1]["data"]["litellm_params"])
+
+        # Verify tag was added and encrypted field preserved
+        assert "tags" in updated_params
+        assert "test-tag-2" in updated_params["tags"]
+        assert updated_params["api_key"] == "encrypted_claude_key"
+
+
+@pytest.mark.asyncio
+async def test_add_tag_to_deployment_no_duplicate_tags():
+    """
+    Test that _add_tag_to_deployment doesn't add duplicate tags
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        _add_tag_to_deployment,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Setup prisma mocks
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        # Mock the database model with existing tags
+        db_model = Mock()
+        db_model.model_id = "model-789"
+        db_model.litellm_params = {
+            "model": "gpt-4",
+            "api_key": "encrypted_key",
+            "tags": ["existing-tag", "another-tag"],
+        }
+
+        # Mock find_unique to return the db model
+        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_model)
+
+        # Mock update
+        mock_db.litellm_proxymodeltable.update = AsyncMock(return_value=db_model)
+
+        # Create deployment
+        deployment = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="gpt-4"),
+            model_info=ModelInfo(id="model-789"),
+        )
+
+        # Try to add an existing tag
+        await _add_tag_to_deployment(deployment, "existing-tag")
+
+        # Verify update was called
+        update_call = mock_db.litellm_proxymodeltable.update.call_args
+        updated_params = json.loads(update_call[1]["data"]["litellm_params"])
+
+        # Verify no duplicate tags
+        assert updated_params["tags"].count("existing-tag") == 1
+        assert len(updated_params["tags"]) == 2
+        assert "another-tag" in updated_params["tags"]
+
+
+@pytest.mark.asyncio
+async def test_add_tag_to_deployment_model_not_found():
+    """
+    Test that _add_tag_to_deployment raises HTTPException when model not found
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        _add_tag_to_deployment,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Setup prisma mocks
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        # Mock find_unique to return None (model not found)
+        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+
+        # Create deployment
+        deployment = Deployment(
+            model_name="nonexistent-model",
+            litellm_params=LiteLLM_Params(model="nonexistent-model"),
+            model_info=ModelInfo(id="model-999"),
+        )
+
+        # Call should raise HTTPException (wrapped as 500 by the exception handler)
+        with pytest.raises(HTTPException) as exc_info:
+            await _add_tag_to_deployment(deployment, "test-tag")
+
+        assert exc_info.value.status_code == 500
+        assert "not found in database" in str(exc_info.value.detail)

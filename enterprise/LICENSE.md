@@ -7,7 +7,7 @@ With regard to the BerriAI Software:
 This software and associated documentation files (the "Software") may only be
 used in production, if you (and any entity that you represent) have agreed to,
 and are in compliance with, the BerriAI Subscription Terms of Service, available
-via [call](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) or email (info@berri.ai) (the "Enterprise Terms"), or other
+via [call](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions) or email (info@berri.ai) (the "Enterprise Terms"), or other
 agreement governing the use of the Software, as agreed by you and BerriAI,
 and otherwise have a valid BerriAI Enterprise license for the
 correct number of user seats. Subject to the foregoing sentence, you are free to

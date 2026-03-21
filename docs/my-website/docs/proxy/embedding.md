@@ -6,6 +6,16 @@ import TabItem from '@theme/TabItem';
 
 See supported Embedding Providers & Models [here](https://docs.litellm.ai/docs/embedding/supported_embedding)
 
+## Supported Input Formats
+
+The `/v1/embeddings` endpoint follows the [OpenAI embeddings API specification](https://platform.openai.com/docs/api-reference/embeddings/create). The following input formats are supported:
+
+| Format | Example |
+|--------|---------|
+| String | `"input": "Hello"` |
+| Array of strings | `"input": ["Hello", "World"]` |
+| Array of tokens (integers) | `"input": [1234, 5678, 9012]` |
+| Array of token arrays | `"input": [[1234, 5678], [9012, 3456]]` |
 
 ## Quick start
 Here's how to route between GPT-J embedding (sagemaker endpoint), Amazon Titan embedding (Bedrock) and Azure OpenAI embedding on the proxy server: 

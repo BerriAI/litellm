@@ -13,6 +13,7 @@ describe("AdvancedSettings", () => {
         setShowAdvancedSettings={() => {}}
         guardrailsList={[]}
         tagsList={{}}
+        accessToken="test-token"
       />,
     );
   });
@@ -24,6 +25,7 @@ describe("AdvancedSettings", () => {
         setShowAdvancedSettings={() => {}}
         guardrailsList={[]}
         tagsList={{}}
+        accessToken="test-token"
       />,
     );
     fireEvent.click(getByText("Advanced Settings"));
@@ -39,6 +41,7 @@ describe("AdvancedSettings", () => {
         setShowAdvancedSettings={() => {}}
         guardrailsList={[]}
         tagsList={{}}
+        accessToken="test-token"
       />,
     );
     act(() => {

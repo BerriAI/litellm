@@ -139,7 +139,7 @@ def completion(
     )
     ## COMPLETION CALL
     try:
-        response = palm.generate_text(prompt=prompt, **inference_params)
+        response = palm.generate_text(prompt=prompt, **inference_params)  # type: ignore[attr-defined]
     except Exception as e:
         raise PalmError(
             message=str(e),

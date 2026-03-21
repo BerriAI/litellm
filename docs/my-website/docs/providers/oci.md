@@ -58,12 +58,11 @@ This method is an alternative when using the LiteLLM SDK on Oracle Cloud Infrast
 ## Usage
 
 <Tabs>
-<TabItem value="manual" label="Manual Credentials">
+<TabItem value="manual" label="Manual Credentials" default>
 
 Input the parameters obtained from the OCI signing key creation process into the `completion` function:
 
 ```python
-import os
 from litellm import completion
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
@@ -86,7 +85,7 @@ print(response)
 ```
 
 </TabItem>
-<TabItem value="oci-sdk" label="OCI SDK Signer" default>
+<TabItem value="oci-sdk" label="OCI SDK Signer">
 
 Use the OCI SDK `Signer` for authentication:
 
@@ -153,7 +152,6 @@ For applications running on OCI compute instances:
 from litellm import completion
 from oci.auth.signers import InstancePrincipalsSecurityTokenSigner
 
-oci.auth.signers.get_oke_workload_identity_resource_principal_signer()
 # Use instance principal authentication
 signer = InstancePrincipalsSecurityTokenSigner()
 
@@ -168,7 +166,7 @@ response = completion(
 print(response)
 ```
 
-**Use workload identity authentication**
+**Workload Identity Authentication**
 
 For applications running in Oracle Kubernetes Engine (OKE):
 
@@ -176,7 +174,7 @@ For applications running in Oracle Kubernetes Engine (OKE):
 from litellm import completion
 from oci.auth.signers import get_oke_workload_identity_resource_principal_signer
 
-# Use instance principal authentication
+# Use workload identity authentication
 signer = get_oke_workload_identity_resource_principal_signer()
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
@@ -196,10 +194,9 @@ print(response)
 Just set `stream=True` when calling completion.
 
 <Tabs>
-<TabItem value="manual-stream" label="Manual Credentials">
+<TabItem value="manual-stream" label="Manual Credentials" default>
 
 ```python
-import os
 from litellm import completion
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
@@ -224,7 +221,7 @@ for chunk in response:
 ```
 
 </TabItem>
-<TabItem value="oci-sdk-stream" label="OCI SDK Signer" default>
+<TabItem value="oci-sdk-stream" label="OCI SDK Signer">
 
 ```python
 from litellm import completion
@@ -258,7 +255,27 @@ for chunk in response:
 ### Using Cohere Models
 
 <Tabs>
-<TabItem value="cohere-sdk" label="OCI SDK Signer" default>
+<TabItem value="cohere-manual" label="Manual Credentials" default>
+
+```python
+from litellm import completion
+
+messages = [{"role": "user", "content": "Explain quantum computing"}]
+response = completion(
+    model="oci/cohere.command-latest",
+    messages=messages,
+    oci_region="us-chicago-1",
+    oci_user=<your_oci_user>,
+    oci_fingerprint=<your_oci_fingerprint>,
+    oci_tenancy=<your_oci_tenancy>,
+    oci_key=<string_with_content_of_oci_key>,
+    oci_compartment_id=<oci_compartment_id>,
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="cohere-sdk" label="OCI SDK Signer">
 
 ```python
 from litellm import completion
@@ -283,19 +300,28 @@ print(response)
 ```
 
 </TabItem>
-<TabItem value="cohere-manual" label="Manual Credentials">
+</Tabs>
+
+## Using Dedicated Endpoints
+
+OCI supports dedicated endpoints for hosting models. Use the `oci_serving_mode="DEDICATED"` parameter along with `oci_endpoint_id` to specify the endpoint ID.
+
+<Tabs>
+<TabItem value="dedicated-manual" label="Manual Credentials" default>
 
 ```python
 from litellm import completion
 
-messages = [{"role": "user", "content": "Explain quantum computing"}]
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(
-    model="oci/cohere.command-latest",
+    model="oci/xai.grok-4",  # Must match the model type hosted on the endpoint
     messages=messages,
-    oci_region="us-chicago-1",
+    oci_region=<your_oci_region>,
     oci_user=<your_oci_user>,
     oci_fingerprint=<your_oci_fingerprint>,
     oci_tenancy=<your_oci_tenancy>,
+    oci_serving_mode="DEDICATED",
+    oci_endpoint_id="ocid1.generativeaiendpoint.oc1...",  # Your dedicated endpoint OCID
     oci_key=<string_with_content_of_oci_key>,
     oci_compartment_id=<oci_compartment_id>,
 )
@@ -303,4 +329,69 @@ print(response)
 ```
 
 </TabItem>
+<TabItem value="dedicated-sdk" label="OCI SDK Signer">
+
+```python
+from litellm import completion
+from oci.signer import Signer
+
+signer = Signer(
+    tenancy="ocid1.tenancy.oc1..",
+    user="ocid1.user.oc1..",
+    fingerprint="xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx",
+    private_key_file_location="~/.oci/key.pem",
+)
+
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
+response = completion(
+    model="oci/xai.grok-4",  # Must match the model type hosted on the endpoint
+    messages=messages,
+    oci_signer=signer,
+    oci_region="us-chicago-1",
+    oci_serving_mode="DEDICATED",
+    oci_endpoint_id="ocid1.generativeaiendpoint.oc1...",  # Your dedicated endpoint OCID
+    oci_compartment_id="<oci_compartment_id>",
+)
+print(response)
+```
+
+</TabItem>
 </Tabs>
+
+**Important:** When using `oci_serving_mode="DEDICATED"`:
+- The `model` parameter **must match the type of model hosted on your dedicated endpoint** (e.g., use `"oci/cohere.command-latest"` for Cohere models, `"oci/xai.grok-4"` for Grok models)
+- The model name determines the API format and vendor-specific handling (Cohere vs Generic)
+- The `oci_endpoint_id` parameter specifies your dedicated endpoint's OCID
+- If `oci_endpoint_id` is not provided, the `model` parameter will be used as the endpoint ID (for backward compatibility)
+
+**Example with Cohere Dedicated Endpoint:**
+```python
+# For a dedicated endpoint hosting a Cohere model
+response = completion(
+    model="oci/cohere.command-latest",  # Use Cohere model name to get Cohere API format
+    messages=messages,
+    oci_region="us-chicago-1",
+    oci_user=<your_oci_user>,
+    oci_fingerprint=<your_oci_fingerprint>,
+    oci_tenancy=<your_oci_tenancy>,
+    oci_serving_mode="DEDICATED",
+    oci_endpoint_id="ocid1.generativeaiendpoint.oc1...",  # Your Cohere endpoint OCID
+    oci_key=<string_with_content_of_oci_key>,
+    oci_compartment_id=<oci_compartment_id>,
+)
+```
+
+## Optional Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `oci_region` | string | `us-ashburn-1` | OCI region where the GenAI service is deployed |
+| `oci_serving_mode` | string | `ON_DEMAND` | Service mode: `ON_DEMAND` for managed models or `DEDICATED` for dedicated endpoints |
+| `oci_endpoint_id` | string | Same as `model` | (For DEDICATED mode) The OCID of your dedicated endpoint |
+| `oci_compartment_id` | string | **Required** | The OCID of the OCI compartment containing your resources |
+| `oci_user` | string | - | (Manual auth) The OCID of the OCI user |
+| `oci_fingerprint` | string | - | (Manual auth) The fingerprint of the API signing key |
+| `oci_tenancy` | string | - | (Manual auth) The OCID of your OCI tenancy |
+| `oci_key` | string | - | (Manual auth) The private key content as a string |
+| `oci_key_file` | string | - | (Manual auth) Path to the private key file |
+| `oci_signer` | object | - | (SDK auth) OCI SDK Signer object for authentication |

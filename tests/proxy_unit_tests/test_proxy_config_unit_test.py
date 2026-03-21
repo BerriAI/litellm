@@ -264,3 +264,55 @@ def test_add_callbacks_invalid_input():
     # Cleanup
     litellm.success_callback = []
     litellm.failure_callback = []
+
+
+@pytest.mark.asyncio
+async def test_json_logs_calls_turn_on_json():
+    """
+    Test that json_logs: true in litellm_settings calls litellm._turn_on_json()
+
+    This is a regression test for the bug where json_logs in config file
+    would only set the attribute but not actually enable JSON logging.
+    See: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    import tempfile
+
+    import yaml
+
+    # Create a temporary config file with json_logs: true
+    config_content = {
+        "model_list": [
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test-key"},
+            }
+        ],
+        "litellm_settings": {"json_logs": True},
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as temp_file:
+        yaml.dump(config_content, temp_file)
+        temp_file_path = temp_file.name
+
+    try:
+        proxy_config = ProxyConfig()
+
+        # Mock _turn_on_json to track if it gets called
+        with mock.patch("litellm._turn_on_json") as mock_turn_on_json:
+            await proxy_config.load_config(
+                router=None,
+                config_file_path=temp_file_path,
+            )
+
+            # Verify _turn_on_json was called
+            mock_turn_on_json.assert_called_once()
+
+        # Also verify the attribute was set
+        assert litellm.json_logs is True
+
+    finally:
+        # Cleanup
+        os.unlink(temp_file_path)
+        litellm.json_logs = False

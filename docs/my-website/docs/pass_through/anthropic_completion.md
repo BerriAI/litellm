@@ -7,7 +7,7 @@ Pass-through endpoints for Anthropic - call provider-specific endpoint, in nativ
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ✅ | supports all models on `/messages` endpoint |
+| Cost Tracking | ✅ | supports all models on `/messages`, `/v1/messages/batches` endpoint |
 | Logging | ✅ | works across all integrations |
 | End-user Tracking | ✅ | disable prometheus tracking via `litellm.disable_end_user_cost_tracking_prometheus_only`|
 | Streaming | ✅ | |
@@ -263,6 +263,19 @@ curl https://api.anthropic.com/v1/messages/batches \
 }'
 ```
 
+:::note Configuration Required for Batch Cost Tracking
+For batch passthrough cost tracking to work properly, you need to define the Anthropic model in your `proxy_config.yaml`:
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5-20250929  # or any alias
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+This ensures the polling mechanism can correctly identify the provider and retrieve batch status for cost calculation.
+:::
 
 ## Advanced
 

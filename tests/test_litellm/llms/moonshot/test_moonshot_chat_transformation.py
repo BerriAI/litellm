@@ -310,3 +310,98 @@ class TestMoonshotConfig:
             # Check that no extra message was added
             assert len(result["messages"]) == 1
             assert result["messages"][0]["content"] == "What's the weather?"
+
+    def test_transform_messages_preserves_image_url_content(self):
+        """Test that messages with image_url blocks are NOT flattened to strings.
+
+        Multimodal models like kimi-k2.5 accept the standard OpenAI content
+        array with non-text blocks. When any message contains a non-text part,
+        the content array must be preserved so the payload reaches the API.
+        """
+        config = MoonshotChatConfig()
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"},
+                    },
+                ],
+            }
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Content must remain a list (not flattened to a string)
+        assert isinstance(result["messages"][0]["content"], list)
+        assert len(result["messages"][0]["content"]) == 2
+        assert result["messages"][0]["content"][0]["type"] == "text"
+        assert result["messages"][0]["content"][1]["type"] == "image_url"
+
+    def test_transform_messages_preserves_non_text_content(self):
+        """Test that any non-text content type (input_audio, video_url, file,
+        etc.) also prevents flattening, matching the OpenAI content spec."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Transcribe this audio"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "base64data", "format": "wav"},
+                    },
+                ],
+            }
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert isinstance(result["messages"][0]["content"], list)
+        assert len(result["messages"][0]["content"]) == 2
+        assert result["messages"][0]["content"][1]["type"] == "input_audio"
+
+    def test_transform_messages_flattens_text_only_content(self):
+        """Test that text-only content arrays ARE flattened to strings.
+
+        For text-only requests, Moonshot expects plain string content.
+        The content list should be converted to a single string.
+        """
+        config = MoonshotChatConfig()
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello, how are you?"},
+                ],
+            }
+        ]
+
+        result = config.transform_request(
+            model="moonshot-v1-8k",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Content should be flattened to a plain string
+        assert isinstance(result["messages"][0]["content"], str)
+        assert result["messages"][0]["content"] == "Hello, how are you?"

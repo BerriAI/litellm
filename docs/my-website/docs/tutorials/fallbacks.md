@@ -2,6 +2,10 @@
 
 This tutorial demonstrates how to employ the `completion()` function with model fallbacks to ensure reliability. LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
+## Set Up Fallbacks for a Virtual Key
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/35539129dd104313aff40eb1cd255778" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
 ## Usage 
 To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
 

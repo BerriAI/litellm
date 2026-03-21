@@ -34,7 +34,7 @@ class TestTextFormatConversion:
         Test that when text_format parameter is passed to litellm.aresponses,
         it gets converted to text parameter in the raw API call to OpenAI.
         """
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         class TestResponse(BaseModel):
             """Test Pydantic model for structured output"""
@@ -42,20 +42,8 @@ class TestTextFormatConversion:
             answer: str
             confidence: float
 
-        class MockResponse:
-            """Mock response class for testing"""
-
-            def __init__(self, json_data, status_code):
-                self._json_data = json_data
-                self.status_code = status_code
-                self.text = json.dumps(json_data)
-                self.headers = {}
-
-            def json(self):
-                return self._json_data
-
         # Mock response from OpenAI
-        mock_response = {
+        mock_response_data = {
             "id": "resp_123",
             "object": "response",
             "created_at": 1741476542,
@@ -101,13 +89,74 @@ class TestTextFormatConversion:
 
         base_completion_call_args = self.get_base_completion_call_args()
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_post:
-            # Configure the mock to return our response
-            mock_post.return_value = MockResponse(mock_response, 200)
+        # Mock the response_api_handler function to capture the request
+        captured_request = {}
 
+        def mock_handler(
+            model,
+            input,
+            responses_api_provider_config,
+            response_api_optional_request_params,
+            custom_llm_provider,
+            litellm_params,
+            logging_obj,
+            extra_headers=None,
+            extra_body=None,
+            timeout=None,
+            client=None,
+            fake_stream=False,
+            litellm_metadata=None,
+            shared_session=None,
+            _is_async=False,
+        ):
+            # Capture the request parameters
+            captured_request["model"] = model
+            captured_request["input"] = input
+            captured_request["params"] = response_api_optional_request_params
+            
+            # Return a mock ResponsesAPIResponse wrapped in a coroutine if async
+            async def async_response():
+                return ResponsesAPIResponse(
+                    id="resp_123",
+                    object="response",
+                    created_at=1741476542,
+                    status="completed",
+                    model="gpt-4o",
+                    output=mock_response_data["output"],
+                    usage=ResponseAPIUsage(
+                        input_tokens=10,
+                        output_tokens=20,
+                        total_tokens=30,
+                    ),
+                    text=mock_response_data.get("text"),
+                    error=None,
+                    incomplete_details=None,
+                )
+            
+            if _is_async:
+                return async_response()
+            else:
+                return ResponsesAPIResponse(
+                    id="resp_123",
+                    object="response",
+                    created_at=1741476542,
+                    status="completed",
+                    model="gpt-4o",
+                    output=mock_response_data["output"],
+                    usage=ResponseAPIUsage(
+                        input_tokens=10,
+                        output_tokens=20,
+                        total_tokens=30,
+                    ),
+                    text=mock_response_data.get("text"),
+                    error=None,
+                    incomplete_details=None,
+                )
+
+        with patch(
+            "litellm.responses.main.base_llm_http_handler.response_api_handler",
+            new=mock_handler,
+        ):
             litellm._turn_on_debug()
             litellm.set_verbose = True
 
@@ -118,21 +167,19 @@ class TestTextFormatConversion:
                 **base_completion_call_args,
             )
 
-            # Verify the request was made correctly
-            mock_post.assert_called_once()
-            request_body = mock_post.call_args.kwargs["json"]
-            print("Request body:", json.dumps(request_body, indent=4))
+            # Verify the captured request
+            print("Captured request:", json.dumps(captured_request, indent=4, default=str))
 
             # Validate that text_format was converted to text parameter
             assert (
-                "text" in request_body
-            ), "text parameter should be present in request body"
+                "text" in captured_request["params"]
+            ), "text parameter should be present in request params"
             assert (
-                "text_format" not in request_body
-            ), "text_format should not be in request body"
+                "text_format" not in captured_request["params"]
+            ), "text_format should not be in request params"
 
             # Validate the text parameter structure
-            text_param = request_body["text"]
+            text_param = captured_request["params"]["text"]
             assert "format" in text_param, "text parameter should have format field"
             assert (
                 text_param["format"]["type"] == "json_schema"
@@ -156,7 +203,7 @@ class TestTextFormatConversion:
             ), "schema should have confidence property"
 
             # Validate other request parameters
-            assert request_body["input"] == "What is the capital of France?"
+            assert captured_request["input"] == "What is the capital of France?"
 
             # Validate the response
             print("Response:", json.dumps(response, indent=4, default=str))

@@ -11,7 +11,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
 
-from ..common_utils import OpenAIError
+from ..common_utils import BaseOpenAILLM, OpenAIError
 from .transformation import OpenAITextCompletionConfig
 
 
@@ -168,7 +168,7 @@ class OpenAITextCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=litellm.aclient_session,
+                    http_client=BaseOpenAILLM._get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,

@@ -409,3 +409,130 @@ async def test_qdrant_semantic_cache_async_set_cache():
 
             # Verify async upsert was called
             qdrant_cache.async_client.put.assert_called() 
+
+def test_qdrant_semantic_cache_custom_vector_size():
+    """
+    Test that QdrantSemanticCache uses a custom vector_size when creating a new collection.
+    Verifies that the vector size passed to the constructor is used in the Qdrant collection
+    creation payload instead of the default 1536.
+    """
+    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
+         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client:
+
+        # Mock the collection does NOT exist (so it will be created)
+        mock_exists_response = MagicMock()
+        mock_exists_response.status_code = 200
+        mock_exists_response.json.return_value = {"result": {"exists": False}}
+
+        # Mock the collection creation response
+        mock_create_response = MagicMock()
+        mock_create_response.status_code = 200
+        mock_create_response.json.return_value = {"result": True}
+
+        # Mock the collection details response after creation
+        mock_details_response = MagicMock()
+        mock_details_response.status_code = 200
+        mock_details_response.json.return_value = {"result": {"status": "ok"}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.side_effect = [mock_exists_response, mock_details_response]
+        mock_sync_client_instance.put.return_value = mock_create_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        # Initialize with custom vector_size of 768
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection_768",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+            vector_size=768,
+        )
+
+        # Verify the vector_size attribute is set correctly
+        assert qdrant_cache.vector_size == 768
+
+        # Verify the PUT call to create the collection used vector_size=768
+        put_call = mock_sync_client_instance.put.call_args
+        assert put_call is not None
+        create_payload = put_call.kwargs.get("json") or put_call[1].get("json")
+        assert create_payload["vectors"]["size"] == 768
+        assert create_payload["vectors"]["distance"] == "Cosine"
+
+
+def test_qdrant_semantic_cache_default_vector_size():
+    """
+    Test that QdrantSemanticCache defaults to QDRANT_VECTOR_SIZE (1536) when vector_size
+    is not provided, and stores it as self.vector_size.
+    """
+    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
+         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client:
+
+        # Mock the collection exists check
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+        from litellm.constants import QDRANT_VECTOR_SIZE
+
+        # Initialize without vector_size
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+        )
+
+        # Verify it falls back to the default QDRANT_VECTOR_SIZE constant
+        assert qdrant_cache.vector_size == QDRANT_VECTOR_SIZE
+
+
+def test_qdrant_semantic_cache_large_vector_size():
+    """
+    Test that QdrantSemanticCache supports large embedding dimensions (e.g. 4096, 8192)
+    for models like Stella, bge-en-icl, etc.
+    """
+    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
+         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_async_client:
+
+        # Mock the collection does NOT exist (so it will be created)
+        mock_exists_response = MagicMock()
+        mock_exists_response.status_code = 200
+        mock_exists_response.json.return_value = {"result": {"exists": False}}
+
+        mock_create_response = MagicMock()
+        mock_create_response.status_code = 200
+        mock_create_response.json.return_value = {"result": True}
+
+        mock_details_response = MagicMock()
+        mock_details_response.status_code = 200
+        mock_details_response.json.return_value = {"result": {"status": "ok"}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.side_effect = [mock_exists_response, mock_details_response]
+        mock_sync_client_instance.put.return_value = mock_create_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        # Initialize with a large vector_size of 4096
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection_4096",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+            vector_size=4096,
+        )
+
+        assert qdrant_cache.vector_size == 4096
+
+        # Verify the collection was created with 4096
+        put_call = mock_sync_client_instance.put.call_args
+        create_payload = put_call.kwargs.get("json") or put_call[1].get("json")
+        assert create_payload["vectors"]["size"] == 4096

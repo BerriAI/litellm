@@ -1,29 +1,30 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
-from typing import cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
+import litellm
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import encode_video_id_with_provider, extract_original_video_id
-import litellm
-from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 
@@ -63,7 +64,12 @@ class OpenAIVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+
         api_key = (
             api_key
             or litellm.api_key
@@ -88,7 +94,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         if api_base is None:
             api_base = "https://api.openai.com/v1"
-        
+
         return f"{api_base.rstrip('/')}/videos"
 
     def transform_video_create_request(
@@ -105,15 +111,14 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         # Remove model and extra_headers from optional params as they're handled separately
         video_create_optional_request_params = {
-            k: v for k, v in video_create_optional_request_params.items()
+            k: v
+            for k, v in video_create_optional_request_params.items()
             if k not in ["model", "extra_headers", "prompt"]
         }
-        
+
         # Create the request data
         video_create_request = CreateVideoRequest(
-            model=model,
-            prompt=prompt,
-            **video_create_optional_request_params
+            model=model, prompt=prompt, **video_create_optional_request_params
         )
         request_dict = cast(Dict, video_create_request)
 
@@ -143,21 +148,23 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         """Transform the OpenAI video creation response."""
         response_data = raw_response.json()
-    
+
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
-        
+
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
-        
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, model
+            )
+
         usage_data = {}
         if video_obj:
-            if hasattr(video_obj, 'seconds') and video_obj.seconds:
+            if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
                     usage_data["duration_seconds"] = float(video_obj.seconds)
                 except (ValueError, TypeError):
                     pass
         video_obj.usage = usage_data
-        
+
         return video_obj
 
     def transform_video_content_request(
@@ -166,22 +173,26 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos/{video_id}/content
+        - GET /v1/videos/{video_id}/content?variant=thumbnail
         """
         original_video_id = extract_original_video_id(video_id)
-        
+
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
-        
-        # Add video_id as query parameter
-        params = {"video_id": original_video_id}
-        
-        return url, params
+        if variant is not None:
+            url = f"{url}?variant={variant}"
+
+        # No additional data needed for GET content request
+        data: Dict[str, Any] = {}
+
+        return url, data
 
     def transform_video_remix_request(
         self,
@@ -194,24 +205,24 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video remix request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - POST /v1/videos/{video_id}/remix
         """
         original_video_id = extract_original_video_id(video_id)
-        
+
         # Construct the URL for video remix
         url = f"{api_base.rstrip('/')}/{original_video_id}/remix"
-        
+
         # Prepare the request data
         data = {"prompt": prompt}
-        
+
         # Add any extra body parameters
         if extra_body:
             data.update(extra_body)
-        
+
         return url, data
-    
+
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
@@ -230,18 +241,20 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video remix response.
         """
         response_data = raw_response.json()
-        
+
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
-        
+
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
-        
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, None
+            )
+
         # Create usage object with duration information for cost calculation
         # Video remix API doesn't provide usage, so we create one with duration
         usage_data = {}
         if video_obj:
-            if hasattr(video_obj, 'seconds') and video_obj.seconds:
+            if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
                     usage_data["duration_seconds"] = float(video_obj.seconds)
                 except (ValueError, TypeError):
@@ -263,26 +276,27 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos
         """
         # Use the api_base directly for video list
         url = api_base
-        
+
         # Prepare query parameters
         params = {}
         if after is not None:
-            params["after"] = after
+            # Decode the wrapped video ID back to the original provider ID
+            params["after"] = extract_original_video_id(after)
         if limit is not None:
             params["limit"] = str(limit)
         if order is not None:
             params["order"] = order
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
-        
+
         return url, params
 
     def transform_video_list_response(
@@ -290,18 +304,40 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str,str]:
+    ) -> Dict[str, str]:
         response_data = raw_response.json()
-        
+
         if custom_llm_provider and "data" in response_data:
             for video_obj in response_data.get("data", []):
                 if isinstance(video_obj, dict) and "id" in video_obj:
                     video_obj["id"] = encode_video_id_with_provider(
-                        video_obj["id"], 
-                        custom_llm_provider, 
-                        video_obj.get("model")
+                        video_obj["id"],
+                        custom_llm_provider,
+                        video_obj.get("model"),
                     )
-        
+
+            # Encode pagination cursor IDs so they remain consistent
+            # with the wrapped data[].id format
+            data_list = response_data.get("data", [])
+            if response_data.get("first_id"):
+                first_model = None
+                if data_list and isinstance(data_list[0], dict):
+                    first_model = data_list[0].get("model")
+                response_data["first_id"] = encode_video_id_with_provider(
+                    response_data["first_id"],
+                    custom_llm_provider,
+                    first_model,
+                )
+            if response_data.get("last_id"):
+                last_model = None
+                if data_list and isinstance(data_list[-1], dict):
+                    last_model = data_list[-1].get("model")
+                response_data["last_id"] = encode_video_id_with_provider(
+                    response_data["last_id"],
+                    custom_llm_provider,
+                    last_model,
+                )
+
         return response_data
 
     def transform_video_delete_request(
@@ -313,18 +349,18 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video delete request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - DELETE /v1/videos/{video_id}
         """
         original_video_id = extract_original_video_id(video_id)
-        
+
         # Construct the URL for video delete
         url = f"{api_base.rstrip('/')}/{original_video_id}"
-        
+
         # No data needed for DELETE request
         data: Dict[str, Any] = {}
-        
+
         return url, data
 
     def transform_video_delete_response(
@@ -336,7 +372,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video delete response.
         """
         response_data = raw_response.json()
-        
+
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
@@ -354,13 +390,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         # Extract the original video_id (remove provider encoding if present)
         original_video_id = extract_original_video_id(video_id)
-        
+
         # For video retrieve, we just need to construct the URL
         url = f"{api_base.rstrip('/')}/{original_video_id}"
-        
+
         # No additional data needed for GET request
         data: Dict[str, Any] = {}
-        
+
         return url, data
 
     def transform_video_status_retrieve_response(
@@ -375,9 +411,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
-        
+
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, None
+            )
 
         return video_obj
 
@@ -404,4 +442,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
         else:
-            files_list.append((field_name, ("input_reference.png", image, image_content_type)))
+            files_list.append(
+                (field_name, ("input_reference.png", image, image_content_type))
+            )

@@ -12,7 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+import httpx
 
 import litellm
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
@@ -193,6 +195,29 @@ def test_get_prompt_metadata():
     assert metadata["model"] == "gemini/gemini-1.5-pro"
     assert "input" in metadata
     assert "output" in metadata
+
+
+def test_get_prompt_with_version():
+    """Test that get_prompt correctly retrieves versioned prompts."""
+    prompt_dir = Path(__file__).parent
+    manager = PromptManager(prompt_directory=str(prompt_dir))
+
+    # Get base prompt (no version)
+    base_prompt = manager.get_prompt(prompt_id="chat_prompt")
+    assert base_prompt is not None
+    assert "User: {{user_message}}" in base_prompt.content
+
+    # Get version 1
+    v1_prompt = manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert "Version 1:" in v1_prompt.content
+    assert v1_prompt.model == "gpt-3.5-turbo"
+
+    # Get version 2
+    v2_prompt = manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert "Version 2:" in v2_prompt.content
+    assert v2_prompt.model == "gpt-4"
 
 
 def test_add_prompt_programmatically():
@@ -521,3 +546,44 @@ def test_prompt_main():
     """
     # TODO: Implement once PromptManager is integrated with litellm completion
     pass
+
+
+
+@pytest.mark.asyncio
+async def test_dotprompt_with_prompt_version():
+    """
+    Test that dotprompt can load and use specific prompt versions.
+    Versions are stored as separate files with .v{version}.prompt naming convention.
+    """
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
+
+    prompt_dir = Path(__file__).parent
+    prompt_manager = PromptManager(prompt_directory=str(prompt_dir))
+    
+    # Test version 1
+    v1_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=1)
+    assert v1_prompt is not None
+    assert v1_prompt.model == "gpt-3.5-turbo"
+    
+    # Verify version 1 content
+    v1_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v1"},
+        version=1
+    )
+    assert "Version 1:" in v1_rendered
+    assert "Test v1" in v1_rendered
+    
+    # Test version 2
+    v2_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=2)
+    assert v2_prompt is not None
+    assert v2_prompt.model == "gpt-4"
+    
+    # Verify version 2 content
+    v2_rendered = prompt_manager.render(
+        prompt_id="chat_prompt",
+        prompt_variables={"user_message": "Test v2"},
+        version=2
+    )
+    assert "Version 2:" in v2_rendered
+    assert "Test v2" in v2_rendered

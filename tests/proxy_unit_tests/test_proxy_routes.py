@@ -56,6 +56,12 @@ def test_routes_on_litellm_proxy():
         # realtime routes - /realtime?model=gpt-4o
         if "realtime" in route:
             assert "/realtime" in _all_routes
+        # wildcard patterns like /containers/* - check that base path exists
+        elif RouteChecks._is_wildcard_pattern(pattern=route):
+            # For wildcard patterns, check that the base path (without * and trailing /) exists
+            base_path = route[:-1].rstrip("/")  # Remove the trailing * and any trailing /
+            # Check if base path exists (e.g., /containers or /v1/containers)
+            assert base_path in _all_routes, f"Wildcard pattern {route} requires base path {base_path} to exist"
         else:
             assert route in _all_routes
 
@@ -85,6 +91,11 @@ def test_routes_on_litellm_proxy():
         # Bedrock Pass Through Routes
         ("/bedrock/model/cohere.command-r-v1:0/converse", True),
         ("/vertex-ai/model/text-embedding-004/embeddings", True),
+        # LiteLLM native RAG routes
+        ("/rag/ingest", True),
+        ("/v1/rag/ingest", True),
+        ("/rag/query", True),
+        ("/v1/rag/query", True),
     ],
 )
 def test_is_llm_api_route(route: str, expected: bool):

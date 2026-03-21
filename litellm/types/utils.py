@@ -1,27 +1,47 @@
 import json
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    get_args,
+)
 
-from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.audio.transcription_create_params import (
+    FileTypes as FileTypes,  # type: ignore
+)
+from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.moderation import Categories as Categories
 from openai.types.moderation import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
+    CategoryAppliedInputTypes as CategoryAppliedInputTypes,
 )
-from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Callable, Dict, Required, TypedDict, override
+from openai.types.moderation import CategoryScores as CategoryScores
+from openai.types.moderation_create_response import Moderation as Moderation
+from openai.types.moderation_create_response import (
+    ModerationCreateResponse as ModerationCreateResponse,
+)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
+from typing_extensions import Required, TypedDict
 
-import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
@@ -30,26 +50,30 @@ from litellm.types.llms.base import (
 from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
+from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
+    AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
     ImageURLListItem,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionFinishReason,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
 )
-from .rerank import RerankResponse
+from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -59,6 +83,19 @@ else:
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+class SafeAttributeModel:
+    """
+    A base model that provides safe attribute access.
+    """
+
+    def __delattr__(self, name):
+        try:
+            super().__delattr__(name)
+        except AttributeError:
+            # noop if attribute does not exist
+            pass
 
 
 class LiteLLMCommonStrings(Enum):
@@ -99,12 +136,29 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
+    supports_none_reasoning_effort: Optional[bool]
+    supports_xhigh_reasoning_effort: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class AgenticLoopParams(TypedDict, total=False):
+    """
+    Parameters passed to agentic loop hooks (e.g., WebSearch interception).
+
+    Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
+    agentic hooks with the original request context needed for follow-up calls.
+    """
+
+    model: str
+    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+
+    custom_llm_provider: str
+    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -129,17 +183,22 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_read_input_token_cost_above_200k_tokens: Optional[float]
+    cache_read_input_token_cost_above_272k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
+    input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -158,10 +217,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_200k_tokens: Optional[
         float
     ]  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_272k_tokens: Optional[
+        float
+    ]  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
+    output_cost_per_image_token: Optional[float]
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -189,6 +252,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     tpm: Optional[int]
     rpm: Optional[int]
+    provider_specific_entry: Optional[Dict[str, float]]
+    uses_embed_content: Optional[bool]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -236,10 +301,13 @@ class CallTypes(str, Enum):
     search = "search"
     asearch = "asearch"
     arealtime = "_arealtime"
+    aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
     retrieve_batch = "retrieve_batch"
+    acancel_batch = "acancel_batch"
+    cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
     get_assistants = "get_assistants"
@@ -290,6 +358,22 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
+    vector_store_file_create = "vector_store_file_create"
+    avector_store_file_create = "avector_store_file_create"
+    vector_store_file_list = "vector_store_file_list"
+    avector_store_file_list = "avector_store_file_list"
+    vector_store_file_retrieve = "vector_store_file_retrieve"
+    avector_store_file_retrieve = "avector_store_file_retrieve"
+    vector_store_file_content = "vector_store_file_content"
+    avector_store_file_content = "avector_store_file_content"
+    vector_store_file_update = "vector_store_file_update"
+    avector_store_file_update = "avector_store_file_update"
+    vector_store_file_delete = "vector_store_file_delete"
+    avector_store_file_delete = "avector_store_file_delete"
+    vector_store_create = "vector_store_create"
+    avector_store_create = "avector_store_create"
+    vector_store_search = "vector_store_search"
+    avector_store_search = "avector_store_search"
 
     #########################################################
     # Container Call Types
@@ -302,6 +386,10 @@ class CallTypes(str, Enum):
     aretrieve_container = "aretrieve_container"
     delete_container = "delete_container"
     adelete_container = "adelete_container"
+    list_container_files = "list_container_files"
+    alist_container_files = "alist_container_files"
+    upload_container_file = "upload_container_file"
+    aupload_container_file = "aupload_container_file"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -324,9 +412,27 @@ class CallTypes(str, Enum):
     agenerate_content_stream = "agenerate_content_stream"
 
     #########################################################
+    # OCR Call Types
+    #########################################################
+    ocr = "ocr"
+    aocr = "aocr"
+
+    #########################################################
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+    list_mcp_tools = "list_mcp_tools"
+
+    #########################################################
+    # A2A Call Types
+    #########################################################
+    asend_message = "asend_message"
+    send_message = "send_message"
+
+    #########################################################
+    # Claude Code Call Types
+    #########################################################
+    acreate_skill = "acreate_skill"
 
 
 CallTypesLiteral = Literal[
@@ -363,10 +469,361 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
-    "avector_store_search",
+    "vector_store_create",
+    "avector_store_create",
     "vector_store_search",
+    "avector_store_search",
+    "vector_store_file_create",
+    "avector_store_file_create",
+    "vector_store_file_list",
+    "avector_store_file_list",
+    "vector_store_file_retrieve",
+    "avector_store_file_retrieve",
+    "vector_store_file_content",
+    "avector_store_file_content",
+    "vector_store_file_update",
+    "avector_store_file_update",
+    "vector_store_file_delete",
+    "avector_store_file_delete",
     "call_mcp_tool",
+    "list_mcp_tools",
+    "asend_message",
+    "send_message",
+    "aresponses",
+    "responses",
+    "acreate_skill",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
 ]
+
+# Mapping of API routes to their corresponding call types
+API_ROUTE_TO_CALL_TYPES = {
+    # Chat Completions
+    "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/engines/{model}/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/openai/deployments/{model}/chat/completions": [
+        CallTypes.acompletion,
+        CallTypes.completion,
+    ],
+    # Text Completions
+    "/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/v1/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/engines/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    "/openai/deployments/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    # Embeddings
+    "/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/v1/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/engines/{model}/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/openai/deployments/{model}/embeddings": [
+        CallTypes.aembedding,
+        CallTypes.embedding,
+    ],
+    # Image Generation
+    "/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/v1/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/engines/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    "/openai/deployments/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    # Image Edits
+    "/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    "/v1/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    # Audio Transcriptions
+    "/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    "/v1/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    # Audio Speech
+    "/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    "/v1/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    # Moderations
+    "/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    "/v1/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    # Rerank
+    "/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v1/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v2/rerank": [CallTypes.arerank, CallTypes.rerank],
+    # Search
+    "/search": [CallTypes.asearch, CallTypes.search],
+    "/v1/search": [CallTypes.asearch, CallTypes.search],
+    # Batches
+    "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    "/v1/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    # Files
+    "/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/v1/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/v1/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    "/v1/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    # Assistants
+    "/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/v1/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    "/v1/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    # Threads
+    "/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/v1/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    "/v1/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    # Thread Messages
+    "/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    "/v1/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    # Thread Runs
+    "/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    "/v1/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    # Fine-tuning Jobs
+    "/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/v1/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    # Video Generation
+    "/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/v1/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/v1/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/videos/{video_id}/content": [CallTypes.avideo_content, CallTypes.video_content],
+    "/v1/videos/{video_id}/content": [
+        CallTypes.avideo_content,
+        CallTypes.video_content,
+    ],
+    "/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    "/v1/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    # Vector Stores
+    "/vector_stores": [CallTypes.avector_store_create, CallTypes.vector_store_create],
+    "/v1/vector_stores": [
+        CallTypes.avector_store_create,
+        CallTypes.vector_store_create,
+    ],
+    "/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/v1/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    # Containers
+    "/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/v1/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    "/v1/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    # Responses API
+    "/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    # Realtime API
+    "/realtime": [CallTypes.arealtime],
+    "/v1/realtime": [CallTypes.arealtime],
+    # Provider-specific routes
+    "/anthropic/v1/messages": [CallTypes.anthropic_messages],
+    # Google GenAI routes
+    "/generate_content": [CallTypes.agenerate_content, CallTypes.generate_content],
+    "/models/{model}:generateContent": [
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ],
+    "/generate_content_stream": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    "/models/{model}:streamGenerateContent": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    # MCP (Model Context Protocol)
+    "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    # A2A (Agent-to-Agent)
+    "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    # Passthrough endpoints
+    "/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+    "/v1/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+    "/v1/messages": [CallTypes.anthropic_messages],
+    # OCR
+    "/ocr": [CallTypes.aocr, CallTypes.ocr],
+    "/v1/ocr": [CallTypes.aocr, CallTypes.ocr],
+}
 
 
 class PassthroughCallTypes(Enum):
@@ -421,6 +878,21 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     In rare cases, there may be fewer than the number of requested `top_logprobs`
     returned.
     """
+
+    # Some OpenAI-compatible providers return null for top_logprobs when
+    # omitted; normalize to [] to preserve the typed List[TopLogprob] contract.
+    @field_validator("top_logprobs", mode="before")
+    @classmethod
+    def ensure_top_logprobs_is_list(cls, v):
+        """Normalize null top_logprobs to empty list.
+
+        Some providers return null instead of [] when logprobs=true but
+        top_logprobs is unset. The OpenAI spec requires an array.
+        Fixes https://github.com/BerriAI/litellm/issues/21932
+        """
+        if v is None:
+            return []
+        return v
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -621,7 +1093,7 @@ def add_provider_specific_fields(
     setattr(object, "provider_specific_fields", provider_specific_fields)
 
 
-class Message(OpenAIObject):
+class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
@@ -741,7 +1213,7 @@ class Message(OpenAIObject):
             return self.dict()
 
 
-class Delta(OpenAIObject):
+class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -765,6 +1237,13 @@ class Delta(OpenAIObject):
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
+        # Map 'reasoning' to 'reasoning_content' for providers that return
+        # delta.reasoning (e.g., Cerebras, Groq gpt-oss models).
+        # Must be done before super().__init__ to prevent 'reasoning' from
+        # leaking as an extra attribute on the parent model.
+        if reasoning_content is None and "reasoning" in params:
+            reasoning_content = params.pop("reasoning", None)
+
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
@@ -838,8 +1317,8 @@ class Delta(OpenAIObject):
         setattr(self, key, value)
 
 
-class Choices(OpenAIObject):
-    finish_reason: str
+class Choices(SafeAttributeModel, OpenAIObject):
+    finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
     logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
@@ -857,7 +1336,13 @@ class Choices(OpenAIObject):
         **params,
     ):
         if finish_reason is not None:
-            params["finish_reason"] = map_finish_reason(finish_reason)
+            mapped = map_finish_reason(finish_reason)
+            params["finish_reason"] = mapped
+            if finish_reason != mapped:
+                provider_specific_fields = (
+                    dict(provider_specific_fields) if provider_specific_fields else {}
+                )
+                provider_specific_fields["native_finish_reason"] = finish_reason
         else:
             params["finish_reason"] = "stop"
         if index is not None:
@@ -871,6 +1356,14 @@ class Choices(OpenAIObject):
                 params["message"] = message
             elif isinstance(message, dict):
                 params["message"] = Message(**message)
+            elif isinstance(message, BaseModel):
+                # Normalize provider/OpenAI SDK message models into LiteLLM's Message type.
+                dump = (
+                    message.model_dump()
+                    if hasattr(message, "model_dump")
+                    else message.dict()
+                )
+                params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
                 params["logprobs"] = ChoiceLogprobs(**logprobs)
@@ -913,6 +1406,12 @@ class CompletionTokensDetailsWrapper(
     text_tokens: Optional[int] = None
     """Text tokens generated by the model."""
 
+    image_tokens: Optional[int] = None
+    """Image tokens generated by the model."""
+
+    video_tokens: Optional[int] = None
+    """Video tokens generated by the model."""
+
 
 class CacheCreationTokenDetails(BaseModel):
     ephemeral_5m_input_tokens: Optional[int] = None
@@ -920,13 +1419,16 @@ class CacheCreationTokenDetails(BaseModel):
 
 
 class PromptTokensDetailsWrapper(
-    PromptTokensDetails
-):  # wrapper for older openai versions
+    SafeAttributeModel, PromptTokensDetails
+):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
     """Text tokens sent to the model."""
 
     image_tokens: Optional[int] = None
     """Image tokens sent to the model."""
+
+    video_tokens: Optional[int] = None
+    """Video tokens sent to the model."""
 
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
@@ -963,10 +1465,11 @@ class PromptTokensDetailsWrapper(
 
 
 class ServerToolUse(BaseModel):
-    web_search_requests: Optional[int]
+    web_search_requests: Optional[int] = None
+    tool_search_requests: Optional[int] = None
 
 
-class Usage(CompletionUsage):
+class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -983,7 +1486,7 @@ class Usage(CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
@@ -1001,15 +1504,8 @@ class Usage(CompletionUsage):
     ):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if reasoning_tokens:
-            text_tokens = (
-                completion_tokens - reasoning_tokens if completion_tokens else None
-            )
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
-            )
 
-        # Ensure completion_tokens_details is properly handled
+        # First, handle existing completion_tokens_details
         if completion_tokens_details:
             if isinstance(completion_tokens_details, dict):
                 _completion_tokens_details = CompletionTokensDetailsWrapper(
@@ -1017,6 +1513,33 @@ class Usage(CompletionUsage):
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
                 _completion_tokens_details = completion_tokens_details
+
+        # Handle reasoning_tokens and auto-calculate text_tokens if needed
+        if reasoning_tokens:
+            # Ensure we have a details object to work with
+            if _completion_tokens_details is None:
+                _completion_tokens_details = CompletionTokensDetailsWrapper()
+
+            # Set reasoning_tokens if not already set by provider
+            if _completion_tokens_details.reasoning_tokens is None:
+                _completion_tokens_details.reasoning_tokens = reasoning_tokens
+
+            # Auto-calculate text_tokens only if provider didn't set it explicitly
+            # Formula: text_tokens = completion_tokens - reasoning_tokens - image_tokens - audio_tokens
+            if (
+                _completion_tokens_details.text_tokens is None
+                and completion_tokens is not None
+            ):
+                calculated_text_tokens = completion_tokens - reasoning_tokens
+
+                # Subtract other modality tokens if present
+                if _completion_tokens_details.image_tokens:
+                    calculated_text_tokens -= _completion_tokens_details.image_tokens
+                if _completion_tokens_details.audio_tokens:
+                    calculated_text_tokens -= _completion_tokens_details.audio_tokens
+
+                # Prevent negative token counts from inconsistent data
+                _completion_tokens_details.text_tokens = max(0, calculated_text_tokens)
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
@@ -1140,7 +1663,7 @@ class StreamingChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = None
+            self.finish_reason = None  # type: ignore[assignment]
         self.index = index
         if delta is not None:
             if isinstance(delta, Delta):
@@ -1209,6 +1732,12 @@ class ModelResponseBase(OpenAIObject):
 
     _response_headers: Optional[dict] = None
 
+    def model_dump(self, **kwargs):
+        """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
+        if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
+            kwargs["exclude_unset"] = True
+        return super().model_dump(**kwargs)
+
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
@@ -1248,12 +1777,16 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
-        if (
-            "usage" in kwargs
-            and kwargs["usage"] is not None
-            and isinstance(kwargs["usage"], dict)
-        ):
-            kwargs["usage"] = Usage(**kwargs["usage"])
+        if "usage" in kwargs and kwargs["usage"] is not None:
+            if isinstance(kwargs["usage"], dict):
+                kwargs["usage"] = Usage(**kwargs["usage"])
+            elif isinstance(kwargs["usage"], BaseModel):
+                dump = (
+                    kwargs["usage"].model_dump()
+                    if hasattr(kwargs["usage"], "model_dump")
+                    else kwargs["usage"].dict()
+                )
+                kwargs["usage"] = Usage(**dump)
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1283,7 +1816,7 @@ class ModelResponseStream(ModelResponseBase):
 
 
 class ModelResponse(ModelResponseBase):
-    choices: List[Union[Choices, StreamingChoices]]
+    choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
     def __init__(  # noqa: PLR0915
@@ -1302,37 +1835,27 @@ class ModelResponse(ModelResponseBase):
         _response_headers=None,
         **params,
     ) -> None:
-        if stream is not None and stream is True:
-            object = "chat.completion.chunk"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    _new_choice = None
-                    if isinstance(choice, StreamingChoices):
-                        _new_choice = choice
-                    elif isinstance(choice, dict):
-                        _new_choice = StreamingChoices(**choice)
-                    elif isinstance(choice, BaseModel):
-                        _new_choice = StreamingChoices(**choice.model_dump())
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [StreamingChoices()]
+        object = "chat.completion"
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                if isinstance(choice, Choices):
+                    _new_choice = choice  # type: ignore
+                elif isinstance(choice, dict):
+                    _new_choice = Choices(**choice)  # type: ignore
+                elif isinstance(choice, BaseModel):
+                    dump = (
+                        choice.model_dump()
+                        if hasattr(choice, "model_dump")
+                        else choice.dict()
+                    )
+                    _new_choice = Choices(**dump)  # type: ignore
+                else:
+                    _new_choice = choice
+                new_choices.append(_new_choice)
+            choices = new_choices
         else:
-            object = "chat.completion"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    if isinstance(choice, Choices):
-                        _new_choice = choice  # type: ignore
-                    elif isinstance(choice, dict):
-                        _new_choice = Choices(**choice)  # type: ignore
-                    else:
-                        _new_choice = choice
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [Choices()]
+            choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:
@@ -1345,10 +1868,15 @@ class ModelResponse(ModelResponseBase):
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
+            elif isinstance(usage, BaseModel):
+                dump = (
+                    usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+                )
+                usage = Usage(**dump)
             else:
                 usage = usage
         elif stream is None or stream is False:
-            usage = Usage()
+            usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:
             self._hidden_params = hidden_params
 
@@ -1654,6 +2182,7 @@ class ImageObject(OpenAIImage):
     b64_json: The base64-encoded JSON of the generated image, if response_format is b64_json.
     url: The URL of the generated image, if response_format is url (default).
     revised_prompt: The prompt that was used to generate the image, if there was any revision to the prompt.
+    provider_specific_fields: Provider-specific fields not part of OpenAI spec.
 
     https://platform.openai.com/docs/api-reference/images/object
     """
@@ -1661,9 +2190,19 @@ class ImageObject(OpenAIImage):
     b64_json: Optional[str] = None
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None, **kwargs):
+    def __init__(
+        self,
+        b64_json=None,
+        url=None,
+        revised_prompt=None,
+        provider_specific_fields=None,
+        **kwargs,
+    ):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
+        if provider_specific_fields:
+            self.provider_specific_fields = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1920,6 +2459,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2031,6 +2571,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     requester_metadata: Optional[dict]
     requester_custom_headers: Optional[
         Dict[str, str]
@@ -2043,6 +2584,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2097,8 +2640,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 
 class GuardrailMode(TypedDict, total=False):
-    tags: Optional[Dict[str, str]]
-    default: Optional[str]
+    tags: Optional[Dict[str, Union[str, List[str]]]]
+    default: Optional[Union[str, List[str]]]
 
 
 GuardrailStatus = Literal[
@@ -2131,6 +2674,52 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     }
     """
 
+    guardrail_id: Optional[str]
+    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
+
+    policy_template: Optional[str]
+    """Name of the policy template this guardrail belongs to, e.g. 'EU AI Act Article 5'"""
+
+    detection_method: Optional[str]
+    """How detection was performed: 'regex', 'keyword', 'llm-judge', 'presidio', etc."""
+
+    confidence_score: Optional[float]
+    """For LLM-judge guardrails: confidence score 0.0-1.0"""
+
+    classification: Optional[dict]
+    """For LLM-judge guardrails: structured classification output"""
+
+    match_details: Optional[List[dict]]
+    """Detailed match information for each detected pattern"""
+
+    patterns_checked: Optional[int]
+    """Total number of patterns evaluated by this guardrail"""
+
+    alert_recipients: Optional[List[str]]
+    """Email addresses that were notified"""
+
+    risk_score: Optional[float]
+    """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
+
+
+class GuardrailTracingDetail(TypedDict, total=False):
+    """
+    Typed fields for guardrail tracing metadata.
+
+    Passed to add_standard_logging_guardrail_information_to_request_data()
+    to enrich the StandardLoggingGuardrailInformation with provider-specific details.
+    """
+
+    guardrail_id: Optional[str]
+    policy_template: Optional[str]
+    detection_method: Optional[str]
+    confidence_score: Optional[float]
+    classification: Optional[dict]
+    match_details: Optional[List[dict]]
+    patterns_checked: Optional[int]
+    alert_recipients: Optional[List[str]]
+    risk_score: Optional[float]
+
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
@@ -2161,9 +2750,15 @@ class CostBreakdown(TypedDict, total=False):
     )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    additional_costs: Dict[
+        str, float
+    ]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
+    margin_percent: float  # Margin percentage applied (e.g., 0.10 = 10%) (optional)
+    margin_fixed_amount: float  # Fixed margin amount in USD (optional)
+    margin_total_amount: float  # Total margin added in USD (optional)
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
@@ -2213,6 +2808,7 @@ class StandardLoggingPayload(TypedDict):
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
@@ -2273,6 +2869,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
     langsmith_sampling_rate: Optional[float]
+    langsmith_tenant_id: Optional[str]
 
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
@@ -2285,6 +2882,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # PostHog dynamic params
     posthog_api_key: Optional[str]
     posthog_api_url: Optional[str]
+
+    # Weave (W&B) dynamic params
+    wandb_api_key: Optional[str]
+    weave_project_id: Optional[str]
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
@@ -2338,6 +2939,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_above_200k_tokens: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
+    output_cost_per_image_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -2366,8 +2968,9 @@ all_litellm_params = (
         "api_key",
         "api_version",
         "prompt_id",
-        "provider_specific_header",
         "prompt_variables",
+        "litellm_system_prompt",
+        "provider_specific_header",
         "prompt_version",
         "api_base",
         "force_timeout",
@@ -2446,6 +3049,9 @@ all_litellm_params = (
         "use_litellm_proxy",
         "prompt_label",
         "shared_session",
+        "search_tool_name",
+        "order",
+        "enable_json_schema_validation",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -2494,9 +3100,11 @@ GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
+    ZAI = "zai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -2507,6 +3115,7 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     RUNWAYML = "runwayml"
+    AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -2516,6 +3125,7 @@ class LlmProviders(str, Enum):
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
+    BLACK_FOREST_LABS = "black_forest_labs"
     AZURE = "azure"
     AZURE_TEXT = "azure_text"
     AZURE_AI = "azure_ai"
@@ -2533,6 +3143,8 @@ class LlmProviders(str, Enum):
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
+    A2A = "a2a"
+    GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
@@ -2541,6 +3153,7 @@ class LlmProviders(str, Enum):
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
+    PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
@@ -2560,7 +3173,9 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    RAGFLOW = "ragflow"
     COMPACTIFAI = "compactifai"
+    DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
@@ -2576,16 +3191,21 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
     GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    S3_VECTORS = "s3_vectors"
+    HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
+    STABILITY = "stability"
     HEROKU = "heroku"
     AIML = "aiml"
     COMETAPI = "cometapi"
@@ -2593,13 +3213,39 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    AMAZON_NOVA = "amazon_nova"
+    A2A_AGENT = "a2a_agent"
+    LANGGRAPH = "langgraph"
+    MINIMAX = "minimax"
+    SYNTHETIC = "synthetic"
+    APERTIS = "apertis"
+    NANOGPT = "nano-gpt"
+    POE = "poe"
+    CHUTES = "chutes"
+    XIAOMI_MIMO = "xiaomi_mimo"
+    LITELLM_AGENT = "litellm_agent"
+    CURSOR = "cursor"
+    BEDROCK_MANTLE = "bedrock_mantle"
 
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+# File and Batch API providers that are OpenAI-compatible
+OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
+    LlmProviders.OPENAI.value,
+    LlmProviders.HOSTED_VLLM.value,
+}
+
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+
+LIST_BATCHES_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    get_args(ListBatchesSupportedProvider)
+)
 
 
 class SearchProviders(str, Enum):
@@ -2612,10 +3258,15 @@ class SearchProviders(str, Enum):
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
+    BRAVE = "brave"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
+    LINKUP = "linkup"
+    DUCKDUCKGO = "duckduckgo"
+    SEARCHAPI = "searchapi"
+    SERPER = "serper"
 
 
 # Create a set of all search provider values for quick lookup
@@ -2647,6 +3298,12 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     """
     Original Response from upstream API call - if an API call was made for token counting
     """
+    error: bool = False
+    error_message: Optional[str] = None
+    """
+    HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
+    """
+    status_code: Optional[int] = None
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
@@ -2696,7 +3353,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
-    usage: Optional[Usage] = None
+    usage: Optional[Usage] = None  # type: ignore[assignment]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2825,6 +3482,7 @@ LLMResponseTypes = Union[
     LiteLLMFineTuningJob,
     AnthropicMessagesResponse,
     ResponsesAPIResponse,
+    LiteLLMSendMessageResponse,
 ]
 
 
@@ -2894,4 +3552,22 @@ class PriorityReservationSettings(BaseModel):
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
 
+    saturation_check_cache_ttl: int = Field(
+        default=60,
+        description="TTL in seconds for local cache when reading saturation check values from Redis.",
+    )
+
     model_config = ConfigDict(protected_namespaces=())
+
+
+class GenericGuardrailAPIInputs(TypedDict, total=False):
+    texts: List[str]  # extracted text from the LLM response - for basic text guardrails
+    images: List[str]  # extracted images from the LLM response - for image guardrails
+    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
+    tool_calls: Union[
+        List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]
+    ]  # tool calls sent from the LLM
+    structured_messages: List[
+        AllMessageValues
+    ]  # structured messages sent to the LLM - indicates if text is from system or user
+    model: Optional[str]  # the model being used for the LLM call

@@ -17,8 +17,11 @@ async def test_disable_spend_logs():
     Test that the spend logs are not written to the database when disable_spend_logs is True
     """
     # Mock the necessary components
+    import asyncio
     mock_prisma_client = Mock()
     mock_prisma_client.spend_log_transactions = []
+    # Add lock for spend_log_transactions (matches real PrismaClient)
+    mock_prisma_client._spend_log_transactions_lock = asyncio.Lock()
 
     with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client

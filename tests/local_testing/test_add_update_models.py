@@ -16,6 +16,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
+import litellm.proxy
+import litellm.proxy.proxy_server
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     add_new_model,
     update_model,
@@ -217,6 +219,7 @@ async def _create_new_team(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_add_team_model_to_db(prisma_client):
     """
     Test adding a team model and verifying the team_public_model_name is stored correctly

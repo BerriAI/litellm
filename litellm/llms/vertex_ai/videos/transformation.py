@@ -7,14 +7,17 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
 
 import httpx
 from httpx._types import RequestFiles
 
+from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
+    get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
@@ -23,8 +26,6 @@ from litellm.types.videos.utils import (
     encode_video_id_with_provider,
     extract_original_video_id,
 )
-from litellm.images.utils import ImageEditRequestUtils
-from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -77,11 +78,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     def extract_model_from_operation_name(operation_name: str) -> Optional[str]:
         """
         Extract the model name from a Vertex AI operation name.
-        
+
         Args:
             operation_name: Operation name in format:
                 projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID
-        
+
         Returns:
             Model name (e.g., "veo-2.0-generate-001") or None if extraction fails
         """
@@ -118,6 +119,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
             mapped_params["image"] = video_create_optional_params["input_reference"]
+        elif "image" in video_create_optional_params:
+            mapped_params["image"] = video_create_optional_params["image"]
+
+        # Pass through a provider-specific parameters block if provided directly
+        if "parameters" in video_create_optional_params:
+            mapped_params["parameters"] = video_create_optional_params["parameters"]
 
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
@@ -160,25 +167,30 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        **kwargs,
-    ) -> Dict:
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
+    ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
-        
+
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
-        litellm_params = litellm_params or {}
-        
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
-        
+        # Ensure litellm_params is a dict for type checking
+        params_dict: Dict[str, Any] = (
+            cast(Dict[str, Any], litellm_params) if litellm_params is not None else {}
+        )
+
+        vertex_project = VertexBase.safe_get_vertex_ai_project(
+            litellm_params=params_dict
+        )
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
+            litellm_params=params_dict
+        )
+
         # Get access token from Vertex credentials
         access_token, project_id = self.get_access_token(
             credentials=vertex_credentials,
@@ -224,7 +236,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if api_base:
             base_url = api_base.rstrip("/")
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
 
@@ -263,23 +275,49 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         instance_dict: Dict[str, Any] = {"prompt": prompt}
         params_copy = video_create_optional_request_params.copy()
 
-
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
             # Replace/merge with user-provided instance
             instance_dict.update(params_copy["instances"])
             params_copy.pop("instances")
         elif "image" in params_copy and params_copy["image"] is not None:
-            image_data = _convert_image_to_vertex_format(params_copy["image"])
+            image = params_copy["image"]
+            if isinstance(image, dict):
+                # Already in Vertex format e.g. {"gcsUri": "gs://..."} or
+                # {"bytesBase64Encoded": "...", "mimeType": "..."}
+                image_data = image
+            elif isinstance(image, str) and image.startswith("gs://"):
+                # Bare GCS URI — Vertex AI accepts gcsUri natively, no download needed
+                image_data = {"gcsUri": image}
+            elif isinstance(image, str):
+                raise ValueError(
+                    f"Unsupported image value '{image}'. "
+                    "Provide a GCS URI (gs://...), a dict with 'gcsUri' or "
+                    "'bytesBase64Encoded'/'mimeType', or a binary file-like object."
+                )
+            else:
+                # File-like object — encode to base64
+                image_data = _convert_image_to_vertex_format(image)
             instance_dict["image"] = image_data
             params_copy.pop("image")
+
+        # Extract a nested "parameters" block that map_openai_params may have placed
+        # inside params_copy (e.g. from provider-specific pass-through).  Merging it
+        # flat prevents the double-nesting bug:
+        #   {"parameters": {"parameters": {...}}}  ← wrong
+        #   {"parameters": {...}}                  ← correct
+        nested_params = params_copy.pop("parameters", None)
+        vertex_params: Dict[str, Any] = {}
+        if isinstance(nested_params, dict):
+            vertex_params.update(nested_params)
+        vertex_params.update(params_copy)
 
         # Build request data directly (TypedDict doesn't have model_dump)
         request_data: Dict[str, Any] = {"instances": [instance_dict]}
 
         # Only add parameters if there are any
-        if params_copy:
-            request_data["parameters"] = params_copy
+        if vertex_params:
+            request_data["parameters"] = vertex_params
 
         # Append :predictLongRunning endpoint to api_base
         url = f"{api_base}:predictLongRunning"
@@ -321,24 +359,23 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             video_id = operation_name
 
-
         video_obj = VideoObject(
-            id=video_id,
-            object="video",
-            status="processing",
-            model=model
+            id=video_id, object="video", status="processing", model=model
         )
 
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+            duration = (
+                parameters.get("durationSeconds")
+                or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+            )
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)
                 except (ValueError, TypeError):
                     pass
-        
+
         video_obj.usage = usage_data
         return video_obj
 
@@ -356,7 +393,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """
         operation_name = extract_original_video_id(video_id)
         model = self.extract_model_from_operation_name(operation_name)
-        
+
         if not model:
             raise ValueError(
                 f"Invalid operation name format: {operation_name}. "
@@ -455,6 +492,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for Veo API.
@@ -467,7 +505,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Since we need to make an HTTP call here, we'll use the same fetchPredictOperation
         approach as status retrieval.
         """
-        return self.transform_video_status_retrieve_request(video_id, api_base, litellm_params, headers)
+        return self.transform_video_status_retrieve_request(
+            video_id, api_base, litellm_params, headers
+        )
 
     def transform_video_content_response(
         self,
@@ -594,4 +634,3 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             message=error_message,
             headers=headers,
         )
-

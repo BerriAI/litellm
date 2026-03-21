@@ -20,7 +20,7 @@ LiteLLM tracks changes to the following entities and actions:
 
 :::tip
 
-Requires Enterprise License, Get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Requires Enterprise License, Get in touch with us [here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -89,7 +89,7 @@ curl -X POST 'http://0.0.0.0:4000/team/update' \
    "id": "bd136c28-edd0-4cb6-b963-f35464cf6f5a",
    "updated_at": "2024-06-08 23:41:14.793",
    "changed_by": "krrish@berri.ai", # 👈 CHANGED BY
-   "changed_by_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+   "changed_by_api_key": "example-api-key-123",
    "action": "updated",
    "table_name": "LiteLLM_TeamTable",
    "object_id": "8bf18b11-7f52-4717-8e1f-7c65f9d01e52",

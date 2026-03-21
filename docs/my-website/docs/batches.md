@@ -7,7 +7,7 @@ Covers Batches, Files
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Supported Providers | OpenAI, Azure, Vertex, Bedrock | - |
+| Supported Providers | OpenAI, Azure, Vertex, Bedrock, vLLM | - |
 | ✨ Cost Tracking | ✅ | LiteLLM Enterprise only |
 | Logging | ✅ | Works across all logging integrations |
 
@@ -174,11 +174,263 @@ print("list_batches_response=", list_batches_response)
 </Tabs>
 
 
+## Multi-Account / Model-Based Routing
+
+Route batch operations to different provider accounts using model-specific credentials from your `config.yaml`. This eliminates the need for environment variables and enables multi-tenant batch processing.
+
+### How It Works
+
+**Priority Order:**
+1. **Encoded Batch/File ID** (highest) - Model info embedded in the ID
+2. **Model Parameter** - Via header (`x-litellm-model`), query param, or request body
+3. **Custom Provider** (fallback) - Uses environment variables
+
+### Configuration
+
+```yaml
+model_list:
+  - model_name: gpt-4o-account-1
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-account-1-key
+      api_base: https://api.openai.com/v1
+  
+  - model_name: gpt-4o-account-2
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-account-2-key
+      api_base: https://api.openai.com/v1
+  
+  - model_name: azure-batches
+    litellm_params:
+      model: azure/gpt-4
+      api_key: azure-key-123
+      api_base: https://my-resource.openai.azure.com
+      api_version: "2024-02-01"
+```
+
+### Usage Examples
+
+#### Scenario 1: Encoded File ID with Model
+
+When you upload a file with a model parameter, LiteLLM encodes the model information in the file ID. All subsequent operations automatically use those credentials.
+
+```bash
+# Step 1: Upload file with model
+curl http://localhost:4000/v1/files \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-model: gpt-4o-account-1" \
+  -F purpose="batch" \
+  -F file="@batch.jsonl"
+
+# Response includes encoded file ID:
+# {
+#   "id": "file-bGl0ZWxsbTpmaWxlLUxkaUwzaVYxNGZRVlpYcU5KVEdkSjk7bW9kZWwsZ3B0LTRvLWFjY291bnQtMQ",
+#   ...
+# }
+
+# Step 2: Create batch - automatically routes to gpt-4o-account-1
+curl http://localhost:4000/v1/batches \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-bGl0ZWxsbTpmaWxlLUxkaUwzaVYxNGZRVlpYcU5KVEdkSjk7bW9kZWwsZ3B0LTRvLWFjY291bnQtMQ",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+
+# Batch ID is also encoded with model:
+# {
+#   "id": "batch_bGl0ZWxsbTpiYXRjaF82OTIwM2IzNjg0MDQ4MTkwYTA3ODQ5NDY3YTFjMDJkYTttb2RlbCxncHQtNG8tYWNjb3VudC0x",
+#   "input_file_id": "file-bGl0ZWxsbTpmaWxlLUxkaUwzaVYxNGZRVlpYcU5KVEdkSjk7bW9kZWwsZ3B0LTRvLWFjY291bnQtMQ",
+#   ...
+# }
+
+# Step 3: Retrieve batch - automatically routes to gpt-4o-account-1
+curl http://localhost:4000/v1/batches/batch_bGl0ZWxsbTpiYXRjaF82OTIwM2IzNjg0MDQ4MTkwYTA3ODQ5NDY3YTFjMDJkYTttb2RlbCxncHQtNG8tYWNjb3VudC0x \
+  -H "Authorization: Bearer sk-1234"
+```
+
+**✅ Benefits:**
+- No need to specify model on every request
+- File and batch IDs "remember" which account created them
+- Automatic routing for retrieve, cancel, and file content operations
+
+#### Scenario 2: Model via Header/Query Parameter
+
+Specify the model for each request without encoding it in the ID.
+
+```bash
+# Create batch with model header
+curl http://localhost:4000/v1/batches \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-model: gpt-4o-account-2" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+
+# Or use query parameter
+curl "http://localhost:4000/v1/batches?model=gpt-4o-account-2" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+
+# List batches for specific model
+curl "http://localhost:4000/v1/batches?model=gpt-4o-account-2" \
+  -H "Authorization: Bearer sk-1234"
+```
+
+**✅ Use Case:**
+- One-off batch operations
+- Different models for different operations
+- Explicit control over routing
+
+#### Scenario 3: Environment Variables (Fallback)
+
+Traditional approach using environment variables when no model is specified.
+
+```bash
+export OPENAI_API_KEY="sk-env-key"
+
+curl http://localhost:4000/v1/batches \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+```
+
+**✅ Use Case:**
+- Backward compatibility
+- Simple single-account setups
+- Quick prototyping
+
+### Complete Multi-Account Example
+
+```bash
+# Upload file to Account 1
+FILE_1=$(curl -s http://localhost:4000/v1/files \
+  -H "x-litellm-model: gpt-4o-account-1" \
+  -F purpose="batch" \
+  -F file="@batch1.jsonl" | jq -r '.id')
+
+# Upload file to Account 2
+FILE_2=$(curl -s http://localhost:4000/v1/files \
+  -H "x-litellm-model: gpt-4o-account-2" \
+  -F purpose="batch" \
+  -F file="@batch2.jsonl" | jq -r '.id')
+
+# Create batch on Account 1 (auto-routed via encoded file ID)
+BATCH_1=$(curl -s http://localhost:4000/v1/batches \
+  -d "{\"input_file_id\": \"$FILE_1\", \"endpoint\": \"/v1/chat/completions\", \"completion_window\": \"24h\"}" | jq -r '.id')
+
+# Create batch on Account 2 (auto-routed via encoded file ID)
+BATCH_2=$(curl -s http://localhost:4000/v1/batches \
+  -d "{\"input_file_id\": \"$FILE_2\", \"endpoint\": \"/v1/chat/completions\", \"completion_window\": \"24h\"}" | jq -r '.id')
+
+# Retrieve both batches (auto-routed to correct accounts)
+curl http://localhost:4000/v1/batches/$BATCH_1
+curl http://localhost:4000/v1/batches/$BATCH_2
+
+# List batches per account
+curl "http://localhost:4000/v1/batches?model=gpt-4o-account-1"
+curl "http://localhost:4000/v1/batches?model=gpt-4o-account-2"
+```
+
+### SDK Usage with Model Routing
+
+```python
+import litellm
+import asyncio
+
+# Upload file with model routing
+file_obj = await litellm.acreate_file(
+    file=open("batch.jsonl", "rb"),
+    purpose="batch",
+    model="gpt-4o-account-1",  # Route to specific account
+)
+
+print(f"File ID: {file_obj.id}")
+# File ID is encoded with model info
+
+# Create batch - automatically uses gpt-4o-account-1 credentials
+batch = await litellm.acreate_batch(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id=file_obj.id,  # Model info embedded in ID
+)
+
+print(f"Batch ID: {batch.id}")
+# Batch ID is also encoded
+
+# Retrieve batch - automatically routes to correct account
+retrieved = await litellm.aretrieve_batch(
+    batch_id=batch.id,  # Model info embedded in ID
+)
+
+print(f"Batch status: {retrieved.status}")
+
+# Or explicitly specify model
+batch2 = await litellm.acreate_batch(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id="file-regular-id",
+    model="gpt-4o-account-2",  # Explicit routing
+)
+```
+
+### How ID Encoding Works
+
+LiteLLM encodes model information into file and batch IDs using base64:
+
+```
+Original:  file-abc123
+Encoded:   file-bGl0ZWxsbTpmaWxlLWFiYzEyMzttb2RlbCxncHQtNG8tdGVzdA
+           └─┬─┘ └──────────────────┬──────────────────────┘
+          prefix      base64(litellm:file-abc123;model,gpt-4o-test)
+
+Original:  batch_xyz789
+Encoded:   batch_bGl0ZWxsbTpiYXRjaF94eXo3ODk7bW9kZWwsZ3B0LTRvLXRlc3Q
+           └──┬──┘ └──────────────────┬──────────────────────┘
+           prefix       base64(litellm:batch_xyz789;model,gpt-4o-test)
+```
+
+The encoding:
+- ✅ Preserves OpenAI-compatible prefixes (`file-`, `batch_`)
+- ✅ Is transparent to clients
+- ✅ Enables automatic routing without additional parameters
+- ✅ Works across all batch and file endpoints
+
+### Supported Endpoints
+
+All batch and file endpoints support model-based routing:
+
+| Endpoint | Method | Model Routing |
+|----------|--------|---------------|
+| `/v1/files` | POST | ✅ Via header/query/body |
+| `/v1/files/{file_id}` | GET | ✅ Auto from encoded ID + header/query |
+| `/v1/files/{file_id}/content` | GET | ✅ Auto from encoded ID + header/query |
+| `/v1/files/{file_id}` | DELETE | ✅ Auto from encoded ID |
+| `/v1/batches` | POST | ✅ Auto from file ID + header/query/body |
+| `/v1/batches` | GET | ✅ Via header/query |
+| `/v1/batches/{batch_id}` | GET | ✅ Auto from encoded ID |
+| `/v1/batches/{batch_id}/cancel` | POST | ✅ Auto from encoded ID |
+
 ## **Supported Providers**:
 ### [Azure OpenAI](./providers/azure#azure-batches-api)
 ### [OpenAI](#quick-start)
 ### [Vertex AI](./providers/vertex#batch-apis)
 ### [Bedrock](./providers/bedrock_batches)
+### [vLLM](./providers/vllm_batches)
 
 
 ## How Cost Tracking for Batches API Works

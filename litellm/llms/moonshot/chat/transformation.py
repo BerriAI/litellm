@@ -33,9 +33,25 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Moonshot AI does not support content in list format.
+        Moonshot text-only models don't support content in list format.
+        Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
+        standard OpenAI content array with non-text blocks (image_url,
+        input_audio, video_url, file, etc.).
+
+        If any message contains a non-text content part, skip flattening
+        so the multimodal payload is preserved.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        has_non_text = False
+        for m in messages:
+            _content = m.get("content")
+            if _content and isinstance(_content, list):
+                if any(c.get("type") != "text" for c in _content):
+                    has_non_text = True
+                    break
+
+        if not has_non_text:
+            messages = handle_messages_with_content_list_to_str_conversion(messages)
+
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
@@ -79,24 +95,24 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for Moonshot AI models
-        
+
         Moonshot AI limitations:
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
         """
         excluded_params: List[str] = ["functions"]
-        
+
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
-        
+
         base_openai_params = super().get_supported_openai_params(model=model)
         final_params: List[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
-        
+
         return final_params
 
     def map_openai_params(
@@ -108,7 +124,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Map OpenAI parameters to Moonshot AI parameters
-        
+
         Handles Moonshot AI specific limitations:
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
@@ -123,7 +139,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         ##########################################
         # temperature limitations
         # 1. `temperature` on KIMI API is [0, 1] but OpenAI is [0, 2]
-        # 2. If temperature < 0.3 and n > 1, KIMI will raise an exception. 
+        # 2. If temperature < 0.3 and n > 1, KIMI will raise an exception.
         #       If we enter this condition, we set the temperature to 0.3 as suggested by Moonshot AI
         ##########################################
         if "temperature" in optional_params:
@@ -132,7 +148,6 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if optional_params["temperature"] < 0.3 and optional_params.get("n", 1) > 1:
                 optional_params["temperature"] = 0.3
         return optional_params
-    
 
     def transform_request(
         self,
@@ -162,17 +177,20 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-    
 
-    def _add_tool_choice_required_message(self, messages: List[AllMessageValues], optional_params: dict) -> List[AllMessageValues]:
+    def _add_tool_choice_required_message(
+        self, messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
         """
         Add a message to the messages list to indicate that the tool choice is required.
 
         https://platform.moonshot.ai/docs/guide/migrating-from-openai-to-kimi#about-tool_choice
         """
-        messages.append({
-            "role": "user",
-            "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": "Please select a tool to handle the current issue.",  # Usually, the Kimi large language model understands the intention to invoke a tool and selects one for invocation
+            }
+        )
         optional_params.pop("tool_choice")
         return messages

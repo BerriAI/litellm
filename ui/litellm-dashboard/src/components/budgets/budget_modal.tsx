@@ -43,7 +43,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, accessToken, 
   return (
     <Modal
       title="Create Budget"
-      visible={isModalVisible}
+      open={isModalVisible}
       width={800}
       footer={null}
       onOk={handleOk}

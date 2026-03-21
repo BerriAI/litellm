@@ -54,7 +54,7 @@
                 "id": "time-14-13-16-469836_chatcmpl-3803a9e9-aa68-4493-94d9-247f354830d6",
                 "endTime": "2025-05-26T14:13:16.795438-07:00",
                 "completionStartTime": "2025-05-26T14:13:16.795438-07:00",
-                "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                 "modelParameters": {
                     "aws_region": "us-east-1"
                 },

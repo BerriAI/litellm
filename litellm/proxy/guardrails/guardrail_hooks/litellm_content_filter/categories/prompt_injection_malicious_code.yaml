@@ -1,0 +1,147 @@
+# Malicious Code Injection Detection - Detects attempts to inject executable code
+# Uses conditional logic: BLOCK if an identifier word + block word appear in same sentence
+category_name: "prompt_injection_malicious_code"
+description: "Detects attempts to inject or execute malicious code via prompts"
+default_action: "BLOCK"
+
+# IDENTIFIER WORDS - Code execution actions
+identifier_words:
+  - "execute"
+  - "run"
+  - "eval"
+  - "exec"
+  - "spawn"
+  - "system"
+  - "shell"
+  - "invoke"
+  - "call"
+  - "launch"
+  - "process"
+  - "compile"
+  - "interpret"
+  - "inject"
+
+# ADDITIONAL BLOCK WORDS - Dangerous commands and patterns
+additional_block_words:
+  # Shell commands
+  - "rm -rf"
+  - "rm -f"
+  - "chmod 777"
+  - "chmod +x"
+  - "sudo"
+  - "su root"
+  - "curl | bash"
+  - "curl | sh"
+  - "wget -O -"
+  - "wget | sh"
+  - "/etc/passwd"
+  - "/etc/shadow"
+  - "mkfs"
+  - "dd if="
+  - "> /dev/sda"
+  - "fork bomb"
+  - "crontab"
+  - "nc -e"
+  - "netcat"
+  - "ncat"
+  - "reverse shell"
+
+  # Script injection
+  - "powershell -enc"
+  - "powershell -e"
+  - "base64 -d"
+  - "base64 --decode"
+  - "<script>"
+  - "javascript:"
+  - "onerror="
+  - "onload="
+  - "document.cookie"
+  - "innerHTML"
+
+  # Python-specific
+  - "__import__"
+  - "os.system"
+  - "subprocess"
+  - "os.popen"
+  - "importlib"
+
+# ALWAYS BLOCK - Explicit malicious patterns (blocked regardless of context)
+always_block_keywords:
+  # Destructive shell commands
+  - keyword: "rm -rf /"
+    severity: "high"
+  - keyword: "rm -rf /*"
+    severity: "high"
+  - keyword: "rm -rf ~"
+    severity: "high"
+  - keyword: ":(){ :|:& };:"
+    severity: "high"
+  - keyword: "> /dev/sda"
+    severity: "high"
+  - keyword: "mkfs.ext4 /dev/sda"
+    severity: "high"
+  - keyword: "dd if=/dev/zero of=/dev/sda"
+    severity: "high"
+
+  # Remote code execution
+  - keyword: "curl | sh"
+    severity: "high"
+  - keyword: "curl | bash"
+    severity: "high"
+  - keyword: "wget | sh"
+    severity: "high"
+  - keyword: "wget | bash"
+    severity: "high"
+  - keyword: "eval(base64"
+    severity: "high"
+  - keyword: "eval(atob("
+    severity: "high"
+  - keyword: "python -c 'import os"
+    severity: "high"
+  - keyword: "python3 -c 'import os"
+    severity: "high"
+  - keyword: "bash -i >& /dev/tcp"
+    severity: "high"
+  - keyword: "nc -e /bin/sh"
+    severity: "high"
+  - keyword: "nc -e /bin/bash"
+    severity: "high"
+
+  # Privilege escalation
+  - keyword: "sudo chmod 777 /"
+    severity: "high"
+  - keyword: "echo ALL=(ALL) NOPASSWD"
+    severity: "high"
+  - keyword: "cat /etc/shadow"
+    severity: "high"
+
+  # Script injection
+  - keyword: "<script>alert("
+    severity: "medium"
+  - keyword: "<script>document.cookie"
+    severity: "high"
+  - keyword: "javascript:void"
+    severity: "medium"
+
+  # Encoded payloads
+  - keyword: "powershell -encodedcommand"
+    severity: "high"
+  - keyword: "powershell -enc"
+    severity: "high"
+
+# Exception patterns (legitimate uses)
+exceptions:
+  - "code review"
+  - "security audit"
+  - "security testing"
+  - "explain this command"
+  - "what does this code do"
+  - "vulnerability assessment"
+  - "penetration test"
+  - "CTF challenge"
+  - "security training"
+  - "defensive security"
+  - "how to prevent"
+  - "how to protect"
+  - "secure coding"
+  - "code analysis"

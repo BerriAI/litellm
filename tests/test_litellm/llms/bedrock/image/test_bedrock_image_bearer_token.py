@@ -23,7 +23,7 @@ class TestBedrockImageGeneration:
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
 
-        with patch("litellm.llms.bedrock.image.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
+        with patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
             # Setup mock response
             mock_image_response_obj = litellm.ImageResponse()
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
@@ -55,7 +55,7 @@ class TestBedrockImageGeneration:
         
         # Mock the environment variable
         with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}), \
-             patch("litellm.llms.bedrock.image.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
+             patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
             
             mock_image_response_obj = litellm.ImageResponse()
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
@@ -85,7 +85,7 @@ class TestBedrockImageGeneration:
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
 
-        with patch("litellm.llms.bedrock.image.image_handler.BedrockImageGeneration.async_image_generation") as mock_async_bedrock_image_gen:
+        with patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.async_image_generation") as mock_async_bedrock_image_gen:
             mock_image_response_obj = litellm.ImageResponse()
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
             mock_async_bedrock_image_gen.return_value = mock_image_response_obj
@@ -114,7 +114,7 @@ class TestBedrockImageGeneration:
         model = "bedrock/stability.sd3-large-v1:0"
         prompt = "A cute baby sea otter"
 
-        with patch("litellm.llms.bedrock.image.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
+        with patch("litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.image_generation") as mock_bedrock_image_gen:
             mock_image_response_obj = litellm.ImageResponse()
             mock_image_response_obj.data = [{"url": "https://example.com/image.jpg"}]
             mock_bedrock_image_gen.return_value = mock_image_response_obj

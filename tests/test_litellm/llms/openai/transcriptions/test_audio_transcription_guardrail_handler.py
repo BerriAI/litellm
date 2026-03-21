@@ -4,6 +4,7 @@ Unit tests for OpenAI Audio Transcription Guardrail Translation Handler
 
 import os
 import sys
+from typing import List, Optional, Tuple
 
 import pytest
 
@@ -21,8 +22,11 @@ from litellm.utils import TranscriptionResponse
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(self, text: str, language=None, entities=None) -> str:
-        return f"{text} [GUARDRAILED]"
+    async def apply_guardrail(
+        self, inputs: dict, request_data: dict, input_type: str, **kwargs
+    ) -> dict:
+        texts = inputs.get("texts", [])
+        return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
 
 class TestHandlerDiscovery:
@@ -140,20 +144,24 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, text: str, language=None, entities=None
-            ) -> str:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
-                masked = re.sub(
-                    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-                    "[EMAIL_REDACTED]",
-                    text,
-                )
-                # Replace names (simple mock)
-                masked = masked.replace("John Doe", "[NAME_REDACTED]")
-                masked = masked.replace("555-1234", "[PHONE_REDACTED]")
-                return masked
+                texts = inputs.get("texts", [])
+                masked_texts = []
+                for text in texts:
+                    masked = re.sub(
+                        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+                        "[EMAIL_REDACTED]",
+                        text,
+                    )
+                    # Replace names (simple mock)
+                    masked = masked.replace("John Doe", "[NAME_REDACTED]")
+                    masked = masked.replace("555-1234", "[PHONE_REDACTED]")
+                    masked_texts.append(masked)
+                return {"texts": masked_texts}
 
         handler = OpenAIAudioTranscriptionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -181,23 +189,27 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, text: str, language=None, entities=None
-            ) -> str:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 import re
 
-                # Mask credit card numbers
-                masked = re.sub(
-                    r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", text
-                )
-                # Mask SSNs
-                masked = re.sub(r"\d{3}-\d{2}-\d{4}", "[SSN_REDACTED]", masked)
-                # Mask emails
-                masked = re.sub(
-                    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-                    "[EMAIL_REDACTED]",
-                    masked,
-                )
-                return masked
+                texts = inputs.get("texts", [])
+                masked_texts = []
+                for text in texts:
+                    # Mask credit card numbers
+                    masked = re.sub(
+                        r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", text
+                    )
+                    # Mask SSNs
+                    masked = re.sub(r"\d{3}-\d{2}-\d{4}", "[SSN_REDACTED]", masked)
+                    # Mask emails
+                    masked = re.sub(
+                        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+                        "[EMAIL_REDACTED]",
+                        masked,
+                    )
+                    masked_texts.append(masked)
+                return {"texts": masked_texts}
 
         handler = OpenAIAudioTranscriptionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -231,14 +243,18 @@ class TestContentModerationScenario:
             """Mock profanity filter guardrail"""
 
             async def apply_guardrail(
-                self, text: str, language=None, entities=None
-            ) -> str:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 # Simple mock: replace common profanity
                 bad_words = ["badword1", "badword2", "inappropriate"]
-                filtered = text
-                for word in bad_words:
-                    filtered = filtered.replace(word, "[FILTERED]")
-                return filtered
+                texts = inputs.get("texts", [])
+                filtered_texts = []
+                for text in texts:
+                    filtered = text
+                    for word in bad_words:
+                        filtered = filtered.replace(word, "[FILTERED]")
+                    filtered_texts.append(filtered)
+                return {"texts": filtered_texts}
 
         handler = OpenAIAudioTranscriptionHandler()
         guardrail = ProfanityFilterGuardrail(guardrail_name="content_filter")

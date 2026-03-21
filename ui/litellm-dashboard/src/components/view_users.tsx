@@ -1,31 +1,35 @@
-import React, { useState, useEffect } from "react";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel } from "@tremor/react";
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import React, { useEffect, useState } from "react";
 
+import { Button } from "antd";
+import BulkEditUserModal from "./BulkEditUsers";
+import { CreateUserButton } from "./CreateUserButton";
+import EditUserModal from "./edit_user";
 import {
-  userUpdateUserCall,
   getPossibleUserRoles,
+  getProxyBaseUrl,
+  invitationCreateCall,
   userListCall,
   UserListResponse,
-  invitationCreateCall,
-  getProxyBaseUrl,
+  userUpdateUserCall,
 } from "./networking";
-import { Button } from "@tremor/react";
-import CreateUser from "./create_user_button";
-import EditUserModal from "./edit_user";
-import OnboardingModal from "./onboarding_link";
-import { InvitationLink } from "./onboarding_link";
-import BulkEditUserModal from "./bulk_edit_user";
+import OnboardingModal, { InvitationLink } from "./onboarding_link";
 
-import { userDeleteCall, modelAvailableCall } from "./networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Typography } from "antd";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import NotificationsManager from "./molecules/notifications_manager";
+import { modelAvailableCall, userDeleteCall } from "./networking";
+import DefaultUserSettings from "./DefaultUserSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import SSOSettings from "./SSOSettings";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "./molecules/notifications_manager";
+import { Skeleton } from "antd";
+
+const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -35,6 +39,7 @@ interface ViewUserDashboardProps {
   userID: string | null;
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
+  orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
 }
 
 interface FilterState {
@@ -65,13 +70,15 @@ const initialFilters: FilterState = {
   sort_order: "desc",
 };
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams }) => {
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds }) => {
+  const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
   const [activeTab, setActiveTab] = useState("users");
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
@@ -83,8 +90,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [selectionMode, setSelectionMode] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
 
-  const handleDelete = (userId: string) => {
-    setUserToDelete(userId);
+  const handleDelete = (user: UserInfo) => {
+    setUserToDelete(user);
     setIsDeleteModalOpen(true);
   };
 
@@ -148,12 +155,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
-        await userDeleteCall(accessToken, [userToDelete]);
+        setIsDeletingUser(true);
+        await userDeleteCall(accessToken, [userToDelete.user_id]);
 
         // Update the user list after deletion
         queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
           if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete);
+          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
           return { ...previousData, users: updatedUsers };
         });
 
@@ -161,10 +169,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       } catch (error) {
         console.error("Error deleting user:", error);
         NotificationsManager.fromBackend("Failed to delete user");
+      } finally {
+        setIsDeleteModalOpen(false);
+        setUserToDelete(null);
+        setIsDeletingUser(false);
       }
     }
-    setIsDeleteModalOpen(false);
-    setUserToDelete(null);
   };
 
   const cancelDelete = () => {
@@ -237,7 +247,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   };
 
   const userListQuery = useQuery({
-    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage }],
+    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage, orgAdminOrgIds }],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
 
@@ -252,6 +262,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         debouncedFilters.sso_user_id || null,
         debouncedFilters.sort_by,
         debouncedFilters.sort_order,
+        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
@@ -270,14 +281,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   });
   const possibleUIRoles = userRolesQuery.data;
 
-  if (userListQuery.isLoading) {
-    return <div>Loading...</div>;
-  }
-
-  if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>;
-  }
-
   const tableColumns = columns(
     possibleUIRoles,
     (user) => {
@@ -286,80 +289,130 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     },
     handleDelete,
     handleResetPassword,
-    () => {}, // placeholder function, will be overridden in UserDataTable
+    () => { }, // placeholder function, will be overridden in UserDataTable
   );
 
   return (
     <div className="w-full p-8 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <div className="flex space-x-3">
-          <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+          {userListQuery.isLoading ? (
+            <>
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+            </>
+          ) : userID && accessToken ? (
+            <>
+              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
-          <Button
-            onClick={handleToggleSelectionMode}
-            variant={selectionMode ? "primary" : "secondary"}
-            className="flex items-center"
-          >
-            {selectionMode ? "Cancel Selection" : "Select Users"}
-          </Button>
+              {isProxyAdmin && (
+                <Button
+                  onClick={handleToggleSelectionMode}
+                  type={selectionMode ? "primary" : "default"}
+                  className="flex items-center"
+                >
+                  {selectionMode ? "Cancel Selection" : "Select Users"}
+                </Button>
+              )}
 
-          {selectionMode && (
-            <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
-              Bulk Edit ({selectedUsers.length} selected)
-            </Button>
-          )}
+              {isProxyAdmin && selectionMode && (
+                <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                  Bulk Edit ({selectedUsers.length} selected)
+                </Button>
+              )}
+            </>
+          ) : null}
         </div>
       </div>
 
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
-        <TabList className="mb-4">
-          <Tab>Users</Tab>
-          <Tab>Default User Settings</Tab>
-        </TabList>
+      {isProxyAdmin ? (
+        <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+          <TabList className="mb-4">
+            <Tab>Users</Tab>
+            <Tab>Default User Settings</Tab>
+          </TabList>
 
-        <TabPanels>
-          <TabPanel>
-            <UserDataTable
-              data={userListQuery.data?.users || []}
-              columns={tableColumns}
-              isLoading={userListQuery.isLoading}
-              accessToken={accessToken}
-              userRole={userRole}
-              onSortChange={handleSortChange}
-              currentSort={{
-                sortBy: filters.sort_by,
-                sortOrder: filters.sort_order,
-              }}
-              possibleUIRoles={possibleUIRoles}
-              handleEdit={(user) => {
-                setSelectedUser(user);
-                setEditModalVisible(true);
-              }}
-              handleDelete={handleDelete}
-              handleResetPassword={handleResetPassword}
-              enableSelection={selectionMode}
-              selectedUsers={selectedUsers}
-              onSelectionChange={handleSelectionChange}
-              filters={filters}
-              updateFilters={updateFilters}
-              initialFilters={initialFilters}
-              teams={teams}
-              userListResponse={userListResponse}
-              currentPage={currentPage}
-              handlePageChange={handlePageChange}
-            />
-          </TabPanel>
+          <TabPanels>
+            <TabPanel>
+              <UserDataTable
+                data={userListQuery.data?.users || []}
+                columns={tableColumns}
+                isLoading={userListQuery.isLoading}
+                accessToken={accessToken}
+                userRole={userRole}
+                onSortChange={handleSortChange}
+                currentSort={{
+                  sortBy: filters.sort_by,
+                  sortOrder: filters.sort_order,
+                }}
+                possibleUIRoles={possibleUIRoles}
+                handleEdit={(user) => {
+                  setSelectedUser(user);
+                  setEditModalVisible(true);
+                }}
+                handleDelete={handleDelete}
+                handleResetPassword={handleResetPassword}
+                enableSelection={selectionMode}
+                selectedUsers={selectedUsers}
+                onSelectionChange={handleSelectionChange}
+                filters={filters}
+                updateFilters={updateFilters}
+                initialFilters={initialFilters}
+                teams={teams}
+                userListResponse={userListResponse}
+                currentPage={currentPage}
+                handlePageChange={handlePageChange}
+              />
+            </TabPanel>
 
-          <TabPanel>
-            <SSOSettings
-              accessToken={accessToken}
-              possibleUIRoles={possibleUIRoles}
-              userID={userID}
-              userRole={userRole}
-            />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+            <TabPanel>
+              {!userID || !userRole || !accessToken ? (
+                <div className="flex justify-center items-center h-64">
+                  <Skeleton active paragraph={{ rows: 4 }} />
+                </div>
+              ) : (
+                <DefaultUserSettings
+                  accessToken={accessToken}
+                  possibleUIRoles={possibleUIRoles}
+                  userID={userID}
+                  userRole={userRole}
+                />
+              )}
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
+      ) : (
+        <UserDataTable
+          data={userListQuery.data?.users || []}
+          columns={tableColumns}
+          isLoading={userListQuery.isLoading}
+          accessToken={accessToken}
+          userRole={userRole}
+          onSortChange={handleSortChange}
+          currentSort={{
+            sortBy: filters.sort_by,
+            sortOrder: filters.sort_order,
+          }}
+          possibleUIRoles={possibleUIRoles}
+          handleEdit={(user) => {
+            setSelectedUser(user);
+            setEditModalVisible(true);
+          }}
+          handleDelete={handleDelete}
+          handleResetPassword={handleResetPassword}
+          enableSelection={false}
+          selectedUsers={[]}
+          onSelectionChange={handleSelectionChange}
+          filters={filters}
+          updateFilters={updateFilters}
+          initialFilters={initialFilters}
+          teams={teams}
+          userListResponse={userListResponse}
+          currentPage={currentPage}
+          handlePageChange={handlePageChange}
+        />
+      )}
 
       {/* Existing Modals */}
       <EditUserModal
@@ -370,42 +423,25 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         onSubmit={handleEditSubmit}
       />
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">User ID: {userToDelete}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userToDelete?.user_email },
+          { label: "User ID", value: userToDelete?.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+          },
+          { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
+        ]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeletingUser}
+      />
 
       <OnboardingModal
         isInvitationLinkModalVisible={isInvitationLinkModalVisible}
@@ -416,7 +452,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       />
 
       <BulkEditUserModal
-        visible={isBulkEditModalVisible}
+        open={isBulkEditModalVisible}
         onCancel={() => setIsBulkEditModalVisible(false)}
         selectedUsers={selectedUsers}
         possibleUIRoles={possibleUIRoles}

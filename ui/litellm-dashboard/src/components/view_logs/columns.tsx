@@ -1,10 +1,29 @@
+import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Badge, Button } from "@tremor/react";
+import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
-import { Tooltip } from "antd";
+import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TimeCell } from "./time_cell";
-import { Button, Badge } from "@tremor/react";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+
+/** API sort field mapping for /spend/logs/ui endpoint */
+export const LOGS_SORT_FIELD_MAP = {
+  startTime: "startTime",
+  spend: "spend",
+  total_tokens: "total_tokens",
+  request_duration_ms: "request_duration_ms",
+} as const;
+
+export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
+
+export interface LogsSortProps {
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (row: LogEntry, provider: string) => {
@@ -43,56 +62,110 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
-  duration?: number;
+  completionStartTime?: string;
+  request_duration_ms?: number;
+  session_total_count?: number;
+  session_total_spend?: number;
+  mcp_tool_call_count?: number;
+  mcp_tool_call_spend?: number;
+  session_llm_count?: number;
+  session_mcp_count?: number;
+  session_agent_count?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
 
-export const columns: ColumnDef<LogEntry>[] = [
+const SortableHeader = ({
+  label,
+  field,
+  sortBy,
+  sortOrder,
+  onSortChange,
+}: {
+  label: string;
+  field: LogsSortField;
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}) => (
+  <div className="flex items-center gap-1">
+    <span>{label}</span>
+    <TableHeaderSortDropdown
+      sortState={sortBy === field ? sortOrder : false}
+      onSortChange={(newState) => {
+        if (newState === false) {
+          onSortChange("startTime", "desc");
+        } else {
+          onSortChange(field, newState);
+        }
+      }}
+    />
+  </div>
+);
+
+export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] => [
   {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      // Convert the cell function to a React component to properly use hooks
-      const ExpanderCell = () => {
-        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
-
-        // Memoize the toggle handler to prevent unnecessary re-renders
-        const toggleHandler = React.useCallback(() => {
-          setLocalExpanded((prev) => !prev);
-          row.getToggleExpandedHandler()();
-        }, [row]);
-
-        return row.getCanExpand() ? (
-          <button
-            onClick={toggleHandler}
-            style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
-          >
-            <svg
-              className={`w-4 h-4 transform transition-transform duration-75 ${localExpanded ? "rotate-90" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        ) : (
-          <span className="w-6 h-6 flex items-center justify-center">●</span>
-        );
-      };
-
-      // Return the component
-      return <ExpanderCell />;
-    },
-  },
-  {
-    header: "Time",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Time"
+            field="startTime"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Time",
     accessorKey: "startTime",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Type",
+    id: "type",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const sessionCount = row.session_total_count || 1;
+      const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+      const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+      const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
+      const sessionAgentCount = row.session_agent_count ?? (isAgent ? sessionCount : 0);
+      const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
+
+      if (isMcp) return <McpBadge />;
+      if (isAgent && sessionCount <= 1) return <AgentBadge />;
+      if (sessionCount <= 1) return <LlmBadge />;
+
+      // Multi-call session — show total count, plus Agent/MCP indicators when mixed.
+      const sessionTypeBadge = (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-[11px] font-medium whitespace-nowrap">
+          <SparkleIcon />
+          <span>{sessionCount}</span>
+          {sessionAgentCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <AgentIcon size={10} />
+            </>
+          )}
+          {sessionMcpCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <WrenchIcon />
+            </>
+          )}
+        </span>
+      );
+
+      const tooltipParts = [
+        sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
+        sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
+        sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+      ].filter(Boolean);
+      return (
+        <Tooltip title={tooltipParts.join(" • ")}>
+          {sessionTypeBadge}
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Status",
@@ -143,18 +216,79 @@ export const columns: ColumnDef<LogEntry>[] = [
     ),
   },
   {
-    header: "Cost",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Cost"
+            field="spend"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Cost",
     accessorKey: "spend",
-    cell: (info: any) => <span>${formatNumberWithCommas(info.getValue() || 0, 6)}</span>,
+    cell: (info: any) => {
+      const row = info.row.original;
+      const mcpCount = row.mcp_tool_call_count || 0;
+      const mcpSpend = row.mcp_tool_call_spend || 0;
+
+      return (
+        <div className="flex flex-col">
+          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+            <span>{getSpendString(info.getValue() || 0)}</span>
+          </Tooltip>
+          {mcpCount > 0 && mcpSpend > 0 && (
+            <span className="text-[10px] text-amber-600">
+              incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
-    header: "Duration (s)",
-    accessorKey: "duration",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Duration (s)"
+            field="request_duration_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Duration (s)",
+    accessorKey: "request_duration_ms",
+    cell: (info: any) => {
+      const ms = info.getValue();
+      if (ms == null) return <span>-</span>;
+      const seconds = (ms / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ms}ms`}>
+          <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    header: "TTFT (s)",
+    accessorKey: "completionStartTime",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const completionStartTime = info.getValue();
+      if (!completionStartTime) return <span>-</span>;
+      // For non-streaming, completionStartTime == endTime so TTFT is not meaningful
+      if (completionStartTime === row.endTime) return <span>-</span>;
+      const ttftMs = new Date(completionStartTime).getTime() - new Date(row.startTime).getTime();
+      if (ttftMs <= 0) return <span>-</span>;
+      const ttftSeconds = (ttftMs / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ttftMs}ms`}>
+          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Team Name",
@@ -221,7 +355,17 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
   {
-    header: "Tokens",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Tokens"
+            field="total_tokens"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Tokens",
     accessorKey: "total_tokens",
     cell: (info: any) => {
       const row = info.row.original;
@@ -288,6 +432,9 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
 ];
+
+/** Default columns without sort (for backward compatibility) */
+export const columns = createColumns();
 
 const formatMessage = (message: any): string => {
   if (!message) return "N/A";

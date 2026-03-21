@@ -1,9 +1,12 @@
 from typing import List, Literal, Optional, Union
 
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+Phase = Optional[Literal["commentary", "final_answer"]]
 
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
@@ -34,6 +37,16 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     type: Optional[str]  # "function_call"
     id: Optional[str]
     status: Literal["in_progress", "completed", "incomplete"]
+    phase: Phase = None
+
+
+class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):
+    """An image generation call output"""
+
+    type: Literal["image_generation_call"]
+    id: str
+    status: Literal["in_progress", "completed", "incomplete", "failed"]
+    result: Optional[str]  # Base64 encoded image data (without data:image prefix)
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
@@ -47,6 +60,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
     content: List[OutputText]
+    phase: Phase = None
 
 
 class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):

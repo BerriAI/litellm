@@ -1,0 +1,821 @@
+[
+  {
+    "id": "baiser",
+    "match": "baiser",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bander",
+    "match": "bander",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bigornette",
+    "match": "bigornette",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bite",
+    "match": "bite",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bitte",
+    "match": "bitte",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bloblos",
+    "match": "bloblos",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bordel",
+    "match": "bordel",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bosser",
+    "match": "bosser",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bourre",
+    "match": "bourré",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bourree",
+    "match": "bourrée",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "brackmard",
+    "match": "brackmard",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "branlage",
+    "match": "branlage",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "branler",
+    "match": "branler",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "branlette",
+    "match": "branlette",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "branleur",
+    "match": "branleur",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "branleuse",
+    "match": "branleuse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "brouter-le-cresson",
+    "match": "brouter le cresson",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "caca",
+    "match": "caca",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "cailler",
+    "match": "cailler",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chatte",
+    "match": "chatte",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chiasse",
+    "match": "chiasse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chier",
+    "match": "chier",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chiottes",
+    "match": "chiottes",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "clito",
+    "match": "clito",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "clitoris",
+    "match": "clitoris",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "con",
+    "match": "con",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "connard",
+    "match": "connard",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "connasse",
+    "match": "connasse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "conne",
+    "match": "conne",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "couilles",
+    "match": "couilles",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "cramouille",
+    "match": "cramouille",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "cul",
+    "match": "cul",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "deconne",
+    "match": "déconne",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "deconner",
+    "match": "déconner",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "drague",
+    "match": "drague",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "emmerdant",
+    "match": "emmerdant",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "emmerder",
+    "match": "emmerder",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "emmerdeur",
+    "match": "emmerdeur",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "emmerdeuse",
+    "match": "emmerdeuse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "encule",
+    "match": "enculé",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "enculee",
+    "match": "enculée",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "enculeur",
+    "match": "enculeur",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "enculeurs",
+    "match": "enculeurs",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "enfoire",
+    "match": "enfoiré",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "enfoiree",
+    "match": "enfoirée",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "etron",
+    "match": "étron",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fille-de-pute",
+    "match": "fille de pute",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fils-de-pute",
+    "match": "fils de pute",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "folle",
+    "match": "folle",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "foutre",
+    "match": "foutre",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gerbe",
+    "match": "gerbe",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gerber",
+    "match": "gerber",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gouine",
+    "match": "gouine",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "grande-folle",
+    "match": "grande folle",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "grogniasse",
+    "match": "grogniasse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gueule",
+    "match": "gueule",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "jouir",
+    "match": "jouir",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "la-putain-de-ta-mere",
+    "match": "la putain de ta mère",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "malpt",
+    "match": "malpt",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "menage-a-trois",
+    "match": "ménage à trois",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "merde",
+    "match": "merde",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "merdeuse",
+    "match": "merdeuse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "merdeux",
+    "match": "merdeux",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "meuf",
+    "match": "meuf",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "negre",
+    "match": "nègre",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nique-ta-mere",
+    "match": "nique ta mère",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nique-ta-race",
+    "match": "nique ta race",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "palucher",
+    "match": "palucher",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pedale",
+    "match": "pédale",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pede",
+    "match": "pédé",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "peter",
+    "match": "péter",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pipi",
+    "match": "pipi",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pisser",
+    "match": "pisser",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pouffiasse",
+    "match": "pouffiasse",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pousse-crotte",
+    "match": "pousse-crotte",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "putain",
+    "match": "putain",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pute",
+    "match": "pute",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "ramoner",
+    "match": "ramoner",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "sac-a-merde",
+    "match": "sac à merde",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "salaud",
+    "match": "salaud",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "salope",
+    "match": "salope",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "suce",
+    "match": "suce",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tapette",
+    "match": "tapette",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "teuf",
+    "match": "teuf",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tringler",
+    "match": "tringler",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "trique",
+    "match": "trique",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "trou-du-cul",
+    "match": "trou du cul",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "turlute",
+    "match": "turlute",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "veuve",
+    "match": "veuve",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "zigounette",
+    "match": "zigounette",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "zizi",
+    "match": "zizi",
+    "tags": [
+      "profanity",
+      "french"
+    ],
+    "severity": 3
+  }
+]

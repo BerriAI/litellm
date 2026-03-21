@@ -103,6 +103,24 @@ class TmpFunction:
         )
 
 
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
+    assert env_vars == [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    ]
+
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
+    assert alias_env_vars == env_vars
+
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
+    assert missing_env_vars == []
+
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
+    assert none_env_vars == []
+
+
 @pytest.mark.asyncio
 async def test_async_chat_openai_stream():
     try:
@@ -513,7 +531,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(1)  # sleep for 0.1 seconds allow set cache to occur
+        time.sleep(5)  # sleep for cache write to propagate
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,

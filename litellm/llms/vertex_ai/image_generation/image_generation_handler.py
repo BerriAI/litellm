@@ -45,17 +45,18 @@ class VertexImageGeneration(VertexLLM):
         Transform the optional params to the format expected by the Vertex AI API.
         For example, "aspect_ratio" is transformed to "aspectRatio".
         """
+        default_params = {
+            "sampleCount": 1,
+        }
         if optional_params is None:
-            return {
-                "sampleCount": 1,
-            }
+            return default_params
 
         def snake_to_camel(snake_str: str) -> str:
             """Convert snake_case to camelCase"""
             components = snake_str.split("_")
             return components[0] + "".join(word.capitalize() for word in components[1:])
 
-        transformed_params = {}
+        transformed_params = default_params.copy()
         for key, value in optional_params.items():
             if "_" in key:
                 camel_case_key = snake_to_camel(key)
@@ -175,7 +176,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        model_response: litellm.ImageResponse,
+        model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,
