@@ -441,6 +441,136 @@ class TestAnthropicOutputToolCallDeletion:
         assert result["content"][1]["name"] == "my_tool"
         assert result["stop_reason"] == "tool_use"
 
+    @pytest.mark.asyncio
+    async def test_non_contiguous_deletion(self):
+        """Delete indices 0 and 2, keep index 1."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockToolCallDeletionGuardrail(
+            guardrail_name="test", indices_to_delete=[0, 2]
+        )
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Here are results."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "tool_a",
+                    "input": {"x": 1},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "tool_b",
+                    "input": {"y": 2},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tu_3",
+                    "name": "tool_c",
+                    "input": {"z": 3},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # tool_a (index 0) and tool_c (index 2) deleted, text and tool_b remain
+        assert len(result["content"]) == 2
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["name"] == "tool_b"
+        assert result["stop_reason"] == "tool_use"
+
+
+class MockMixedModifyDeleteGuardrail(CustomGuardrail):
+    """Mock guardrail that deletes some tool calls by name and modifies others."""
+
+    def __init__(
+        self,
+        guardrail_name: str,
+        names_to_delete: List[str],
+        names_to_modify: Optional[List[str]] = None,
+    ):
+        super().__init__(guardrail_name=guardrail_name)
+        self.names_to_delete = names_to_delete
+        self.names_to_modify = names_to_modify or []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = inputs.get("tool_calls", [])
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                name = tc.get("function", {}).get("name", "")
+                if name in self.names_to_delete:
+                    tc["guardrail_deleted"] = True
+                elif name in self.names_to_modify:
+                    tc["function"]["arguments"] = '{"modified": true}'
+        return inputs
+
+
+class TestAnthropicMixedModifyAndDelete:
+    """Test mixed modification and deletion of tool calls."""
+
+    @pytest.mark.asyncio
+    async def test_mixed_modify_and_delete(self):
+        """One tool_use modified, another deleted."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMixedModifyDeleteGuardrail(
+            guardrail_name="test",
+            names_to_delete=["dangerous_tool"],
+            names_to_modify=["safe_tool"],
+        )
+
+        response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3",
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Running tools."},
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "dangerous_tool",
+                    "input": {"action": "delete"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "tu_2",
+                    "name": "safe_tool",
+                    "input": {"query": "hello"},
+                },
+            ],
+        }
+
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+
+        # dangerous_tool deleted, safe_tool modified
+        assert len(result["content"]) == 2
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][1]["type"] == "tool_use"
+        assert result["content"][1]["name"] == "safe_tool"
+        assert result["content"][1]["input"] == {"modified": True}
+        assert result["stop_reason"] == "tool_use"
+
 
 class MockDeletionWithReplacementGuardrail(CustomGuardrail):
     """Mock guardrail that deletes all tool calls and adds replacement text."""

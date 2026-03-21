@@ -454,6 +454,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to response
+            # Use guardrailed results if returned, otherwise fall back to originals.
+            # Note: `is not None` (not `or`) so an empty list from the guardrail
+            # correctly signals "all tool calls deleted" rather than falling back.
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
             if tool_calls_to_check:
                 resolved = (

@@ -747,10 +747,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
         Apply guardrailed tool calls back to output response.
 
-        The guardrail may have modified the tool_calls list in place,
-        so we apply the modified tool calls back to the original response.
-
-        Override this method to customize how tool call responses are applied.
+        Two-pass approach:
+        1. Modify pass: update tool calls with modified arguments/name
+        2. Delete pass: remove tool calls marked with guardrail_deleted,
+           set tool_calls to None and finish_reason to "stop" if all removed
         """
         # Collect indices to delete, grouped by choice_idx
         deletions_by_choice: Dict[int, List[int]] = {}
