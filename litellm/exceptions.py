@@ -9,6 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+import pickle
 from typing import Optional
 
 import httpx
@@ -87,7 +88,11 @@ class _LiteLLMPickleMixin:
             elif isinstance(v, httpx.Request):
                 http_attrs.append(k)
             else:
-                state[k] = v
+                try:
+                    pickle.loads(pickle.dumps(v))
+                    state[k] = v
+                except Exception:
+                    state[k] = str(v)
         if http_attrs:
             state["_pickled_http_attrs"] = http_attrs
         return state
