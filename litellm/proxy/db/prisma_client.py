@@ -1,8 +1,10 @@
 """
 This file contains the PrismaWrapper class, which is used to wrap the Prisma client and handle the RDS IAM token.
+It also contains PrismaModelProxy for instrumenting actual DB operations with metrics.
 """
 
 import asyncio
+import functools
 import os
 import random
 import subprocess
@@ -10,10 +12,162 @@ import time
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, FrozenSet, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.services import ServiceTypes
+
+if TYPE_CHECKING:
+    from litellm._service_logger import ServiceLogging
+
+_DB_READ_METHODS: FrozenSet[str] = frozenset(
+    {
+        "find_unique",
+        "find_many",
+        "find_first",
+        "find_first_or_raise",
+        "find_unique_or_raise",
+        "count",
+        "group_by",
+    }
+)
+
+_DB_WRITE_METHODS: FrozenSet[str] = frozenset(
+    {
+        "create",
+        "create_many",
+        "update",
+        "update_many",
+        "upsert",
+        "delete",
+        "delete_many",
+    }
+)
+
+_INSTRUMENTED_METHODS: FrozenSet[str] = _DB_READ_METHODS | _DB_WRITE_METHODS
+
+
+class PrismaModelProxy:
+    """
+    Proxy around a Prisma model (e.g. ``prisma.litellm_usertable``) that
+    instruments every CRUD call with latency / count / error metrics via
+    :class:`ServiceLogging`.
+
+    Only async methods are wrapped because all Prisma Python CRUD methods
+    are async.  Non-CRUD attribute access is forwarded unchanged.
+    """
+
+    __slots__ = ("_model", "_table_name", "_service_logger_obj")
+
+    def __init__(
+        self,
+        model: Any,
+        table_name: str,
+        service_logger_obj: "ServiceLogging",
+    ):
+        self._model = model
+        self._table_name = table_name
+        self._service_logger_obj = service_logger_obj
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._model, name)
+
+        if name not in _INSTRUMENTED_METHODS:
+            return attr
+
+        service_type = (
+            ServiceTypes.DB_READ if name in _DB_READ_METHODS else ServiceTypes.DB_WRITE
+        )
+        call_type = f"{self._table_name}.{name}"
+
+        @functools.wraps(attr)
+        async def _instrumented(*args: Any, **kwargs: Any) -> Any:
+            start_time = time.time()
+            try:
+                result = await attr(*args, **kwargs)
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self._service_logger_obj.async_service_success_hook(
+                        service=service_type,
+                        duration=_duration,
+                        call_type=call_type,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                )
+                return result
+            except Exception as e:
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self._service_logger_obj.async_service_failure_hook(
+                        service=service_type,
+                        duration=_duration,
+                        error=e,
+                        call_type=call_type,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                )
+                raise
+
+        return _instrumented
+
+
+def _wrap_raw_query_method(
+    method: Callable,
+    service_type: ServiceTypes,
+    call_type: str,
+    service_logger_obj: "ServiceLogging",
+) -> Callable:
+    """Wrap ``query_raw`` / ``query_first`` / ``execute_raw`` with metrics."""
+
+    @functools.wraps(method)
+    async def _instrumented(*args: Any, **kwargs: Any) -> Any:
+        start_time = time.time()
+        try:
+            result = await method(*args, **kwargs)
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                service_logger_obj.async_service_success_hook(
+                    service=service_type,
+                    duration=_duration,
+                    call_type=call_type,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            )
+            return result
+        except Exception as e:
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                service_logger_obj.async_service_failure_hook(
+                    service=service_type,
+                    duration=_duration,
+                    error=e,
+                    call_type=call_type,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            )
+            raise
+
+    return _instrumented
+
+
+_RAW_METHOD_SERVICE_TYPES = {
+    "query_raw": ServiceTypes.DB_READ,
+    "query_first": ServiceTypes.DB_READ,
+    "execute_raw": ServiceTypes.DB_WRITE,
+}
+
+_PASSTHROUGH_ATTRS: FrozenSet[str] = frozenset(
+    {"batch_", "tx", "connect", "disconnect", "is_connected"}
+)
 
 
 class PrismaWrapper:
@@ -36,9 +190,15 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
-    def __init__(self, original_prisma: Any, iam_token_db_auth: bool):
+    def __init__(
+        self,
+        original_prisma: Any,
+        iam_token_db_auth: bool,
+        service_logger_obj: Optional["ServiceLogging"] = None,
+    ):
         self._original_prisma = original_prisma
         self.iam_token_db_auth = iam_token_db_auth
+        self._service_logger_obj = service_logger_obj
 
         # Background token refresh task management
         self._token_refresh_task: Optional[asyncio.Task] = None
@@ -294,24 +454,22 @@ class PrismaWrapper:
                     "Failed to generate new RDS IAM token during proactive refresh"
                 )
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         """
         Proxy attribute access to the underlying Prisma client.
 
-        If IAM token auth is enabled and the token is expired, this method
-        provides a synchronous fallback to refresh the token. However, this
-        should rarely be needed since the background task proactively refreshes
-        tokens before they expire.
-
-        FIXED: Now properly waits for reconnection to complete before returning,
-        instead of the previous fire-and-forget pattern that caused the bug.
+        Handles three concerns:
+        1. IAM token refresh when tokens expire (RDS auth)
+        2. Wrapping Prisma model objects with ``PrismaModelProxy`` for
+           per-query metrics (latency, count, errors)
+        3. Wrapping ``query_raw`` / ``query_first`` / ``execute_raw``
+           with equivalent metrics
         """
         original_attr = getattr(self._original_prisma, name)
 
         if self.iam_token_db_auth:
             db_url = os.getenv("DATABASE_URL")
 
-            # Check if token is expired (should be rare if background task is running)
             if self.is_token_expired(db_url):
                 verbose_proxy_logger.warning(
                     "RDS IAM token expired in __getattr__ - proactive refresh may have failed. "
@@ -323,13 +481,10 @@ class PrismaWrapper:
                     loop = asyncio.get_event_loop()
 
                     if loop.is_running():
-                        # FIXED: Actually wait for the reconnection to complete!
-                        # The previous code used fire-and-forget which caused the bug.
                         future = asyncio.run_coroutine_threadsafe(
                             self.recreate_prisma_client(new_db_url), loop
                         )
                         try:
-                            # Wait up to 30 seconds for reconnection
                             future.result(timeout=30)
                             verbose_proxy_logger.info(
                                 "Synchronous token refresh completed successfully"
@@ -342,10 +497,27 @@ class PrismaWrapper:
                     else:
                         asyncio.run(self.recreate_prisma_client(new_db_url))
 
-                    # Get the NEW attribute after reconnection
                     original_attr = getattr(self._original_prisma, name)
                 else:
                     raise ValueError("Failed to get RDS IAM token")
+
+        if self._service_logger_obj is None or name in _PASSTHROUGH_ATTRS:
+            return original_attr
+
+        if name in _RAW_METHOD_SERVICE_TYPES:
+            return _wrap_raw_query_method(
+                method=original_attr,
+                service_type=_RAW_METHOD_SERVICE_TYPES[name],
+                call_type=name,
+                service_logger_obj=self._service_logger_obj,
+            )
+
+        if hasattr(original_attr, "find_unique"):
+            return PrismaModelProxy(
+                model=original_attr,
+                table_name=name,
+                service_logger_obj=self._service_logger_obj,
+            )
 
         return original_attr
 

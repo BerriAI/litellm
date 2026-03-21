@@ -104,3 +104,152 @@ def test_update_gauge():
         # Verify correct methods were called
         mock_labels.assert_called_once_with("test_label")
         mock_gauge.set.assert_called_once_with(42.5)
+
+
+# ---------------------------------------------------------------------------
+# DB read/write call_type label tests
+# ---------------------------------------------------------------------------
+
+from litellm.types.services import ServiceLoggerPayload
+
+
+def test_db_read_histogram_should_have_call_type_label():
+    """DB_READ histograms should include a call_type label."""
+    pl = PrometheusServicesLogger()
+    histogram = pl.create_histogram(
+        service=ServiceTypes.DB_READ.value, type_of_request="latency"
+    )
+    assert "call_type" in histogram._labelnames
+
+
+def test_db_write_histogram_should_have_call_type_label():
+    """DB_WRITE histograms should include a call_type label."""
+    pl = PrometheusServicesLogger()
+    histogram = pl.create_histogram(
+        service=ServiceTypes.DB_WRITE.value, type_of_request="latency"
+    )
+    assert "call_type" in histogram._labelnames
+
+
+def test_db_read_counter_should_have_call_type_label():
+    """DB_READ counters should include a call_type label."""
+    pl = PrometheusServicesLogger()
+    counter = pl.create_counter(
+        service=ServiceTypes.DB_READ.value, type_of_request="total_requests"
+    )
+    assert "call_type" in counter._labelnames
+
+
+def test_non_db_histogram_should_not_have_call_type_label():
+    """Non-DB service histograms should NOT get a call_type label."""
+    pl = PrometheusServicesLogger()
+    histogram = pl.create_histogram(
+        service=ServiceTypes.REDIS.value, type_of_request="latency"
+    )
+    assert "call_type" not in histogram._labelnames
+
+
+def test_service_success_hook_should_pass_call_type_for_db_read():
+    """service_success_hook should pass call_type to histogram and total_requests counter for DB_READ."""
+    pl = PrometheusServicesLogger()
+    payload = ServiceLoggerPayload(
+        is_error=False,
+        error=None,
+        service=ServiceTypes.DB_READ,
+        duration=0.05,
+        call_type="litellm_usertable.find_unique",
+        event_metadata=None,
+    )
+
+    pl.service_success_hook(payload)
+
+    prom_objects = pl.payload_to_prometheus_map[ServiceTypes.DB_READ.value]
+    for obj in prom_objects:
+        if isinstance(obj, pl.Histogram):
+            assert "call_type" in obj._labelnames
+            child = obj.labels(
+                ServiceTypes.DB_READ.value, "litellm_usertable.find_unique"
+            )
+            assert child is not None
+        elif isinstance(obj, pl.Counter) and "total_requests" in obj._name:
+            assert "call_type" in obj._labelnames
+            child = obj.labels(
+                ServiceTypes.DB_READ.value, "litellm_usertable.find_unique"
+            )
+            assert child is not None
+
+
+@pytest.mark.asyncio
+async def test_async_service_success_hook_should_pass_call_type_for_db_write():
+    """async_service_success_hook should pass call_type for DB_WRITE."""
+    pl = PrometheusServicesLogger()
+    payload = ServiceLoggerPayload(
+        is_error=False,
+        error=None,
+        service=ServiceTypes.DB_WRITE,
+        duration=0.1,
+        call_type="litellm_teamtable.create",
+        event_metadata=None,
+    )
+
+    await pl.async_service_success_hook(payload)
+
+    prom_objects = pl.payload_to_prometheus_map[ServiceTypes.DB_WRITE.value]
+    for obj in prom_objects:
+        if isinstance(obj, pl.Histogram):
+            assert "call_type" in obj._labelnames
+            child = obj.labels(
+                ServiceTypes.DB_WRITE.value, "litellm_teamtable.create"
+            )
+            assert child is not None
+
+
+@pytest.mark.asyncio
+async def test_async_service_failure_hook_should_pass_call_type_for_db_read():
+    """async_service_failure_hook should pass call_type for DB_READ failures."""
+    pl = PrometheusServicesLogger()
+    payload = ServiceLoggerPayload(
+        is_error=True,
+        error="connection lost",
+        service=ServiceTypes.DB_READ,
+        duration=0.01,
+        call_type="litellm_usertable.find_unique",
+        event_metadata=None,
+    )
+
+    await pl.async_service_failure_hook(
+        payload=payload,
+        error=RuntimeError("connection lost"),
+    )
+
+    prom_objects = pl.payload_to_prometheus_map[ServiceTypes.DB_READ.value]
+    for obj in prom_objects:
+        if isinstance(obj, pl.Counter) and "failed_requests" in obj._name:
+            assert "call_type" in obj._labelnames
+            child = obj.labels(
+                ServiceTypes.DB_READ.value,
+                "litellm_usertable.find_unique",
+                "RuntimeError",
+                "litellm_usertable.find_unique",
+            )
+            assert child is not None
+
+
+def test_service_success_hook_should_not_pass_call_type_for_redis():
+    """service_success_hook should NOT pass call_type for non-DB services like REDIS."""
+    pl = PrometheusServicesLogger()
+    payload = ServiceLoggerPayload(
+        is_error=False,
+        error=None,
+        service=ServiceTypes.REDIS,
+        duration=0.01,
+        call_type="async_get_cache",
+        event_metadata=None,
+    )
+
+    pl.service_success_hook(payload)
+
+    prom_objects = pl.payload_to_prometheus_map[ServiceTypes.REDIS.value]
+    for obj in prom_objects:
+        if hasattr(obj, "_labelnames"):
+            assert "call_type" not in obj._labelnames
