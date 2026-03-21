@@ -14,6 +14,10 @@ from typing import (
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    GUARDRAIL_DELETED_KEY as GUARDRAIL_DELETED_KEY,
+)
+
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
