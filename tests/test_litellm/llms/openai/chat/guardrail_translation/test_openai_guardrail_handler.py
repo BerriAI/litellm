@@ -1463,25 +1463,25 @@ class TestGuardrailReplacementText:
 
 
 class TestGuardrailHandlesToolCallsFlag:
-    """Test that guardrail_handles_tool_calls=False (default) skips tool-call-only responses."""
+    """Test guardrail_handles_tool_calls flag controls apply-back, not inspection."""
 
     @pytest.mark.asyncio
-    async def test_default_flag_skips_tool_only_output(self):
-        """Default guardrail (flag=False) should not process tool-call-only responses."""
+    async def test_default_flag_passes_tool_calls_for_inspection(self):
+        """Default guardrail (flag=False) still receives tool calls for inspection."""
         handler = OpenAIChatCompletionsHandler()
 
-        class DefaultGuardrail(CustomGuardrail):
+        class InspectingGuardrail(CustomGuardrail):
             def __init__(self):
-                super().__init__(guardrail_name="default")
-                self.was_called = False
+                super().__init__(guardrail_name="inspector")
+                self.received_tool_calls = None
 
             async def apply_guardrail(
                 self, inputs, request_data, input_type, logging_obj=None
             ):
-                self.was_called = True
+                self.received_tool_calls = inputs.get("tool_calls")
                 return inputs
 
-        guardrail = DefaultGuardrail()
+        guardrail = InspectingGuardrail()
         assert guardrail.guardrail_handles_tool_calls is False
 
         response = ModelResponse(
@@ -1510,32 +1510,22 @@ class TestGuardrailHandlesToolCallsFlag:
 
         await handler.process_output_response(response, guardrail)
 
-        # Guardrail should NOT have been called
-        assert guardrail.was_called is False
-        # Response should be unchanged
+        # Guardrail SHOULD be called and receive tool calls for inspection
+        assert guardrail.received_tool_calls is not None
+        assert len(guardrail.received_tool_calls) == 1
+        # But apply-back should NOT happen — tool calls unchanged
         assert response.choices[0].message.tool_calls is not None
         assert len(response.choices[0].message.tool_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_flag_true_processes_tool_only_output(self):
-        """Guardrail with flag=True should process tool-call-only responses."""
+    async def test_flag_true_enables_apply_back(self):
+        """Guardrail with flag=True enables tool call deletion."""
         handler = OpenAIChatCompletionsHandler()
-
-        class OptInGuardrail(CustomGuardrail):
-            def __init__(self):
-                super().__init__(
-                    guardrail_name="opt-in",
-                    guardrail_handles_tool_calls=True,
-                )
-                self.was_called = False
-
-            async def apply_guardrail(
-                self, inputs, request_data, input_type, logging_obj=None
-            ):
-                self.was_called = True
-                return inputs
-
-        guardrail = OptInGuardrail()
+        guardrail = MockDeletionWithReplacementGuardrail(
+            guardrail_name="test",
+            replacement_text="Blocked.",
+        )
+        assert guardrail.guardrail_handles_tool_calls is True
 
         response = ModelResponse(
             id="chatcmpl-2",
@@ -1563,12 +1553,13 @@ class TestGuardrailHandlesToolCallsFlag:
 
         await handler.process_output_response(response, guardrail)
 
-        # Guardrail SHOULD have been called
-        assert guardrail.was_called is True
+        # Tool calls should be deleted and replacement text injected
+        assert response.choices[0].message.tool_calls is None
+        assert response.choices[0].message.content == "Blocked."
 
     @pytest.mark.asyncio
     async def test_default_flag_still_processes_text_responses(self):
-        """Default guardrail (flag=False) should still process responses with text."""
+        """Default guardrail (flag=False) still processes text responses normally."""
         handler = OpenAIChatCompletionsHandler()
 
         class DefaultGuardrail(CustomGuardrail):

@@ -606,10 +606,10 @@ class BaseLitellmParams(
     guardrail_handles_tool_calls: Optional[bool] = Field(
         default=False,
         description=(
-            "When True, this guardrail will receive tool calls in inputs and "
-            "responses that contain only tool calls (no text). When False "
-            "(default), tool-call-only messages/responses skip this guardrail. "
-            "Enable this to use guardrail_deleted or to inspect tool call arguments."
+            "When True, modifications and deletions to tool calls returned by "
+            "apply_guardrail are written back to the response. When False "
+            "(default), tool calls are still passed to apply_guardrail for "
+            "inspection/validation but returned changes are not applied."
         ),
     )
 

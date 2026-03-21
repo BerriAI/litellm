@@ -612,8 +612,8 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         )
 
     @pytest.mark.asyncio
-    async def test_process_output_response_with_tool_calls_skipped_by_default(self):
-        """Tool-call-only response skipped when guardrail_handles_tool_calls is False (default)"""
+    async def test_process_output_response_with_tool_calls(self):
+        """Tool-call-only response reaches guardrail for inspection"""
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
@@ -635,11 +635,9 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             ],
         )
 
-        # Default guardrail does not handle tool calls, so tool-call-only
-        # response should pass through unchanged
-        result = await handler.process_output_response(response, guardrail)
-        assert len(result.output) == 1
-        assert result.output[0].name == "get_current_weather"
+        # MockGuardrail blocks responses — tool-call-only response should reach it
+        with pytest.raises(ValueError, match="Response blocked by guardrail"):
+            await handler.process_output_response(response, guardrail)
 
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""

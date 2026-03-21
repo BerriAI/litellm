@@ -407,7 +407,15 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 
 ## Handling Tool Calls
 
-By default, guardrails only process messages and responses that contain text. To also receive tool calls, set `guardrail_handles_tool_calls: true` in your guardrail config:
+When the LLM request or response contains tool calls, they are passed to `apply_guardrail` via `inputs["tool_calls"]` as a list of dicts for inspection and validation. You can:
+
+- **Inspect** tool calls and raise an exception to block the request — works by default
+- **Modify** a tool call by changing its fields (e.g. redact arguments) — requires `guardrail_handles_tool_calls: true`
+- **Delete** individual tool calls by setting `"guardrail_deleted": True` on the dict — requires `guardrail_handles_tool_calls: true`
+
+### Deleting Tool Calls
+
+To modify or delete tool calls, set `guardrail_handles_tool_calls: true` in your guardrail config. Without this, tool calls are passed for inspection only — any modifications returned by `apply_guardrail` are not written back.
 
 ```yaml
 guardrails:
@@ -417,22 +425,6 @@ guardrails:
       mode: post_call
       guardrail_handles_tool_calls: true
 ```
-
-Or in Python:
-
-```python
-class ToolFilterGuardrail(CustomGuardrail):
-    def __init__(self, **kwargs):
-        super().__init__(guardrail_handles_tool_calls=True, **kwargs)
-```
-
-When enabled, tool calls are passed to `apply_guardrail` via `inputs["tool_calls"]` as a list of dicts. You can:
-
-- **Modify** a tool call by changing its fields (e.g. redact arguments)
-- **Block** the entire request by raising an exception
-- **Delete** individual tool calls by setting `"guardrail_deleted": True` on the dict
-
-### Deleting Tool Calls
 
 To selectively remove tool calls that violate policy while keeping the rest, set `"guardrail_deleted": True` on the tool call dict:
 
