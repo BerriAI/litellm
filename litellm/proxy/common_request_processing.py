@@ -1004,7 +1004,8 @@ class ProxyBaseLLMRequestProcessing:
                 self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
-                    litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
+                    litellm_call_id=self.data.get("litellm_call_id", ""),
+                    status="success",
                 )
             )
             if self._is_streaming_request(
@@ -1029,11 +1030,13 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 # Call response headers hook for streaming success
-                callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                    data=self.data,
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_headers=dict(request.headers),
+                callback_headers = (
+                    await proxy_logging_obj.post_call_response_headers_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=dict(request.headers),
+                    )
                 )
                 if callback_headers:
                     custom_headers.update(callback_headers)
@@ -1439,7 +1442,8 @@ class ProxyBaseLLMRequestProcessing:
                         )["guardrail_blocked"] = True
         except Exception as e:
             verbose_proxy_logger.exception(
-                "Error in deferred streaming guardrail initialization: %s", e,
+                "Error in deferred streaming guardrail initialization: %s",
+                e,
             )
         finally:
             try:
@@ -1453,7 +1457,8 @@ class ProxyBaseLLMRequestProcessing:
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error in deferred streaming async logging: %s", e,
+                    "Error in deferred streaming async logging: %s",
+                    e,
                 )
 
             try:
@@ -1466,7 +1471,8 @@ class ProxyBaseLLMRequestProcessing:
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error in deferred streaming sync logging: %s", e,
+                    "Error in deferred streaming sync logging: %s",
+                    e,
                 )
 
     async def _handle_llm_api_exception(
