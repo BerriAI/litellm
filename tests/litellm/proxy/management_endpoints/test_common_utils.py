@@ -157,3 +157,127 @@ class TestUpdateMetadataFieldsPremiumCheck:
         }
         _update_metadata_fields(updated_kv)
         mock_check.assert_called()
+
+
+class TestCheckMemberPermission:
+    """Tests for check_member_permission and _find_member_in_team."""
+
+    def _make_user_api_key_dict(self, user_id="user-1", user_role=None):
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        return UserAPIKeyAuth(
+            user_id=user_id,
+            user_role=user_role or LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-test",
+        )
+
+    def _make_team(self, members):
+        from litellm.proxy._types import LiteLLM_TeamTable
+
+        return LiteLLM_TeamTable(
+            team_id="team-1",
+            members_with_roles=members,
+        )
+
+    def test_proxy_admin_always_allowed(self):
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        team = self._make_team([])
+        assert check_member_permission(user, team, "mcp:create") is True
+
+    def test_team_admin_always_allowed(self):
+        from litellm.proxy._types import Member
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(user_id="admin-1")
+        team = self._make_team(
+            [Member(user_id="admin-1", role="admin")]
+        )
+        assert check_member_permission(user, team, "mcp:create") is True
+
+    def test_member_with_permission_allowed(self):
+        from litellm.proxy._types import Member
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(user_id="member-1")
+        team = self._make_team(
+            [Member(user_id="member-1", role="user", extra_permissions=["mcp:create"])]
+        )
+        assert check_member_permission(user, team, "mcp:create") is True
+
+    def test_member_without_permission_denied(self):
+        from litellm.proxy._types import Member
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(user_id="member-1")
+        team = self._make_team(
+            [Member(user_id="member-1", role="user", extra_permissions=["mcp:read"])]
+        )
+        assert check_member_permission(user, team, "mcp:create") is False
+
+    def test_member_with_no_permissions_denied(self):
+        from litellm.proxy._types import Member
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(user_id="member-1")
+        team = self._make_team(
+            [Member(user_id="member-1", role="user")]
+        )
+        assert check_member_permission(user, team, "mcp:create") is False
+
+    def test_user_not_in_team_denied(self):
+        from litellm.proxy._types import Member
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_member_permission,
+        )
+
+        user = self._make_user_api_key_dict(user_id="outsider")
+        team = self._make_team(
+            [Member(user_id="member-1", role="user", extra_permissions=["mcp:create"])]
+        )
+        assert check_member_permission(user, team, "mcp:create") is False
+
+
+class TestMemberExtraPermissionsSerialization:
+    """Verify Member with extra_permissions round-trips through JSON."""
+
+    def test_member_with_permissions_roundtrip(self):
+        import json
+
+        from litellm.proxy._types import Member
+
+        original = Member(
+            user_id="user-1",
+            role="user",
+            extra_permissions=["mcp:create", "mcp:delete"],
+        )
+        serialized = json.dumps(original.model_dump())
+        deserialized = Member(**json.loads(serialized))
+        assert deserialized.extra_permissions == ["mcp:create", "mcp:delete"]
+        assert deserialized.user_id == "user-1"
+        assert deserialized.role == "user"
+
+    def test_member_without_permissions_roundtrip(self):
+        import json
+
+        from litellm.proxy._types import Member
+
+        original = Member(user_id="user-1", role="admin")
+        serialized = json.dumps(original.model_dump())
+        deserialized = Member(**json.loads(serialized))
+        assert deserialized.extra_permissions is None
+        assert deserialized.role == "admin"
