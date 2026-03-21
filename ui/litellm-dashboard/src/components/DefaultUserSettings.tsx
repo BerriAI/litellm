@@ -22,22 +22,30 @@ interface TeamEntry {
   user_role: "user" | "admin";
 }
 
-/** Normalize heterogeneous team arrays (strings or objects) to TeamEntry[]. */
-function normalizeTeams(teams: any[]): TeamEntry[] {
-  if (!teams || !Array.isArray(teams)) return [];
+/** Shape returned by the GET endpoint and sent back on PATCH. */
+interface DefaultUserSettingsValues {
+  user_role?: string | null;
+  max_budget?: number | null;
+  budget_duration?: string | null;
+  models?: string[] | null;
+  teams?: (string | TeamEntry)[] | null;
+}
 
-  return teams.map((team) => {
-    if (typeof team === "string") {
-      return { team_id: team, user_role: "user" as const };
-    } else if (typeof team === "object" && team.team_id) {
-      return {
-        team_id: team.team_id,
-        max_budget_in_team: team.max_budget_in_team,
-        user_role: team.user_role || "user",
-      };
-    }
-    return { team_id: "", user_role: "user" as const };
-  });
+interface SettingsResponse {
+  values: DefaultUserSettingsValues;
+  field_schema: {
+    description?: string;
+    properties: Record<string, { type: string; description?: string; enum?: string[]; items?: { enum?: string[] } }>;
+  };
+}
+
+/** Normalize the backend's union type (string | TeamEntry) to TeamEntry[]. */
+function normalizeTeams(teams: (string | TeamEntry)[]): TeamEntry[] {
+  return teams.map((team) =>
+    typeof team === "string"
+      ? { team_id: team, user_role: "user" as const }
+      : { team_id: team.team_id, max_budget_in_team: team.max_budget_in_team, user_role: team.user_role || "user" },
+  );
 }
 
 /**
@@ -46,136 +54,64 @@ function normalizeTeams(teams: any[]): TeamEntry[] {
  * cleared, or reduced.
  */
 export function computeSettingsDiff(
-  original: Record<string, any>,
-  edited: Record<string, any>,
+  original: DefaultUserSettingsValues,
+  edited: DefaultUserSettingsValues,
 ): { changes: SettingsChange[]; hasDestructiveChanges: boolean } {
   const changes: SettingsChange[] = [];
 
-  const allKeys = new Set([...Object.keys(original), ...Object.keys(edited)]);
+  // --- Teams ---
+  const oldTeams = normalizeTeams(original.teams || []);
+  const newTeams = normalizeTeams(edited.teams || []);
+  const oldTeamMap = new Map(oldTeams.map((t) => [t.team_id, t]));
+  const newTeamIds = new Set(newTeams.map((t) => t.team_id));
 
-  for (const key of allKeys) {
-    const oldVal = original[key];
-    const newVal = edited[key];
-
-    const displayName = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-
-    if (key === "teams") {
-      const oldTeams = normalizeTeams(oldVal || []);
-      const newTeams = normalizeTeams(newVal || []);
-
-      const oldIds = new Set(oldTeams.map((t) => t.team_id));
-      const newIds = new Set(newTeams.map((t) => t.team_id));
-
-      // Removed teams
-      for (const t of oldTeams) {
-        if (!newIds.has(t.team_id)) {
-          changes.push({
-            field: displayName,
-            type: "removed",
-            details: `Team "${t.team_id}" removed`,
-          });
-        }
-      }
-
-      // Added teams
-      for (const t of newTeams) {
-        if (t.team_id && !oldIds.has(t.team_id)) {
-          changes.push({
-            field: displayName,
-            type: "added",
-            details: `Team "${t.team_id}" added`,
-          });
-        }
-      }
-
-      // Budget/role changes for teams that still exist
-      for (const newTeam of newTeams) {
-        if (!oldIds.has(newTeam.team_id)) continue;
-        const oldTeam = oldTeams.find((t) => t.team_id === newTeam.team_id);
-        if (!oldTeam) continue;
-
-        if (oldTeam.max_budget_in_team !== newTeam.max_budget_in_team) {
-          const oldBudget = oldTeam.max_budget_in_team !== undefined ? `$${oldTeam.max_budget_in_team}` : "No limit";
-          const newBudget = newTeam.max_budget_in_team !== undefined ? `$${newTeam.max_budget_in_team}` : "No limit";
-          changes.push({
-            field: displayName,
-            type: "changed",
-            details: `Team "${newTeam.team_id}" budget: ${oldBudget} → ${newBudget}`,
-          });
-        }
-
-        if (oldTeam.user_role !== newTeam.user_role) {
-          changes.push({
-            field: displayName,
-            type: "changed",
-            details: `Team "${newTeam.team_id}" role: ${oldTeam.user_role} → ${newTeam.user_role}`,
-          });
-        }
-      }
-
+  for (const t of oldTeams) {
+    if (!newTeamIds.has(t.team_id)) {
+      changes.push({ field: "Teams", type: "removed", details: `Team "${t.team_id}" removed` });
+    }
+  }
+  for (const t of newTeams) {
+    if (!t.team_id) continue;
+    const old = oldTeamMap.get(t.team_id);
+    if (!old) {
+      changes.push({ field: "Teams", type: "added", details: `Team "${t.team_id}" added` });
       continue;
     }
-
-    if (key === "models") {
-      const oldModels: string[] = Array.isArray(oldVal) ? oldVal : [];
-      const newModels: string[] = Array.isArray(newVal) ? newVal : [];
-      const oldSet = new Set(oldModels);
-      const newSet = new Set(newModels);
-
-      const removed = oldModels.filter((m) => !newSet.has(m));
-      const added = newModels.filter((m) => !oldSet.has(m));
-
-      if (removed.length > 0) {
-        changes.push({
-          field: displayName,
-          type: "removed",
-          details: `${removed.join(", ")} removed`,
-        });
-      }
-      if (added.length > 0) {
-        changes.push({
-          field: displayName,
-          type: "added",
-          details: `${added.join(", ")} added`,
-        });
-      }
-      continue;
+    if (old.max_budget_in_team !== t.max_budget_in_team) {
+      const fmt = (v?: number) => (v !== undefined ? `$${v}` : "No limit");
+      changes.push({ field: "Teams", type: "changed", details: `Team "${t.team_id}" budget: ${fmt(old.max_budget_in_team)} → ${fmt(t.max_budget_in_team)}` });
     }
-
-    // Scalar fields
-    const oldNorm = oldVal === "" ? null : oldVal;
-    const newNorm = newVal === "" ? null : newVal;
-
-    if (oldNorm === newNorm) continue;
-    // Both null/undefined — no change
-    if (oldNorm == null && newNorm == null) continue;
-
-    if (oldNorm != null && newNorm == null) {
-      // Value cleared
-      changes.push({
-        field: displayName,
-        type: "removed",
-        details: `Cleared (was "${oldNorm}")`,
-      });
-    } else if (oldNorm == null && newNorm != null) {
-      // Value set
-      changes.push({
-        field: displayName,
-        type: "added",
-        details: `Set to "${newNorm}"`,
-      });
-    } else if (oldNorm !== newNorm) {
-      changes.push({
-        field: displayName,
-        type: "changed",
-        details: `"${oldNorm}" → "${newNorm}"`,
-      });
+    if (old.user_role !== t.user_role) {
+      changes.push({ field: "Teams", type: "changed", details: `Team "${t.team_id}" role: ${old.user_role} → ${t.user_role}` });
     }
   }
 
-  const hasDestructiveChanges = changes.some((c) => c.type === "removed" || c.type === "changed");
+  // --- Models ---
+  const oldModels = new Set(original.models || []);
+  const newModels = new Set(edited.models || []);
+  const removedModels = [...oldModels].filter((m) => !newModels.has(m));
+  const addedModels = [...newModels].filter((m) => !oldModels.has(m));
+  if (removedModels.length) changes.push({ field: "Models", type: "removed", details: `${removedModels.join(", ")} removed` });
+  if (addedModels.length) changes.push({ field: "Models", type: "added", details: `${addedModels.join(", ")} added` });
 
-  return { changes, hasDestructiveChanges };
+  // --- Scalars ---
+  const scalarKeys = ["user_role", "max_budget", "budget_duration"] as const;
+  for (const key of scalarKeys) {
+    const oldVal = original[key] ?? null;
+    const newVal = edited[key] ?? null;
+    if (oldVal === newVal) continue;
+
+    const displayName = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+    if (oldVal != null && newVal == null) {
+      changes.push({ field: displayName, type: "removed", details: `Cleared (was "${oldVal}")` });
+    } else if (oldVal == null && newVal != null) {
+      changes.push({ field: displayName, type: "added", details: `Set to "${newVal}"` });
+    } else {
+      changes.push({ field: displayName, type: "changed", details: `"${oldVal}" → "${newVal}"` });
+    }
+  }
+
+  return { changes, hasDestructiveChanges: changes.some((c) => c.type === "removed" || c.type === "changed") };
 }
 
 const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
@@ -185,14 +121,14 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   userRole,
 }) => {
   const [loading, setLoading] = useState<boolean>(true);
-  const [settings, setSettings] = useState<any>(null);
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [editedValues, setEditedValues] = useState<any>({});
+  const [editedValues, setEditedValues] = useState<DefaultUserSettingsValues>({});
   const [saving, setSaving] = useState<boolean>(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
   const [pendingChanges, setPendingChanges] = useState<SettingsChange[]>([]);
-  const [pendingProcessedValues, setPendingProcessedValues] = useState<Record<string, any> | null>(null);
+  const [pendingProcessedValues, setPendingProcessedValues] = useState<DefaultUserSettingsValues | null>(null);
   const { Paragraph } = Typography;
   const { Option } = Select;
 
@@ -232,7 +168,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   }, [accessToken]);
 
   /** Perform the actual API save with the given processed values. */
-  const executeSave = async (processedValues: Record<string, any>) => {
+  const executeSave = async (processedValues: DefaultUserSettingsValues) => {
     if (!accessToken) return;
 
     setSaving(true);
@@ -253,13 +189,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     if (!accessToken) return;
 
     // Convert empty strings to null
-    const processedValues = Object.entries(editedValues).reduce(
-      (acc, [key, value]) => {
-        acc[key] = value === "" ? null : value;
-        return acc;
-      },
-      {} as Record<string, any>,
-    );
+    const processedValues = Object.fromEntries(
+      Object.entries(editedValues).map(([key, value]) => [key, value === "" ? null : value]),
+    ) as DefaultUserSettingsValues;
 
     const { changes, hasDestructiveChanges } = computeSettingsDiff(
       settings?.values || {},
@@ -286,11 +218,8 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     setPendingProcessedValues(null);
   };
 
-  const handleTextInputChange = (key: string, value: any) => {
-    setEditedValues((prev: Record<string, any>) => ({
-      ...prev,
-      [key]: value,
-    }));
+  const handleTextInputChange = (key: keyof DefaultUserSettingsValues, value: DefaultUserSettingsValues[typeof key]) => {
+    setEditedValues((prev) => ({ ...prev, [key]: value }));
   };
 
   // Teams editor component

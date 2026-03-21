@@ -434,9 +434,9 @@ describe("computeSettingsDiff", () => {
     );
   });
 
-  it("treats empty string same as null for scalars", () => {
-    const original = { max_budget: "" };
-    const edited = { max_budget: null };
+  it("treats null and undefined as equal for scalars", () => {
+    const original = { max_budget: null };
+    const edited = { max_budget: undefined };
 
     const { changes } = computeSettingsDiff(original, edited);
     expect(changes).toHaveLength(0);
