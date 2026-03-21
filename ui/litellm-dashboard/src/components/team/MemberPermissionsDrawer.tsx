@@ -28,16 +28,21 @@ const MemberPermissionsDrawer: React.FC<MemberPermissionsDrawerProps> = ({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  // Sync state when member changes or drawer opens
+  // Sync state when member changes or drawer opens — only seed with known permissions
+  // so that unknown permissions are preserved separately on save without duplication
   useEffect(() => {
     if (open && member) {
-      setSelected(new Set(member.extra_permissions || []));
+      const knownValues = new Set(availablePermissions.map((p) => p.value));
+      setSelected(new Set((member.extra_permissions || []).filter((p) => knownValues.has(p))));
     }
-  }, [open, member]);
+  }, [open, member, availablePermissions]);
 
   const initial = useMemo(
-    () => new Set(member?.extra_permissions || []),
-    [member],
+    () => {
+      const knownValues = new Set(availablePermissions.map((p) => p.value));
+      return new Set((member?.extra_permissions || []).filter((p) => knownValues.has(p)));
+    },
+    [member, availablePermissions],
   );
 
   const isDirty = useMemo(() => {

@@ -311,9 +311,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
         <div className="flex items-center gap-2">
-          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-            + Add New MCP Server
-          </Button>
+          {!isAdminRole(userRole) && (selectedTeam === "all" || selectedTeam === "personal") ? (
+            <Tooltip title="Select a team first to add an MCP server">
+              <Button className="flex-shrink-0 opacity-50 cursor-not-allowed" onClick={() => {}}>
+                + Add New MCP Server
+              </Button>
+            </Tooltip>
+          ) : (
+            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+              + Add New MCP Server
+            </Button>
+          )}
         </div>
       </div>
       <MCPDiscovery
