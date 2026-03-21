@@ -185,6 +185,8 @@ class UserAPIKeyLabelNames(Enum):
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
     STREAM = "stream"
+    ORG_ID = "org_id"
+    ORG_ALIAS = "org_alias"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -207,6 +209,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
+    "litellm_remaining_org_budget_metric",
+    "litellm_org_max_budget_metric",
+    "litellm_org_budget_remaining_hours_metric",
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
@@ -490,6 +495,21 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
+    litellm_remaining_org_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_max_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
     litellm_remaining_api_key_budget_metric = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -720,6 +740,12 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     stream: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
+    ] = None
+    org_id: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ID.value)
+    ] = None
+    org_alias: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ALIAS.value)
     ] = None
 
     @field_validator("stream", mode="before")
