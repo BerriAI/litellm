@@ -216,8 +216,8 @@ Use `litellm.supports_audio_input(model="")` -> returns `True` if model can acce
 assert litellm.supports_audio_output(model="gpt-4o-audio-preview") == True
 assert litellm.supports_audio_input(model="gpt-4o-audio-preview") == True
 
-assert litellm.supports_audio_output(model="gpt-3.5-turbo") == False
-assert litellm.supports_audio_input(model="gpt-3.5-turbo") == False
+assert litellm.supports_audio_output(model="gpt-4o") == False
+assert litellm.supports_audio_input(model="gpt-4o") == False
 ```
 </TabItem>
 

@@ -15,7 +15,7 @@ LiteLLM supports streaming the model response back by passing `stream=True` as a
 ```python
 from litellm import completion
 messages = [{"role": "user", "content": "Hey, how's it going?"}]
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+response = completion(model="gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
 ```
@@ -27,7 +27,7 @@ LiteLLM also exposes a helper function to rebuild the complete streaming respons
 ```python
 from litellm import completion
 messages = [{"role": "user", "content": "Hey, how's it going?"}]
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+response = completion(model="gpt-4o", messages=messages, stream=True)
 
 for chunk in response: 
     chunks.append(chunk)
@@ -45,7 +45,7 @@ import asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
-    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    response = await acompletion(model="gpt-4o", messages=messages)
     return response
 
 response = asyncio.run(test_get_response())
@@ -66,7 +66,7 @@ async def completion_call():
     try:
         print("test acompletion + streaming")
         response = await acompletion(
-            model="gpt-3.5-turbo", 
+            model="gpt-4o", 
             messages=[{"content": "Hello, how are you?", "role": "user"}], 
             stream=True
         )
@@ -106,7 +106,7 @@ chunks = [
     "id": "chatcmpl-123",
     "object": "chat.completion.chunk",
     "created": 1694268190,
-    "model": "gpt-3.5-turbo-0125",
+    "model": "gpt-4o-0125",
     "system_fingerprint": "fp_44709d6fcb",
     "choices": [
         {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
@@ -117,10 +117,10 @@ completion_stream = litellm.ModelResponseListIterator(model_responses=chunks)
 
 response = litellm.CustomStreamWrapper(
     completion_stream=completion_stream,
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     custom_llm_provider="cached_response",
     logging_obj=litellm.Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{"role": "user", "content": "Hey"}],
         stream=True,
         call_type="completion",

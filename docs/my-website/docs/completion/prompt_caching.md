@@ -700,7 +700,7 @@ response = client.chat.completions.with_raw_response.create(
         "role": "user",
         "content": "Say this is a test",
     }],
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
 )
 print(response.headers.get('x-litellm-response-cost'))
 
