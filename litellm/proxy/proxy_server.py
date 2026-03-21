@@ -3236,6 +3236,17 @@ class ProxyConfig:
                 _license_check.license_str = general_settings["litellm_license"]
                 premium_user = _license_check.is_premium()
 
+            ### SKILLS MODE ###
+            skills_mode = general_settings.get("skills_mode", None)
+            if skills_mode == "litellm":
+                from litellm.proxy.hooks.litellm_skills.main import (
+                    skills_injection_hook,
+                )
+
+                litellm.logging_callback_manager.add_litellm_callback(
+                    skills_injection_hook
+                )
+
         router_params: dict = {
             "cache_responses": litellm.cache
             is not None,  # cache if user passed in cache values

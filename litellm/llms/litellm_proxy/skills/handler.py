@@ -58,6 +58,7 @@ class LiteLLMSkillsHandler:
     async def create_skill(
         data: NewSkillRequest,
         user_id: Optional[str] = None,
+        source: str = "custom",
     ) -> LiteLLM_SkillsTable:
         """
         Create a new skill in the LiteLLM database.
@@ -65,6 +66,7 @@ class LiteLLMSkillsHandler:
         Args:
             data: NewSkillRequest with skill details
             user_id: Optional user ID for tracking
+            source: Source of the skill ("custom", "gateway", etc.)
 
         Returns:
             LiteLLM_SkillsTable record
@@ -78,7 +80,7 @@ class LiteLLMSkillsHandler:
             "display_title": data.display_title,
             "description": data.description,
             "instructions": data.instructions,
-            "source": "custom",
+            "source": source,
             "created_by": user_id,
             "updated_by": user_id,
         }
@@ -111,6 +113,7 @@ class LiteLLMSkillsHandler:
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
+        source: Optional[str] = None,
     ) -> List[LiteLLM_SkillsTable]:
         """
         List skills from the LiteLLM database.
@@ -118,6 +121,7 @@ class LiteLLMSkillsHandler:
         Args:
             limit: Maximum number of skills to return
             offset: Number of skills to skip
+            source: Optional filter by source ("custom", "gateway", etc.)
 
         Returns:
             List of LiteLLM_SkillsTable records
@@ -125,10 +129,16 @@ class LiteLLMSkillsHandler:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
         verbose_logger.debug(
-            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
+            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}, source={source}"
         )
 
+        # Build where clause
+        where_clause: Dict[str, Any] = {}
+        if source is not None:
+            where_clause["source"] = source
+
         skills = await prisma_client.db.litellm_skillstable.find_many(
+            where=where_clause if where_clause else None,
             take=limit,
             skip=offset,
             order={"created_at": "desc"},

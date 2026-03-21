@@ -14,12 +14,10 @@ For non-Anthropic models (e.g., Bedrock, OpenAI, etc.):
   execution automatically and returns final response with file_ids
 
 Usage:
-    # Simple - LiteLLM handles everything automatically via proxy
-    # The container parameter triggers the SkillsInjectionHook
     response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
-        container={"skills": [{"skill_id": "litellm:skill_abc123"}]},
+        container={"skills": [{"skill_id": "litellm_skill_abc123"}]},
     )
     # Response includes file_ids for generated files
 """
@@ -43,7 +41,7 @@ class SkillsInjectionHook(CustomLogger):
     Pre/Post-call hook that processes skills from container.skills parameter.
 
     Pre-call (async_pre_call_hook):
-    - Skills with 'litellm:' prefix are fetched from LiteLLM DB
+    - Skills with 'litellm_' prefix are fetched from LiteLLM DB
     - For Anthropic models: native skills pass through, LiteLLM skills converted to tools
     - For non-Anthropic models: LiteLLM skills are converted to tools + execute_code tool
 
@@ -78,7 +76,7 @@ class SkillsInjectionHook(CustomLogger):
         Process skills from container.skills before the LLM call.
 
         1. Check if container.skills exists in request
-        2. Separate skills by prefix (litellm: vs native)
+        2. Separate skills by prefix (litellm_ vs native)
         3. Fetch LiteLLM skills from database
         4. For Anthropic: keep native skills in container
         5. For non-Anthropic: convert LiteLLM skills to tools, inject content, add execute_code
@@ -91,7 +89,7 @@ class SkillsInjectionHook(CustomLogger):
         if not container or not isinstance(container, dict):
             return data
 
-        skills = container.get("skills")
+        skills = container.get("skills")    
         if not skills or not isinstance(skills, list):
             return data
 
@@ -906,9 +904,5 @@ print('No executable skill module found')
         return response
 
 
-# Global instance for registration
+# Global instance for registration (registered when skills_mode is enabled)
 skills_injection_hook = SkillsInjectionHook()
-
-import litellm
-
-litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)
