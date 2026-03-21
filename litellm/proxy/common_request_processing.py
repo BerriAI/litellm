@@ -1091,7 +1091,7 @@ class ProxyBaseLLMRequestProcessing:
                             cache_hit=cache_hit,
                         )
 
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[attr-defined]
+                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -1153,7 +1153,7 @@ class ProxyBaseLLMRequestProcessing:
             # Clear the closure so guardrails run inline as before — this
             # preserves blocking behavior and avoids double invocation.
             if getattr(logging_obj, "_on_deferred_stream_complete", None):
-                logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
             response = await proxy_logging_obj.post_call_success_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
@@ -1170,7 +1170,7 @@ class ProxyBaseLLMRequestProcessing:
             # returns before the deferred block), so _enqueue_fn is None — no-op.
             _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
             if _enqueue_fn is not None:
-                logging_obj._enqueue_deferred_logging = None  # type: ignore[attr-defined]
+                logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
                 try:
                     _enqueue_fn()
                 except Exception as e:
@@ -1191,7 +1191,7 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj, "_on_deferred_stream_complete", None
                 )
                 if _deferred_fn is not None:
-                    logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
                     try:
                         asyncio.create_task(
                             logging_obj.async_success_handler(
