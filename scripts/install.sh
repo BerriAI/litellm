@@ -72,34 +72,73 @@ if [ -z "$PYTHON_BIN" ]; then
     Ubuntu: sudo apt install python3 python3-pip"
 fi
 
-# ── pip detection ──────────────────────────────────────────────────────────
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-  die "pip is not available. Install it with:
-    $PYTHON_BIN -m ensurepip --upgrade"
-fi
-
 # ── install ────────────────────────────────────────────────────────────────
+# Prefer pipx or venv to avoid PEP 668 "externally-managed-environment" on
+# Homebrew/ system Python.  Neither strategy requires system pip — pipx
+# manages its own venvs and the venv strategy uses Python's built-in
+# ensurepip, so there is no unconditional pip gate here.
 echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" \
-  || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
+LITELLM_BIN=""
 
-# ── find the litellm binary installed by pip for this Python ───────────────
-# sysconfig.get_path('scripts') is where pip puts console scripts — reliable
-# even when the Python lives in a libexec/ symlink tree (e.g. Homebrew).
-SCRIPTS_DIR="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
-LITELLM_BIN="${SCRIPTS_DIR}/litellm"
+# Strategy 1: pipx (best for CLI apps, per PEP 668)
+# Try upgrade first to preserve existing flags (e.g. --include-deps); fall
+# back to a fresh install if the package is not yet managed by pipx.
+if command -v pipx >/dev/null 2>&1; then
+  info "Using pipx (isolated install)"
+  if pipx upgrade litellm 2>/dev/null; then
+    # Ensure proxy extras are present (may be absent if originally installed
+    # as bare "litellm" without [proxy]).  runpip installs inside the existing
+    # venv without disturbing pipx metadata (preserves --include-deps, etc.).
+    pipx runpip litellm install "${LITELLM_PACKAGE}" >/dev/null 2>&1 || true
+    _pipx_upgraded=1
+  elif pipx install "${LITELLM_PACKAGE}"; then
+    _pipx_upgraded=1
+  fi
+  if [ "${_pipx_upgraded:-0}" = "1" ]; then
+    _pipx_bin_dir="${PIPX_BIN_DIR:-${HOME}/.local/bin}"
+    _pipx_home="${PIPX_HOME:-${HOME}/.local/share/pipx}"
+    for try in \
+      "${_pipx_bin_dir}/litellm" \
+      "${_pipx_home}/venvs/litellm/bin/litellm"; do
+      if [ -n "$try" ] && [ -x "$try" ]; then
+        LITELLM_BIN="$try"
+        break
+      fi
+    done
+    if [ -z "$LITELLM_BIN" ] && command -v litellm >/dev/null 2>&1; then
+      LITELLM_BIN="$(command -v litellm)"
+    fi
+    if [ -z "$LITELLM_BIN" ]; then
+      die "pipx install succeeded but litellm binary not found.
+  Check PIPX_BIN_DIR (current: ${_pipx_bin_dir}).
+  PIPX_HOME is: ${_pipx_home}
+  Run: pipx list"
+    fi
+  else
+    info "pipx install failed, falling back to venv"
+  fi
+fi
 
-if [ ! -x "$LITELLM_BIN" ]; then
-  # Fall back to user-base bin (pip install --user)
-  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
-  LITELLM_BIN="${USER_BIN}/litellm"
+# Strategy 2: venv in ~/.litellm (avoids PEP 668 externally-managed-environment)
+if [ -z "$LITELLM_BIN" ]; then
+  LITELLM_VENV="${LITELLM_VENV:-${HOME}/.litellm/venv}"
+  info "Using isolated venv: $LITELLM_VENV"
+  mkdir -p "$(dirname "$LITELLM_VENV")"
+  "$PYTHON_BIN" -m venv --clear "$LITELLM_VENV" \
+    || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV
+On Ubuntu/Debian you may first need: sudo apt install python3-venv"
+  "${LITELLM_VENV}/bin/pip" install -q --upgrade pip \
+    || die "Failed to upgrade pip in venv. Try: ${LITELLM_VENV}/bin/pip install --upgrade pip"
+  "${LITELLM_VENV}/bin/pip" install --upgrade "${LITELLM_PACKAGE}" \
+    || die "pip install failed. Try manually: ${LITELLM_VENV}/bin/pip install '${LITELLM_PACKAGE}'"
+  LITELLM_BIN="${LITELLM_VENV}/bin/litellm"
 fi
 
 if [ ! -x "$LITELLM_BIN" ]; then
-  die "litellm binary not found after install. Try: $PYTHON_BIN -m pip install --user '${LITELLM_PACKAGE}'"
+  die "litellm binary not found. Try: pipx install '${LITELLM_PACKAGE}' or use a venv."
 fi
 
 # ── success banner ─────────────────────────────────────────────────────────
@@ -111,7 +150,8 @@ installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]
 
 # ── PATH hint ──────────────────────────────────────────────────────────────
 if ! command -v litellm >/dev/null 2>&1; then
-  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${SCRIPTS_DIR}\""
+  LITELLM_DIR="$(dirname "$LITELLM_BIN")"
+  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${LITELLM_DIR}\""
 fi
 
 # ── launch setup wizard ────────────────────────────────────────────────────
