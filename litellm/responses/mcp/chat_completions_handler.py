@@ -2,18 +2,54 @@
 
 from typing import (
     Any,
+    Dict,
     List,
     Optional,
     Union,
     cast,
 )
 
+from litellm._logging import verbose_logger
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
+
+
+async def _apply_semantic_filter(tools: List[Any], messages: List[Any]) -> List[Any]:
+    """
+    Filter MCP tools semantically based on the user query.
+
+    Uses the global SemanticToolFilterHook if configured; otherwise returns
+    all tools unchanged.
+    """
+    try:
+        import litellm
+
+        for callback in litellm.callbacks or []:
+            from litellm.proxy.hooks.mcp_semantic_filter.hook import (
+                SemanticToolFilterHook,
+            )
+
+            if isinstance(callback, SemanticToolFilterHook):
+                query = callback.filter.extract_user_query(messages)
+                if query:
+                    filtered = await callback.filter.filter_tools(
+                        query=query,
+                        available_tools=tools,
+                    )
+                    verbose_logger.debug(
+                        "Semantic filter (per-tool flag): %d → %d tools for query '%s...'",
+                        len(tools),
+                        len(filtered),
+                        query[:60],
+                    )
+                    return filtered
+    except Exception as e:
+        verbose_logger.warning("semantic_filter flag: filter failed (%s), using all tools", e)
+    return tools
 
 
 def _add_mcp_metadata_to_response(
@@ -104,8 +140,14 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         other_tools,
     ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
-    if not mcp_tools_with_litellm_proxy:
-        # No MCP tools, proceed with regular completion
+    # Parse A2A agent tools from what remains
+    (
+        agent_tool_configs,
+        other_tools,
+    ) = LiteLLM_Proxy_MCP_Handler._parse_agent_tools(other_tools)
+
+    if not mcp_tools_with_litellm_proxy and not agent_tool_configs:
+        # No MCP or agent tools, proceed with regular completion
         return await litellm_acompletion(
             model=model,
             messages=messages,
@@ -141,17 +183,41 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         mcp_server_auth_headers=mcp_server_auth_headers,
     )
 
+    # Apply per-tool semantic filter if any MCP tool has semantic_filter=true
+    if any(
+        isinstance(t, dict) and t.get("semantic_filter")
+        for t in mcp_tools_with_litellm_proxy
+    ):
+        deduplicated_mcp_tools = await _apply_semantic_filter(
+            tools=deduplicated_mcp_tools,
+            messages=messages,
+        )
+
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         deduplicated_mcp_tools,
         target_format="chat",
     )
 
-    # Combine with other tools
-    all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
+    # Wrap registered A2A agents as function tools
+    agent_function_tools: List = []
+    agent_tool_map: dict = {}
+    if agent_tool_configs:
+        agent_function_tools, agent_tool_map = (
+            await LiteLLM_Proxy_MCP_Handler._wrap_agents_as_function_tools(
+                user_api_key_auth=user_api_key_auth,
+            )
+        )
 
-    # Determine if we should auto-execute tools
+    # Combine all tool types
+    combined = openai_tools + agent_function_tools + other_tools
+    all_tools: Optional[List] = combined if combined else None
+
+    # Determine if we should auto-execute tools (MCP or agent tools with require_approval="never")
     should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+    ) or any(
+        isinstance(t, dict) and t.get("require_approval") == "never"
+        for t in agent_tool_configs
     )
 
     # Prepare call parameters
@@ -186,6 +252,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         initial_call_args["stream"] = True
         if mock_tool_calls is not None:
             initial_call_args["mock_tool_calls"] = mock_tool_calls
+        _agent_tool_map = agent_tool_map  # capture for closure
 
         # Make initial streaming call
         initial_stream = await litellm_acompletion(**initial_call_args)
@@ -220,6 +287,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                agent_tool_map=None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -233,6 +301,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
+                self.agent_tool_map = agent_tool_map or {}
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
                 self.tool_results: Optional[List] = None
@@ -456,6 +525,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                                 raw_headers=self.raw_headers,
                                 litellm_call_id=self.litellm_call_id,
                                 litellm_trace_id=self.litellm_trace_id,
+                                agent_tool_map=self.agent_tool_map,
                             )
                         )
 
@@ -518,6 +588,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            agent_tool_map=_agent_tool_map,
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -569,6 +640,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 # Delegate to sync iterator
                 if self._sync_iterator is None:
                     self.__iter__()
+                assert self._sync_iterator is not None
                 return next(self._sync_iterator)
 
             def __getattr__(self, name):
@@ -626,7 +698,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         )
         return initial_response
 
-    # Execute tool calls
+    # Execute tool calls (MCP + A2A agents)
     tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
@@ -637,6 +709,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        agent_tool_map=agent_tool_map,
     )
 
     if not tool_results:
