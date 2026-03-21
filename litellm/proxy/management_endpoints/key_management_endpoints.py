@@ -638,15 +638,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
-    # [TEAM MODEL OVERRIDES] Handle effective team models for the key
+    # [TEAM MODEL OVERRIDES] Handle effective team models for the key.
+    # Only applies when a user_id is specified — service/bot keys (no user_id) use
+    # the full team.models pool, preserving pre-feature behavior.
     if (
         litellm.team_model_overrides_enabled
         or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
-    ) and team_table is not None:
+    ) and team_table is not None and data.user_id:
         # Read member models from LiteLLM_TeamMembership via the standard cached helper
         # (NOT from members_with_roles JSON blob which can be stale after /team/member_update).
         member_models: List[str] = []
-        if data.user_id and prisma_client is not None:
+        if prisma_client is not None:
             from litellm.proxy.proxy_server import user_api_key_cache
 
             _membership = await get_team_membership(

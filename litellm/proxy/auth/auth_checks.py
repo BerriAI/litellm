@@ -2780,7 +2780,12 @@ async def can_team_access_model(
             object_type="team",
         )
     except ProxyException:
-        # Fallback: check team's access_group_ids
+        # Fallback: check team's access_group_ids.
+        # Note: access groups are a team-level concept and are NOT restricted by
+        # per-member model overrides. If a team has access_group_ids configured,
+        # any member can access models from those groups regardless of their
+        # effective_models set. This is by design — access groups grant team-wide
+        # access, while default_models/member.models control the team's own model list.
         team_access_group_ids = (
             (team_object.access_group_ids or []) if team_object else []
         )
