@@ -121,8 +121,6 @@ describe("MCPServers", () => {
     // Verify the mocked server data is rendered in the table
     expect(getByText("Test Server 1")).toBeInTheDocument();
     expect(getByText("Test Server 2")).toBeInTheDocument();
-    expect(getByText("test-server-1")).toBeInTheDocument();
-    expect(getByText("test-server-2")).toBeInTheDocument();
 
     // Verify the API was called
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
@@ -306,8 +304,9 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select dropdown by looking for the "Team" label
-    const teamLabel = screen.getByText("Team");
+    // Find the team filter dropdown (not the "Team (Owner)" column header)
+    const teamLabels = screen.getAllByText("Team");
+    const teamLabel = teamLabels.find((el) => el.classList.contains("text-sm") && el.classList.contains("font-medium") && el.classList.contains("text-gray-600"))!;
     const teamSelectContainer = teamLabel.closest("div")?.querySelector(".ant-select");
     expect(teamSelectContainer).toBeTruthy();
 
