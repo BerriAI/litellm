@@ -3,6 +3,7 @@ import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
+import { setObfuscated, getObfuscated } from "../../utils/storageUtils";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -94,7 +95,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      window.sessionStorage.setItem(
+      setObfuscated(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           modalVisible: isModalVisible,
@@ -177,7 +178,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(CREATE_OAUTH_UI_STATE_KEY);
+    const storedState = getObfuscated(CREATE_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }

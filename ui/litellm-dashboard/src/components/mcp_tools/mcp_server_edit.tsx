@@ -4,6 +4,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
+import { setObfuscated, getObfuscated } from "../../utils/storageUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -73,7 +74,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      window.sessionStorage.setItem(
+      setObfuscated(
         EDIT_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           serverId: mcpServer.server_id,
@@ -213,7 +214,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+    const storedState = getObfuscated(EDIT_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
