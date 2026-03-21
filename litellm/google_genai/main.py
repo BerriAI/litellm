@@ -185,7 +185,8 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={

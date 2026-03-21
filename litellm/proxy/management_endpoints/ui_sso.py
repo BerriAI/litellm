@@ -16,6 +16,7 @@ import os
 import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from urllib.parse import urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
@@ -301,6 +302,7 @@ async def google_login(
     source: Optional[str] = None,
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
+    return_to: Optional[str] = None,
 ):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -394,13 +396,23 @@ async def google_login(
         is True
     ):
         verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
+        sso_redirect = await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
         )
+        if return_to is not None and sso_redirect is not None:
+            SSOAuthenticationHandler._validate_return_to(return_to)
+            sso_redirect.set_cookie(
+                key="litellm_cp_return_to",
+                value=return_to,
+                max_age=600,
+                httponly=True,
+                samesite="lax",
+            )
+        return sso_redirect
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -846,12 +858,16 @@ async def get_generic_sso_response(
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
     additional_generic_sso_headers_dict = _parse_generic_sso_headers()
 
-    code_verifier: Optional[str] = None  # assigned inside try; initialized for type tracking
+    code_verifier: Optional[
+        str
+    ] = None  # assigned inside try; initialized for type tracking
 
     try:
-        token_exchange_params = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
-            request=request,
-            generic_include_client_id=generic_include_client_id,
+        token_exchange_params = (
+            await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=request,
+                generic_include_client_id=generic_include_client_id,
+            )
         )
 
         # Extract code_verifier (and the cache key for deferred deletion) before calling fastapi-sso
@@ -915,7 +931,9 @@ async def get_generic_sso_response(
             # Assign directly rather than relying on nonlocal mutation so that Pyright
             # can track that received_response is non-None from this point on.
             received_response = {
-                k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS
+                k: v
+                for k, v in combined_response.items()
+                if k not in _OAUTH_TOKEN_FIELDS
             }
             # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
             # is never set. Read the token directly from the exchange response instead so
@@ -1306,12 +1324,17 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             request=request, key=key_id, existing_key=existing_key, result=result
         )
 
+    # Control-plane cross-origin: read return_to from cookie.
+    # Starlette's cookie_parser already handles RFC 2109 unquoting.
+    cp_return_to: Optional[str] = request.cookies.get("litellm_cp_return_to")
+
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
         request=request,
         received_response=received_response,
         generic_client_id=generic_client_id,
         ui_access_mode=ui_access_mode,
+        return_to=cp_return_to,
     )
 
 
@@ -1753,6 +1776,38 @@ class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
     """
+
+    @staticmethod
+    def _validate_return_to(return_to: str) -> None:
+        """
+        Validate that return_to matches the configured control_plane_url origin.
+
+        Raises HTTPException(400) if:
+        - control_plane_url is not configured in general_settings
+        - return_to origin does not match control_plane_url origin
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        control_plane_url = general_settings.get("control_plane_url")
+        if control_plane_url is None:
+            raise HTTPException(
+                status_code=400,
+                detail="return_to is not allowed: control_plane_url is not configured",
+            )
+
+        def _origin(url: str) -> tuple:
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or "").lower()
+            hostname = (parsed.hostname or "").lower()
+            default_port = 443 if scheme == "https" else 80
+            port = parsed.port if parsed.port is not None else default_port
+            return (scheme, hostname, port)
+
+        if _origin(return_to) != _origin(control_plane_url):
+            raise HTTPException(
+                status_code=400,
+                detail="return_to does not match the configured control_plane_url",
+            )
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -2352,6 +2407,7 @@ class SSOAuthenticationHandler:
         received_response: Optional[dict] = None,
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
+        return_to: Optional[str] = None,
     ) -> RedirectResponse:
         import jwt
 
@@ -2361,6 +2417,7 @@ class SSOAuthenticationHandler:
             master_key,
             premium_user,
             proxy_logging_obj,
+            redis_usage_cache,
             user_api_key_cache,
             user_custom_sso,
         )
@@ -2528,6 +2585,36 @@ class SSOAuthenticationHandler:
             master_key or "",
             algorithm="HS256",
         )
+
+        # Control-plane cross-origin: store JWT behind a single-use opaque
+        # code (60s TTL) so the token never appears in browser history / logs.
+        # The control plane redeems it via POST /v3/login/exchange.
+        if return_to is not None:
+            SSOAuthenticationHandler._validate_return_to(return_to)
+
+            code = secrets.token_urlsafe(32)
+            cache_key = f"login_code:{code}"
+            cache_value = {"token": jwt_token, "redirect_url": return_to}
+            if redis_usage_cache is not None:
+                await redis_usage_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+            else:
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+
+            separator = "&" if "?" in return_to else "?"
+            redirect_url = (
+                return_to + separator + urlencode({"login": "success", "code": code})
+            )
+            verbose_proxy_logger.info(
+                "Cross-origin SSO: redirecting to control plane with login code"
+            )
+            redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+            redirect_response.delete_cookie("litellm_cp_return_to")
+            return redirect_response
+
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
@@ -2598,7 +2685,9 @@ class SSOAuthenticationHandler:
                             state,
                         )
                     else:
-                        verbose_proxy_logger.debug("PKCE code_verifier retrieved from cache")
+                        verbose_proxy_logger.debug(
+                            "PKCE code_verifier retrieved from cache"
+                        )
                 elif isinstance(cached_data, str):
                     # Handle legacy format (plain string) for backward compatibility
                     code_verifier = cached_data
@@ -2647,7 +2736,9 @@ class SSOAuthenticationHandler:
         In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
         Otherwise logs a warning and returns (token exchange proceeds without verifier).
         """
-        active_cache = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        active_cache = (
+            redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        )
         strict_cache_miss = (
             os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         )

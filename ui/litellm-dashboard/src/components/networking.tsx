@@ -68,7 +68,7 @@ export const getInProductNudgesCall = async (accessToken: string) => {
 /**
  * Helper file for calls being made to proxy
  */
-import { message } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
@@ -86,7 +86,23 @@ const defaultProxyBaseUrl =
     : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
-export let proxyBaseUrl = defaultProxyBaseUrl;
+const WORKER_URL_KEY = "litellm_worker_url";
+// If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
+// This survives page navigation and the sessionStorage.clear() in user_dashboard.
+const _rawWorkerUrl =
+  typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
+// Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
+const _initialWorkerUrl = (() => {
+  if (!_rawWorkerUrl) return null;
+  try {
+    const parsed = new URL(_rawWorkerUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return _rawWorkerUrl;
+  } catch { /* invalid URL */ }
+  // Invalid URL in storage — clear it
+  if (typeof window !== "undefined") window.localStorage.removeItem(WORKER_URL_KEY);
+  return null;
+})();
+export let proxyBaseUrl: string | null = _initialWorkerUrl ?? defaultProxyBaseUrl;
 if (isLocal != true) {
   console.log = function () { };
 }
@@ -102,6 +118,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
+  // If a worker URL is in localStorage, don't let getUiConfig overwrite it
+  if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
+    return;
+  }
   const browserLocation = getWindowLocation();
   const resolvedDefaultProxyBaseUrl =
     isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
@@ -136,6 +156,36 @@ export const getProxyBaseUrl = (): string => {
   const browserLocation = getWindowLocation();
   return browserLocation?.origin ?? "";
 };
+
+/**
+ * Switch API calls to point at a worker (or back to the control plane).
+ * Persists to localStorage so it survives page navigation and the
+ * sessionStorage.clear() in user_dashboard. Also updates the module-level
+ * proxyBaseUrl so in-flight code in this JS execution sees the new value
+ * immediately.
+ */
+function isValidHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function switchToWorkerUrl(workerUrl: string | null): void {
+  if (workerUrl && !isValidHttpUrl(workerUrl)) {
+    return;
+  }
+  if (typeof window !== "undefined") {
+    if (workerUrl) {
+      window.localStorage.setItem(WORKER_URL_KEY, workerUrl);
+    } else {
+      window.localStorage.removeItem(WORKER_URL_KEY);
+    }
+  }
+  proxyBaseUrl = workerUrl ?? defaultProxyBaseUrl;
+}
 
 const HTTP_REQUEST = {
   GET: "GET",
@@ -262,12 +312,20 @@ interface PublicModelHubInfo {
   useful_links: Record<string, string | { url: string; index: number }>;
 }
 
+export interface WorkerInfo {
+  worker_id: string;
+  name: string;
+  url: string;
+}
+
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  is_control_plane?: boolean;
+  workers?: WorkerInfo[];
 }
 
 export interface CredentialsResponse {
@@ -555,7 +613,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     console.log("API Response:", data);
 
     // Close any existing messages before showing new ones
-    message.destroy();
+    MessageManager.destroy();
 
     // Sequential success messages
     NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
@@ -7206,7 +7264,6 @@ export const updateDefaultTeamSettings = async (accessToken: string, settings: R
 
     const data = await response.json();
     console.log("Updated default team settings:", data);
-    NotificationsManager.success("Default team settings updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update default team settings:", error);
@@ -9031,15 +9088,20 @@ export const deriveErrorMessage = (errorData: any): string => {
 export interface LoginRequest {
   username: string;
   password: string;
+  useV3?: boolean;
 }
 
 interface LoginResponse {
   redirect_url: string;
+  token?: string;
+  code?: string;
+  expires_in?: number;
 }
 
-export const loginCall = async (username: string, password: string): Promise<LoginResponse> => {
+export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}/v2/login` : "/v2/login";
+  const loginPath = useV3 ? "/v3/login" : "/v2/login";
+  const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}${loginPath}` : loginPath;
 
   const body = JSON.stringify({
     username,
@@ -9061,8 +9123,63 @@ export const loginCall = async (username: string, password: string): Promise<Log
     throw new Error(errorMessage);
   }
 
-  const data = await response.json();
+  const data: LoginResponse = await response.json();
+
+  // v3 returns an opaque code — exchange it for the real JWT
+  if (useV3 && data.code) {
+    const exchangeUrl = proxyBaseUrl
+      ? `${proxyBaseUrl}/v3/login/exchange`
+      : "/v3/login/exchange";
+
+    const exchangeResponse = await fetch(exchangeUrl, {
+      method: "POST",
+      body: JSON.stringify({ code: data.code }),
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!exchangeResponse.ok) {
+      const errorData = await exchangeResponse.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    const exchangeData: LoginResponse = await exchangeResponse.json();
+    if (exchangeData.token) {
+      document.cookie = `token=${exchangeData.token}; path=/; SameSite=Lax`;
+    }
+    return exchangeData;
+  }
+
+  // Backwards compatibility: v2 or old v3 returns token directly
+  if (data.token) {
+    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+  }
+
   return data;
+};
+
+/**
+ * Exchange a single-use login code for a JWT token.
+ * Used by the SSO callback when the worker redirects back with ?code=.
+ */
+export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | null): Promise<string> => {
+  const base = workerBaseUrl || getProxyBaseUrl();
+  const response = await fetch(`${base}/v3/login/exchange`, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(deriveErrorMessage(errorData));
+  }
+
+  const data = await response.json();
+  if (data.token) {
+    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+  }
+  return data.token;
 };
 
 export const getUiSettings = async () => {
