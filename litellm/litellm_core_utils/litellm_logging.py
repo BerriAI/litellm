@@ -1686,7 +1686,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         return logging_result
 
-    def _merge_hidden_params_from_response_into_metadata(self, logging_result: Any) -> None:
+    def _merge_hidden_params_from_response_into_metadata(
+        self, logging_result: Any
+    ) -> None:
         """
         Copy response._hidden_params into litellm_params.metadata['hidden_params'].
 
@@ -1704,9 +1706,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["litellm_params"].setdefault("metadata", {})
         if self.model_call_details["litellm_params"]["metadata"] is None:
             self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(
-            logging_result, "_hidden_params", {}
-        )
+        self.model_call_details["litellm_params"]["metadata"][
+            "hidden_params"
+        ] = getattr(logging_result, "_hidden_params", {})
 
     def _process_hidden_params_and_response_cost(
         self,

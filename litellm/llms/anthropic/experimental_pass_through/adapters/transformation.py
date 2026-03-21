@@ -869,19 +869,25 @@ class LiteLLMAnthropicMessagesAdapter:
 
         # Handle array items
         if "items" in schema:
-            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(schema["items"])
+            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                schema["items"]
+            )
 
         # Handle anyOf/oneOf/allOf
         for key in ("anyOf", "oneOf", "allOf"):
             if key in schema:
                 for sub_schema in schema[key]:
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(sub_schema)
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        sub_schema
+                    )
 
         # Handle $defs / definitions
         for key in ("$defs", "definitions"):
             if key in schema:
                 for def_schema in schema[key].values():
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        def_schema
+                    )
 
     def _add_system_message_to_messages(
         self,

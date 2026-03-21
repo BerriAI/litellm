@@ -297,7 +297,10 @@ def _insert_user_continue_message(
     while i < len(result_messages):
         curr_message = result_messages[i]
         inserted_continue_message = False
-        if _counts_for_alternation(curr_message) and curr_message["role"] == "assistant":
+        if (
+            _counts_for_alternation(curr_message)
+            and curr_message["role"] == "assistant"
+        ):
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
@@ -584,7 +587,9 @@ def _decode_vector_store_ids_in_tools(
                 continue
 
             parsed = parse_unified_id(vs_id)
-            provider_resource_id = parsed.get("provider_resource_id") if parsed else None
+            provider_resource_id = (
+                parsed.get("provider_resource_id") if parsed else None
+            )
 
             if not provider_resource_id:
                 verbose_logger.warning(
