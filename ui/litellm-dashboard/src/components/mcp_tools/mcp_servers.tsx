@@ -26,7 +26,7 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const { data: mcpServers, isLoading: isLoadingServers, error: mcpServersError, refetch } = useMCPServers();
 
   // Fetch health status for all servers
   const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
@@ -238,8 +238,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return <div className="p-6 text-center text-gray-500">Loading...</div>;
   }
 
   return (
@@ -311,17 +310,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
         <div className="flex items-center gap-2">
-          {!isAdminRole(userRole) && (selectedTeam === "all" || selectedTeam === "personal") ? (
-            <Tooltip title="Select a team first to add an MCP server">
-              <Button className="flex-shrink-0 opacity-50 cursor-not-allowed" onClick={() => {}}>
-                + Add New MCP Server
-              </Button>
-            </Tooltip>
-          ) : (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-              + Add New MCP Server
-            </Button>
-          )}
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
         </div>
       </div>
       <MCPDiscovery
@@ -407,6 +398,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                   </div>
                 </div>
                 <div className="w-full mt-6">
+                  {mcpServersError ? (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-8 text-center">
+                      <h3 className="text-lg font-semibold text-red-800 mb-2">Unable to load MCP servers</h3>
+                      <p className="text-sm text-red-700 mb-4">
+                        {mcpServersError.message?.includes("403")
+                          ? "You do not have permission to view MCP servers."
+                          : `Error: ${mcpServersError.message}`}
+                      </p>
+                      <div className="text-sm text-red-600 bg-red-100 rounded-md p-4 inline-block text-left">
+                        <p className="font-medium mb-2">To resolve this, ask your team admin or proxy admin to:</p>
+                        <ol className="list-decimal list-inside space-y-1">
+                          <li>Go to <span className="font-mono">Teams</span> and select your team</li>
+                          <li>Find your user in the team members list</li>
+                          <li>Add the <span className="font-mono bg-red-200 px-1 rounded">mcp:read</span> permission to your user</li>
+                        </ol>
+                      </div>
+                    </div>
+                  ) : (
                   <DataTable
                     data={filteredServers}
                     columns={columns}
@@ -417,6 +426,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     loadingMessage="Loading MCP servers..."
                     enableSorting={true}
                   />
+                  )}
                 </div>
               </div>
             )}
