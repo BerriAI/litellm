@@ -158,6 +158,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        # OpenRouter expects the actual model ID (e.g. "mistralai/mistral-7b-instruct"),
+        # not the litellm-internal "openrouter/<model>" form.  Strip the provider
+        # prefix so it is never sent to the API.
+        if model.startswith("openrouter/"):
+            model = model[len("openrouter/"):]
+
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
         
