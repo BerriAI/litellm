@@ -1565,46 +1565,39 @@ if MCP_AVAILABLE:
         team_id: Optional[str] = None
 
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            # Find which teams own this server via ObjectPermissionTable,
-            # then check if the user has mcp:delete in any of those teams.
-            object_perms = await get_objectpermissions_for_mcp_server(
-                prisma_client, server_id
-            )
-            if not object_perms:
+            # Look up the server's owning team directly
+            mcp_server = await get_mcp_server(prisma_client, server_id)
+            if mcp_server is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={
-                        "error": f"MCP Server not found or not assigned to any team, server_id={server_id}"
+                        "error": f"MCP Server not found, server_id={server_id}"
                     },
                 )
 
-            authorized = False
-            for perm in object_perms:
-                for team in perm.teams or []:
-                    candidate_team_id = team.team_id
-                    try:
-                        team_obj = await get_team_object(
-                            team_id=candidate_team_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                        )
-                    except Exception:
-                        continue
-                    if check_member_permission(
-                        user_api_key_dict, team_obj, "mcp:delete"
-                    ):
-                        authorized = True
-                        team_id = candidate_team_id
-                        break
-                if authorized:
-                    break
+            team_id = mcp_server.team_id
+            if not team_id:
+                # Global server (team_id=NULL) — only proxy admins can manage
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "This is a global MCP server. Only proxy admins can delete it."
+                    },
+                )
 
-            if not authorized:
+            team_obj = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if not check_member_permission(
+                user_api_key_dict, team_obj, "mcp:delete"
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
                         "error": "User does not have permission to delete this MCP server. "
-                        "Requires team admin role or 'mcp:delete' permission in one of the server's teams."
+                        "Requires team admin role or 'mcp:delete' permission in the server's owning team."
                     },
                 )
 
