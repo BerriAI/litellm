@@ -158,6 +158,17 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        # Native OpenRouter models have IDs like "openrouter/auto" where the
+        # "openrouter/" prefix is part of the actual model name on the API.
+        # Only preserve prefix for single-segment native models (no extra '/'),
+        # not for provider-routed models like "openrouter/anthropic/claude-3.5-sonnet".
+        if (
+            custom_llm_provider == "openrouter"
+            and model.startswith("openrouter/")
+            and "/" not in model[len("openrouter/"):]
+        ):
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
 
