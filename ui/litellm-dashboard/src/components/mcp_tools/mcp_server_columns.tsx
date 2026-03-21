@@ -5,7 +5,7 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined } from "@ant-design/icons";
+import { CheckOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,6 +92,7 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  teamAliasMap?: Map<string, string>,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -125,6 +126,30 @@ export const mcpServerColumns = (
           ) : null}
           <span>{name}</span>
         </div>
+      );
+    },
+  },
+  {
+    accessorKey: "team_id",
+    header: () => (
+      <span className="flex items-center gap-1">
+        Team (Owner)
+        <Tooltip title="Shows the team that owns this MCP server. You can only see servers owned by teams where you have the mcp:read permission.">
+          <InfoCircleOutlined className="text-gray-400 cursor-help" style={{ fontSize: 12 }} />
+        </Tooltip>
+      </span>
+    ),
+    enableSorting: true,
+    cell: ({ row }) => {
+      const tid = row.original.team_id;
+      if (!tid) {
+        return <span className="text-xs text-gray-400 italic">Global</span>;
+      }
+      const alias = teamAliasMap?.get(tid);
+      return (
+        <Tooltip title={tid}>
+          <span className="text-sm">{alias || tid.slice(0, 8) + "..."}</span>
+        </Tooltip>
       );
     },
   },

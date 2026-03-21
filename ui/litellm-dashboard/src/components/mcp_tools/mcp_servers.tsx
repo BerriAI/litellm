@@ -15,6 +15,7 @@ import MCPConnect from "./mcp_connect";
 import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
 import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
@@ -63,6 +64,16 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
+  const { data: allTeams } = useTeams();
+  const teamAliasMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    if (allTeams) {
+      for (const t of allTeams) {
+        if (t.team_alias) map.set(t.team_id, t.team_alias);
+      }
+    }
+    return map;
+  }, [allTeams]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -171,8 +182,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        teamAliasMap,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, teamAliasMap],
   );
 
   function handleDelete(server_id: string) {
