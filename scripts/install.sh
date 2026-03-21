@@ -112,7 +112,7 @@ if [ -z "$LITELLM_BIN" ]; then
   LITELLM_VENV="${LITELLM_VENV:-${HOME}/.litellm/venv}"
   info "Using isolated venv: $LITELLM_VENV"
   mkdir -p "$(dirname "$LITELLM_VENV")"
-  "$PYTHON_BIN" -m venv "$LITELLM_VENV" \
+  "$PYTHON_BIN" -m venv --clear "$LITELLM_VENV" \
     || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV
 On Ubuntu/Debian you may first need: sudo apt install python3-venv"
   "${LITELLM_VENV}/bin/pip" install -q --upgrade pip \
