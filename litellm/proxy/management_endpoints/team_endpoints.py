@@ -1439,15 +1439,6 @@ async def update_team(  # noqa: PLR0915
                         },
                     )
 
-        # When team.models is being narrowed, prune existing default_models
-        # to prevent stale over-permissive defaults (privilege escalation)
-        if data.models is not None and not data.default_models:
-            existing_defaults = existing_team_row.default_models or []
-            if existing_defaults and data.models:
-                pruned = [m for m in existing_defaults if m in set(data.models)]
-                if pruned != existing_defaults:
-                    data.default_models = pruned
-
         if data.soft_budget is not None:
             max_budget_to_check = (
                 data.max_budget
@@ -1534,6 +1525,18 @@ async def update_team(  # noqa: PLR0915
                 )
 
         updated_kv = data.json(exclude_unset=True)
+
+        # When team.models is being narrowed, prune existing default_models
+        # to prevent stale over-permissive defaults (privilege escalation).
+        # Must inject into updated_kv directly (not data) because
+        # data.json(exclude_unset=True) skips fields not set during __init__.
+        if "models" in updated_kv and "default_models" not in updated_kv:
+            existing_defaults = existing_team_row.default_models or []
+            new_models = updated_kv["models"] or []
+            if existing_defaults and new_models:
+                pruned = [m for m in existing_defaults if m in set(new_models)]
+                if pruned != existing_defaults:
+                    updated_kv["default_models"] = pruned
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)

@@ -406,16 +406,18 @@ async def _upsert_budget_and_membership(
         _budget_id = new_budget.budget_id
 
     # upsert the team membership with the new/updated budget and models
-    membership_data: Dict[str, Any] = {
+    membership_create_data: Dict[str, Any] = {
         "user_id": user_id,
         "team_id": team_id,
     }
+    membership_update_data: Dict[str, Any] = {}
     if _budget_id:
-        membership_data["litellm_budget_table"] = {
-            "connect": {"budget_id": _budget_id},
-        }
+        budget_connect = {"litellm_budget_table": {"connect": {"budget_id": _budget_id}}}
+        membership_create_data.update(budget_connect)
+        membership_update_data.update(budget_connect)
     if models is not None:
-        membership_data["models"] = models
+        membership_create_data["models"] = models
+        membership_update_data["models"] = models
 
     await tx.litellm_teammembership.upsert(
         where={
@@ -425,8 +427,8 @@ async def _upsert_budget_and_membership(
             }
         },
         data={
-            "create": membership_data,
-            "update": membership_data,
+            "create": membership_create_data,
+            "update": membership_update_data,
         },
     )
 
