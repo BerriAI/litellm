@@ -1,13 +1,21 @@
 """
-Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer 
+Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-This is OpenAI compatible 
+This is OpenAI compatible
 
 This file only contains param mapping logic
 
 API calling is done using the OpenAI SDK with an api_base
 """
+from typing import Any, List, Optional, cast
+
+import httpx
+
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _parse_content_for_reasoning,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.utils import ModelResponse
 
 
 class NvidiaNimConfig(OpenAIGPTConfig):
@@ -108,3 +116,64 @@ class NvidiaNimConfig(OpenAIGPTConfig):
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    def transform_response(  # type: ignore[override]
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Any,
+        request_data: dict,
+        messages: List[Any],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        """
+        Override transform_response to extract <think>…</think> reasoning blocks
+        produced by NVIDIA NIM reasoning models (e.g. minimax/minimax-m1).
+
+        NIM forwards the raw model output as a plain OpenAI-compatible response:
+        the <think> block appears inside ``choices[0].message.content`` and
+        ``reasoning_content`` is absent.  The parent class's
+        ``_extract_reasoning_content`` helper already calls
+        ``_parse_content_for_reasoning``, but only after the response has been
+        deserialized.  We do the same pre-processing here on the raw JSON so
+        that the upstream consumer always sees a clean split between
+        ``reasoning_content`` and ``content``.
+        """
+        # Let the parent class build the base ModelResponse first.
+        result = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        # Post-process: if reasoning_content is still None but the content
+        # contains <think>…</think> raw tags, extract them now.
+        for choice in getattr(result, "choices", []):
+            message = getattr(choice, "message", None)
+            if message is None:
+                continue
+            if getattr(message, "reasoning_content", None) is not None:
+                # Already parsed — nothing to do.
+                continue
+            content = getattr(message, "content", None)
+            if not isinstance(content, str):
+                continue
+            reasoning, stripped_content = _parse_content_for_reasoning(content)
+            if reasoning is not None:
+                message.reasoning_content = reasoning
+                message.content = stripped_content
+
+        return result
