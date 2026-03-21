@@ -176,7 +176,9 @@ if MCP_AVAILABLE:
             meta = getattr(content, "meta", None)
             if meta is None and hasattr(content, "model_dump"):
                 d = content.model_dump()
-                meta = d.get("meta") or d.get("_meta")
+                meta = d.get("meta")
+                if meta is None:
+                    meta = d.get("_meta")
             if isinstance(content, TextResourceContents):
                 normalized.append(
                     ReadResourceContents(
@@ -189,7 +191,7 @@ if MCP_AVAILABLE:
                 normalized.append(
                     ReadResourceContents(
                         content=content.blob,
-                        mime_type=None,
+                        mime_type=content.mimeType,
                         meta=meta,
                     )
                 )

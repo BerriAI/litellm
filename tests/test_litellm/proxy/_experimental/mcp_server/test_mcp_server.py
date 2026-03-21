@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
-from mcp.types import Prompt, ResourceTemplate, TextResourceContents
+from mcp.types import BlobResourceContents, Prompt, ResourceTemplate, TextResourceContents
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -437,6 +437,60 @@ def test_normalize_resource_contents_passes_metadata():
     assert result[0].content == "hello world"
     assert result[0].mime_type == "text/plain"
     assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_blob_with_metadata():
+    """Test that _normalize_resource_contents preserves meta for BlobResourceContents."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    meta = {"encoding": "base64"}
+    contents = [
+        BlobResourceContents(
+            uri="https://example.com/image.png",
+            blob="aGVsbG8=",
+            mimeType="image/png",
+            meta=meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "aGVsbG8="
+    assert result[0].mime_type == "image/png"
+    assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_preserves_empty_metadata():
+    """Test that empty dict meta is preserved (truthiness bug fix)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    empty_meta: dict = {}
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hi",
+            mimeType="text/plain",
+            meta=empty_meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].meta == empty_meta
+    assert result[0].meta is not None
+    assert result[0].meta == {}
 
 
 def test_normalize_resource_contents_without_metadata():
