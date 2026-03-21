@@ -98,7 +98,6 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 elif modality == "IMAGE":
                     input_tokens_details.image_tokens += token_count
 
-
         return ImageUsage(
             input_tokens=usage_metadata.get("promptTokenCount", 0),
             input_tokens_details=input_tokens_details,
