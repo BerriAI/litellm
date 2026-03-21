@@ -1294,14 +1294,9 @@ if MCP_AVAILABLE:
 
         # Auto-assign server to team's ObjectPermissionTable if team-scoped
         if team_id and new_mcp_server.server_id:
-            try:
-                await add_mcp_server_to_team(
-                    prisma_client, team_id, new_mcp_server.server_id
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Failed to auto-assign MCP server {new_mcp_server.server_id} to team {team_id}: {e}"
-                )
+            await add_mcp_server_to_team(
+                prisma_client, team_id, new_mcp_server.server_id
+            )
 
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1577,12 +1572,7 @@ if MCP_AVAILABLE:
 
         # Remove server from team's ObjectPermissionTable
         if team_id:
-            try:
-                await remove_mcp_server_from_team(prisma_client, team_id, server_id)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Failed to remove MCP server {server_id} from team {team_id}: {e}"
-                )
+            await remove_mcp_server_from_team(prisma_client, team_id, server_id)
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
@@ -1913,6 +1903,13 @@ if MCP_AVAILABLE:
             )
 
             team_servers = await _get_team_allowed_mcp_servers(team_obj)
+            if payload.server_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "server_id is required to update an MCP server."
+                    },
+                )
             if payload.server_id not in team_servers:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

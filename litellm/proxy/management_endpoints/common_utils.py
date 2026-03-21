@@ -45,12 +45,25 @@ def _is_user_team_admin(
 def _find_member_in_team(
     user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
 ) -> Optional[Member]:
-    """Find and return the Member object for the given user in the team, or None."""
-    if not user_api_key_dict.user_id:
-        return None
+    """Find and return the Member object for the given user in the team, or None.
+
+    Matches by user_id first, then falls back to user_email for email-only members.
+    """
     for member in team_obj.members_with_roles:
-        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+        if (
+            user_api_key_dict.user_id
+            and member.user_id is not None
+            and member.user_id == user_api_key_dict.user_id
+        ):
             return member
+    # Fallback: match by email for email-only members
+    if user_api_key_dict.user_email:
+        for member in team_obj.members_with_roles:
+            if (
+                member.user_email is not None
+                and member.user_email == user_api_key_dict.user_email
+            ):
+                return member
     return None
 
 

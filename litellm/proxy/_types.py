@@ -1622,6 +1622,22 @@ class Member(MemberBase):
         description="Granular permissions granted to this member (e.g. 'mcp:create', 'mcp:delete'). Used for per-member permission grants.",
     )
 
+    @field_validator("extra_permissions", mode="before")
+    @classmethod
+    def validate_permission_format(cls, v):
+        """Validate that all permission strings follow the resource:action format."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("extra_permissions must be a list of strings")
+        for perm in v:
+            if not isinstance(perm, str) or ":" not in perm:
+                raise ValueError(
+                    f"Invalid permission format: '{perm}'. "
+                    "Must follow 'resource:action' format (e.g. 'mcp:create')."
+                )
+        return v
+
 
 class OrgMember(MemberBase):
     role: Literal[

@@ -2434,31 +2434,7 @@ async def team_member_update(
             rpm_limit=data.rpm_limit,
         )
 
-    ### update team member role
-    if data.role is not None:
-        team_members: List[Member] = []
-        for member in team_table.members_with_roles:
-            if member.user_id == received_user_id:
-                team_members.append(
-                    Member(
-                        user_id=member.user_id,
-                        role=data.role,
-                        user_email=data.user_email or member.user_email,
-                        extra_permissions=member.extra_permissions,
-                    )
-                )
-            else:
-                team_members.append(member)
-
-        team_table.members_with_roles = team_members
-
-        _db_team_members: List[dict] = [m.model_dump() for m in team_members]
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-        )
-
-    ### update team member extra_permissions
+    ### Validate extra_permissions before applying any changes
     if data.extra_permissions is not None:
         from litellm.proxy.auth.permissions import VALID_PERMISSIONS
 
@@ -2472,34 +2448,39 @@ async def team_member_update(
                 },
             )
 
-        team_members_updated: List[Member] = []
+    ### Apply role and extra_permissions updates in-memory, then do a single DB write
+    members_changed = data.role is not None or data.extra_permissions is not None
+    if members_changed:
+        updated_members: List[Member] = []
         for member in team_table.members_with_roles:
             if member.user_id == received_user_id:
-                team_members_updated.append(
+                updated_members.append(
                     Member(
                         user_id=member.user_id,
-                        role=member.role,
-                        user_email=member.user_email,
-                        extra_permissions=data.extra_permissions,
+                        role=data.role if data.role is not None else member.role,
+                        user_email=data.user_email or member.user_email,
+                        extra_permissions=(
+                            data.extra_permissions
+                            if data.extra_permissions is not None
+                            else member.extra_permissions
+                        ),
                     )
                 )
             else:
-                team_members_updated.append(member)
+                updated_members.append(member)
 
-        team_table.members_with_roles = team_members_updated
+        team_table.members_with_roles = updated_members
 
-        _db_team_members_perms: List[dict] = [
-            m.model_dump() for m in team_members_updated
-        ]
+        _db_team_members: List[dict] = [m.model_dump() for m in updated_members]
         await prisma_client.db.litellm_teamtable.update(
             where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members_perms)},  # type: ignore
+            data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
         )
 
-    # Invalidate team cache so permission changes take effect immediately
-    from litellm.proxy.proxy_server import user_api_key_cache
+        # Invalidate team cache so changes take effect immediately
+        from litellm.proxy.proxy_server import user_api_key_cache
 
-    user_api_key_cache.delete_cache(key="team_id:{}".format(data.team_id))
+        user_api_key_cache.delete_cache(key="team_id:{}".format(data.team_id))
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,

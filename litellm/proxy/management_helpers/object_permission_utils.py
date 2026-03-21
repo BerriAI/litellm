@@ -373,50 +373,53 @@ async def add_mcp_server_to_team(
     Add an MCP server ID to a team's ObjectPermissionTable.mcp_servers.
 
     If the team has no ObjectPermissionTable yet, one is created.
+    Uses a DB transaction to prevent race conditions when multiple
+    concurrent calls try to initialize the ObjectPermissionTable.
     """
-    team = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": team_id}
-    )
-    if team is None:
-        raise ValueError(f"Team {team_id} not found")
+    async with prisma_client.db.tx() as tx:
+        team = await tx.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+        if team is None:
+            raise ValueError(f"Team {team_id} not found")
 
-    object_permission_id = team.object_permission_id or str(uuid.uuid4())
+        object_permission_id = team.object_permission_id or str(uuid.uuid4())
 
-    # Get existing object permission or start fresh
-    existing_mcp_servers: List[str] = []
-    if team.object_permission_id:
-        existing_perm = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": team.object_permission_id}
+        # Get existing object permission or start fresh
+        existing_mcp_servers: List[str] = []
+        if team.object_permission_id:
+            existing_perm = (
+                await tx.litellm_objectpermissiontable.find_unique(
+                    where={"object_permission_id": team.object_permission_id}
+                )
             )
-        )
-        if existing_perm and existing_perm.mcp_servers:
-            existing_mcp_servers = list(existing_perm.mcp_servers)
+            if existing_perm and existing_perm.mcp_servers:
+                existing_mcp_servers = list(existing_perm.mcp_servers)
 
-    # Add server if not already present
-    if server_id not in existing_mcp_servers:
-        existing_mcp_servers.append(server_id)
+        # Add server if not already present
+        if server_id not in existing_mcp_servers:
+            existing_mcp_servers.append(server_id)
 
-    # Upsert the ObjectPermissionTable
-    await prisma_client.db.litellm_objectpermissiontable.upsert(
-        where={"object_permission_id": object_permission_id},
-        data={
-            "create": {
-                "object_permission_id": object_permission_id,
-                "mcp_servers": existing_mcp_servers,
+        # Upsert the ObjectPermissionTable
+        await tx.litellm_objectpermissiontable.upsert(
+            where={"object_permission_id": object_permission_id},
+            data={
+                "create": {
+                    "object_permission_id": object_permission_id,
+                    "mcp_servers": existing_mcp_servers,
+                },
+                "update": {
+                    "mcp_servers": existing_mcp_servers,
+                },
             },
-            "update": {
-                "mcp_servers": existing_mcp_servers,
-            },
-        },
-    )
-
-    # Link the team to the ObjectPermissionTable if not already linked
-    if not team.object_permission_id:
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": team_id},
-            data={"object_permission_id": object_permission_id},
         )
+
+        # Link the team to the ObjectPermissionTable if not already linked
+        if not team.object_permission_id:
+            await tx.litellm_teamtable.update(
+                where={"team_id": team_id},
+                data={"object_permission_id": object_permission_id},
+            )
 
 
 async def remove_mcp_server_from_team(
@@ -426,24 +429,26 @@ async def remove_mcp_server_from_team(
     Remove an MCP server ID from a team's ObjectPermissionTable.mcp_servers.
 
     No-op if the team has no ObjectPermissionTable or the server isn't in the list.
+    Uses a DB transaction for consistency.
     """
-    team = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": team_id}
-    )
-    if team is None or not team.object_permission_id:
-        return
-
-    existing_perm = (
-        await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": team.object_permission_id}
+    async with prisma_client.db.tx() as tx:
+        team = await tx.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
         )
-    )
-    if existing_perm is None or not existing_perm.mcp_servers:
-        return
+        if team is None or not team.object_permission_id:
+            return
 
-    updated_servers = [s for s in existing_perm.mcp_servers if s != server_id]
-    if len(updated_servers) != len(existing_perm.mcp_servers):
-        await prisma_client.db.litellm_objectpermissiontable.update(
-            where={"object_permission_id": team.object_permission_id},
-            data={"mcp_servers": updated_servers},
+        existing_perm = (
+            await tx.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": team.object_permission_id}
+            )
         )
+        if existing_perm is None or not existing_perm.mcp_servers:
+            return
+
+        updated_servers = [s for s in existing_perm.mcp_servers if s != server_id]
+        if len(updated_servers) != len(existing_perm.mcp_servers):
+            await tx.litellm_objectpermissiontable.update(
+                where={"object_permission_id": team.object_permission_id},
+                data={"mcp_servers": updated_servers},
+            )
