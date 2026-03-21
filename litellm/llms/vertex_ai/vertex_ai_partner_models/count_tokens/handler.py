@@ -5,6 +5,7 @@ This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
+
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -105,11 +106,19 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        vertex_location = self.get_vertex_ai_location(litellm_params)
+        vertex_count_tokens_location = litellm_params.get(
+            "vertex_count_tokens_location"
+        )
+        vertex_location = vertex_count_tokens_location or self.get_vertex_ai_location(
+            litellm_params
+        )
 
-        # Map empty location/cluade models to a supported region for count-tokens endpoint
+        # For Claude models, count-tokens only works in us-central1 unless
+        # vertex_count_tokens_location is explicitly configured to override.
         # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-        if not vertex_location or "claude" in model.lower():
+        if "claude" in model.lower() and not vertex_count_tokens_location:
+            vertex_location = "us-central1"
+        elif not vertex_location:
             vertex_location = "us-central1"
 
         # Get access token and resolved project ID
