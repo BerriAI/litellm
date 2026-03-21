@@ -14,7 +14,7 @@ const QuickStartCodeBlock = ({ token }) => {
         messages = [{ "content": "Hello, how are you?","role": "user"}]
   
         # openai call
-        response = completion(model="gpt-3.5-turbo", messages=messages)
+        response = completion(model="gpt-4o", messages=messages)
   
         # cohere call
         response = completion("command-nightly", messages)

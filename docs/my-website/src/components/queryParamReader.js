@@ -11,7 +11,7 @@ os.environ["LITELLM_TOKEN"] = '${token}'
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 
 # cohere call
 response = completion("command-nightly", messages)
@@ -28,7 +28,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 
 # cohere call
 response = completion("command-nightly", messages)
