@@ -246,6 +246,8 @@ poetry run litellm --config dev_config.yaml --port 4000
 
 The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
 
+**Important:** `prisma generate` must be run before the first proxy start (the update script handles this). Without it, the proxy crashes with `RuntimeError: The Client hasn't been generated yet`.
+
 ### Running tests
 
 See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
