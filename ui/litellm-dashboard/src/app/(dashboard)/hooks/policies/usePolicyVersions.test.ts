@@ -96,6 +96,8 @@ describe("usePolicyVersions", () => {
     );
 
     expect(result.current.fetchStatus).toBe("idle");
+    // isLoading (not isPending) must be false when query is disabled
+    expect(result.current.isLoading).toBe(false);
     expect(mockListPolicyVersions).not.toHaveBeenCalled();
   });
 
@@ -106,6 +108,8 @@ describe("usePolicyVersions", () => {
     );
 
     expect(result.current.fetchStatus).toBe("idle");
+    // isLoading (not isPending) must be false when query is disabled
+    expect(result.current.isLoading).toBe(false);
     expect(mockListPolicyVersions).not.toHaveBeenCalled();
   });
 

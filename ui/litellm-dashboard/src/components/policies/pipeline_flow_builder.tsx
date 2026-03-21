@@ -1305,7 +1305,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
   const {
     data: versionsData,
-    isPending: isVersionsLoading,
+    isLoading: isVersionsLoading,
   } = usePolicyVersions({
     policyName: editingPolicy?.policy_name,
     enabled: showVersionsSidebar,
@@ -1316,8 +1316,12 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const updateStatusMutation = useUpdatePolicyVersionStatus(editingPolicy?.policy_name);
 
   const handleNewVersion = async () => {
-    const newPolicy = await createVersionMutation.mutateAsync();
-    onVersionCreated?.(newPolicy);
+    try {
+      const newPolicy = await createVersionMutation.mutateAsync();
+      onVersionCreated?.(newPolicy);
+    } catch {
+      // Notification already shown by onError in the mutation hook
+    }
   };
 
   const handleSelectVersion = (policy: Policy) => {
@@ -1326,20 +1330,28 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
   const handlePublishVersion = async () => {
     if (!editingPolicy?.policy_id) return;
-    const updated = await updateStatusMutation.mutateAsync({
-      policyId: editingPolicy.policy_id,
-      status: "published",
-    });
-    onVersionStatusUpdated?.(updated);
+    try {
+      const updated = await updateStatusMutation.mutateAsync({
+        policyId: editingPolicy.policy_id,
+        status: "published",
+      });
+      onVersionStatusUpdated?.(updated);
+    } catch {
+      // Notification already shown by onError in the mutation hook
+    }
   };
 
   const handlePromoteToProduction = async () => {
     if (!editingPolicy?.policy_id) return;
-    const updated = await updateStatusMutation.mutateAsync({
-      policyId: editingPolicy.policy_id,
-      status: "production",
-    });
-    onVersionStatusUpdated?.(updated);
+    try {
+      const updated = await updateStatusMutation.mutateAsync({
+        policyId: editingPolicy.policy_id,
+        status: "production",
+      });
+      onVersionStatusUpdated?.(updated);
+    } catch {
+      // Notification already shown by onError in the mutation hook
+    }
   };
 
   const handleSave = async () => {
