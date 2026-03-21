@@ -486,6 +486,12 @@ ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
 class MessageDelta(TypedDict, total=False):
     stop_reason: Optional[str]
+    stop_sequence: Optional[str]
+
+
+class CacheCreationDelta(TypedDict, total=False):
+    ephemeral_5m_input_tokens: int
+    ephemeral_1h_input_tokens: int
 
 
 class UsageDelta(TypedDict, total=False):
@@ -493,6 +499,7 @@ class UsageDelta(TypedDict, total=False):
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    cache_creation: CacheCreationDelta
 
 
 class MessageBlockDelta(TypedDict):
