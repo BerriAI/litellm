@@ -11,6 +11,7 @@
 import asyncio
 import json
 import json as _json
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -539,13 +540,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 _ar_used.add(_ar_i)
                                 break
                         _token_value = _orig_val if _orig_val is not None else new_text[start:end]
-                        # Store in request_data for per-request thread safety
+                        # Store in request_data["metadata"]["pii_tokens"] for
+                        # per-request thread safety (matches upstream convention).
+                        # Do NOT write to self.pii_tokens — the guardrail instance
+                        # is shared across concurrent requests.
                         if request_data is not None:
-                            if "pii_tokens" not in request_data:
-                                request_data["pii_tokens"] = {}
-                            request_data["pii_tokens"][replacement] = _token_value
-                        # Also store on instance as fallback
-                        self.pii_tokens[replacement] = _token_value
+                            if "metadata" not in request_data:
+                                request_data["metadata"] = {}
+                            if "pii_tokens" not in request_data["metadata"]:
+                                request_data["metadata"]["pii_tokens"] = {}
+                            request_data["metadata"]["pii_tokens"][replacement] = _token_value
 
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
@@ -938,7 +942,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         # Prefer pii_tokens from request_data (stored by pre_call masking instance).
-        _pii_tokens = data.get("pii_tokens") or self.pii_tokens
+        _pii_tokens = (data.get("metadata", {}).get("pii_tokens") if data else None) or self.pii_tokens
 
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
@@ -979,7 +983,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Use word-boundary anchoring to avoid false positives in technical text
             stripped = token.strip("<>")
             if stripped:
-                import re
                 _fb_pattern = r'(?<!\w)' + re.escape(stripped) + r'(?!\w)'
                 if re.search(_fb_pattern, text):
                     text = re.sub(_fb_pattern, original_text, text)
@@ -1015,7 +1018,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Handles content blocks with type == "text".
         """
         pii_tokens = (
-            (request_data.get("pii_tokens") if request_data else None)
+            (request_data.get("metadata", {}).get("pii_tokens") if request_data else None)
             or self.pii_tokens
         )
         if not pii_tokens and mode == "unmask":
@@ -1059,7 +1062,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Handles all choices and tool calls.
         """
         pii_tokens = (
-            (request_data.get("pii_tokens") if request_data else None)
+            (request_data.get("metadata", {}).get("pii_tokens") if request_data else None)
             or self.pii_tokens
         )
         if not pii_tokens and mode == "unmask":
@@ -1293,12 +1296,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        pii_tokens = (request_data.get("metadata", {}).get("pii_tokens", {}) if request_data else {})
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
                 "No pii_tokens in request_data for streaming unmask path"
             )
-        if not (self.output_parse_pii and pii_tokens):
+        if not ((self.output_parse_pii or litellm.output_parse_pii) and pii_tokens):
             async for chunk in response:
                 yield chunk
             return
@@ -1488,12 +1491,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # --- PII unmask path for output responses ---
         # When the unified guardrail calls apply_guardrail(input_type="response"),
         # we unmask PII tokens instead of masking. The tokens were stored in
-        # request_data["pii_tokens"] during input masking.
+        # request_data["metadata"]["pii_tokens"] during input masking.
         # Unmask path only — applies when unified guardrail calls apply_guardrail()
         # with input_type="response". The apply_to_output masking path is handled
         # separately by async_post_call_*_hook, not by this method.
         if input_type == "response" and self.output_parse_pii:
-            pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+            pii_tokens = (request_data.get("metadata", {}).get("pii_tokens", {}) if request_data else {})
             if pii_tokens:
                 _texts = inputs.get("texts", [])
                 inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in _texts]
@@ -1519,12 +1522,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Returning them would overwrite native Anthropic tools with type:"function".
         for _k in ("tools", "structured_messages", "model", "images"):
             inputs.pop(_k, None)
-        # Store pii_tokens in request_data so post_call hooks can access them.
-        # The guardrail initializer creates TWO separate instances (one pre_call,
-        # one post_call), so self.pii_tokens on the masking instance is invisible
-        # to the unmasking instance. request_data is shared across the full call.
-        if request_data is not None and self.pii_tokens:
-            request_data["pii_tokens"] = dict(self.pii_tokens)
+        # pii_tokens are already stored in request_data["metadata"]["pii_tokens"]
+        # by anonymize_text() above — no need to copy from self.pii_tokens.
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:

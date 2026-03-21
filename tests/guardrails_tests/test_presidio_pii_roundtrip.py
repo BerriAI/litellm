@@ -100,7 +100,7 @@ def test_unmask_pii_text_no_match_passthrough():
 async def test_apply_guardrail_unmask_path(guardrail):
     """input_type='response' with pii_tokens unmasks texts."""
     request_data = {
-        "pii_tokens": {"<PERSON_abc123>": "Alice Smith"},
+        "metadata": {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}},
     }
     inputs = {"texts": ["Hello <PERSON_abc123>, how are you?"]}
 
@@ -116,7 +116,7 @@ async def test_apply_guardrail_unmask_path(guardrail):
 @pytest.mark.asyncio
 async def test_apply_guardrail_unmask_no_tokens(guardrail):
     """input_type='response' with empty pii_tokens passes through."""
-    request_data = {"pii_tokens": {}}
+    request_data = {"metadata": {"pii_tokens": {}}}
     inputs = {"texts": ["Hello world"]}
 
     result = await guardrail.apply_guardrail(
@@ -159,19 +159,23 @@ async def test_apply_guardrail_strips_openai_keys(guardrail):
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_stores_pii_tokens(guardrail):
-    """After masking, pii_tokens are copied to request_data."""
-    # Manually set some pii_tokens as if anonymize_text ran
-    guardrail.pii_tokens = {"<PERSON_abc>": "Alice"}
+async def test_apply_guardrail_stores_pii_tokens_via_check_pii(guardrail):
+    """check_pii stores pii_tokens in request_data['metadata']['pii_tokens']."""
+    # Mock check_pii to simulate anonymize_text storing a token
+    async def _mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        if "metadata" not in request_data:
+            request_data["metadata"] = {}
+        if "pii_tokens" not in request_data["metadata"]:
+            request_data["metadata"]["pii_tokens"] = {}
+        request_data["metadata"]["pii_tokens"]["<PERSON_abc>"] = "Alice"
+        return "Hello <PERSON_abc>"
 
-    # Mock check_pii to avoid calling Presidio
-    async def _passthrough(text, output_parse_pii, presidio_config, request_data):
-        return text
+    guardrail.check_pii = _mock_check_pii
 
-    guardrail.check_pii = _passthrough
-
-    inputs = {"texts": ["no pii here"]}
-    request_data = {}
+    inputs = {"texts": ["Hello Alice"]}
+    # request_data must be non-empty (truthy) so `request_data or {}`
+    # returns the same dict object rather than a new empty one.
+    request_data = {"model": "test"}
 
     await guardrail.apply_guardrail(
         inputs=inputs,
@@ -179,8 +183,9 @@ async def test_apply_guardrail_stores_pii_tokens(guardrail):
         input_type="request",
     )
 
-    assert "pii_tokens" in request_data
-    assert request_data["pii_tokens"] == {"<PERSON_abc>": "Alice"}
+    assert "metadata" in request_data
+    assert "pii_tokens" in request_data["metadata"]
+    assert request_data["metadata"]["pii_tokens"] == {"<PERSON_abc>": "Alice"}
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +209,7 @@ async def test_post_call_success_hook_anthropic_native_dict(guardrail):
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
 
-    data = {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}
+    data = {"metadata": {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}}
     from litellm.proxy._types import UserAPIKeyAuth
 
     user_api_key = UserAPIKeyAuth(api_key="test_key")
@@ -258,7 +263,7 @@ async def test_streaming_anthropic_sse_unmask(guardrail):
         _make_sse_event("message_stop", {"type": "message_stop"}),
     ]
 
-    request_data = {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}}
     collected = b""
 
     async for chunk in guardrail.async_post_call_streaming_iterator_hook(
@@ -287,7 +292,7 @@ async def test_streaming_sse_split_token_carry_buffer(guardrail):
         _make_sse_event("message_stop", {"type": "message_stop"}),
     ]
 
-    request_data = {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_abc123>": "Alice Smith"}}}
     collected = b""
 
     async for chunk in guardrail.async_post_call_streaming_iterator_hook(
