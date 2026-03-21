@@ -101,7 +101,7 @@ pip install litellm==1.80.0
     - Fix azure doesn't accept extra body param - [PR #16116](https://github.com/BerriAI/litellm/pull/16116)
 
 - **[OpenAI](../../docs/providers/openai)**
-    - Add deprecation dates for gpt-3.5-turbo-1106, gpt-4-0125-preview, gpt-4-1106-preview, o1-mini-2024-09-12 - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
+    - Add deprecation dates for gpt-4o-1106, gpt-4-0125-preview, gpt-4-1106-preview, o1-mini-2024-09-12 - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
     - Add extended Sora-2 modality support (text + image inputs) - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
     - Updated OpenAI Sora-2-Pro pricing to $0.30/video/second - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
 
