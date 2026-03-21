@@ -72,15 +72,11 @@ if [ -z "$PYTHON_BIN" ]; then
     Ubuntu: sudo apt install python3 python3-pip"
 fi
 
-# ── pip detection ──────────────────────────────────────────────────────────
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-  die "pip is not available. Install it with:
-    $PYTHON_BIN -m ensurepip --upgrade"
-fi
-
 # ── install ────────────────────────────────────────────────────────────────
 # Prefer pipx or venv to avoid PEP 668 "externally-managed-environment" on
-# Homebrew/ system Python.
+# Homebrew/ system Python.  Neither strategy requires system pip — pipx
+# manages its own venvs and the venv strategy uses Python's built-in
+# ensurepip, so there is no unconditional pip gate here.
 echo ""
 header "Installing litellm[proxy]…"
 echo ""
@@ -91,16 +87,26 @@ LITELLM_BIN=""
 if command -v pipx >/dev/null 2>&1; then
   info "Using pipx (isolated install)"
   if pipx install --force "${LITELLM_PACKAGE}"; then
-    # pipx installs to ~/.local/bin by default; try PIPX_BIN_DIR, then pipx venv (avoid PATH—may have stale binary)
-    for try in "${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm" "${PIPX_HOME:-${HOME}/.local/pipx}/venvs/litellm/bin/litellm"; do
+    _pipx_bin_dir="${PIPX_BIN_DIR:-${HOME}/.local/bin}"
+    _pipx_home="${PIPX_HOME:-${HOME}/.local}"
+    for try in \
+      "${_pipx_bin_dir}/litellm" \
+      "${_pipx_home}/pipx/venvs/litellm/bin/litellm" \
+      "${_pipx_home}/venvs/litellm/bin/litellm"; do
       if [ -n "$try" ] && [ -x "$try" ]; then
         LITELLM_BIN="$try"
         break
       fi
     done
+    # Last resort: check PATH (may pick up a stale binary, but better than failing)
+    if [ -z "$LITELLM_BIN" ] && command -v litellm >/dev/null 2>&1; then
+      LITELLM_BIN="$(command -v litellm)"
+    fi
     if [ -z "$LITELLM_BIN" ]; then
       die "pipx install succeeded but litellm binary not found.
-  Check PIPX_BIN_DIR (current: ${PIPX_BIN_DIR:-${HOME}/.local/bin}). Run: pipx list"
+  Check PIPX_BIN_DIR (current: ${_pipx_bin_dir}).
+  PIPX_HOME is: ${_pipx_home}
+  Run: pipx list"
     fi
   else
     info "pipx install failed, falling back to venv"
