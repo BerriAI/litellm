@@ -110,10 +110,12 @@ describe("CreateMCPServer", () => {
     expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
   });
 
-  it("should not render when user is not an admin", () => {
+  it("should render for internal users with team selection prompt", () => {
     render(<CreateMCPServer {...defaultProps} userRole="Internal User" />);
 
-    expect(screen.queryByText("Add New MCP Server")).not.toBeInTheDocument();
+    expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
+    // Internal users without a selected team see a prompt
+    expect(screen.getByText("Select a team to create an MCP server for your team.")).toBeInTheDocument();
   });
 
   it("should show transport type options", async () => {
