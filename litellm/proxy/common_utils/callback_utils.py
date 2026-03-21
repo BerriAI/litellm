@@ -51,21 +51,29 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 # set at startup. Without this, store_model_in_db=true causes
                 # the async model-loading path to skip callback instantiation
                 # entirely, leaving the logger as None.
-                try:
-                    from litellm.utils import (
-                        _add_custom_logger_callback_to_specific_event,
-                    )
+                #
+                # Each event is registered independently so a failure in one
+                # does not leave the callback half-registered.
+                from litellm.utils import (
+                    _add_custom_logger_callback_to_specific_event,
+                )
 
-                    _add_custom_logger_callback_to_specific_event(callback, "success")
-                    _add_custom_logger_callback_to_specific_event(callback, "failure")
-                except Exception as e:
-                    verbose_proxy_logger.error(
-                        f"Failed to initialize callback '{callback}' at startup: {e}. "
-                        "Check that the required environment variables are set."
-                    )
-                    # Still add the string so it can be retried later during
-                    # request processing (preserves pre-existing behaviour).
-                    imported_list.append(callback)
+                for event in ("success", "failure"):
+                    try:
+                        _add_custom_logger_callback_to_specific_event(callback, event)
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            f"Failed to initialize callback '{callback}' "
+                            f"for {event} event at startup: {e}. "
+                            "Check that the required environment variables "
+                            "are set."
+                        )
+                # Always add to imported_list so litellm.callbacks stays in
+                # sync — it is read by health endpoints, hot-reload, and
+                # spend tracking. On success the instance is already in the
+                # success/failure lists; the string here keeps the canonical
+                # config list complete.
+                imported_list.append(callback)
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,
