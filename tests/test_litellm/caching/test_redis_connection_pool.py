@@ -129,3 +129,15 @@ async def test_disconnect_idempotent():
     await cache.disconnect()  # should not raise
 
 
+def test_ssl_false_does_not_use_ssl_connection(monkeypatch):
+    """When REDIS_SSL=False, get_redis_connection_pool should not use SSLConnection
+    and ssl must not be leaked into connection_kwargs (would cause TypeError at
+    connection time since Connection.__init__() does not accept an ssl param)."""
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+    monkeypatch.setenv("REDIS_SSL", "False")
+
+    pool = get_redis_connection_pool()
+
+    assert pool.connection_class is not async_redis.SSLConnection
+    assert "ssl" not in pool.connection_kwargs
