@@ -657,8 +657,9 @@ class LiteLLMRoutes(enum.Enum):
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
-        "/prompt/list",
-        "/prompt/info",
+         "/prompt/list",
+         "/prompt/info",
+         "/prompts/list",  # plural route alias — endpoint is @router.get("/prompts/list")
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
