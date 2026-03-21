@@ -9,6 +9,16 @@ vi.mock("../networking", () => ({
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({
+    data: [
+      { team_id: "team-1", team_alias: "Team One" },
+      { team_id: "team-2", team_alias: "Team Two" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: () => ({
     startOAuthFlow: vi.fn(),

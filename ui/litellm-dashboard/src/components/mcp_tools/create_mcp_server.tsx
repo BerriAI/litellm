@@ -17,6 +17,8 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import TeamDropdown from "../common_components/team_dropdown";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -75,6 +77,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | undefined>(teamId ?? undefined);
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
@@ -387,9 +391,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         payload.credentials = credentialsPayload;
       }
 
-      // Include team_id when a team is selected in the filter
-      if (teamId) {
-        payload.team_id = teamId;
+      // Include team_id when a team is selected
+      if (selectedTeamId) {
+        payload.team_id = selectedTeamId;
       }
 
       console.log(`Payload: ${JSON.stringify(payload)}`);
@@ -479,6 +483,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
+  // Sync selectedTeamId when the parent teamId prop changes
+  React.useEffect(() => {
+    setSelectedTeamId(teamId ?? undefined);
+  }, [teamId]);
+
   // Clear formValues when modal closes to reset child components
   React.useEffect(() => {
     if (!isModalVisible) {
@@ -536,11 +545,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
-          {!isAdmin && !teamId && (
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Team
+                <Tooltip title="Assign this MCP server to a team. The server will be added to the team's permissions automatically.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+          >
+            <TeamDropdown
+              teams={teams ?? []}
+              value={selectedTeamId}
+              onChange={(value) => setSelectedTeamId(value)}
+              loading={isLoadingTeams}
+            />
+          </Form.Item>
+          {!isAdmin && !selectedTeamId ? (
             <div className="rounded-md bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm text-yellow-800">
-              Select a team from the filter to create an MCP server for your team.
+              Select a team to create an MCP server for your team.
             </div>
-          )}
+          ) : (
+          <>
           <div className="grid grid-cols-1 gap-6">
             <Form.Item
               label={
@@ -992,12 +1019,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               disabled={false}
             />
           </div>
+          </>
+          )}
 
           <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
             <Button variant="secondary" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button variant="primary" loading={isLoading}>
+            <Button variant="primary" loading={isLoading} disabled={!isAdmin && !selectedTeamId}>
               {isLoading ? "Creating..." : "Add MCP Server"}
             </Button>
           </div>
