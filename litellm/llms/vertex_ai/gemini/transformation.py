@@ -538,7 +538,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    last_message_with_tool_calls = assistant_msg
+                    # Accumulate tool_calls from all consecutive assistant
+                    # messages so that parallel tool results can match any of
+                    # them (not just the last assistant message in the group).
+                    _tool_calls = assistant_msg.get("tool_calls") or []
+                    if _tool_calls:
+                        if last_message_with_tool_calls is None:
+                            last_message_with_tool_calls = {
+                                "tool_calls": list(_tool_calls)
+                            }
+                        else:
+                            last_message_with_tool_calls["tool_calls"].extend(
+                                _tool_calls
+                            )
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
