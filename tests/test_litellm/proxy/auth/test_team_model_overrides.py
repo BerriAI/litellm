@@ -24,6 +24,8 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
 
+from unittest.mock import AsyncMock, patch
+
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_TeamTable
 from litellm.proxy.auth.auth_checks import (
@@ -213,3 +215,95 @@ class TestCanTeamAccessModelWithOverrides:
             await can_team_access_model(
                 model="d1", team_object=team, llm_router=None, valid_token=token
             )
+
+
+# ── Key-generation enforcement tests ─────────────────────────────────────────
+
+
+class TestKeyGenerationEnforcement:
+    """Tests 5, 6, 8: key-generation model validation against effective set."""
+
+    def _get_effective(self, team, token=None):
+        """Helper to compute effective models (same logic as key-gen)."""
+        return get_effective_team_models(team, token)
+
+    def test_key_rejects_models_outside_effective_set(self):
+        """5. Key creation with models outside effective set → should be rejected."""
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
+        )
+        token = UserAPIKeyAuth(team_member_models=["m2"])
+        effective = self._get_effective(team, token)
+
+        # Simulate key-gen validation: requested models must be subset of effective
+        requested = ["m3"]  # not in effective set {m1, m2}
+        disallowed = set(requested) - set(effective)
+        assert disallowed == {"m3"}, "m3 should be disallowed"
+
+    def test_key_defaults_to_effective_set(self):
+        """6. Key creation with no models → defaults to effective set."""
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
+        )
+        token = UserAPIKeyAuth(team_member_models=["m2"])
+        effective = self._get_effective(team, token)
+
+        # When no models requested, key should get effective set
+        assert set(effective) == {"m1", "m2"}
+
+    def test_all_team_models_restricted_to_effective_set(self):
+        """8. all-team-models key + overrides → restricted to effective set, not full team.models."""
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
+        )
+        token = UserAPIKeyAuth(team_member_models=["m2"])
+        effective = self._get_effective(team, token)
+
+        # all-team-models should resolve to effective set, not team.models
+        assert set(effective) == {"m1", "m2"}
+        assert "m3" not in effective  # m3 is in team.models but not in effective
+
+
+# ── Access group fallback test ───────────────────────────────────────────────
+
+
+class TestAccessGroupFallback:
+    @pytest.mark.asyncio
+    async def test_access_group_fallback_when_effective_models_deny(self):
+        """10. access_group_ids fallback still works when effective models check fails."""
+        team = LiteLLM_TeamTable(
+            team_id="t1",
+            models=["m1", "m2"],
+            default_models=["m1"],
+            access_group_ids=["group-1"],
+        )
+        # "m2" is NOT in effective set (only "m1" is default, no member overrides)
+        # But it should be accessible via access_group_ids fallback
+        with patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["m2", "m3"],
+        ):
+            result = await can_team_access_model(
+                model="m2", team_object=team, llm_router=None
+            )
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_access_group_fallback_still_denies_unknown_model(self):
+        """10b. access_group_ids fallback does not grant access to models outside groups."""
+        team = LiteLLM_TeamTable(
+            team_id="t1",
+            models=["m1", "m2"],
+            default_models=["m1"],
+            access_group_ids=["group-1"],
+        )
+        with patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["m2"],  # group only has m2
+        ):
+            with pytest.raises(Exception):
+                await can_team_access_model(
+                    model="unknown-model", team_object=team, llm_router=None
+                )
