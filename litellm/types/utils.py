@@ -358,6 +358,14 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
+    video_create_character = "video_create_character"
+    avideo_create_character = "avideo_create_character"
+    video_get_character = "video_get_character"
+    avideo_get_character = "avideo_get_character"
+    video_edit = "video_edit"
+    avideo_edit = "avideo_edit"
+    video_extension = "video_extension"
+    avideo_extension = "avideo_extension"
     vector_store_file_create = "vector_store_file_create"
     avector_store_file_create = "avector_store_file_create"
     vector_store_file_list = "vector_store_file_list"
@@ -700,6 +708,26 @@ API_ROUTE_TO_CALL_TYPES = {
     ],
     "/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
     "/v1/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    "/videos/characters": [
+        CallTypes.avideo_create_character,
+        CallTypes.video_create_character,
+    ],
+    "/v1/videos/characters": [
+        CallTypes.avideo_create_character,
+        CallTypes.video_create_character,
+    ],
+    "/videos/characters/{character_id}": [
+        CallTypes.avideo_get_character,
+        CallTypes.video_get_character,
+    ],
+    "/v1/videos/characters/{character_id}": [
+        CallTypes.avideo_get_character,
+        CallTypes.video_get_character,
+    ],
+    "/videos/edits": [CallTypes.avideo_edit, CallTypes.video_edit],
+    "/v1/videos/edits": [CallTypes.avideo_edit, CallTypes.video_edit],
+    "/videos/extensions": [CallTypes.avideo_extension, CallTypes.video_extension],
+    "/v1/videos/extensions": [CallTypes.avideo_extension, CallTypes.video_extension],
     # Vector Stores
     "/vector_stores": [CallTypes.avector_store_create, CallTypes.vector_store_create],
     "/v1/vector_stores": [
@@ -3131,6 +3159,7 @@ class LlmProviders(str, Enum):
     AZURE_AI = "azure_ai"
     SAGEMAKER = "sagemaker"
     SAGEMAKER_CHAT = "sagemaker_chat"
+    SAGEMAKER_NOVA = "sagemaker_nova"
     BEDROCK = "bedrock"
     VLLM = "vllm"
     NLP_CLOUD = "nlp_cloud"

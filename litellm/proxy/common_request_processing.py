@@ -599,6 +599,10 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
             "acreate_container",
             "alist_containers",
             "aingest",
@@ -850,6 +854,10 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_status",
             "avideo_content",
             "avideo_remix",
+            "avideo_create_character",
+            "avideo_get_character",
+            "avideo_edit",
+            "avideo_extension",
             "acreate_container",
             "alist_containers",
             "aingest",
@@ -1252,7 +1260,9 @@ class ProxyBaseLLMRequestProcessing:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
-                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
+                _litellm_logging_obj.litellm_call_id
+                if _litellm_logging_obj
+                else self.data.get("litellm_call_id")
             ),
             model_id=model_id,
             version=version,

@@ -79,7 +79,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return AnthropicError(
             status_code=status_code,
             message=error_message,
-            headers=cast(httpx.Headers, headers) if isinstance(headers, dict) else headers,
+            headers=cast(httpx.Headers, headers)
+            if isinstance(headers, dict)
+            else headers,
         )
 
     def validate_environment(
@@ -92,14 +94,14 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        if not api_key:
+        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        if auth_header is None:
             raise ValueError(
-                "Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or pass api_key parameter."
+                "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."
             )
         headers.update(
             {
-                "x-api-key": api_key,
+                **auth_header,
                 "anthropic-version": "2023-06-01",
                 "anthropic-beta": ANTHROPIC_FILES_BETA_HEADER,
             }

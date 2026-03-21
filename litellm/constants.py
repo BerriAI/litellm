@@ -505,6 +505,7 @@ LITELLM_CHAT_PROVIDERS = [
     "azure_ai",
     "sagemaker",
     "sagemaker_chat",
+    "sagemaker_nova",
     "bedrock",
     "vllm",
     "nlp_cloud",
@@ -1417,6 +1418,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "default_team_params",
     "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
@@ -1442,6 +1444,7 @@ SENTRY_DENYLIST = [
     "credential",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "AZURE_API_KEY",
     "COHERE_API_KEY",
     "REPLICATE_API_KEY",

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Modal, message, Alert } from "antd";
+import { Modal, Alert } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { ExclamationCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
@@ -80,7 +81,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setPoliciesList(response.policies || []);
     } catch (error) {
       console.error("Error fetching policies:", error);
-      message.error("Failed to fetch policies");
+      MessageManager.error("Failed to fetch policies");
     } finally {
       setIsLoading(false);
     }
@@ -95,7 +96,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setAttachmentsList(response.attachments || []);
     } catch (error) {
       console.error("Error fetching attachments:", error);
-      message.error("Failed to fetch attachments");
+      MessageManager.error("Failed to fetch attachments");
     } finally {
       setIsAttachmentsLoading(false);
     }
@@ -148,11 +149,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setIsDeleting(true);
     try {
       await deletePolicyCall(accessToken, policyToDelete.policy_id);
-      message.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
+      MessageManager.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
       await fetchPolicies();
     } catch (error) {
       console.error("Error deleting policy:", error);
-      message.error("Failed to delete policy");
+      MessageManager.error("Failed to delete policy");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -177,11 +178,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         if (!accessToken) return;
         try {
           await deletePolicyAttachmentCall(accessToken, attachmentId);
-          message.success("Attachment deleted successfully");
+          MessageManager.success("Attachment deleted successfully");
           fetchAttachments();
         } catch (error) {
           console.error("Error deleting attachment:", error);
-          message.error("Failed to delete attachment");
+          MessageManager.error("Failed to delete attachment");
         }
       },
     });
@@ -193,7 +194,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
   const handleUseTemplate = async (template: any) => {
     if (!accessToken) {
-      message.error("Authentication required");
+      MessageManager.error("Authentication required");
       return;
     }
 
@@ -221,7 +222,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setIsGuardrailSelectionModalOpen(true);
     } catch (error) {
       console.error("Error fetching guardrails:", error);
-      message.error("Failed to load guardrails. Please try again.");
+      MessageManager.error("Failed to load guardrails. Please try again.");
     }
   };
 
@@ -271,7 +272,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       await proceedWithTemplate(enrichedTemplate);
     } catch (error) {
       console.error("Error enriching template:", error);
-      message.error("Failed to configure template. Please try again.");
+      MessageManager.error("Failed to configure template. Please try again.");
       setIsEnrichingTemplate(false);
     }
   };
@@ -318,15 +319,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
       // Show success message
       if (createdGuardrails.length > 0) {
-        message.success(
+        MessageManager.success(
           `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`
         );
       } else {
-        message.success("Template ready! Complete the policy form to save.");
+        MessageManager.success("Template ready! Complete the policy form to save.");
       }
 
       if (failedGuardrails.length > 0) {
-        message.warning(
+        MessageManager.warning(
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
         );
       }
@@ -348,7 +349,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setTemplateQueue([]);
       setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
-      message.error("Failed to create guardrails. Please try again.");
+      MessageManager.error("Failed to create guardrails. Please try again.");
     }
   };
 

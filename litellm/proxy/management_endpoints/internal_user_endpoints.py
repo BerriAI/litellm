@@ -2137,21 +2137,23 @@ async def _resolve_org_filter_for_user_search(
         except ValueError:
             caller_user = None
 
-    org_admin_org_ids: List[str] = []
+    # Collect org IDs from ALL org memberships (any role, not just ORG_ADMIN).
+    # This allows team admins who are org members to search users in their org.
+    member_org_ids: List[str] = []
     if caller_user is not None:
-        org_admin_org_ids = [
-            m.organization_id
-            for m in (caller_user.organization_memberships or [])
-            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        member_org_ids = [
+            m.organization_id for m in (caller_user.organization_memberships or [])
         ]
 
-    if org_admin_org_ids:
-        return org_admin_org_ids
+    if member_org_ids:
+        return member_org_ids
 
-    if team_id is not None:
+    # Fall back to resolving via team_id (query param or from the caller's API key)
+    resolved_team_id = team_id or user_api_key_dict.team_id
+    if resolved_team_id is not None:
         return await _resolve_team_org_filter(
             user_api_key_dict,
-            team_id,
+            resolved_team_id,
             prisma_client,
             user_api_key_cache,
             proxy_logging_obj,

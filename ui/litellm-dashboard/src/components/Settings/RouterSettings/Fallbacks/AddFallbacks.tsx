@@ -5,8 +5,9 @@
  */
 
 import { Button as TremorButton } from "@tremor/react";
-import { Button, message } from "antd";
+import { Button } from "antd";
 import React, { useEffect, useState } from "react";
+import MessageManager from "@/components/molecules/message_manager";
 import NotificationManager from "../../../molecules/notifications_manager";
 import { fetchAvailableModels, ModelGroup } from "../../../playground/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
@@ -90,7 +91,7 @@ export default function AddFallbacks({
       (g) => !g.primaryModel || g.fallbackModels.length === 0,
     );
     if (invalidGroups.length > 0) {
-      message.error(
+      MessageManager.error(
         `Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`,
       );
       return;

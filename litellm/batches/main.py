@@ -199,7 +199,8 @@ def create_batch(  # noqa: PLR0915
         )
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=None,
             optional_params=optional_params.model_dump(),
@@ -207,7 +208,6 @@ def create_batch(  # noqa: PLR0915
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),
@@ -524,6 +524,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             optional_params.api_base
             or litellm.api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
         )
         api_key = (
             optional_params.api_key
@@ -584,7 +585,8 @@ def retrieve_batch(
             **kwargs,
         )
         if litellm_logging_obj is not None:
-            litellm_logging_obj.update_environment_variables(
+            litellm_logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 user=None,
                 optional_params=optional_params.model_dump(),

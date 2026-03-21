@@ -13,6 +13,7 @@ import {
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
+  ExportOutlined,
   FileTextOutlined,
   FolderOutlined,
   KeyOutlined,
@@ -231,8 +232,8 @@ const menuGroups: MenuGroup[] = [
     groupLabel: "DEVELOPER TOOLS",
     items: [
       {
-        key: "api_ref",
-        page: "api_ref",
+        key: "api-reference",
+        page: "api-reference",
         label: "API Reference",
         icon: <ApiOutlined />,
       },
@@ -400,7 +401,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           onClick={(e) => e.stopPropagation()}
           style={{ color: "inherit", textDecoration: "none" }}
         >
-          {label}
+          {label} <ExportOutlined style={{ fontSize: 10, marginLeft: 4 }} />
         </a>
       );
     }

@@ -136,7 +136,8 @@ async def acreate_realtime_client_secret(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model_name,
         optional_params={"expires_after": expires_after, "session": session},
         litellm_params={"api_base": resolved_api_base},
@@ -186,7 +187,8 @@ async def arealtime_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model_name,
         optional_params={"realtime_calls": True, "session": session},
         litellm_params={"api_base": resolved_api_base},
@@ -247,7 +249,8 @@ async def _arealtime(  # noqa: PLR0915
     if query_params is not None:
         query_params = {**query_params, "model": model}
 
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model,
         user=user,
         optional_params={},
