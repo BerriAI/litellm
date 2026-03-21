@@ -113,6 +113,151 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ### [API Reference](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
 
+## **Per-Member Model Overrides (Team-Scoped Defaults)**
+
+:::info
+
+Requires `TEAM_MODEL_OVERRIDES=true` environment variable or `litellm.team_model_overrides_enabled = True`.
+
+:::
+
+By default, every team member can access all models in `team.models`. With per-member model overrides, you can:
+
+- Set **`default_models`** on a team — the models every member gets by default
+- Set **`models`** on individual team members — additional models only they can access
+
+A member's **effective models** = `default_models` ∪ `member.models`. If neither is set, falls back to `team.models` (full backward compatibility).
+
+### Enable the Feature
+
+Add to your `config.yaml`:
+
+```yaml
+environment_variables:
+  TEAM_MODEL_OVERRIDES: "true"
+```
+
+### 1. Create a Team with Default Models
+
+```shell
+curl -L 'http://localhost:4000/team/new' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "team_alias": "engineering",
+    "models": ["gpt-4", "gpt-4o-mini", "gpt-4o"],
+    "default_models": ["gpt-4o-mini"]
+  }'
+```
+
+- `models` — the full pool of models the team is allowed to use
+- `default_models` — the subset every member gets by default (must be a subset of `models`)
+
+### 2. Add Members with Per-User Overrides
+
+```shell
+# Alice gets the default (gpt-4o-mini only)
+curl -L 'http://localhost:4000/team/member_add' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "team_id": "<team-id>",
+    "member": {"role": "user", "user_id": "alice"}
+  }'
+
+# Bob gets gpt-4o in addition to the default
+curl -L 'http://localhost:4000/team/member_add' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "team_id": "<team-id>",
+    "member": {"role": "user", "user_id": "bob", "models": ["gpt-4o"]}
+  }'
+```
+
+| Member | Override | Effective Models |
+|--------|----------|-----------------|
+| Alice | none | `["gpt-4o-mini"]` |
+| Bob | `["gpt-4o"]` | `["gpt-4o-mini", "gpt-4o"]` |
+
+### 3. Generate Keys and Test
+
+```shell
+# Generate key for Bob
+curl -L 'http://localhost:4000/key/generate' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"team_id": "<team-id>", "user_id": "bob"}'
+```
+
+<Tabs>
+<TabItem label="Allowed (Bob → gpt-4o)" value="allowed">
+
+```shell
+curl -L 'http://localhost:4000/chat/completions' \
+  -H 'Authorization: Bearer <bob-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+Returns `200 OK` — `gpt-4o` is in Bob's effective set.
+
+</TabItem>
+<TabItem label="Denied (Bob → gpt-4)" value="denied">
+
+```shell
+curl -L 'http://localhost:4000/chat/completions' \
+  -H 'Authorization: Bearer <bob-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+Returns `401 Unauthorized` — `gpt-4` is in the team pool but not in Bob's effective set.
+
+</TabItem>
+</Tabs>
+
+### 4. Update Member Overrides
+
+```shell
+# Add gpt-4 to Bob's overrides
+curl -L 'http://localhost:4000/team/member_update' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "team_id": "<team-id>",
+    "user_id": "bob",
+    "models": ["gpt-4o", "gpt-4"]
+  }'
+
+# Remove all overrides (Bob falls back to default_models only)
+curl -L 'http://localhost:4000/team/member_update' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "team_id": "<team-id>",
+    "user_id": "bob",
+    "models": []
+  }'
+```
+
+### Validation Rules
+
+| Rule | Error |
+|------|-------|
+| `default_models` must be a subset of `team.models` | `400` on `/team/new` and `/team/update` |
+| Member `models` must be a subset of `team.models` | `400` on `/team/member_add` and `/team/member_update` |
+| Key `models` must be a subset of effective models | `403` on `/key/generate` |
+| Narrowing `team.models` auto-prunes stale `default_models` | Automatic on `/team/update` |
+
+### Backward Compatibility
+
+When the feature flag is off **or** when neither `default_models` nor member `models` is configured:
+
+- `get_effective_team_models()` returns `team.models` unchanged
+- All existing teams and keys work exactly as before
+- Zero extra database queries on the auth hot path
+
 
 ## **View Available Fallback Models**
 
