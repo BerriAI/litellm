@@ -387,8 +387,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         payload.credentials = credentialsPayload;
       }
 
-      // Include team_id for non-admin users
-      if (!isAdmin && teamId) {
+      // Include team_id when a team is selected in the filter
+      if (teamId) {
         payload.team_id = teamId;
       }
 

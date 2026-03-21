@@ -13,7 +13,7 @@ interface MemberPermissionsDrawerProps {
   availablePermissions: AvailablePermission[];
   accessToken: string | null;
   teamId: string;
-  onUpdate: () => void;
+  onUpdate: () => Promise<void>;
 }
 
 const MemberPermissionsDrawer: React.FC<MemberPermissionsDrawerProps> = ({
@@ -80,7 +80,7 @@ const MemberPermissionsDrawer: React.FC<MemberPermissionsDrawerProps> = ({
       };
       await teamMemberUpdateCall(accessToken, teamId, updatedMember);
       NotificationsManager.success("Permissions updated successfully");
-      onUpdate();
+      await onUpdate();
       onClose();
     } catch (error: any) {
       const errMsg = error?.message || "Failed to update permissions";

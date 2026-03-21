@@ -224,8 +224,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     fetchTeamInfo();
   }, [teamId, accessToken]);
 
-  // Fetch available permissions for team member editing
+  // Fetch available permissions for team member editing (only for users who can edit the team)
   useEffect(() => {
+    if (!canEditTeam) return;
     const fetchPermissions = async () => {
       if (!accessToken) return;
       try {
@@ -236,7 +237,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
     fetchPermissions();
-  }, [accessToken]);
+  }, [accessToken, canEditTeam]);
 
   // Fetch organization data when team has organization_id
   useEffect(() => {
@@ -1364,7 +1365,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         accessToken={accessToken}
         teamId={teamId}
         onUpdate={async () => {
-          const updatedTeamData = await teamInfoCall(accessToken!, teamId);
+          if (!accessToken) return;
+          const updatedTeamData = await teamInfoCall(accessToken, teamId);
           setTeamData(updatedTeamData);
           onUpdate(updatedTeamData);
         }}
