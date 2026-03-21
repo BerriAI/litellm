@@ -1831,8 +1831,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: Optional[List[str]] = []
-    mcp_access_groups: Optional[List[str]] = []
+    mcp_servers: Optional[List[str]] = None
+    mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     """
     Mapping - server_id -> list of tools
@@ -1843,10 +1843,10 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     }
     """
 
-    vector_stores: Optional[List[str]] = []
-    search_tools: Optional[List[str]] = []
-    agents: Optional[List[str]] = []
-    agent_access_groups: Optional[List[str]] = []
+    vector_stores: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
+    agents: Optional[List[str]] = None
+    agent_access_groups: Optional[List[str]] = None
 
 
 class LiteLLM_TeamTable(TeamBase):
