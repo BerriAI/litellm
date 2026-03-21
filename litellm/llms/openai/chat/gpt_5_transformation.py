@@ -235,7 +235,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         elif effective_effort == "minimal":
             # minimal is opt-out: unknown models pass through; only block when
             # the model map explicitly sets supports_minimal_reasoning_effort=false.
-            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
+            if self._is_reasoning_effort_level_explicitly_disabled(
+                model, effective_effort
+            ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)

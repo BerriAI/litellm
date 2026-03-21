@@ -70,9 +70,7 @@ class DeploymentAffinityCheck(CustomLogger):
                     self.VALID_FLAGS,
                 )
 
-    def _get_effective_flags(
-        self, model_group: str
-    ) -> Tuple[bool, bool, bool]:
+    def _get_effective_flags(self, model_group: str) -> Tuple[bool, bool, bool]:
         """
         Return (enable_user_key_affinity, enable_responses_api_affinity, enable_session_id_affinity)
         for the given model group.
@@ -316,9 +314,11 @@ class DeploymentAffinityCheck(CustomLogger):
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
 
-        enable_user_key, enable_responses_api, enable_session_id = (
-            self._get_effective_flags(model)
-        )
+        (
+            enable_user_key,
+            enable_responses_api,
+            enable_session_id,
+        ) = self._get_effective_flags(model)
 
         # 1) Responses API continuity (high priority)
         if enable_responses_api:
@@ -458,9 +458,11 @@ class DeploymentAffinityCheck(CustomLogger):
             return None
 
         # Resolve effective flags for this model group
-        enable_user_key, _enable_responses_api, enable_session_id = (
-            self._get_effective_flags(deployment_model_name)
-        )
+        (
+            enable_user_key,
+            _enable_responses_api,
+            enable_session_id,
+        ) = self._get_effective_flags(deployment_model_name)
 
         if not enable_user_key and not enable_session_id:
             return None

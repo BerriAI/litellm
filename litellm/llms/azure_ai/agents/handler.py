@@ -112,9 +112,7 @@ class AzureAIAgentsHandler:
                         text_obj = content_item.get("text", {})
                         content = text_obj.get("value", "")
                         raw_annotations = text_obj.get("annotations")
-                        annotations = self._transform_annotations(
-                            raw_annotations
-                        )
+                        annotations = self._transform_annotations(raw_annotations)
                         return content, annotations
         return "", None
 
@@ -146,9 +144,7 @@ class AzureAIAgentsHandler:
                     url_citation["start_index"] = ann["start_index"]
                 if "end_index" in ann and "end_index" not in url_citation:
                     url_citation["end_index"] = ann["end_index"]
-                result.append(
-                    {"type": "url_citation", "url_citation": url_citation}
-                )
+                result.append({"type": "url_citation", "url_citation": url_citation})
             else:
                 # Pass through unknown annotation types as-is
                 result.append(ann)
@@ -696,9 +692,7 @@ class AzureAIAgentsHandler:
                             raw_annotations = content_item.get("text", {}).get(
                                 "annotations"
                             )
-                            transformed = self._transform_annotations(
-                                raw_annotations
-                            )
+                            transformed = self._transform_annotations(raw_annotations)
                             if transformed:
                                 if collected_annotations is None:
                                     collected_annotations = []
