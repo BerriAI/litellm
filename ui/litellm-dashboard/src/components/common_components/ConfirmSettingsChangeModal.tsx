@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Modal, Typography } from "antd";
+import { Modal, Typography } from "antd";
 import {
   MinusCircleOutlined,
   PlusCircleOutlined,
@@ -63,13 +63,7 @@ export default function ConfirmSettingsChangeModal({
       cancelButtonProps={{ disabled: confirmLoading }}
     >
       <div className="space-y-4">
-        <Alert
-          message="These defaults apply to all future users created via SSO, API, or SCIM."
-          type="warning"
-          showIcon
-        />
-
-        <div className="mt-4 space-y-2">
+        <div className="space-y-2">
           {changes.map((change, index) => {
             const config = CHANGE_CONFIG[change.type];
             return (
