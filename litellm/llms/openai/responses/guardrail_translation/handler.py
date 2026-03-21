@@ -253,8 +253,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         j = 0
         for tool in original_tools:
             if isinstance(tool, dict) and tool.get("type") in (
-                    "web_search",
-                    "web_search_preview",
+                "web_search",
+                "web_search_preview",
             ):
                 result.append(tool)
             else:
@@ -375,7 +375,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
-        task_mappings: List[Tuple[int, int]] = []  # (output_idx, content_idx) for each text
+        task_mappings: List[
+            Tuple[int, int]
+        ] = []  # (output_idx, content_idx) for each text
         tool_call_task_mappings: List[int] = []  # output_idx for each tool call
 
         # Handle both dict and Pydantic object responses
@@ -489,10 +491,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         if final_chunk.get("type") == "response.output_item.done":
             # convert openai response to model response
-            model_response_stream = (
-                OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 final_chunk
-            ))
+            )
 
             tool_calls = model_response_stream.choices[0].delta.tool_calls
             if tool_calls:
@@ -642,11 +643,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Check if this is a tool call (OutputFunctionToolCall)
         if isinstance(output_item, OutputFunctionToolCall):
             if tool_calls_to_check is not None:
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=output_item,
                     index=output_idx,
-                ))
+                )
                 tool_calls_to_check.append(
                     cast(ChatCompletionToolCallChunk, tool_call_dict)
                 )
@@ -657,11 +657,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             and getattr(output_item, "type") == "function_call"
         ):
             if tool_calls_to_check is not None:
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=output_item,
                     index=output_idx,
-                ))
+                )
                 tool_calls_to_check.append(
                     cast(ChatCompletionToolCallChunk, tool_call_dict)
                 )
@@ -674,11 +673,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 # Convert dict to ResponseFunctionToolCall for processing
                 try:
                     tool_call_obj = ResponseFunctionToolCall(**output_item)
-                    tool_call_dict = (
-                        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                         tool_call_item=tool_call_obj,
                         index=output_idx,
-                    ))
+                    )
                     tool_calls_to_check.append(
                         cast(ChatCompletionToolCallChunk, tool_call_dict)
                     )
@@ -797,7 +795,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Append extra texts as new message output items
         if len(responses) > len(task_mappings):
-            for i, extra_text in enumerate(responses[len(task_mappings):]):
+            for i, extra_text in enumerate(responses[len(task_mappings) :]):
                 response_output.append(
                     {
                         "type": "message",

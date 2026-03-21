@@ -730,7 +730,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Append extra texts as new content on the first choice
         if len(responses) > len(task_mappings) and response.choices:
             choice = response.choices[0]
-            for extra_text in responses[len(task_mappings):]:
+            for extra_text in responses[len(task_mappings) :]:
                 if choice.message.content is None:
                     choice.message.content = extra_text
                 elif isinstance(choice.message.content, str):
