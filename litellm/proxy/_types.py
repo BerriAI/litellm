@@ -2064,6 +2064,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
     )
+    timeout: Optional[int] = Field(
+        default=None,
+        description="Timeout in seconds for requests to the target endpoint. Defaults to 600 seconds if not specified.",
+    )
     is_from_config: bool = Field(
         default=False,
         description="True if this endpoint is defined in the config file, False if from DB. Config-defined endpoints cannot be edited via the UI.",

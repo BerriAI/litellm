@@ -2232,11 +2232,15 @@ def test_build_full_path_with_root_default():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with default root path
         mock_get_root.return_value = "/"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/api/v1/endpoint"
 
 
@@ -2248,11 +2252,15 @@ def test_build_full_path_with_root_custom():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/proxy/api/v1/endpoint"
 
 
@@ -2264,7 +2272,9 @@ def test_build_full_path_with_root_nested():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with nested root path /api/v2
         mock_get_root.return_value = "/api/v2"
 
@@ -2296,24 +2306,46 @@ def test_is_registered_pass_through_route_with_custom_root():
         "headers": {},
     }
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
         # Should match when request route includes the root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match when request route doesn't include root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is False
+        )
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should match with default root
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match with root prepended when root is /
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is False
+        )
 
     # Clean up
     _registered_pass_through_routes.clear()
@@ -2345,25 +2377,33 @@ def test_get_registered_pass_through_route_with_custom_root():
     route_key = f"{endpoint_id}:exact:{path}"
     _registered_pass_through_routes[route_key] = target_config
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /litellm
         mock_get_root.return_value = "/litellm"
 
         # Should return config when request route includes root path
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/litellm/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
         assert result["headers"]["Authorization"] == "Bearer token123"
 
         # Should return None when route doesn't match
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is None
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should return config with default root
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
 
@@ -2382,9 +2422,7 @@ def test_mapped_pass_through_routes_with_server_root_path():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch(
-        "litellm.proxy.utils.get_server_root_path"
-    ) as mock_get_root:
+    with patch("litellm.proxy.utils.get_server_root_path") as mock_get_root:
         mock_get_root.return_value = "/litellm"
 
         # prefixed route should match mapped routes like /vertex_ai
@@ -2410,7 +2448,6 @@ def test_mapped_pass_through_routes_with_server_root_path():
         )
 
 
-
 @pytest.mark.asyncio
 async def test_multipart_passthrough_preserves_boundary():
     """
@@ -2425,7 +2462,9 @@ async def test_multipart_passthrough_preserves_boundary():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = httpx.Headers({"content-type": "application/json"})
-    mock_response.aread = AsyncMock(return_value=b'{"filename": "test.txt", "size": 17}')
+    mock_response.aread = AsyncMock(
+        return_value=b'{"filename": "test.txt", "size": 17}'
+    )
     mock_response.text = '{"filename": "test.txt", "size": 17}'
 
     async def mock_httpx_request(method, url, **kwargs):
@@ -2435,7 +2474,9 @@ async def test_multipart_passthrough_preserves_boundary():
 
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
-        assert "content-type" not in headers, "content-type should be removed for multipart"
+        assert (
+            "content-type" not in headers
+        ), "content-type should be removed for multipart"
 
         filename, content, content_type = kwargs["files"]["file"]
         assert filename == "test.txt"
@@ -2474,3 +2515,212 @@ async def test_multipart_passthrough_preserves_boundary():
     # Verify the response
     assert response.status_code == 200
     async_client.request.assert_called_once()
+
+
+# Test timeout field on PassThroughGenericEndpoint
+def test_pass_through_endpoint_timeout_field_parsing():
+    """Test that PassThroughGenericEndpoint correctly parses the timeout field."""
+    from litellm.proxy._types import PassThroughGenericEndpoint
+
+    # With timeout specified
+    endpoint = PassThroughGenericEndpoint(
+        path="/test", target="http://example.com", timeout=300
+    )
+    assert endpoint.timeout == 300
+
+    # Without timeout (default None)
+    endpoint_no_timeout = PassThroughGenericEndpoint(
+        path="/test", target="http://example.com"
+    )
+    assert endpoint_no_timeout.timeout is None
+
+
+# Test that pass_through_request uses custom timeout
+@pytest.mark.asyncio
+async def test_pass_through_request_custom_timeout():
+    """Test that pass_through_request passes a custom timeout to get_async_httpx_client."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams("")
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
+
+    mock_user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    mock_client = AsyncMock()
+    mock_client.client = AsyncMock()
+    mock_client.client.request = AsyncMock(
+        return_value=httpx.Response(200, json={"result": "ok"})
+    )
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+        return_value=mock_client,
+    ) as mock_get_client, patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails",
+        return_value=[],
+    ):
+        try:
+            await pass_through_request(
+                request=mock_request,
+                target="http://example.com/api",
+                custom_headers={"Authorization": "Bearer test"},
+                user_api_key_dict=mock_user_api_key_dict,
+                timeout=300,
+            )
+        except Exception:
+            pass  # We only care about the get_async_httpx_client call
+
+        # Verify get_async_httpx_client was called with the custom timeout
+        mock_get_client.assert_called_once()
+        call_kwargs = mock_get_client.call_args
+        assert call_kwargs.kwargs["params"] == {"timeout": 300}
+
+
+# Test that pass_through_request uses default timeout when not specified
+@pytest.mark.asyncio
+async def test_pass_through_request_default_timeout():
+    """Test that pass_through_request uses default 600s timeout when timeout is None."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams("")
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
+
+    mock_user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    mock_client = AsyncMock()
+    mock_client.client = AsyncMock()
+    mock_client.client.request = AsyncMock(
+        return_value=httpx.Response(200, json={"result": "ok"})
+    )
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+        return_value=mock_client,
+    ) as mock_get_client, patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails",
+        return_value=[],
+    ):
+        try:
+            await pass_through_request(
+                request=mock_request,
+                target="http://example.com/api",
+                custom_headers={"Authorization": "Bearer test"},
+                user_api_key_dict=mock_user_api_key_dict,
+                # timeout not specified, should default to 600
+            )
+        except Exception:
+            pass
+
+        mock_get_client.assert_called_once()
+        call_kwargs = mock_get_client.call_args
+        assert call_kwargs.kwargs["params"] == {"timeout": 600}
+
+
+# Test that passthrough_params includes timeout in route registration
+def test_passthrough_params_include_timeout():
+    """Test that add_exact_path_route stores timeout in passthrough_params."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    mock_app = MagicMock()
+    mock_app.routes = []
+
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=mock_app,
+        path="/test-timeout",
+        target="http://example.com",
+        custom_headers={"Authorization": "Bearer test"},
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="test-timeout-id",
+        timeout=120,
+    )
+
+    # Find the registered route
+    matching_routes = {
+        k: v
+        for k, v in _registered_pass_through_routes.items()
+        if "test-timeout-id" in k
+    }
+    assert len(matching_routes) > 0
+
+    route_data = list(matching_routes.values())[0]
+    assert route_data["passthrough_params"]["timeout"] == 120
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_timeout_passed_to_httpx_client():
+    """
+    Verify that the timeout parameter passed to pass_through_request
+    is correctly forwarded to get_async_httpx_client.
+    No real network calls - uses a sentinel exception to short-circuit after
+    capturing the call arguments.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured_calls = []
+
+    class _SentinelError(Exception):
+        pass
+
+    def fake_get_async_httpx_client(**kwargs):
+        captured_calls.append(kwargs)
+        raise _SentinelError("captured")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams("")
+    mock_request.method = "POST"
+    mock_request.body = AsyncMock(return_value=b'{"test": "data"}')
+
+    mock_user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails",
+        return_value=[],
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+        side_effect=fake_get_async_httpx_client,
+    ):
+        # The sentinel exception will propagate out as a ProxyException
+        with pytest.raises(Exception):
+            await pass_through_request(
+                request=mock_request,
+                target="https://api.example.com/test",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=mock_user_api_key_dict,
+                timeout=120,
+            )
+
+    # Verify get_async_httpx_client was called with the correct timeout
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["params"] == {"timeout": 120}
