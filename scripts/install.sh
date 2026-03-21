@@ -92,16 +92,15 @@ if command -v pipx >/dev/null 2>&1; then
   info "Using pipx (isolated install)"
   if pipx upgrade litellm 2>/dev/null; then
     # Ensure proxy extras are present (may be absent if originally installed
-    # as bare "litellm" without [proxy]).  We use `pipx runpip` (not
-    # `pipx inject`) because `runpip` has been available across pipx versions
-    # for years, while `inject` is newer — older pipx installs would otherwise
-    # fail here.  runpip installs inside the existing venv without disturbing
-    # pipx metadata (preserves --include-deps, etc.).
-    if ! _runpip_err="$(pipx runpip litellm install -q "${LITELLM_PACKAGE}" 2>&1)"; then
-      warn "could not ensure proxy extras via pipx runpip (proxy features may fail until fixed)."
-      printf '%s\n' "$_runpip_err" >&2
+    # as bare "litellm" without [proxy]).  `pipx inject` has been available
+    # since pipx 0.12.3 (~2019) and records injected deps in pipx metadata so
+    # upgrades stay consistent; the `runpip` subcommand is newer (0.15.x) and would fail
+    # on older pipx.
+    if ! _inject_err="$(pipx inject litellm "${LITELLM_PACKAGE}" 2>&1)"; then
+      warn "could not inject proxy extras (proxy features may fail until manually fixed)."
+      printf '%s\n' "$_inject_err" >&2
     fi
-    unset _runpip_err 2>/dev/null || true
+    unset _inject_err 2>/dev/null || true
     _pipx_upgraded=1
   elif pipx install "${LITELLM_PACKAGE}"; then
     _pipx_upgraded=1
@@ -125,7 +124,7 @@ if command -v pipx >/dev/null 2>&1; then
       warn "Falling back to a dedicated venv — you may still have a pipx-managed copy elsewhere; check: pipx list"
     fi
   else
-    info "pipx install failed, falling back to venv"
+    warn "pipx install failed (see above), falling back to venv"
   fi
 fi
 
