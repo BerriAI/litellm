@@ -1,5 +1,23 @@
 import { MessageType, MultimodalContent } from "./types";
 
+/**
+ * Ensures an image src URL uses a safe scheme (blob:, data:, http:, https:).
+ * Returns an empty string for anything else (e.g. javascript: URIs) to
+ * prevent XSS via img src injection.
+ */
+export const sanitizeImageSrc = (url: string | undefined): string => {
+  if (!url) return "";
+  if (
+    url.startsWith("blob:") ||
+    url.startsWith("data:") ||
+    url.startsWith("http://") ||
+    url.startsWith("https://")
+  ) {
+    return url;
+  }
+  return "";
+};
+
 export const convertImageToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
