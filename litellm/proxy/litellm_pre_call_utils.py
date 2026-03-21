@@ -1454,7 +1454,7 @@ def _add_guardrails_from_key_or_team_metadata(
     if combined_guardrails:
         existing = set(data.get(metadata_variable_name, {}).get("guardrails", []))
         combined_guardrails.update(existing)
-        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+        data[metadata_variable_name]["guardrails"] = sorted(combined_guardrails)
 
 
 def _add_guardrails_from_policies_in_metadata(
@@ -1647,28 +1647,34 @@ async def _add_guardrails_from_user_team_memberships(
                         existing = set(
                             data.get(metadata_variable_name, {}).get("guardrails", [])
                         )
-                        new_guardrails = set(team_meta["guardrails"]) - existing
+                        new_guardrails = sorted(
+                            set(team_meta["guardrails"]) - existing
+                        )
                         if new_guardrails:
-                            if "guardrails" not in data[metadata_variable_name]:
-                                data[metadata_variable_name]["guardrails"] = []
-                            data[metadata_variable_name]["guardrails"].extend(
-                                list(new_guardrails)
-                            )
+                            metadata_dict = data.get(metadata_variable_name)
+                            if metadata_dict is None:
+                                data[metadata_variable_name] = {}
+                                metadata_dict = data[metadata_variable_name]
+                            if "guardrails" not in metadata_dict:
+                                metadata_dict["guardrails"] = []
+                            metadata_dict["guardrails"].extend(new_guardrails)
                             verbose_proxy_logger.debug(
                                 "Applied guardrails %s from user team membership (team_id=%s, user_id=%s)",
                                 new_guardrails,
                                 team_id,
                                 user_id,
                             )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "Could not fetch team object for team_id=%s during user team guardrails resolution",
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Could not fetch team object for team_id=%s during user team guardrails resolution: %s",
                     team_id,
+                    str(e),
                 )
-    except Exception:
-        verbose_proxy_logger.debug(
-            "Could not resolve user team memberships for guardrails (user_id=%s)",
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Could not resolve user team memberships for guardrails (user_id=%s): %s",
             user_id,
+            str(e),
         )
 
 
@@ -1699,33 +1705,21 @@ async def move_guardrails_to_metadata(
         "guardrails" in data or "guardrail_config" in data or "policies" in data
     )
 
-    # Always check user team memberships for guardrails
-    await _add_guardrails_from_user_team_memberships(
-        user_api_key_dict=user_api_key_dict,
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
-    )
-
     # Check if any guardrails are configured at all in the proxy
     has_any_guardrails_configured = bool(litellm.guardrail_name_config_map)
 
-    # Early-out: skip remaining guardrails processing when nothing is configured
+    # Early-out: skip all guardrails processing when nothing is configured
     if not (
         has_key_config
         or has_team_config
         or has_request_config
         or has_any_guardrails_configured
     ):
-        # Check if user team memberships already added guardrails
-        has_user_team_guardrails = bool(
-            data.get(_metadata_variable_name, {}).get("guardrails")
-        )
-        if not has_user_team_guardrails:
-            from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
-            if not get_policy_registry().is_initialized():
-                data.pop("policies", None)
-                return
+        if not get_policy_registry().is_initialized():
+            data.pop("policies", None)
+            return
 
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
@@ -1734,6 +1728,19 @@ async def move_guardrails_to_metadata(
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
+
+    #########################################################################################
+    # Apply guardrails from user's team memberships.
+    # Only runs when guardrails are configured in the proxy (past early-exit).
+    # _add_guardrails_from_key_or_team_metadata merges (not overwrites), so
+    # guardrails added here are preserved.
+    #########################################################################################
+    if user_api_key_dict.user_id:
+        await _add_guardrails_from_user_team_memberships(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            metadata_variable_name=_metadata_variable_name,
+        )
 
     #########################################################################################
     # Add guardrails from policies attached to key/team metadata
