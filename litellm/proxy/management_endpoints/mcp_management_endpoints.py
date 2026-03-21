@@ -1924,55 +1924,62 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import user_api_key_cache
 
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            if payload.server_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "server_id is required to update an MCP server."
-                    },
-                )
-
-            # Find which teams own this server via ObjectPermissionTable,
-            # then check if the user has mcp:update in any of those teams.
-            object_perms = await get_objectpermissions_for_mcp_server(
-                prisma_client, payload.server_id
-            )
-            if not object_perms:
+            mcp_server = await get_mcp_server(prisma_client, payload.server_id)
+            if mcp_server is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail={
-                        "error": f"MCP Server not found or not assigned to any team, server_id={payload.server_id}"
+                        "error": f"MCP Server not found, server_id={payload.server_id}"
                     },
                 )
 
-            authorized = False
-            for perm in object_perms:
-                for team in perm.teams or []:
-                    candidate_team_id = team.team_id
-                    try:
-                        team_obj = await get_team_object(
-                            team_id=candidate_team_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                        )
-                    except Exception:
-                        continue
-                    if check_member_permission(
-                        user_api_key_dict, team_obj, "mcp:update"
-                    ):
-                        authorized = True
-                        break
-                if authorized:
-                    break
+            owner_team_id = mcp_server.team_id
+            if not owner_team_id:
+                # Global server (team_id=NULL) — only proxy admins can manage
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "This is a global MCP server. Only proxy admins can update it."
+                    },
+                )
 
-            if not authorized:
+            team_obj = await get_team_object(
+                team_id=owner_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if not check_member_permission(
+                user_api_key_dict, team_obj, "mcp:update"
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
                         "error": "User does not have permission to update this MCP server. "
-                        "Requires team admin role or 'mcp:update' permission in one of the server's teams."
+                        "Requires team admin role or 'mcp:update' permission in the server's owning team."
                     },
                 )
+
+            # Non-admins cannot change ownership at all
+            if "team_id" in payload.model_fields_set:
+                if payload.team_id != owner_team_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Only proxy admins can change MCP server ownership."
+                        },
+                    )
+            # Preserve existing team_id — non-admins can't change it
+            payload.team_id = owner_team_id
+
+        # For proxy admins: detect if ownership is changing
+        is_admin = LitellmUserRoles.PROXY_ADMIN == user_api_key_dict.user_role
+        team_id_explicitly_set = "team_id" in payload.model_fields_set
+        old_team_id: Optional[str] = None
+
+        if is_admin and team_id_explicitly_set:
+            existing_server = await get_mcp_server(prisma_client, payload.server_id)
+            if existing_server:
+                old_team_id = existing_server.team_id
 
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
@@ -1992,6 +1999,39 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # Handle explicit team_id changes (including clearing to null/global)
+        if is_admin and team_id_explicitly_set:
+            new_team_id = payload.team_id  # could be a team ID or None (global)
+
+            # Direct DB update for team_id — exclude_none in _prepare_mcp_server_data
+            # skips None, so we must write it explicitly when clearing to global
+            if new_team_id is None:
+                await prisma_client.db.litellm_mcpservertable.update(
+                    where={"server_id": payload.server_id},
+                    data={"team_id": None},
+                )
+
+            # Sync ObjectPermissionTable
+            if old_team_id != new_team_id:
+                if old_team_id:
+                    try:
+                        await remove_mcp_server_from_team(
+                            prisma_client, old_team_id, payload.server_id
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Failed to remove server {payload.server_id} from old team {old_team_id}: {e}"
+                        )
+                if new_team_id:
+                    try:
+                        await add_mcp_server_to_team(
+                            prisma_client, new_team_id, payload.server_id
+                        )
+                    except ValueError as e:
+                        verbose_proxy_logger.warning(
+                            f"Failed to add server {payload.server_id} to new team {new_team_id}: {e}"
+                        )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
