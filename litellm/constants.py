@@ -692,6 +692,12 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "context_management": None,
 }
 
+# Params that are LiteLLM-internal or OpenAI-only and must never be forwarded
+# to non-OpenAI providers as arbitrary kwargs.
+LITELLM_INTERNAL_PASSTHROUGH_BLOCKLIST: frozenset = frozenset(
+    {"vector_store_id", "vector_store_ids"}
+)
+
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
