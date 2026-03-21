@@ -41,6 +41,7 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
+import CommandPalette from "@/components/common_components/CommandPalette";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
@@ -675,6 +676,13 @@ function CreateKeyPageContent() {
                   isOpen={showClaudeCodeModal}
                   onClose={handleClaudeCodeModalClose}
                   onComplete={handleClaudeCodeComplete}
+                />
+
+                {/* Command Palette (⌘K) */}
+                <CommandPalette
+                  onSelectKey={() => {
+                    if (page !== "api-keys") updatePage("api-keys");
+                  }}
                 />
               </div>
             )}
