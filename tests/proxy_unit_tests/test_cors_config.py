@@ -1,4 +1,3 @@
-import importlib
 import sys
 from pathlib import Path
 
@@ -29,7 +28,24 @@ def _reload_local_proxy_server():
 
     import litellm.proxy.proxy_server as proxy_server
 
-    return importlib.reload(proxy_server)
+    return proxy_server
+
+
+def test_normalize_cors_value_string():
+    from litellm.proxy.proxy_cli import _normalize_cors_value
+
+    assert (
+        _normalize_cors_value(
+            "https://a.com, https://b.com ", "cors_allow_origins"
+        )
+        == "https://a.com,https://b.com"
+    )
+
+
+def test_normalize_cors_value_single_string():
+    from litellm.proxy.proxy_cli import _normalize_cors_value
+
+    assert _normalize_cors_value("https://a.com", "cors_allow_origins") == "https://a.com"
 
 
 def test_normalize_cors_value_list():

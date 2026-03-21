@@ -1156,7 +1156,7 @@ configured_cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS
 configured_cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS")
 configured_cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS")
 cors_credentials_was_configured = (
-    os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") is not None
+    os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS", "").strip() != ""
 )
 cors_origins_were_configured = configured_cors_allow_origins is not None
 

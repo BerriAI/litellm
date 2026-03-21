@@ -802,9 +802,19 @@ def run_server(  # noqa: PLR0915
             cors_allow_methods = general_settings.get("cors_allow_methods", None)
             cors_allow_headers = general_settings.get("cors_allow_headers", None)
 
-            normalized_origins = _normalize_cors_value(
-                cors_allow_origins, "cors_allow_origins"
-            )
+            try:
+                normalized_origins = _normalize_cors_value(
+                    cors_allow_origins, "cors_allow_origins"
+                )
+                normalized_methods = _normalize_cors_value(
+                    cors_allow_methods, "cors_allow_methods"
+                )
+                normalized_headers = _normalize_cors_value(
+                    cors_allow_headers, "cors_allow_headers"
+                )
+            except ValueError as e:
+                raise click.ClickException(f"Invalid CORS configuration: {e}") from e
+
             if normalized_origins is not None:
                 os.environ["LITELLM_CORS_ALLOW_ORIGINS"] = normalized_origins
 
@@ -813,15 +823,9 @@ def run_server(  # noqa: PLR0915
                     cors_allow_credentials
                 )
 
-            normalized_methods = _normalize_cors_value(
-                cors_allow_methods, "cors_allow_methods"
-            )
             if normalized_methods is not None:
                 os.environ["LITELLM_CORS_ALLOW_METHODS"] = normalized_methods
 
-            normalized_headers = _normalize_cors_value(
-                cors_allow_headers, "cors_allow_headers"
-            )
             if normalized_headers is not None:
                 os.environ["LITELLM_CORS_ALLOW_HEADERS"] = normalized_headers
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
