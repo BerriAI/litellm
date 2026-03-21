@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from typing import (
@@ -833,6 +834,11 @@ class LiteLLMAnthropicMessagesAdapter:
         if not schema:
             return None
 
+        # Deep copy to avoid mutating the original schema
+        schema = copy.deepcopy(schema)
+        # OpenAI strict mode requires additionalProperties: false on every object
+        self._add_additional_properties_false(schema)
+
         # Convert to OpenAI response_format structure
         return {
             "type": "json_schema",
@@ -842,6 +848,40 @@ class LiteLLMAnthropicMessagesAdapter:
                 "strict": True,
             },
         }
+
+    @staticmethod
+    def _add_additional_properties_false(schema: dict) -> None:
+        """
+        Recursively ensure object schemas comply with OpenAI strict mode.
+
+        OpenAI's strict mode requires:
+        1. 'additionalProperties': false at every object nesting level
+        2. All property keys listed in 'required'
+        """
+        if not isinstance(schema, dict):
+            return
+
+        if schema.get("type") == "object" and "properties" in schema:
+            schema["additionalProperties"] = False
+            schema["required"] = list(schema["properties"].keys())
+            for prop in schema["properties"].values():
+                LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(prop)
+
+        # Handle array items
+        if "items" in schema:
+            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(schema["items"])
+
+        # Handle anyOf/oneOf/allOf
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in schema:
+                for sub_schema in schema[key]:
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(sub_schema)
+
+        # Handle $defs / definitions
+        for key in ("$defs", "definitions"):
+            if key in schema:
+                for def_schema in schema[key].values():
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
 
     def _add_system_message_to_messages(
         self,
