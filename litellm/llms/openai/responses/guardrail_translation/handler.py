@@ -797,7 +797,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Append extra texts as new message output items
         if len(responses) > len(task_mappings):
             for i, extra_text in enumerate(responses[len(task_mappings) :]):
-                response_output.append(
+                response_output.append(  # type: ignore[arg-type]
                     GenericResponseOutputItem(
                         type="message",
                         id=f"guardrail_msg_{uuid.uuid4().hex[:12]}",
