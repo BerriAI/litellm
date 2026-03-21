@@ -16,7 +16,7 @@ from litellm.proxy.auth.auth_checks import (
 @pytest.mark.asyncio
 async def test_get_effective_team_models():
     original_flag = litellm.team_model_overrides_enabled
-    original_env = os.environ.get("TEAM_MODEL_OVERRIDES")
+    original_env = os.environ.pop("TEAM_MODEL_OVERRIDES", None)
     try:
         litellm.team_model_overrides_enabled = True
 
@@ -39,14 +39,13 @@ async def test_get_effective_team_models():
         token.team_default_models = ["td1"]
         assert set(get_effective_team_models(None, token)) == {"td1", "mo1"}
 
-        # Case 5: Feature disabled
+        # Case 5: Feature disabled — also ensure env var is cleared
         litellm.team_model_overrides_enabled = False
-        if original_env:
-            os.environ.pop("TEAM_MODEL_OVERRIDES", None)
+        os.environ.pop("TEAM_MODEL_OVERRIDES", None)
         assert get_effective_team_models(team, token) == ["m1", "d1", "mo1"]
     finally:
         litellm.team_model_overrides_enabled = original_flag
-        if original_env:
+        if original_env is not None:
             os.environ["TEAM_MODEL_OVERRIDES"] = original_env
 
 

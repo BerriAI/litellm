@@ -41,7 +41,7 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
-    _compute_effective_models,
+    compute_effective_models,
     _delete_cache_key_object,
     can_team_access_model,
     get_org_object,
@@ -646,7 +646,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         # NOT from members_with_roles JSON blob which can be stale after /team/member_update.
         # Note: This is a management endpoint (/key/generate), not the hot auth path.
         # The hot path (/chat/completions) uses the SQL view join with zero extra queries.
-        member_models: list = []
+        member_models: List[str] = []
         if data.user_id and prisma_client is not None:
             _membership = await prisma_client.db.litellm_teammembership.find_unique(
                 where={
@@ -660,7 +660,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 member_models = _membership.models or []
         team_default_models = getattr(team_table, "default_models", None) or []
         team_pool = team_table.models or []
-        effective_models = _compute_effective_models(
+        effective_models = compute_effective_models(
             team_defaults=team_default_models,
             member_models=member_models,
             team_pool=team_pool,

@@ -2693,7 +2693,7 @@ def can_org_access_model(
     )
 
 
-def _compute_effective_models(
+def compute_effective_models(
     team_defaults: List[str],
     member_models: List[str],
     team_pool: List[str],
@@ -2754,7 +2754,7 @@ def get_effective_team_models(
 
     team_pool = team_object.models if team_object else []
 
-    return _compute_effective_models(team_defaults, member_models, team_pool)
+    return compute_effective_models(team_defaults, member_models, team_pool)
 
 
 async def can_team_access_model(
