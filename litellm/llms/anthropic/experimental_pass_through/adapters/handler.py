@@ -12,11 +12,11 @@ from typing import (
 )
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.utils import (
-    is_default_reasoning_summary_disabled,
-)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     AnthropicAdapter,
+)
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -82,7 +82,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             # Prefix model with "responses/" to route to OpenAI Responses API
             completion_kwargs["model"] = f"responses/{model}"
 
-        summary_disabled = is_default_reasoning_summary_disabled()
+        auto_summary = is_reasoning_auto_summary_enabled()
 
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         summary = thinking.get("summary")
@@ -90,7 +90,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
             if summary:
                 reasoning_dict["summary"] = summary
-            elif not summary_disabled:
+            elif auto_summary:
                 reasoning_dict["summary"] = "detailed"
             completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
@@ -98,7 +98,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "summary" not in reasoning_effort
                 and "generate_summary" not in reasoning_effort
             ):
-                effective_summary = summary if summary else ("detailed" if not summary_disabled else None)
+                effective_summary = (
+                    summary if summary else ("detailed" if auto_summary else None)
+                )
                 if effective_summary:
                     updated_reasoning_effort = dict(reasoning_effort)
                     updated_reasoning_effort["summary"] = effective_summary

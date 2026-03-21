@@ -15,7 +15,7 @@ from typing import (
 )
 
 from litellm.llms.anthropic.experimental_pass_through.utils import (
-    is_default_reasoning_summary_disabled,
+    is_reasoning_auto_summary_enabled,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -741,7 +741,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 summary = (
                     thinking.get("summary") if isinstance(thinking, dict) else None
                 )
-                summary_disabled = is_default_reasoning_summary_disabled()
+                auto_summary = is_reasoning_auto_summary_enabled()
                 if summary:
                     return {
                         "reasoning_effort": {
@@ -749,7 +749,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             "summary": summary,
                         }
                     }
-                elif not summary_disabled:
+                elif auto_summary:
                     return {
                         "reasoning_effort": {
                             "effort": reasoning_effort,
@@ -891,19 +891,25 @@ class LiteLLMAnthropicMessagesAdapter:
 
         # Handle array items
         if "items" in schema:
-            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(schema["items"])
+            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                schema["items"]
+            )
 
         # Handle anyOf/oneOf/allOf
         for key in ("anyOf", "oneOf", "allOf"):
             if key in schema:
                 for sub_schema in schema[key]:
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(sub_schema)
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        sub_schema
+                    )
 
         # Handle $defs / definitions
         for key in ("$defs", "definitions"):
             if key in schema:
                 for def_schema in schema[key].values():
-                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(def_schema)
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        def_schema
+                    )
 
     def _add_system_message_to_messages(
         self,
@@ -1030,12 +1036,21 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
+        auto_summary = is_reasoning_auto_summary_enabled()
         if summary:
             new_kwargs["reasoning_effort"] = cast(
                 Any,
                 {
                     "effort": reasoning_effort,
                     "summary": summary,
+                },
+            )
+        elif auto_summary:
+            new_kwargs["reasoning_effort"] = cast(
+                Any,
+                {
+                    "effort": reasoning_effort,
+                    "summary": "detailed",
                 },
             )
         else:

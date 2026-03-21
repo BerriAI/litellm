@@ -700,11 +700,11 @@ response = await litellm.anthropic.messages.acreate(
 # The summary="concise" is preserved when routing to OpenAI's Responses API
 ```
 
-### Default Summary Injection for `/v1/messages` Adapter
+### Enabling Default Summary Injection for `/v1/messages` Adapter
 
-When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, `summary="detailed"` is automatically injected by default. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
+When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, you can opt-in to automatic `summary="detailed"` injection using the `reasoning_auto_summary` flag. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
 
-To **disable** this default injection, use the `disable_default_reasoning_summary` flag:
+To **enable** this default injection, use the `reasoning_auto_summary` flag:
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -712,8 +712,8 @@ To **disable** this default injection, use the `disable_default_reasoning_summar
 ```python
 import litellm
 
-# Disable default summary="detailed" injection
-litellm.disable_default_reasoning_summary = True
+# Enable default summary="detailed" injection
+litellm.reasoning_auto_summary = True
 
 response = await litellm.anthropic.messages.acreate(
     model="openai/gpt-5.1",
@@ -721,7 +721,7 @@ response = await litellm.anthropic.messages.acreate(
     max_tokens=8096,
     thinking={"type": "enabled", "budget_tokens": 5000},
 )
-# No summary will be injected — only reasoning_effort is forwarded
+# summary="detailed" will be automatically added to reasoning_effort
 ```
 
 </TabItem>
@@ -729,7 +729,7 @@ response = await litellm.anthropic.messages.acreate(
 <TabItem value="env" label="Environment Variable">
 
 ```bash
-export LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY=true
+export LITELLM_REASONING_AUTO_SUMMARY=true
 ```
 
 </TabItem>
@@ -738,7 +738,7 @@ export LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY=true
 
 ```yaml
 litellm_settings:
-  disable_default_reasoning_summary: true
+  reasoning_auto_summary: true
 ```
 
 </TabItem>

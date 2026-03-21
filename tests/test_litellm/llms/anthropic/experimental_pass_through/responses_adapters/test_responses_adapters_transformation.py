@@ -170,6 +170,7 @@ class TestOutputConfigStructuredOutput:
 # translate_messages_to_responses_input
 # ---------------------------------------------------------------------------
 
+
 # Helper: cast plain dicts to the expected type so call sites stay clean.
 def _translate_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     return _ADAPTER.translate_messages_to_responses_input(messages)  # type: ignore[arg-type]
@@ -274,7 +275,11 @@ class TestTranslateMessagesToResponsesInput:
                 "content": [
                     {
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": ""},
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": "",
+                        },
                     }
                 ],
             }
@@ -462,7 +467,10 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"][0] == {"type": "input_text", "text": "Describe this image:"}
+        assert result[0]["content"][0] == {
+            "type": "input_text",
+            "text": "Describe this image:",
+        }
         assert result[0]["content"][1] == {
             "type": "input_image",
             "image_url": "https://example.com/cat.jpg",
@@ -606,7 +614,7 @@ class TestTranslateThinkingToReasoning:
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 10000}
         )
-        assert result == {"effort": "high", "summary": "detailed"}
+        assert result == {"effort": "high"}
 
     def test_budget_above_threshold_high_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
@@ -619,19 +627,19 @@ class TestTranslateThinkingToReasoning:
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 7500}
         )
-        assert result == {"effort": "medium", "summary": "detailed"}
+        assert result == {"effort": "medium"}
 
     def test_budget_low_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 3000}
         )
-        assert result == {"effort": "low", "summary": "detailed"}
+        assert result == {"effort": "low"}
 
     def test_budget_minimal_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 500}
         )
-        assert result == {"effort": "minimal", "summary": "detailed"}
+        assert result == {"effort": "minimal"}
 
     def test_budget_at_exact_thresholds(self):
         result_medium = _ADAPTER.translate_thinking_to_reasoning(
@@ -656,39 +664,37 @@ class TestTranslateThinkingToReasoning:
     def test_missing_budget_defaults_to_minimal(self):
         """Missing budget_tokens defaults to 0, which is < 2000 -> minimal."""
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
-        assert result == {"effort": "minimal", "summary": "detailed"}
+        assert result == {"effort": "minimal"}
 
-    def test_summary_excluded_when_disable_flag_set(self):
-        """When disable_default_reasoning_summary is True, summary is not included."""
+    def test_summary_added_when_auto_summary_enabled(self):
+        """When reasoning_auto_summary is True, summary='detailed' is included."""
         import litellm
 
-        original = litellm.disable_default_reasoning_summary
+        original = litellm.reasoning_auto_summary
         try:
-            litellm.disable_default_reasoning_summary = True
+            litellm.reasoning_auto_summary = True
             result = _ADAPTER.translate_thinking_to_reasoning(
                 {"type": "enabled", "budget_tokens": 10000}
             )
-            assert result == {"effort": "high"}
-            assert "summary" not in result
+            assert result == {"effort": "high", "summary": "detailed"}
         finally:
-            litellm.disable_default_reasoning_summary = original
+            litellm.reasoning_auto_summary = original
 
-    def test_summary_excluded_when_env_var_set(self):
-        """When LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY env var is true, summary is not included."""
+    def test_summary_added_when_env_var_set(self):
+        """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is included."""
         import litellm
 
-        original = litellm.disable_default_reasoning_summary
+        original = litellm.reasoning_auto_summary
         try:
-            litellm.disable_default_reasoning_summary = False
-            os.environ["LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY"] = "true"
+            litellm.reasoning_auto_summary = False
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
             result = _ADAPTER.translate_thinking_to_reasoning(
                 {"type": "enabled", "budget_tokens": 5000}
             )
-            assert result == {"effort": "medium"}
-            assert "summary" not in result
+            assert result == {"effort": "medium", "summary": "detailed"}
         finally:
-            litellm.disable_default_reasoning_summary = original
-            os.environ.pop("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", None)
+            litellm.reasoning_auto_summary = original
+            os.environ.pop("LITELLM_REASONING_AUTO_SUMMARY", None)
 
 
 # ---------------------------------------------------------------------------
@@ -747,7 +753,9 @@ class TestTranslateRequestBroaderCoverage:
 
     def test_tools_translated(self):
         req = _make_request(
-            tools=[{"name": "calculator", "description": "Does math.", "input_schema": {}}]
+            tools=[
+                {"name": "calculator", "description": "Does math.", "input_schema": {}}
+            ]
         )
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["tools"]) == 1
@@ -764,7 +772,8 @@ class TestTranslateRequestBroaderCoverage:
     def test_thinking_translated_to_reasoning(self):
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["reasoning"] == {"effort": "high", "summary": "detailed"}
+        # reasoning_auto_summary is False by default, so no summary key
+        assert kwargs["reasoning"] == {"effort": "high"}
 
     def test_disabled_thinking_not_included_in_kwargs(self):
         req = _make_request(thinking={"type": "disabled"})
@@ -785,8 +794,17 @@ class TestTranslateRequestBroaderCoverage:
     def test_no_optional_fields_does_not_add_spurious_keys(self):
         req = _make_request()
         kwargs = _ADAPTER.translate_request(req)
-        for key in ("instructions", "temperature", "top_p", "tools", "tool_choice",
-                    "reasoning", "text", "context_management", "user"):
+        for key in (
+            "instructions",
+            "temperature",
+            "top_p",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "text",
+            "context_management",
+            "user",
+        ):
             assert key not in kwargs, f"unexpected key: {key}"
 
 
@@ -833,9 +851,7 @@ def _make_output_message(texts: List[str]) -> MagicMock:
     return msg
 
 
-def _make_function_call_item(
-    call_id: str, name: str, arguments: str
-) -> MagicMock:
+def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
     """Build a mock ResponseFunctionToolCall."""
     from openai.types.responses import ResponseFunctionToolCall  # type: ignore[import]
 
