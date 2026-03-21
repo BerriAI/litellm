@@ -78,6 +78,24 @@ def test_cors_credentials_enabled_with_explicit_origins(monkeypatch):
     ]
 
 
+def test_cors_credentials_default_to_disabled_with_explicit_origins(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "https://example.com")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_credentials is False
+    assert proxy_server.cors_allow_origins == ["https://example.com"]
+
+
+def test_cors_credentials_only_config_is_rejected_with_wildcard_default(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "true")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_credentials is False
+    assert proxy_server.cors_allow_origins == ["*"]
+
+
 def test_explicit_empty_origins_stay_empty(monkeypatch):
     monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "")
 

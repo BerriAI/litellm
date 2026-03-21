@@ -1141,10 +1141,10 @@ def _get_cors_allow_list(env_key: str) -> Optional[List[str]]:
     return [value.strip() for value in raw_value.split(",") if value.strip()]
 
 
-def _get_cors_allow_credentials() -> bool:
+def _get_cors_allow_credentials(origins_were_configured: bool) -> bool:
     raw_value = os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
     if raw_value is None:
-        return True
+        return not origins_were_configured
     if raw_value.strip() == "":
         return False
     return raw_value.strip().lower() in {"1", "true", "yes"}
@@ -1156,11 +1156,14 @@ configured_cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS
 cors_credentials_was_configured = (
     os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") is not None
 )
+cors_origins_were_configured = configured_cors_allow_origins is not None
 
 cors_allow_origins = (
     ["*"] if configured_cors_allow_origins is None else configured_cors_allow_origins
 )
-cors_allow_credentials = _get_cors_allow_credentials()
+cors_allow_credentials = _get_cors_allow_credentials(
+    origins_were_configured=cors_origins_were_configured
+)
 cors_allow_methods = (
     ["*"] if configured_cors_allow_methods is None else configured_cors_allow_methods
 )
@@ -1168,11 +1171,12 @@ cors_allow_headers = (
     ["*"] if configured_cors_allow_headers is None else configured_cors_allow_headers
 )
 
-# Preserve the proxy's existing wildcard+credentials default unless the
-# operator explicitly configures CORS origins or credentials.
+# Preserve the proxy's existing wildcard+credentials default only when CORS
+# origins are completely unconfigured. Setting credentials without origins
+# still triggers this guard because origins fall back to ["*"].
 has_wildcard_origin = any("*" in origin for origin in cors_allow_origins)
 should_validate_cors_credentials = (
-    configured_cors_allow_origins is not None or cors_credentials_was_configured
+    cors_origins_were_configured or cors_credentials_was_configured
 )
 if should_validate_cors_credentials and has_wildcard_origin and cors_allow_credentials:
     verbose_proxy_logger.warning(

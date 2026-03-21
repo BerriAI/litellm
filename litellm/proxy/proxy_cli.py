@@ -58,6 +58,30 @@ def append_query_params(url: Optional[str], params: dict) -> str:
     return modified_url  # type: ignore
 
 
+def _normalize_cors_value(value: Any, setting_name: str) -> Optional[str]:
+    """
+    Normalize a CORS config value to a comma-separated string.
+
+    Accepts either a string or a list of strings. Returns None if the
+    incoming value is None. Raises ValueError for any other type or for
+    lists containing non-string elements.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return ",".join([item.strip() for item in value.split(",") if item.strip()])
+    if isinstance(value, list):
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(
+                f"Invalid CORS setting for '{setting_name}': expected a list of strings."
+            )
+        return ",".join([item.strip() for item in value if item.strip()])
+    raise ValueError(
+        f"Invalid CORS setting for '{setting_name}': expected a string or list of strings, "
+        f"got {type(value).__name__}."
+    )
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
@@ -777,31 +801,6 @@ def run_server(  # noqa: PLR0915
             )
             cors_allow_methods = general_settings.get("cors_allow_methods", None)
             cors_allow_headers = general_settings.get("cors_allow_headers", None)
-
-            def _normalize_cors_value(value: Any, setting_name: str) -> Optional[str]:
-                """
-                Normalize a CORS config value to a comma-separated string.
-
-                Accepts either a string or a list of strings. Returns None if the
-                incoming value is None. Raises ValueError for any other type or for
-                lists containing non-string elements.
-                """
-                if value is None:
-                    return None
-                if isinstance(value, str):
-                    return ",".join(
-                        [item.strip() for item in value.split(",") if item.strip()]
-                    )
-                if isinstance(value, list):
-                    if not all(isinstance(item, str) for item in value):
-                        raise ValueError(
-                            f"Invalid CORS setting for '{setting_name}': expected a list of strings."
-                        )
-                    return ",".join([item.strip() for item in value if item.strip()])
-                raise ValueError(
-                    f"Invalid CORS setting for '{setting_name}': expected a string or list of strings, "
-                    f"got {type(value).__name__}."
-                )
 
             normalized_origins = _normalize_cors_value(
                 cors_allow_origins, "cors_allow_origins"

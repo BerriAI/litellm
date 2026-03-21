@@ -2242,7 +2242,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     cors_allow_credentials: Optional[bool] = Field(
         None,
-        description="Allow CORS credentials. Defaults to the proxy's existing behavior when unset. Wildcard origins or patterns disable credentials when custom CORS settings are configured.",
+        description="Allow CORS credentials. Defaults to False when cors_allow_origins is explicitly configured and this setting is unset. Otherwise it preserves the proxy's existing default behavior. Wildcard origins or patterns disable credentials.",
     )
     cors_allow_methods: Optional[Union[str, List[str]]] = Field(
         None,
