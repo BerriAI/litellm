@@ -3602,6 +3602,8 @@ class BedrockImageProcessor:
             #########################################################
             # Check if image_format is an image or video
             #########################################################
+            format_aliases = {"jpg": "jpeg", "mpg": "mpeg"}
+            image_format = format_aliases.get(image_format, image_format)
             if image_format not in supported_image_and_video_formats:
                 raise ValueError(
                     f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"

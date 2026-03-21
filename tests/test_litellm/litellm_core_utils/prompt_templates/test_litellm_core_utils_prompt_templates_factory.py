@@ -134,13 +134,16 @@ def test_bedrock_validate_format_image_or_video():
         "webm",
         "flv",
         "mpeg",
-        "mpg",
         "wmv",
         "3gp",
     ]
     for format in valid_video_formats:
         result = BedrockImageProcessor._validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
+
+    # 'mpg' is aliased to 'mpeg'
+    result = BedrockImageProcessor._validate_format("video/mpg", "mpg")
+    assert result == "mpeg", f"Expected 'mpeg', got '{result}'"
 
     # Test valid document formats
     valid_document_formats = {
@@ -153,6 +156,38 @@ def test_bedrock_validate_format_image_or_video():
         print("testing mime", mime, "expected", expected)
         result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
+
+
+def test_bedrock_validate_format_resolves_common_aliases():
+    """
+    Test that _validate_format resolves common format aliases like
+    'jpg' -> 'jpeg' and 'mpg' -> 'mpeg' instead of raising ValueError.
+
+    These aliases are standard equivalents (JPEG files commonly use .jpg
+    extension, MPEG videos commonly use .mpg extension) but were previously
+    rejected because only the canonical names appeared in the supported
+    formats list.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    # 'jpg' should be resolved to 'jpeg'
+    result_jpg = BedrockImageProcessor._validate_format("image/jpg", "jpg")
+    assert result_jpg == "jpeg", f"Expected 'jpeg', got '{result_jpg}'"
+
+    # 'mpg' should be resolved to 'mpeg'
+    result_mpg = BedrockImageProcessor._validate_format("video/mpg", "mpg")
+    assert result_mpg == "mpeg", f"Expected 'mpeg', got '{result_mpg}'"
+
+    # Canonical names should still work unchanged
+    result_jpeg = BedrockImageProcessor._validate_format("image/jpeg", "jpeg")
+    assert result_jpeg == "jpeg", f"Expected 'jpeg', got '{result_jpeg}'"
+
+    result_mpeg = BedrockImageProcessor._validate_format("video/mpeg", "mpeg")
+    assert result_mpeg == "mpeg", f"Expected 'mpeg', got '{result_mpeg}'"
+
+    # Unsupported formats should still raise ValueError
+    with pytest.raises(ValueError, match="Unsupported image format"):
+        BedrockImageProcessor._validate_format("image/bmp", "bmp")
 
 
 def test_bedrock_get_document_format_fallback_mimes():
