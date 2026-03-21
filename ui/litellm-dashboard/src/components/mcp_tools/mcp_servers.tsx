@@ -291,7 +291,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </div>
       </Modal>
       <CreateMCPServer
-        userRole={userRole}
+        userRole={userRole ?? ""}
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
@@ -345,7 +345,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole ?? "") && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
           </div>
         </TabList>
         <TabPanels>
@@ -355,7 +355,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 key={selectedServerId}
                 mcpServer={selectedServer}
                 onBack={handleBack}
-                isProxyAdmin={isAdminRole(userRole)}
+                isProxyAdmin={isAdminRole(userRole ?? "")}
                 isEditing={editServer}
                 accessToken={accessToken}
                 userID={userID}
@@ -451,7 +451,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPNetworkSettings accessToken={accessToken} />
           </TabPanel>
-          {isAdminRole(userRole) && (
+          {isAdminRole(userRole ?? "") && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabPanel>
