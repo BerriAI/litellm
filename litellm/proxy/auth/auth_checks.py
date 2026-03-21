@@ -2697,7 +2697,11 @@ def compute_effective_models(
 
     effective = union(team_defaults, member_models), capped by team_pool.
     - If neither defaults nor overrides are set, falls back to team_pool (backward compat).
-    - If cap empties the list (all stale), falls back to team_pool (NOT [] which = allow-all).
+    - If cap empties the list (all overrides/defaults are stale), falls back to team_pool
+      rather than returning [] (which would mean "allow all"). This is a deliberate security
+      trade-off: a member with entirely stale overrides gets team-pool access (the team's
+      restriction is still enforced) instead of unrestricted access. Admins should clean up
+      stale overrides via /team/member_update when narrowing team.models.
     - team_pool=[] means "allow all" — cap is skipped.
     """
     # dict.fromkeys preserves insertion order while deduplicating

@@ -140,7 +140,7 @@ async def handle_budget_for_entity(
         return existing_budget_id
 
 
-async def add_new_member(
+async def add_new_member(  # noqa: PLR0915
     new_member: Member,
     max_budget_in_team: Optional[float],
     prisma_client: PrismaClient,
@@ -270,6 +270,13 @@ async def add_new_member(
         returned_team_membership = LiteLLM_TeamMembership(
             **_returned_team_membership.model_dump()
         )
+
+        # Invalidate any stale cached membership for this user+team pair
+        # (e.g., from a previous add/remove cycle).
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _cache_key = f"team_membership:{returned_user.user_id}:{team_id}"
+        await user_api_key_cache.async_delete_cache(key=_cache_key)
 
     if returned_user is None:
         raise Exception("Unable to update user table with membership information!")

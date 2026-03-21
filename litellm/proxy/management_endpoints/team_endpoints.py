@@ -2533,7 +2533,7 @@ async def team_member_update(  # noqa: PLR0915
     from litellm.proxy.proxy_server import user_api_key_cache
 
     _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
-    user_api_key_cache.delete_cache(key=_cache_key)
+    await user_api_key_cache.async_delete_cache(key=_cache_key)
 
     ### update team member role
     # Resolve the effective models for this member (from the authoritative
