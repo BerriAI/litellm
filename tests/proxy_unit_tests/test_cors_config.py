@@ -206,6 +206,34 @@ def test_load_general_settings_for_early_cors_handles_include_and_env_refs(
     }
 
 
+def test_load_general_settings_for_early_cors_resolves_env_refs_in_list(
+    monkeypatch, tmp_path
+):
+    from litellm.proxy.proxy_cli import _load_general_settings_for_early_cors
+
+    monkeypatch.setenv("CORS_ORIGIN", "https://env.example.com")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "general_settings:",
+                "  cors_allow_origins:",
+                "    - os.environ/CORS_ORIGIN",
+                "    - https://dashboard.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    general_settings = _load_general_settings_for_early_cors(str(config_path))
+
+    assert general_settings["cors_allow_origins"] == [
+        "https://env.example.com",
+        "https://dashboard.example.com",
+    ]
+
+
 def test_run_server_applies_config_cors_before_proxy_server_import(tmp_path):
     from litellm.proxy.proxy_cli import run_server
 

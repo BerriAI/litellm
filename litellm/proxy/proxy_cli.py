@@ -162,9 +162,17 @@ def _resolve_os_environ_refs(config: dict) -> dict:
         if isinstance(value, dict):
             config[key] = _resolve_os_environ_refs(value)
         elif isinstance(value, list):
+            resolved_list = []
             for item in value:
                 if isinstance(item, dict):
-                    _resolve_os_environ_refs(item)
+                    resolved_list.append(_resolve_os_environ_refs(item))
+                elif isinstance(item, str) and item.startswith("os.environ/"):
+                    from litellm import get_secret_str
+
+                    resolved_list.append(get_secret_str(item, default_value=None))
+                else:
+                    resolved_list.append(item)
+            config[key] = resolved_list
         elif isinstance(value, str) and value.startswith("os.environ/"):
             from litellm import get_secret_str
 

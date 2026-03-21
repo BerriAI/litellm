@@ -2553,11 +2553,19 @@ class ProxyConfig:
                     config=value, depth=depth + 1, max_depth=max_depth
                 )
             elif isinstance(value, list):
+                resolved_list = []
                 for item in value:
                     if isinstance(item, dict):
-                        item = self._check_for_os_environ_vars(
-                            config=item, depth=depth + 1, max_depth=max_depth
+                        resolved_list.append(
+                            self._check_for_os_environ_vars(
+                                config=item, depth=depth + 1, max_depth=max_depth
+                            )
                         )
+                    elif isinstance(item, str) and item.startswith("os.environ/"):
+                        resolved_list.append(get_secret(item))
+                    else:
+                        resolved_list.append(item)
+                config[key] = resolved_list
             # if the value is a string and starts with "os.environ/" - then it's an environment variable
             elif isinstance(value, str) and value.startswith("os.environ/"):
                 config[key] = get_secret(value)
