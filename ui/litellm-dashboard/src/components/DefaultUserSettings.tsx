@@ -386,6 +386,19 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           ))}
         </Select>
       );
+    } else if (type === "number") {
+      return (
+        <InputNumber
+          style={{ width: "100%" }}
+          value={editedValues[key] as number | undefined}
+          onChange={(value) => handleTextInputChange(key, value)}
+          placeholder={property.description || ""}
+          className="mt-2"
+          min={0}
+          step={0.01}
+          precision={2}
+        />
+      );
     } else if (type === "string" && property.enum) {
       return (
         <Select
