@@ -58,12 +58,26 @@ class HttpxBlobType(TypedDict, total=False):
     data: str
 
 
+class HttpxServerSideToolCall(TypedDict, total=False):
+    toolType: str
+    id: str
+    args: dict
+
+
+class HttpxServerSideToolResponse(TypedDict, total=False):
+    toolType: str
+    id: str
+    response: Union[str, dict]
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inlineData: HttpxBlobType
     fileData: FileDataType
     functionCall: HttpxFunctionCall
     functionResponse: FunctionResponse
+    toolCall: HttpxServerSideToolCall
+    toolResponse: HttpxServerSideToolResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
