@@ -5,9 +5,11 @@ OpenAI Moderation Guardrail Integration for LiteLLM
 
 from typing import (
     TYPE_CHECKING,
+    Dict,
     Literal,
     Optional,
     Type,
+    Union,
 )
 
 from fastapi import HTTPException
@@ -22,7 +24,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from .base import OpenAIGuardrailBase
 
@@ -223,11 +226,96 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         # Make moderation request
         moderation_response = await self.async_make_request(input_text=text_to_moderate)
 
+        # Stash full moderation response in request_data for logging
+        # (Model Armor pattern — per-request dict avoids race conditions)
+        if isinstance(request_data, dict):
+            metadata = request_data.setdefault("metadata", {})
+            metadata["_openai_moderation_response"] = moderation_response.model_dump()
+
         # Check if content is flagged and raise exception if needed
         self._check_moderation_result(moderation_response)
 
         # Moderation doesn't modify content, just blocks - return inputs unchanged
         return inputs
+
+    def _process_response(
+        self,
+        response: Optional[Dict],
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[Dict] = None,
+    ):
+        """
+        Override to log the full OpenAI Moderation API response instead of
+        the decorator's simplified "allow"/"mask" string.
+
+        Follows the Model Armor pattern (model_armor.py:325-360).
+        """
+        metadata = (
+            request_data.get("metadata") or {}
+            if isinstance(request_data, dict)
+            else {}
+        )
+
+        # .pop() cleans up the internal key so it doesn't leak to downstream
+        # loggers. Falls back to "allow" when no moderation call was made
+        # (e.g. no text to moderate — early return in apply_guardrail).
+        guardrail_response = metadata.pop("_openai_moderation_response", "allow")
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+        )
+        return response
+
+    def _process_error(
+        self,
+        e: Exception,
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+    ):
+        """
+        Override to log the full OpenAI Moderation API response on error
+        instead of the stringified exception.
+        """
+        guardrail_status: GuardrailStatus = (
+            "guardrail_intervened"
+            if self._is_guardrail_intervention(e)
+            else "guardrail_failed_to_respond"
+        )
+
+        metadata = (
+            request_data.get("metadata") or {}
+            if isinstance(request_data, dict)
+            else {}
+        )
+
+        # Use the stashed moderation response if available, fall back to exception
+        guardrail_response: Union[dict, Exception, str] = metadata.pop(
+            "_openai_moderation_response", e
+        )
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response,
+            request_data=request_data,
+            guardrail_status=guardrail_status,
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+        )
+        raise e
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

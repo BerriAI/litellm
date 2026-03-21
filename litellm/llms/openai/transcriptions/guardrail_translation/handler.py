@@ -58,6 +58,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.
@@ -79,15 +80,18 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
         if isinstance(response.text, str):
             original_text = response.text
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
-
-            # Add user API key metadata with prefixed keys
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a throwaway dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+                user_metadata = self.transform_user_api_key_dict_to_metadata(
+                    user_api_key_dict
+                )
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
 
             inputs = GenericGuardrailAPIInputs(texts=[original_text])
             # Include model information from the response if available

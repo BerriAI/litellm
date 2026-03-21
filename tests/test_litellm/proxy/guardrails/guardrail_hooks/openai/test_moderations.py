@@ -488,3 +488,242 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
             assert exc_info.value.status_code == 400
             assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_logs_full_response_safe_content():
+    """Test that safe content logs the full moderation response (categories, scores)
+    in StandardLoggingGuardrailInformation, not just 'allow'."""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-123",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.002,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.003,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": [],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "Hello, how are you?"}
+                ]
+            )
+            request_data = {"metadata": {}}
+
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            guardrail_info_list = request_data["metadata"][
+                "standard_logging_guardrail_information"
+            ]
+            assert len(guardrail_info_list) == 1
+
+            info = guardrail_info_list[0]
+            assert info["guardrail_name"] == "test-openai-moderation"
+            assert info["guardrail_status"] == "success"
+
+            # Full moderation response, NOT "allow"
+            guardrail_resp = info["guardrail_response"]
+            assert isinstance(guardrail_resp, dict)
+            assert guardrail_resp["results"][0]["flagged"] is False
+            assert "category_scores" in guardrail_resp["results"][0]
+
+            # Internal key cleaned up (.pop())
+            assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_logs_full_response_harmful_content():
+    """Test that harmful content logs guardrail_intervened status with the full
+    moderation response, not just the exception string."""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-456",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=True,
+                    categories={
+                        "sexual": False,
+                        "hate": True,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.95,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.001,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": ["text"],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "Hateful content"}
+                ]
+            )
+            request_data = {"metadata": {}}
+
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+            guardrail_info_list = request_data["metadata"][
+                "standard_logging_guardrail_information"
+            ]
+            info = guardrail_info_list[0]
+            assert info["guardrail_status"] == "guardrail_intervened"
+
+            # Full moderation response, NOT stringified exception
+            guardrail_resp = info["guardrail_response"]
+            assert isinstance(guardrail_resp, dict)
+            assert guardrail_resp["results"][0]["flagged"] is True
+            assert guardrail_resp["results"][0]["category_scores"]["hate"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_post_call_request_data_passthrough():
+    """Test that post-call guardrail info flows through to the real request_data
+    via the unified guardrail dispatcher (Bug 1 fix)."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        UnifiedLLMGuardrails,
+    )
+    from litellm.types.utils import ModelResponse
+
+    import litellm
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = OpenAIModerationResponse(
+            id="modr-789",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.002,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.001,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": [],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        llm_response = ModelResponse(
+            id="chatcmpl-test",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(
+                        role="assistant", content="Hello world"
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+        }
+
+        mock_make_request = AsyncMock(return_value=mock_mod_response)
+        with patch.object(guardrail, "async_make_request", mock_make_request):
+            await unified_guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test", request_route="/chat/completions"
+                ),
+                response=llm_response,
+            )
+
+        mock_make_request.assert_called_once()
+
+        # Guardrail info in the REAL request_data (not a throwaway)
+        guardrail_info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert guardrail_info_list is not None
+        assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
+        assert "results" in guardrail_info_list[0]["guardrail_response"]
