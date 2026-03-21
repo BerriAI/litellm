@@ -1888,6 +1888,43 @@ def test_get_error_information_error_code_priority():
     assert result["error_class"] == "NoCodeException"
 
 
+def test_get_error_information_should_omit_traceback_for_http_exception_4xx():
+    from fastapi import HTTPException
+    from litellm.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup,
+    )
+
+    try:
+        raise HTTPException(status_code=403, detail="Blocked by guardrail")
+    except HTTPException as exception:
+        result = StandardLoggingPayloadSetup.get_error_information(exception)
+
+    assert result["error_code"] == "403"
+    assert result["error_class"] == "HTTPException"
+    assert result["traceback"] == ""
+
+
+def test_get_error_information_should_omit_traceback_for_proxy_exception_4xx():
+    from litellm.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup,
+    )
+    from litellm.proxy._types import ProxyException
+
+    try:
+        raise ProxyException(
+            message="Content blocked",
+            type="auth_error",
+            param=None,
+            code=403,
+        )
+    except ProxyException as exception:
+        result = StandardLoggingPayloadSetup.get_error_information(exception)
+
+    assert result["error_code"] == "403"
+    assert result["error_class"] == "ProxyException"
+    assert result["traceback"] == ""
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────

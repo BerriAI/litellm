@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -26,6 +26,26 @@ from litellm.proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
+    def test_should_log_exception_with_traceback_should_return_false_for_http_4xx(
+        self,
+    ):
+        exception = HTTPException(status_code=403, detail="Blocked by policy")
+        should_log_traceback = (
+            ProxyBaseLLMRequestProcessing.should_log_exception_with_traceback(exception)
+        )
+
+        assert should_log_traceback is False
+
+    def test_should_log_exception_with_traceback_should_return_true_for_http_5xx(
+        self,
+    ):
+        exception = HTTPException(status_code=500, detail="Internal error")
+        should_log_traceback = (
+            ProxyBaseLLMRequestProcessing.should_log_exception_with_traceback(exception)
+        )
+
+        assert should_log_traceback is True
+
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
         self, monkeypatch
