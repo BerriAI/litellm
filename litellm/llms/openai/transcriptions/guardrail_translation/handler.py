@@ -58,6 +58,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.

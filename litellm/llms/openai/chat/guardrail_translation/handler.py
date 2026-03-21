@@ -260,6 +260,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        original_request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content.
@@ -269,6 +270,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            original_request_data: The original request data dict from the proxy.
+                When provided, this is used as the base for request_data passed to
+                apply_guardrail, ensuring guardrail logging information (e.g.
+                StandardLoggingGuardrailInformation) is written to the original dict
+                and appears in spend logs.
 
         Returns:
             Modified response with guardrail applied to content
@@ -308,15 +314,30 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            # Use original request data as the base when available so that
+            # guardrail logging information (StandardLoggingGuardrailInformation)
+            # is written to the original dict and appears in spend logs.
+            # Previously, a throwaway dict was created here, causing post_call
+            # guardrail entries to be lost (see GitHub issue #23561).
+            if original_request_data is not None:
+                request_data: dict = original_request_data.copy()
+                request_data["response"] = response
+            else:
+                request_data = {"response": response}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                if "litellm_metadata" not in request_data:
+                    request_data["litellm_metadata"] = user_metadata
+                else:
+                    # Merge without overwriting existing keys
+                    existing = request_data["litellm_metadata"]
+                    if isinstance(existing, dict):
+                        for k, v in user_metadata.items():
+                            existing.setdefault(k, v)
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -364,6 +385,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        original_request_data: Optional[dict] = None,
     ) -> List["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -373,6 +395,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            original_request_data: The original request data dict from the proxy.
 
         Returns:
             Modified list of responses with guardrail applied to content
@@ -402,6 +425,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=litellm_logging_obj,
                 user_api_key_dict=user_api_key_dict,
+                original_request_data=original_request_data,
             )
 
             return responses_so_far
@@ -436,15 +460,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"responses": responses_so_far}
+            # Use original request data as the base when available
+            if original_request_data is not None:
+                request_data: dict = original_request_data.copy()
+                request_data["responses"] = responses_so_far
+            else:
+                request_data = {"responses": responses_so_far}
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(
                 user_api_key_dict
             )
             if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+                if "litellm_metadata" not in request_data:
+                    request_data["litellm_metadata"] = user_metadata
+                else:
+                    existing = request_data["litellm_metadata"]
+                    if isinstance(existing, dict):
+                        for k, v in user_metadata.items():
+                            existing.setdefault(k, v)
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
