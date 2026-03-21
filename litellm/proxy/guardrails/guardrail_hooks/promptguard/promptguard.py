@@ -148,6 +148,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
+                timeout=10.0,
             )
             response.raise_for_status()
             result = response.json()
@@ -184,11 +185,14 @@ class PromptGuardGuardrail(CustomGuardrail):
             if redacted:
                 if structured_messages:
                     inputs["structured_messages"] = redacted
-                extracted = self._extract_texts_from_messages(
-                    redacted,
-                )
-                if extracted:
-                    inputs["texts"] = extracted
+                if "texts" in inputs:
+                    extracted = (
+                        self._extract_texts_from_messages(
+                            redacted,
+                        )
+                    )
+                    if extracted:
+                        inputs["texts"] = extracted
 
         return inputs
 

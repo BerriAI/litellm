@@ -376,6 +376,37 @@ class TestPromptGuardRedactAction:
             assert "My SSN is *********" in result["texts"]
 
     @pytest.mark.asyncio
+    async def test_redact_structured_only_does_not_create_texts(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        """When only structured_messages are provided, redact should not inject a texts key."""
+        original = [
+            {"role": "user", "content": "My SSN is 123-45-6789"},
+        ]
+        redacted = [
+            {"role": "user", "content": "My SSN is *********"},
+        ]
+        resp = _make_response(
+            {
+                "decision": "redact",
+                "event_id": "evt-009",
+                "redacted_messages": redacted,
+            }
+        )
+        with patch.object(
+            promptguard_guardrail.async_handler,
+            "post",
+            return_value=resp,
+        ):
+            result = await promptguard_guardrail.apply_guardrail(
+                inputs={"structured_messages": original},
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["structured_messages"] == redacted
+            assert "texts" not in result
+
+    @pytest.mark.asyncio
     async def test_redact_texts_only_without_structured(
         self, promptguard_guardrail, mock_request_data
     ):
