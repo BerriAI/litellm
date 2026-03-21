@@ -446,11 +446,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 3: Map guardrail responses back to original response structure
-            await self._apply_guardrail_responses_to_output(
-                response=response,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
-            )
+            if guardrailed_texts:
+                await self._apply_guardrail_responses_to_output(
+                    response=response,
+                    responses=guardrailed_texts,
+                    task_mappings=task_mappings,
+                )
 
             # Step 4: Apply guardrailed tool calls back to response
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
