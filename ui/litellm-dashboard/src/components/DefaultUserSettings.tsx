@@ -174,7 +174,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     setSaving(true);
     try {
       const updatedSettings = await updateInternalUserSettings(accessToken, processedValues);
-      setSettings({ ...settings, values: updatedSettings.settings });
+      setSettings((prev) => prev ? { ...prev, values: updatedSettings.settings } : null);
       setIsEditing(false);
       return true;
     } catch (error) {
@@ -222,7 +222,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     }
   };
 
-  const handleTextInputChange = (key: keyof DefaultUserSettingsValues, value: DefaultUserSettingsValues[typeof key]) => {
+  const handleTextInputChange = (key: string, value: any) => {
     setEditedValues((prev) => ({ ...prev, [key]: value }));
   };
 

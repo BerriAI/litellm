@@ -55,12 +55,14 @@ export default function ConfirmSettingsChangeModal({
       title="Review Changes"
       open={isOpen}
       onOk={onConfirm}
-      onCancel={onCancel}
+      onCancel={() => { if (!confirmLoading) onCancel(); }}
       confirmLoading={confirmLoading}
       okText={confirmLoading ? "Saving..." : "Confirm Changes"}
       cancelText="Cancel"
       okButtonProps={{ disabled: confirmLoading }}
       cancelButtonProps={{ disabled: confirmLoading }}
+      keyboard={!confirmLoading}
+      maskClosable={!confirmLoading}
     >
       <div className="space-y-4">
         <div className="space-y-2">
