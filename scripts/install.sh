@@ -17,13 +17,14 @@ if [ -t 1 ]; then
   BOLD='\033[1m'
   GREEN='\033[38;2;78;186;101m'
   GREY='\033[38;2;153;153;153m'
+  YELLOW='\033[33m'
   RESET='\033[0m'
 else
-  BOLD='' GREEN='' GREY='' RESET=''
+  BOLD='' GREEN='' GREY='' YELLOW='' RESET=''
 fi
 
 info()    { printf "${GREY}  %s${RESET}\n" "$*"; }
-warn()    { printf "${GREY}  Warning: %s${RESET}\n" "$*" >&2; }
+warn()    { printf "${YELLOW}  Warning: %s${RESET}\n" "$*" >&2; }
 success() { printf "${GREEN}  ✔ %s${RESET}\n" "$*"; }
 header()  { printf "${BOLD}  %s${RESET}\n" "$*"; }
 die()     { printf "\n  Error: %s\n\n" "$*" >&2; exit 1; }
@@ -91,8 +92,11 @@ if command -v pipx >/dev/null 2>&1; then
   info "Using pipx (isolated install)"
   if pipx upgrade litellm 2>/dev/null; then
     # Ensure proxy extras are present (may be absent if originally installed
-    # as bare "litellm" without [proxy]).  runpip installs inside the existing
-    # venv without disturbing pipx metadata (preserves --include-deps, etc.).
+    # as bare "litellm" without [proxy]).  We use `pipx runpip` (not
+    # `pipx inject`) because `runpip` has been available across pipx versions
+    # for years, while `inject` is newer — older pipx installs would otherwise
+    # fail here.  runpip installs inside the existing venv without disturbing
+    # pipx metadata (preserves --include-deps, etc.).
     if ! _runpip_err="$(pipx runpip litellm install -q "${LITELLM_PACKAGE}" 2>&1)"; then
       warn "could not ensure proxy extras via pipx runpip (proxy features may fail until fixed)."
       printf '%s\n' "$_runpip_err" >&2
@@ -117,7 +121,8 @@ if command -v pipx >/dev/null 2>&1; then
       LITELLM_BIN="$(command -v litellm)"
     fi
     if [ -z "$LITELLM_BIN" ]; then
-      info "pipx reported success but litellm binary not found (PIPX_BIN_DIR=${_pipx_bin_dir}, PIPX_HOME=${_pipx_home}); falling back to venv"
+      warn "pipx install/upgrade succeeded but the litellm binary was not found at expected locations (PIPX_BIN_DIR=${_pipx_bin_dir}, PIPX_HOME=${_pipx_home}) and not on PATH."
+      warn "Falling back to a dedicated venv — you may still have a pipx-managed copy elsewhere; check: pipx list"
     fi
   else
     info "pipx install failed, falling back to venv"
