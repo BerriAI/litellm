@@ -8043,6 +8043,7 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
             ),
+            LlmProviders.AIHUBMIX: (lambda: litellm.AIHubMixChatConfig(), False),
         }
 
     @staticmethod

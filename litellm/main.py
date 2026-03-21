@@ -2275,6 +2275,47 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "aihubmix":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("AIHUBMIX_API_BASE")
+                or "https://aihubmix.com/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.aihubmix_key
+                or get_secret("AIHUBMIX_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.AIHubMixChatConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
         elif custom_llm_provider == "bedrock_mantle":
             api_base = (
                 api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")

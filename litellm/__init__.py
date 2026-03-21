@@ -221,6 +221,7 @@ retry = True
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
+aihubmix_key: Optional[str] = None
 groq_key: Optional[str] = None
 gigachat_key: Optional[str] = None
 databricks_key: Optional[str] = None
@@ -1591,6 +1592,9 @@ if TYPE_CHECKING:
     )
     from litellm.llms.openai.completion.transformation import (
         OpenAITextCompletionConfig as OpenAITextCompletionConfig,
+    )
+    from .llms.aihubmix.chat.transformation import (
+        AIHubMixChatConfig as AIHubMixChatConfig,
     )
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
     from .llms.bedrock_mantle.chat.transformation import (

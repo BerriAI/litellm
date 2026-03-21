@@ -3205,6 +3205,7 @@ class LlmProviders(str, Enum):
     RAGFLOW = "ragflow"
     COMPACTIFAI = "compactifai"
     DOCKER_MODEL_RUNNER = "docker_model_runner"
+    AIHUBMIX = "aihubmix"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"

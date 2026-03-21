@@ -223,6 +223,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.mistral.ai/v1":
                         custom_llm_provider = "mistral"
                         dynamic_api_key = get_secret_str("MISTRAL_API_KEY")
+                    elif endpoint == "aihubmix.com/v1":
+                        custom_llm_provider = "aihubmix"
+                        dynamic_api_key = get_secret_str("AIHUBMIX_API_KEY")
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret_str("GROQ_API_KEY")
@@ -560,6 +563,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://app.empower.dev/api/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("EMPOWER_API_KEY")
+    elif custom_llm_provider == "aihubmix":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.AIHubMixChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "groq":
         (
             api_base,
