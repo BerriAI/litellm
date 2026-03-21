@@ -91,6 +91,7 @@ if MCP_AVAILABLE:
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
+        get_objectpermissions_for_mcp_server,
         get_user_oauth_credential,
         list_user_oauth_credentials,
         reject_mcp_server,
@@ -111,6 +112,7 @@ if MCP_AVAILABLE:
         build_effective_auth_contexts,
     )
     from litellm.proxy._types import (
+        UI_TEAM_ID,
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
@@ -921,6 +923,19 @@ if MCP_AVAILABLE:
         validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_required_fields(payload)
 
+        # Guard against virtual UI-session team
+        register_team_id = user_api_key_dict.team_id
+        if register_team_id == UI_TEAM_ID:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "Cannot register MCP servers with the dashboard session team. Use a real team-scoped key."
+                },
+            )
+
+        # Set ownership — registered servers belong to the submitter's team
+        payload.team_id = register_team_id
+
         payload.approval_status = MCPApprovalStatus.pending_review
         payload.submitted_by = user_api_key_dict.user_id
         payload.submitted_at = datetime.now(timezone.utc)
@@ -1014,6 +1029,18 @@ if MCP_AVAILABLE:
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # Grant the owning team access to the now-approved server
+        approved_server = await get_mcp_server(prisma_client, server_id)
+        if approved_server and approved_server.team_id:
+            try:
+                await add_mcp_server_to_team(
+                    prisma_client, approved_server.team_id, server_id
+                )
+            except ValueError:
+                verbose_proxy_logger.warning(
+                    f"Could not add approved server {server_id} to team {approved_server.team_id}: team not found"
+                )
 
         return _redact_mcp_credentials(approved)
 
@@ -1219,6 +1246,9 @@ if MCP_AVAILABLE:
 
         team_obj = None
         team_id = payload.team_id or user_api_key_dict.team_id
+        # litellm-dashboard is a virtual UI-session team, not a real DB team
+        if team_id == UI_TEAM_ID:
+            team_id = None
 
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             if not team_id:
@@ -1269,6 +1299,9 @@ if MCP_AVAILABLE:
 
         # TODO: audit log for create
 
+        # Set ownership team_id on the server record
+        payload.team_id = team_id
+
         # Admin-created servers are always active — clear any submission lifecycle
         # fields the caller may have provided to prevent fake entries appearing in
         # the submissions queue.
@@ -1283,10 +1316,6 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            await global_mcp_server_manager.add_server(new_mcp_server)
-
-            # Ensure registry is up to date by reloading from database
-            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
             raise HTTPException(
@@ -1294,7 +1323,9 @@ if MCP_AVAILABLE:
                 detail={"error": f"Error creating mcp server: {str(e)}"},
             )
 
-        # Auto-assign server to team's ObjectPermissionTable if team-scoped
+        # Auto-assign server to team's ObjectPermissionTable if team-scoped.
+        # Must happen before the server manager reload so the registry
+        # reflects team membership immediately.
         if team_id and new_mcp_server.server_id:
             try:
                 await add_mcp_server_to_team(
@@ -1306,6 +1337,10 @@ if MCP_AVAILABLE:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"error": str(e)},
                 )
+
+        await global_mcp_server_manager.add_server(new_mcp_server)
+        # Ensure registry is up to date by reloading from database
+        await global_mcp_server_manager.reload_servers_from_database()
 
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1527,42 +1562,49 @@ if MCP_AVAILABLE:
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        team_id = user_api_key_dict.team_id
+        team_id: Optional[str] = None
 
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            if not team_id:
+            # Find which teams own this server via ObjectPermissionTable,
+            # then check if the user has mcp:delete in any of those teams.
+            object_perms = await get_objectpermissions_for_mcp_server(
+                prisma_client, server_id
+            )
+            if not object_perms:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_404_NOT_FOUND,
                     detail={
-                        "error": "team_id is required for non-proxy-admin users to delete MCP servers."
+                        "error": f"MCP Server not found or not assigned to any team, server_id={server_id}"
                     },
                 )
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if not check_member_permission(
-                user_api_key_dict, team_obj, "mcp:delete"
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": "User does not have permission to delete MCP servers for this team. "
-                        "Requires team admin role or 'mcp:delete' permission."
-                    },
-                )
-            # Verify server belongs to this team
-            from litellm.proxy.management_helpers.object_permission_utils import (
-                _get_team_allowed_mcp_servers,
-            )
 
-            team_servers = await _get_team_allowed_mcp_servers(team_obj)
-            if server_id not in team_servers:
+            authorized = False
+            for perm in object_perms:
+                for team in perm.teams or []:
+                    candidate_team_id = team.team_id
+                    try:
+                        team_obj = await get_team_object(
+                            team_id=candidate_team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                        )
+                    except Exception:
+                        continue
+                    if check_member_permission(
+                        user_api_key_dict, team_obj, "mcp:delete"
+                    ):
+                        authorized = True
+                        team_id = candidate_team_id
+                        break
+                if authorized:
+                    break
+
+            if not authorized:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
-                        "error": f"MCP Server {server_id} does not belong to your team."
+                        "error": "User does not have permission to delete this MCP server. "
+                        "Requires team admin role or 'mcp:delete' permission in one of the server's teams."
                     },
                 )
 
@@ -1889,35 +1931,6 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import user_api_key_cache
 
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            team_id = user_api_key_dict.team_id
-            if not team_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "team_id is required for non-proxy-admin users to update MCP servers."
-                    },
-                )
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if not check_member_permission(
-                user_api_key_dict, team_obj, "mcp:update"
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": "User does not have permission to update MCP servers for this team. "
-                        "Requires team admin role or 'mcp:update' permission."
-                    },
-                )
-            # Verify server belongs to this team
-            from litellm.proxy.management_helpers.object_permission_utils import (
-                _get_team_allowed_mcp_servers,
-            )
-
-            team_servers = await _get_team_allowed_mcp_servers(team_obj)
             if payload.server_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -1925,11 +1938,46 @@ if MCP_AVAILABLE:
                         "error": "server_id is required to update an MCP server."
                     },
                 )
-            if payload.server_id not in team_servers:
+
+            # Find which teams own this server via ObjectPermissionTable,
+            # then check if the user has mcp:update in any of those teams.
+            object_perms = await get_objectpermissions_for_mcp_server(
+                prisma_client, payload.server_id
+            )
+            if not object_perms:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": f"MCP Server not found or not assigned to any team, server_id={payload.server_id}"
+                    },
+                )
+
+            authorized = False
+            for perm in object_perms:
+                for team in perm.teams or []:
+                    candidate_team_id = team.team_id
+                    try:
+                        team_obj = await get_team_object(
+                            team_id=candidate_team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                        )
+                    except Exception:
+                        continue
+                    if check_member_permission(
+                        user_api_key_dict, team_obj, "mcp:update"
+                    ):
+                        authorized = True
+                        break
+                if authorized:
+                    break
+
+            if not authorized:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
-                        "error": f"MCP Server {payload.server_id} does not belong to your team."
+                        "error": "User does not have permission to update this MCP server. "
+                        "Requires team admin role or 'mcp:update' permission in one of the server's teams."
                     },
                 )
 
@@ -2075,16 +2123,6 @@ if MCP_AVAILABLE:
 
         Used by the UI to show a discovery grid when adding new MCP servers.
         """
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only proxy admins can access MCP discovery. Your role={}".format(
-                        user_api_key_dict.user_role
-                    )
-                },
-            )
-
         registry = _load_mcp_registry()
         servers = registry.get("servers", [])
 
