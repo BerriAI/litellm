@@ -28,20 +28,25 @@ LITELLM_PROXY_AGENTS_URL = "litellm_proxy/agents"
 
 
 def _parse_a2a_response(data: Dict[str, Any]) -> str:
-    """Extract text content from an A2A JSON-RPC message/send response."""
+    """Extract text content from an A2A JSON-RPC message/send response.
+
+    Handles both ``"type": "text"`` (older A2A SDK) and ``"kind": "text"``
+    (A2A SDK >= 0.3) part schemas.
+    """
     if "error" in data:
         err = data["error"]
         return f"Agent error: {err.get('message', str(err))}"
 
     result = data.get("result", {})
 
+    def _is_text_part(p: Dict[str, Any]) -> bool:
+        return (p.get("kind") == "text" or p.get("type") == "text") and bool(
+            p.get("text")
+        )
+
     # A2A spec: result.artifacts[].parts[].text
     for artifact in result.get("artifacts", []):
-        texts = [
-            p["text"]
-            for p in artifact.get("parts", [])
-            if p.get("type") == "text" and p.get("text")
-        ]
+        texts = [p["text"] for p in artifact.get("parts", []) if _is_text_part(p)]
         if texts:
             return "\n".join(texts)
 
@@ -50,7 +55,7 @@ def _parse_a2a_response(data: Dict[str, Any]) -> str:
     if isinstance(status, dict):
         msg = status.get("message") or {}
         for p in msg.get("parts", []):
-            if p.get("type") == "text" and p.get("text"):
+            if _is_text_part(p):
                 return p["text"]
 
     return str(result) if result else "Agent executed successfully"
