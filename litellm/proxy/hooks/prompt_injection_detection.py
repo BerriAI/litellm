@@ -7,6 +7,7 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
+import asyncio
 from difflib import SequenceMatcher
 from typing import List, Literal, Optional
 
@@ -16,7 +17,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_injection_detection_default_pt,
 )
@@ -25,12 +26,16 @@ from litellm.router import Router
 from litellm.utils import get_formatted_prompt
 
 
-class _OPTIONAL_PromptInjectionDetection(CustomLogger):
+class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
     # Class variables or attributes
     def __init__(
         self,
         prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
     ):
+        super().__init__(
+            guardrail_name="prompt_injection_detection",
+            default_on=True,
+        )
         self.prompt_injection_params = prompt_injection_params
         self.llm_router: Optional[Router] = None
 
@@ -171,8 +176,12 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
                 if self.prompt_injection_params.heuristics_check is True:
-                    is_prompt_attack = self.check_user_input_similarity(
-                        user_input=formatted_prompt
+                    # Run CPU-bound similarity check in a thread to avoid
+                    # blocking the event loop (which causes K8s health probe
+                    # failures and pod restarts).
+                    is_prompt_attack = await asyncio.to_thread(
+                        self.check_user_input_similarity,
+                        user_input=formatted_prompt,
                     )
                     if is_prompt_attack is True:
                         raise HTTPException(
@@ -185,8 +194,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
-                is_prompt_attack = self.check_user_input_similarity(
-                    user_input=formatted_prompt
+                is_prompt_attack = await asyncio.to_thread(
+                    self.check_user_input_similarity,
+                    user_input=formatted_prompt,
                 )
 
             if is_prompt_attack is True:
