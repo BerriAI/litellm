@@ -58,7 +58,6 @@ class LiteLLMSkillsHandler:
     async def create_skill(
         data: NewSkillRequest,
         user_id: Optional[str] = None,
-        source: str = "custom",
     ) -> LiteLLM_SkillsTable:
         """
         Create a new skill in the LiteLLM database.
@@ -66,7 +65,6 @@ class LiteLLMSkillsHandler:
         Args:
             data: NewSkillRequest with skill details
             user_id: Optional user ID for tracking
-            source: Source of the skill ("custom", "gateway", etc.)
 
         Returns:
             LiteLLM_SkillsTable record
@@ -80,7 +78,6 @@ class LiteLLMSkillsHandler:
             "display_title": data.display_title,
             "description": data.description,
             "instructions": data.instructions,
-            "source": source,
             "created_by": user_id,
             "updated_by": user_id,
         }
@@ -113,7 +110,6 @@ class LiteLLMSkillsHandler:
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
-        source: Optional[str] = None,
     ) -> List[LiteLLM_SkillsTable]:
         """
         List skills from the LiteLLM database.
@@ -121,7 +117,6 @@ class LiteLLMSkillsHandler:
         Args:
             limit: Maximum number of skills to return
             offset: Number of skills to skip
-            source: Optional filter by source ("custom", "gateway", etc.)
 
         Returns:
             List of LiteLLM_SkillsTable records
@@ -129,16 +124,10 @@ class LiteLLMSkillsHandler:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
         verbose_logger.debug(
-            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}, source={source}"
+            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
         )
 
-        # Build where clause
-        where_clause: Dict[str, Any] = {}
-        if source is not None:
-            where_clause["source"] = source
-
         skills = await prisma_client.db.litellm_skillstable.find_many(
-            where=where_clause if where_clause else None,
             take=limit,
             skip=offset,
             order={"created_at": "desc"},
@@ -227,3 +216,76 @@ class LiteLLMSkillsHandler:
                 f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}"
             )
             return None
+
+    @staticmethod
+    async def save_provider_skill_id(
+        skill_id: str,
+        provider: str,
+        provider_skill_id: str,
+    ) -> None:
+        """
+        Save a provider-assigned skill ID for a LiteLLM skill.
+
+        When a skill is used with a provider that has a native skills API
+        (e.g. Anthropic), the provider returns its own skill ID. We store
+        that mapping so subsequent calls can reuse it without re-creating.
+
+        Stored in metadata._provider_skill_ids.{provider} = provider_skill_id
+
+        Args:
+            skill_id: The LiteLLM skill ID
+            provider: Provider name (e.g. "anthropic")
+            provider_skill_id: The ID assigned by the provider
+        """
+        import json
+
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+
+        # Fetch current metadata
+        skill = await prisma_client.db.litellm_skillstable.find_unique(
+            where={"skill_id": skill_id}
+        )
+        if skill is None:
+            verbose_logger.warning(
+                f"LiteLLMSkillsHandler: Cannot save provider ID - skill {skill_id} not found"
+            )
+            return
+
+        metadata = skill.metadata if isinstance(skill.metadata, dict) else {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
+        provider_ids = metadata.get("_provider_skill_ids", {})
+        provider_ids[provider] = provider_skill_id
+        metadata["_provider_skill_ids"] = provider_ids
+
+        await prisma_client.db.litellm_skillstable.update(
+            where={"skill_id": skill_id},
+            data={"metadata": json.dumps(metadata)},
+        )
+
+        verbose_logger.debug(
+            f"LiteLLMSkillsHandler: Saved {provider} skill ID "
+            f"'{provider_skill_id}' for skill {skill_id}"
+        )
+
+    @staticmethod
+    def get_provider_skill_id(
+        skill: LiteLLM_SkillsTable,
+        provider: str,
+    ) -> Optional[str]:
+        """
+        Get the provider-assigned skill ID from a skill's metadata.
+
+        Args:
+            skill: The LiteLLM skill record
+            provider: Provider name (e.g. "anthropic")
+
+        Returns:
+            The provider's skill ID, or None if not yet registered
+        """
+        if not skill.metadata or not isinstance(skill.metadata, dict):
+            return None
+
+        provider_ids = skill.metadata.get("_provider_skill_ids", {})
+        return provider_ids.get(provider)

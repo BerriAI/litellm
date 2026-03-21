@@ -73,7 +73,7 @@ class TestCreateSkill:
             )
 
             result = await LiteLLMSkillsHandler.create_skill(
-                data=request, user_id="user1", source="custom"
+                data=request, user_id="user1"
             )
 
             assert isinstance(result, LiteLLM_SkillsTable)
@@ -169,8 +169,8 @@ class TestListSkills:
             assert results == []
 
     @pytest.mark.asyncio
-    async def test_list_skills_with_source_filter(self):
-        """Test listing skills passes source filter to Prisma."""
+    async def test_list_skills_with_pagination(self):
+        """Test listing skills passes limit and offset to Prisma."""
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
         mock_prisma = MagicMock()
@@ -182,10 +182,11 @@ class TestListSkills:
             new_callable=AsyncMock,
             return_value=mock_prisma,
         ):
-            await LiteLLMSkillsHandler.list_skills(source="custom")
+            await LiteLLMSkillsHandler.list_skills(limit=5, offset=10)
 
             call_args = mock_prisma.db.litellm_skillstable.find_many.call_args
-            assert call_args[1]["where"] == {"source": "custom"}
+            assert call_args[1]["take"] == 5
+            assert call_args[1]["skip"] == 10
 
 
 class TestGetSkill:
@@ -307,3 +308,145 @@ class TestFetchSkillFromDb:
         ):
             result = await LiteLLMSkillsHandler.fetch_skill_from_db("any_id")
             assert result is None
+
+
+class TestProviderSkillIds:
+    """Tests for provider skill ID save/retrieve."""
+
+    @pytest.mark.asyncio
+    async def test_save_provider_skill_id(self):
+        """Test saving an Anthropic skill ID for a LiteLLM skill."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        mock_skill = MagicMock()
+        mock_skill.metadata = {}
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_unique = AsyncMock(
+            return_value=mock_skill
+        )
+        mock_prisma.db.litellm_skillstable.update = AsyncMock()
+
+        with patch.object(
+            LiteLLMSkillsHandler,
+            "_get_prisma_client",
+            new_callable=AsyncMock,
+            return_value=mock_prisma,
+        ):
+            await LiteLLMSkillsHandler.save_provider_skill_id(
+                skill_id="litellm_skill_abc",
+                provider="anthropic",
+                provider_skill_id="sk_ant_123",
+            )
+
+            call_args = mock_prisma.db.litellm_skillstable.update.call_args
+            assert call_args[1]["where"] == {"skill_id": "litellm_skill_abc"}
+            import json
+
+            saved_metadata = json.loads(call_args[1]["data"]["metadata"])
+            assert saved_metadata["_provider_skill_ids"]["anthropic"] == "sk_ant_123"
+
+    @pytest.mark.asyncio
+    async def test_save_provider_skill_id_preserves_existing_metadata(self):
+        """Test that saving a provider ID doesn't clobber existing metadata."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        mock_skill = MagicMock()
+        mock_skill.metadata = {"custom_key": "custom_value"}
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_unique = AsyncMock(
+            return_value=mock_skill
+        )
+        mock_prisma.db.litellm_skillstable.update = AsyncMock()
+
+        with patch.object(
+            LiteLLMSkillsHandler,
+            "_get_prisma_client",
+            new_callable=AsyncMock,
+            return_value=mock_prisma,
+        ):
+            await LiteLLMSkillsHandler.save_provider_skill_id(
+                skill_id="litellm_skill_abc",
+                provider="anthropic",
+                provider_skill_id="sk_ant_456",
+            )
+
+            call_args = mock_prisma.db.litellm_skillstable.update.call_args
+            import json
+
+            saved_metadata = json.loads(call_args[1]["data"]["metadata"])
+            assert saved_metadata["custom_key"] == "custom_value"
+            assert saved_metadata["_provider_skill_ids"]["anthropic"] == "sk_ant_456"
+
+    @pytest.mark.asyncio
+    async def test_save_provider_skill_id_skill_not_found(self):
+        """Test that saving provider ID for missing skill doesn't raise."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_skillstable.update = AsyncMock()
+
+        with patch.object(
+            LiteLLMSkillsHandler,
+            "_get_prisma_client",
+            new_callable=AsyncMock,
+            return_value=mock_prisma,
+        ):
+            # Should not raise
+            await LiteLLMSkillsHandler.save_provider_skill_id(
+                skill_id="nonexistent",
+                provider="anthropic",
+                provider_skill_id="sk_ant_789",
+            )
+
+            mock_prisma.db.litellm_skillstable.update.assert_not_called()
+
+    def test_get_provider_skill_id_found(self):
+        """Test retrieving a saved Anthropic skill ID."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        skill = LiteLLM_SkillsTable(
+            skill_id="litellm_skill_abc",
+            metadata={"_provider_skill_ids": {"anthropic": "sk_ant_123"}},
+        )
+
+        result = LiteLLMSkillsHandler.get_provider_skill_id(skill, "anthropic")
+        assert result == "sk_ant_123"
+
+    def test_get_provider_skill_id_not_found(self):
+        """Test retrieving provider ID when none saved."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        skill = LiteLLM_SkillsTable(
+            skill_id="litellm_skill_abc",
+            metadata={},
+        )
+
+        result = LiteLLMSkillsHandler.get_provider_skill_id(skill, "anthropic")
+        assert result is None
+
+    def test_get_provider_skill_id_no_metadata(self):
+        """Test retrieving provider ID when metadata is None."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        skill = LiteLLM_SkillsTable(
+            skill_id="litellm_skill_abc",
+            metadata=None,
+        )
+
+        result = LiteLLMSkillsHandler.get_provider_skill_id(skill, "anthropic")
+        assert result is None
+
+    def test_get_provider_skill_id_different_provider(self):
+        """Test that provider IDs are namespaced per provider."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        skill = LiteLLM_SkillsTable(
+            skill_id="litellm_skill_abc",
+            metadata={"_provider_skill_ids": {"anthropic": "sk_ant_123"}},
+        )
+
+        assert LiteLLMSkillsHandler.get_provider_skill_id(skill, "anthropic") == "sk_ant_123"
+        assert LiteLLMSkillsHandler.get_provider_skill_id(skill, "openai") is None

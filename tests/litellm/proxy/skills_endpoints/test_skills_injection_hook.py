@@ -451,25 +451,18 @@ class TestSkillApplicator:
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
 
-    def test_get_strategy_known_providers(self):
-        """Test strategy mapping for known providers."""
+    def test_supports_native_skills(self):
+        """Test native skills support detection."""
         from litellm.llms.litellm_proxy.skills.skill_applicator import SkillApplicator
 
         applicator = SkillApplicator()
 
-        assert applicator.get_strategy("openai") == "system_prompt"
-        assert applicator.get_strategy("azure") == "system_prompt"
-        assert applicator.get_strategy("bedrock") == "system_prompt"
-        assert applicator.get_strategy("gemini") == "system_prompt"
-        assert applicator.get_strategy("anthropic") == "tool_conversion"
-
-    def test_get_strategy_unknown_defaults_to_system_prompt(self):
-        """Test unknown provider defaults to system_prompt."""
-        from litellm.llms.litellm_proxy.skills.skill_applicator import SkillApplicator
-
-        applicator = SkillApplicator()
-
-        assert applicator.get_strategy("some_new_provider") == "system_prompt"
+        assert applicator.supports_native_skills("anthropic") is True
+        assert applicator.supports_native_skills("openai") is False
+        assert applicator.supports_native_skills("azure") is False
+        assert applicator.supports_native_skills("bedrock") is False
+        assert applicator.supports_native_skills("gemini") is False
+        assert applicator.supports_native_skills("some_new_provider") is False
 
 
 class TestSkillContentExtraction:

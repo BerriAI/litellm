@@ -124,7 +124,6 @@ async def _handle_litellm_create_skill(
     skill_record = await LiteLLMSkillsHandler.create_skill(
         data=skill_request,
         user_id=user_api_key_dict.user_id,
-        source="litellm",
     )
 
     verbose_proxy_logger.debug(
@@ -134,7 +133,7 @@ async def _handle_litellm_create_skill(
     return Skill(
         id=skill_record.skill_id,
         display_title=skill_record.display_title,
-        source="litellm",
+        source=skill_record.source,
         latest_version=skill_record.latest_version,
         created_at=skill_record.created_at.isoformat() if skill_record.created_at else "",
         updated_at=skill_record.updated_at.isoformat() if skill_record.updated_at else "",
