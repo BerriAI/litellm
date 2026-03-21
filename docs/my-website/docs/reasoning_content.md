@@ -594,9 +594,26 @@ Expected Response
 
 :::tip gpt-5.4: reasoning_effort + function tools
 
-LiteLLM drops `reasoning_effort` from `gpt-5.4` requests to `litellm.completion()` that include tools, since that combination is supported in the Responses API.
+When `gpt-5.4+` requests to `litellm.completion()` include both `reasoning_effort` and `tools`, LiteLLM **automatically routes** the request through the Responses API bridge. This works for both **OpenAI** (`openai/gpt-5.4`) and **Azure** (`azure/gpt-5.4`) providers — no extra configuration needed.
 
-If you need reasoning **and** tools together, use `openai/responses/gpt-5.4` to route through the Responses API instead. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+You can also route explicitly via `openai/responses/gpt-5.4` or `azure/responses/gpt-5.4`. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+**Azure custom deployment names:** Auto-routing relies on the deployment name matching the `gpt-5.4*` pattern. If you use a custom deployment name (e.g. `"my-reasoning-model"`), enable routing via:
+
+**SDK:**
+```python
+litellm.completion(model="azure/responses/my-reasoning-model", ...)
+```
+
+**Proxy config:**
+```yaml
+model_list:
+  - model_name: my-reasoning-model
+    litellm_params:
+      model: azure/my-reasoning-model
+    model_info:
+      mode: responses
+```
 
 :::
 

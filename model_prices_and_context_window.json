@@ -16940,6 +16940,18 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-4-0314": {
+        "deprecation_date": "2026-03-26",
+        "input_cost_per_token": 3e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 6e-05,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "gpt-4-0613": {
         "deprecation_date": "2025-06-06",
         "input_cost_per_token": 3e-05,
@@ -30510,7 +30522,7 @@
         "output_cost_per_token": 5.4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supported_regions": [
-            "us-west2"
+            "us-central1"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -30530,7 +30542,7 @@
         "output_cost_per_token_batches": 8.4e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supported_regions": [
-            "us-west2"
+            "global"
         ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
@@ -30547,6 +30559,9 @@
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supported_regions": [
+            "us-central1"
+        ],
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -31171,7 +31186,10 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "ocr_cost_per_page": 0.0003,
-        "source": "https://cloud.google.com/vertex-ai/pricing"
+        "source": "https://cloud.google.com/vertex-ai/pricing",
+        "supported_regions": [
+            "us-central1"
+        ]
     },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,

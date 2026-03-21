@@ -373,6 +373,14 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}pillar.jpeg`,
     tags: ["Monitoring", "Safety"],
   },
+  {
+    id: "akto",
+    name: "Akto Guardrail",
+    description: "AI security platform from Akto.io with automatic monitoring and guardrails for AI/ML applications.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}akto.svg`,
+    tags: ["Security", "Safety", "Monitoring"],
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
