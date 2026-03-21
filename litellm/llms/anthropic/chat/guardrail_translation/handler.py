@@ -279,9 +279,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
-        task_mappings: List[
-            Tuple[int, Optional[int]]
-        ] = []  # (content_idx, None) for each text
+        task_mappings: List[Tuple[int, Optional[int]]] = []  # (content_idx, None) for each text
         tool_call_task_mappings: List[int] = []  # content_idx for each tool call
 
         # Handle both dict and object responses
@@ -715,7 +713,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             # Verify it's a text block and update the text field
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
-                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
+                    content_block["text"] = guardrail_response
             elif (
                 hasattr(content_block, "type")
                 and getattr(content_block, "type", None) == "text"
@@ -725,7 +723,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Append extra texts as new content blocks
         if len(responses) > len(task_mappings):
-            for extra_text in responses[len(task_mappings) :]:
+            for extra_text in responses[len(task_mappings):]:
                 response_content.append({"type": "text", "text": extra_text})
 
     def _apply_guardrail_responses_to_output_tool_calls(

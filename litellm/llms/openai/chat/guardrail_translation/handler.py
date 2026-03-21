@@ -729,8 +729,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Append extra texts as new content on the first choice
         if len(responses) > len(task_mappings) and response.choices:
-            choice = cast(Choices, response.choices[0])
-            for extra_text in responses[len(task_mappings) :]:
+            choice = response.choices[0]
+            for extra_text in responses[len(task_mappings):]:
                 if choice.message.content is None:
                     choice.message.content = extra_text
                 elif isinstance(choice.message.content, str):
@@ -784,7 +784,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Apply deletions in reverse index order to preserve indices
         for choice_idx, indices_to_delete in deletions_by_choice.items():
-            choice = cast(Choices, response.choices[choice_idx])
+            choice = response.choices[choice_idx]
             choice_tool_calls = choice.message.tool_calls
             if choice_tool_calls is not None and isinstance(choice_tool_calls, list):
                 remove_items_at_indices(choice_tool_calls, indices_to_delete)
