@@ -96,9 +96,10 @@ class TestGetEffectiveTeamModels:
         assert "mo_a" not in result_b
         assert "mo_b" not in result_a
 
-    def test_feature_flag_off(self):
+    def test_feature_flag_off(self, monkeypatch):
         """11. Feature flag off → all new fields ignored, team.models used."""
         litellm.team_model_overrides_enabled = False
+        monkeypatch.delenv("TEAM_MODEL_OVERRIDES", raising=False)
         team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         result = get_effective_team_models(team, token)
@@ -210,6 +211,30 @@ class TestCanTeamAccessModelWithOverrides:
             )
 
     @pytest.mark.asyncio
+    async def test_all_overrides_stale_does_not_grant_allow_all(self):
+        """P0: When ALL overrides are stale (capped out), must NOT return [] (allow all).
+        Should fall back to team.models to prevent privilege escalation."""
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1"]  # no default_models
+        )
+        # Member has ONLY stale overrides — none are in team.models
+        token = UserAPIKeyAuth(team_member_models=["stale1", "stale2"])
+        result = get_effective_team_models(team, token)
+        # Should fall back to team.models=["m1"], NOT [] (allow all)
+        assert result == ["m1"]
+        # And specifically should NOT be empty (which means allow-all)
+        assert result != []
+        # Member should be able to access m1 (team pool fallback)
+        assert await can_team_access_model(
+            model="m1", team_object=team, llm_router=None, valid_token=token
+        )
+        # But not an arbitrary model
+        with pytest.raises(Exception):
+            await can_team_access_model(
+                model="random-model", team_object=team, llm_router=None, valid_token=token
+            )
+
+    @pytest.mark.asyncio
     async def test_backward_compat_no_overrides(self):
         """4. Neither configured → uses team.models as before."""
         team = LiteLLM_TeamTable(team_id="t1", models=["m1", "m2"])
@@ -226,9 +251,10 @@ class TestCanTeamAccessModelWithOverrides:
         )
 
     @pytest.mark.asyncio
-    async def test_feature_flag_off_uses_team_models(self):
+    async def test_feature_flag_off_uses_team_models(self, monkeypatch):
         """11. Feature flag off → ignores overrides, uses team.models."""
         litellm.team_model_overrides_enabled = False
+        monkeypatch.delenv("TEAM_MODEL_OVERRIDES", raising=False)
         team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         # Should use team.models=["m1"], not effective models

@@ -660,6 +660,13 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         team_default_models = getattr(team_table, "default_models", None) or []
         effective_models = list(set(team_default_models + member_models))
 
+        # Cap at team.models pool (same logic as get_effective_team_models)
+        team_pool = team_table.models or []
+        if effective_models and team_pool:
+            effective_models = [m for m in effective_models if m in set(team_pool)]
+            if not effective_models:
+                effective_models = team_pool
+
         if effective_models:
             # if 'all-team-models' was requested, restrict it to the effective models
             if "all-team-models" in (data.models or []):
