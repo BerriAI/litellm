@@ -34,8 +34,8 @@ litellm_settings:
 
   # Fallbacks, reliability
   default_fallbacks: ["claude-opus"] # set default_fallbacks, in case a specific model group is misconfigured / bad.
-  content_policy_fallbacks: [{ "gpt-3.5-turbo-small": ["claude-opus"] }] # fallbacks for ContentPolicyErrors
-  context_window_fallbacks: [{ "gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"] }] # fallbacks for ContextWindowExceededErrors
+  content_policy_fallbacks: [{ "gpt-4o-small": ["claude-opus"] }] # fallbacks for ContentPolicyErrors
+  context_window_fallbacks: [{ "gpt-4o-small": ["gpt-4o-large", "claude-opus"] }] # fallbacks for ContextWindowExceededErrors
 
   # MCP Aliases - Map aliases to MCP server names for easier tool access
   mcp_aliases: {
@@ -349,7 +349,7 @@ router_settings:
 | model_group_alias | dict | Model group alias mapping. E.g. `{"claude-3-haiku": "claude-3-haiku-20240229"}` |
 | num_retries | int | Number of retries for a request. Defaults to 3. |
 | default_fallbacks | Optional[List[str]] | Fallbacks to try if no model group-specific fallbacks are defined. |
-| caching_groups | Optional[List[tuple]] | List of model groups for caching across model groups. Defaults to None. - e.g. caching_groups=[("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")]|
+| caching_groups | Optional[List[tuple]] | List of model groups for caching across model groups. Defaults to None. - e.g. caching_groups=[("openai-gpt-4o", "azure-gpt-4o")]|
 | alerting_config | AlertingConfig | [SDK-only arg] Slack alerting configuration. Defaults to None. [Further Docs](../routing.md#alerting-) |
 | assistants_config | AssistantsConfig | Set on proxy via `assistant_settings`. [Further docs](../assistants.md) |
 | set_verbose | boolean | [DEPRECATED PARAM - see debug docs](./debugging) If true, sets the logging level to verbose. |

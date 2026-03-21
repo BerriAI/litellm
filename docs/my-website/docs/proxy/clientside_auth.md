@@ -41,7 +41,7 @@ user_config = {
         {
             'model_name': 'user-openai-instance',
             'litellm_params': {
-                'model': 'gpt-3.5-turbo',
+                'model': 'gpt-4o',
                 'api_key': os.getenv('OPENAI_API_KEY'),
                 'timeout': 10,
             },
@@ -109,7 +109,7 @@ const userConfig = {
         {
             model_name: 'user-openai-instance',
             litellm_params: {
-                model: 'gpt-3.5-turbo',
+                model: 'gpt-4o',
                 api_key: process.env.OPENAI_API_KEY,
                 timeout: 10,
             },
@@ -140,7 +140,7 @@ const openai = new OpenAI({
 async function main() {
   const chatCompletion = await openai.chat.completions.create({
     messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
+    model: 'gpt-4o',
     user_config: userConfig // # 👈 User config
   });
 }
@@ -188,7 +188,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-4o", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -213,7 +213,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-4o", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -245,7 +245,7 @@ const openai = new OpenAI({
 async function main() {
   const chatCompletion = await openai.chat.completions.create({
     messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
+    model: 'gpt-4o',
     api_key: "my-bad-key" // 👈 User Key
   });
 }
@@ -272,7 +272,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",

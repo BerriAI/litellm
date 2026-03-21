@@ -135,9 +135,9 @@ proxy_handler_instance = MyCustomHandler()
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
@@ -151,7 +151,7 @@ $ litellm /path/to/config.yaml
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -231,9 +231,9 @@ proxy_handler_instance = MyCustomHandler()
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
@@ -247,7 +247,7 @@ $ litellm /path/to/config.yaml
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -318,9 +318,9 @@ proxy_handler_instance = MyCustomHandler()
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
@@ -335,7 +335,7 @@ $ litellm /path/to/config.yaml
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
