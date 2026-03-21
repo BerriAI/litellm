@@ -1946,22 +1946,40 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             # Internal sub-calls (e.g. emulated file-search steps) share the
-            # parent's logging obj; skip here so only the outer call bills once.
+            # parent's logging obj; skip async logging here so only the outer call bills once.
+            # NOTE: streaming requests return early (before this point) via
+            # CustomStreamWrapper, so this block is non-streaming only.
             if not _is_litellm_internal_call:
-                asyncio.create_task(
-                    _client_async_logging_helper(
-                        logging_obj=logging_obj,
-                        result=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                if getattr(logging_obj, "_defer_async_logging", False):
+
+                    def _enqueue_deferred_logging() -> None:
+                        asyncio.create_task(
+                            _client_async_logging_helper(
+                                logging_obj=logging_obj,
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                            )
+                        )
+
+                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                else:
+                    asyncio.create_task(
+                        _client_async_logging_helper(
+                            logging_obj=logging_obj,
+                            result=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        )
                     )
-                )
-                logging_obj.handle_sync_success_callbacks_for_async_calls(
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
