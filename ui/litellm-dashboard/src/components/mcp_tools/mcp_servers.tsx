@@ -422,7 +422,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     renderSubComponent={() => <div></div>}
                     getRowCanExpand={() => false}
                     isLoading={isLoadingServers}
-                    noDataMessage="No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    noDataMessage={isInternalUser
+                      ? "No MCP servers available. Your team may not have any MCP servers assigned, or you may need the mcp:read permission. Contact your team admin."
+                      : "No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    }
                     loadingMessage="Loading MCP servers..."
                     enableSorting={true}
                   />
