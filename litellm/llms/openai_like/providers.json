@@ -101,5 +101,10 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "rapid_mlx": {
+    "base_url": "http://localhost:8000/v1",
+    "api_key_env": "RAPID_MLX_API_KEY",
+    "default_api_key": "not-needed"
   }
 }
