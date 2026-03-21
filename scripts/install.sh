@@ -23,6 +23,7 @@ else
 fi
 
 info()    { printf "${GREY}  %s${RESET}\n" "$*"; }
+warn()    { printf "${GREY}  Warning: %s${RESET}\n" "$*" >&2; }
 success() { printf "${GREEN}  ✔ %s${RESET}\n" "$*"; }
 header()  { printf "${BOLD}  %s${RESET}\n" "$*"; }
 die()     { printf "\n  Error: %s\n\n" "$*" >&2; exit 1; }
@@ -92,7 +93,11 @@ if command -v pipx >/dev/null 2>&1; then
     # Ensure proxy extras are present (may be absent if originally installed
     # as bare "litellm" without [proxy]).  runpip installs inside the existing
     # venv without disturbing pipx metadata (preserves --include-deps, etc.).
-    pipx runpip litellm install "${LITELLM_PACKAGE}" >/dev/null 2>&1 || true
+    if ! _runpip_err="$(pipx runpip litellm install -q "${LITELLM_PACKAGE}" 2>&1)"; then
+      warn "could not ensure proxy extras via pipx runpip (proxy features may fail until fixed)."
+      printf '%s\n' "$_runpip_err" >&2
+    fi
+    unset _runpip_err 2>/dev/null || true
     _pipx_upgraded=1
   elif pipx install "${LITELLM_PACKAGE}"; then
     _pipx_upgraded=1
@@ -112,10 +117,7 @@ if command -v pipx >/dev/null 2>&1; then
       LITELLM_BIN="$(command -v litellm)"
     fi
     if [ -z "$LITELLM_BIN" ]; then
-      die "pipx install succeeded but litellm binary not found.
-  Check PIPX_BIN_DIR (current: ${_pipx_bin_dir}).
-  PIPX_HOME is: ${_pipx_home}
-  Run: pipx list"
+      info "pipx reported success but litellm binary not found (PIPX_BIN_DIR=${_pipx_bin_dir}, PIPX_HOME=${_pipx_home}); falling back to venv"
     fi
   else
     info "pipx install failed, falling back to venv"
@@ -127,9 +129,21 @@ if [ -z "$LITELLM_BIN" ]; then
   LITELLM_VENV="${LITELLM_VENV:-${HOME}/.litellm/venv}"
   info "Using isolated venv: $LITELLM_VENV"
   mkdir -p "$(dirname "$LITELLM_VENV")"
-  "$PYTHON_BIN" -m venv --clear "$LITELLM_VENV" \
-    || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV
+  # Preserve an existing venv on repeat runs; use LITELLM_FORCE_VENV_RECREATE=1 to wipe it.
+  if [ "${LITELLM_FORCE_VENV_RECREATE:-0}" = "1" ]; then
+    "$PYTHON_BIN" -m venv --clear "$LITELLM_VENV" \
+      || die "Failed to recreate venv. Try: $PYTHON_BIN -m venv --clear $LITELLM_VENV
 On Ubuntu/Debian you may first need: sudo apt install python3-venv"
+  elif [ ! -d "$LITELLM_VENV" ]; then
+    "$PYTHON_BIN" -m venv "$LITELLM_VENV" \
+      || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV
+On Ubuntu/Debian you may first need: sudo apt install python3-venv"
+  elif [ ! -x "${LITELLM_VENV}/bin/python" ]; then
+    info "Existing venv at ${LITELLM_VENV} is incomplete; recreating"
+    "$PYTHON_BIN" -m venv --clear "$LITELLM_VENV" \
+      || die "Failed to recreate venv. Try: $PYTHON_BIN -m venv --clear $LITELLM_VENV
+On Ubuntu/Debian you may first need: sudo apt install python3-venv"
+  fi
   "${LITELLM_VENV}/bin/pip" install -q --upgrade pip \
     || die "Failed to upgrade pip in venv. Try: ${LITELLM_VENV}/bin/pip install --upgrade pip"
   "${LITELLM_VENV}/bin/pip" install --upgrade "${LITELLM_PACKAGE}" \
