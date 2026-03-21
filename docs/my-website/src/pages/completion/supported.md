@@ -4,9 +4,9 @@
 
 | Model Name       | Function Call                          | Required OS Variables                |
 |------------------|----------------------------------------|--------------------------------------|
-| gpt-3.5-turbo    | `completion('gpt-3.5-turbo', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-16k    | `completion('gpt-3.5-turbo-16k', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-16k-0613    | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
+| gpt-4o    | `completion('gpt-4o', messages)` | `os.environ['OPENAI_API_KEY']`       |
+| gpt-4o-16k    | `completion('gpt-4o-16k', messages)` | `os.environ['OPENAI_API_KEY']`       |
+| gpt-4o-16k-0613    | `completion('gpt-4o-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
 | gpt-5-pro        | `completion('gpt-5-pro', messages)`    | `os.environ['OPENAI_API_KEY']`       |
 
@@ -15,7 +15,7 @@ For Azure calls add the `azure/` prefix to `model`. If your azure deployment nam
 
 | Model Name       | Function Call                           | Required OS Variables                     |
 |------------------|-----------------------------------------|-------------------------------------------|
-| gpt-3.5-turbo    | `completion('azure/gpt-3.5-turbo-deployment', messages)` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+| gpt-4o    | `completion('azure/gpt-4o-deployment', messages)` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
 | gpt-4            | `completion('azure/gpt-4-deployment', messages)`         | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
 
 ### OpenAI Text Completion Models
@@ -62,8 +62,8 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
-| openai/gpt-3.5-turbo | `completion('openai/gpt-3.5-turbo', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| openai/gpt-3.5-turbo-16k | `completion('openai/gpt-3.5-turbo-16k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
+| openai/gpt-4o | `completion('openai/gpt-4o', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
+| openai/gpt-4o-16k | `completion('openai/gpt-4o-16k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
 | openai/gpt-4 | `completion('openai/gpt-4', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
 | openai/gpt-4-32k | `completion('openai/gpt-4-32k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
 | anthropic/claude-2 | `completion('anthropic/claude-2', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |

@@ -17,7 +17,7 @@ However, we also expose 3 public helper functions to calculate token usage acros
 from litellm import token_counter
 
 messages = [{"role": "user", "content": "Hey, how's it going"}]
-print(token_counter(model="gpt-3.5-turbo", messages=messages))
+print(token_counter(model="gpt-4o", messages=messages))
 ```
 
 2. `cost_per_token`
@@ -27,7 +27,7 @@ from litellm import cost_per_token
 
 prompt_tokens =  5
 completion_tokens = 10
-prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model="gpt-3.5-turbo", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model="gpt-4o", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
 print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 ```
@@ -39,7 +39,7 @@ from litellm import completion_cost
 
 prompt = "Hey, how's it going"
 completion = "Hi, I'm gpt - I am doing well"
-cost_of_query = completion_cost(model="gpt-3.5-turbo", prompt=prompt, completion=completion))
+cost_of_query = completion_cost(model="gpt-4o", prompt=prompt, completion=completion))
 
 print(cost_of_query)
 ```

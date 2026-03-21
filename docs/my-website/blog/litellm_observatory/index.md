@@ -93,7 +93,7 @@ Our focus moving forward is on being the first to detect issues, even when they 
 The `TestOAIAzureRelease` test is designed to catch a class of bugs that only surface after sustained runtime:
 
 - **Duration**: Runs continuously for 3 hours
-- **Behavior**: Cycles through specified models (such as `gpt-4` and `gpt-3.5-turbo`), issuing requests continuously
+- **Behavior**: Cycles through specified models (such as `gpt-4` and `gpt-4o`), issuing requests continuously
 - **Why 3 Hours**: This helps catch issues where HTTP clients degrade or fail after extended use (for example, a bug observed in LiteLLM v1.81.3)
 - **Pass / Fail Criteria**: The test passes if fewer than 1% of requests fail. If the failure rate exceeds 1%, the test fails and we are notified in Slack
 - **Key Detail**: The same HTTP client is reused for the entire run, allowing us to detect lifecycle-related bugs that only appear under prolonged reuse
