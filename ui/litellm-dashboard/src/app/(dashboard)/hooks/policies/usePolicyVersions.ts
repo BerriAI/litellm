@@ -44,16 +44,20 @@ export interface UsePolicyVersionsOptions {
   enabled?: boolean;
 }
 
+/** Stable key used when the query is disabled to avoid undefined in cache keys. */
+const DISABLED_POLICY_KEY = "__disabled__";
+
 export const usePolicyVersions = ({
   policyName,
   enabled = true,
 }: UsePolicyVersionsOptions) => {
   const { accessToken } = useAuthorized();
+  const isEnabled = Boolean(accessToken && policyName && enabled);
 
   return useQuery<PolicyVersionsResponse, Error, PolicyVersionsData>({
-    queryKey: policyVersionKeys.detail(policyName!),
+    queryKey: policyVersionKeys.detail(policyName ?? DISABLED_POLICY_KEY),
     queryFn: async () => await fetchPolicyVersions(accessToken!, policyName!),
-    enabled: Boolean(accessToken && policyName && enabled),
+    enabled: isEnabled,
     select: (data) => ({
       ...data,
       versions: data.versions ?? [],

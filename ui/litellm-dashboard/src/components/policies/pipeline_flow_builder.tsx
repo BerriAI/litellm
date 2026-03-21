@@ -1316,12 +1316,13 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const updateStatusMutation = useUpdatePolicyVersionStatus(editingPolicy?.policy_name);
 
   const handleNewVersion = async () => {
+    let newPolicy: Policy;
     try {
-      const newPolicy = await createVersionMutation.mutateAsync();
-      onVersionCreated?.(newPolicy);
+      newPolicy = await createVersionMutation.mutateAsync();
     } catch {
-      // Notification already shown by onError in the mutation hook
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionCreated?.(newPolicy);
   };
 
   const handleSelectVersion = (policy: Policy) => {
@@ -1330,28 +1331,30 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
   const handlePublishVersion = async () => {
     if (!editingPolicy?.policy_id) return;
+    let updated: Policy;
     try {
-      const updated = await updateStatusMutation.mutateAsync({
+      updated = await updateStatusMutation.mutateAsync({
         policyId: editingPolicy.policy_id,
         status: "published",
       });
-      onVersionStatusUpdated?.(updated);
     } catch {
-      // Notification already shown by onError in the mutation hook
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionStatusUpdated?.(updated);
   };
 
   const handlePromoteToProduction = async () => {
     if (!editingPolicy?.policy_id) return;
+    let updated: Policy;
     try {
-      const updated = await updateStatusMutation.mutateAsync({
+      updated = await updateStatusMutation.mutateAsync({
         policyId: editingPolicy.policy_id,
         status: "production",
       });
-      onVersionStatusUpdated?.(updated);
     } catch {
-      // Notification already shown by onError in the mutation hook
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionStatusUpdated?.(updated);
   };
 
   const handleSave = async () => {
