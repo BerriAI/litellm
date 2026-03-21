@@ -1032,12 +1032,14 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> List[Dict[str, Any]]:
         new_content: List[Dict[str, Any]] = []
         for choice in choices:
+            # Get message or delta (delta is used for streaming choices)
+            _msg = getattr(choice, "message", None) or getattr(choice, "delta", None)
             # Handle thinking blocks first
             if (
-                hasattr(choice.message, "thinking_blocks")
-                and choice.message.thinking_blocks
+                hasattr(_msg, "thinking_blocks")
+                and _msg.thinking_blocks
             ):
-                for thinking_block in choice.message.thinking_blocks:
+                for thinking_block in _msg.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
                         thinking_value = thinking_block.get("thinking", "")
                         signature_value = thinking_block.get("signature", "")
@@ -1066,30 +1068,30 @@ class LiteLLMAnthropicMessagesAdapter:
                         )
             # Handle reasoning_content when thinking_blocks is not present
             elif (
-                hasattr(choice.message, "reasoning_content")
-                and choice.message.reasoning_content
+                hasattr(_msg, "reasoning_content")
+                and _msg.reasoning_content
             ):
                 new_content.append(
                     AnthropicResponseContentBlockThinking(
                         type="thinking",
-                        thinking=str(choice.message.reasoning_content),
+                        thinking=str(_msg.reasoning_content),
                         signature=None,
                     ).model_dump()
                 )
 
             # Handle text content
-            if choice.message.content is not None:
+            if _msg is not None and _msg.content is not None:
                 new_content.append(
                     AnthropicResponseContentBlockText(
-                        type="text", text=choice.message.content
+                        type="text", text=_msg.content
                     ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
             if (
-                choice.message.tool_calls is not None
-                and len(choice.message.tool_calls) > 0
+                _msg is not None and _msg.tool_calls is not None
+                and len(_msg.tool_calls) > 0
             ):
-                for tool_call in choice.message.tool_calls:
+                for tool_call in _msg.tool_calls:
                     # Extract signature from provider_specific_fields only
                     signature = self._extract_signature_from_tool_call(tool_call)
 
@@ -1159,7 +1161,7 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
         )
         # extract usage
-        usage: Usage = getattr(response, "usage")
+        usage: Usage = getattr(response, "usage", None) or Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         uncached_input_tokens = usage.prompt_tokens or 0
         cached_tokens = 0
         if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:

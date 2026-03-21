@@ -1984,3 +1984,331 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+"""
+Regression tests for streaming adapter bugs in:
+  litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py
+
+Bug 1 — AttributeError: 'StreamingChoices' object has no attribute 'message'
+  _translate_openai_content_to_anthropic() called choice.message unconditionally.
+  Streaming choices have choice.delta, not choice.message.
+  Fix: _msg = getattr(choice, "message", None) or getattr(choice, "delta", None)
+
+Bug 2 — AttributeError: 'ModelResponseStream' object has no attribute 'usage'
+  translate_openai_response_to_anthropic() called getattr(response, "usage") which
+  raises AttributeError on ModelResponseStream objects (streaming responses have no .usage).
+  Fix: getattr(response, "usage", None) or Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+These bugs are triggered when Ollama (or any non-OpenAI provider) is used via
+/v1/messages with stream=True on LiteLLM proxy v1.82.1.
+"""
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.abspath("../../../../.."))
+
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
+)
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Choices,
+    Delta,
+    Function,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
+
+
+# ---------------------------------------------------------------------------
+# Bug 1: StreamingChoices has no attribute 'message'
+# ---------------------------------------------------------------------------
+
+
+def test_translate_openai_content_to_anthropic_streaming_choice_text():
+    """
+    _translate_openai_content_to_anthropic() must not raise AttributeError when
+    passed StreamingChoices (which carry .delta instead of .message).
+
+    Reproduces: AttributeError: 'StreamingChoices' object has no attribute 'message'
+    """
+    streaming_choices = [
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="Hello world",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+                provider_specific_fields=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=streaming_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "Hello world"
+
+
+def test_translate_openai_content_to_anthropic_streaming_choice_tool_calls():
+    """
+    _translate_openai_content_to_anthropic() must extract tool_calls from
+    StreamingChoices.delta.tool_calls without crashing on .message.
+    """
+    streaming_choices = [
+        StreamingChoices(
+            finish_reason="tool_calls",
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="call_abc123",
+                        function=Function(
+                            arguments='{"location": "Boston"}',
+                            name="get_weather",
+                        ),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+                provider_specific_fields=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=streaming_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_abc123"
+    assert result[0]["name"] == "get_weather"
+    assert result[0]["input"] == {"location": "Boston"}
+
+
+def test_translate_openai_content_to_anthropic_streaming_choice_reasoning_content():
+    """
+    _translate_openai_content_to_anthropic() must convert delta.reasoning_content
+    to a thinking block when passed StreamingChoices.
+    """
+    streaming_choices = [
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content="The answer is 42.",
+                reasoning_content="Let me think about this carefully.",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+                provider_specific_fields=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=streaming_choices)
+
+    assert len(result) == 2
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "Let me think about this carefully."
+    assert result[0]["signature"] is None
+    assert result[1]["type"] == "text"
+    assert result[1]["text"] == "The answer is 42."
+
+
+def test_translate_openai_content_to_anthropic_streaming_choice_thinking_blocks():
+    """
+    _translate_openai_content_to_anthropic() must convert delta.thinking_blocks
+    from StreamingChoices without crashing on .message.
+    """
+    streaming_choices = [
+        StreamingChoices(
+            finish_reason="stop",
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I will reason through this.",
+                        "signature": "sig123",
+                    }
+                ],
+                provider_specific_fields=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=streaming_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "I will reason through this."
+    assert result[0]["signature"] == "sig123"
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: ModelResponseStream has no attribute 'usage'
+# ---------------------------------------------------------------------------
+
+
+def test_translate_openai_response_to_anthropic_model_response_stream_no_usage():
+    """
+    translate_openai_response_to_anthropic() must not raise AttributeError when
+    passed a ModelResponseStream (streaming object with no .usage attribute).
+
+    Reproduces: AttributeError: 'ModelResponseStream' object has no attribute 'usage'
+
+    The fix returns zeroed Usage as a safe default.
+    """
+    stream_response = ModelResponseStream(
+        id="chatcmpl-stream-abc",
+        model="ollama_chat/glm-4.7-flash-tools",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="Today is Wednesday, March 11, 2026.",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                    provider_specific_fields=None,
+                ),
+                logprobs=None,
+            )
+        ],
+    )
+
+    # Confirm the test premise: ModelResponseStream has no usable .usage
+    assert getattr(stream_response, "usage", None) is None
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    # Must not raise AttributeError
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=stream_response
+    )
+
+    assert anthropic_response is not None
+    assert "usage" in anthropic_response
+    # Safe default: zeroed usage tokens
+    assert anthropic_response["usage"]["input_tokens"] == 0
+    assert anthropic_response["usage"]["output_tokens"] == 0
+
+
+def test_translate_openai_response_to_anthropic_model_response_stream_text_content():
+    """
+    translate_openai_response_to_anthropic() called with a ModelResponseStream
+    must correctly extract text content from delta and not crash on missing
+    .message (Bug 1) or .usage (Bug 2).
+
+    This is the exact combined failure path triggered when Ollama is used via
+    /v1/messages with stream=True on LiteLLM proxy.
+    """
+    stream_response = ModelResponseStream(
+        id="chatcmpl-stream-xyz",
+        model="ollama_chat/glm-4.7-flash-tools",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="The capital of France is Paris.",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                    provider_specific_fields=None,
+                ),
+                logprobs=None,
+            )
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=stream_response
+    )
+
+    assert anthropic_response is not None
+    content = anthropic_response.get("content", [])
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "The capital of France is Paris."
+    assert anthropic_response["stop_reason"] == "end_turn"
+
+
+def test_translate_openai_response_to_anthropic_model_response_stream_tool_calls():
+    """
+    translate_openai_response_to_anthropic() called with a ModelResponseStream
+    containing tool_calls in delta must return a tool_use content block.
+    Validates both bug fixes work together for the tool_call case.
+    """
+    stream_response = ModelResponseStream(
+        id="chatcmpl-stream-tools",
+        model="ollama_chat/glm-4.7-flash-tools",
+        choices=[
+            StreamingChoices(
+                finish_reason="tool_calls",
+                index=0,
+                delta=Delta(
+                    content=None,
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_xyz789",
+                            function=Function(
+                                arguments='{"query": "today\'s date"}',
+                                name="litellm_web_search",
+                            ),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                    audio=None,
+                    provider_specific_fields=None,
+                ),
+                logprobs=None,
+            )
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=stream_response
+    )
+
+    assert anthropic_response is not None
+    content = anthropic_response.get("content", [])
+    assert len(content) == 1
+    assert content[0]["type"] == "tool_use"
+    assert content[0]["id"] == "call_xyz789"
+    assert content[0]["name"] == "litellm_web_search"
+    assert content[0]["input"] == {"query": "today's date"}
+    assert anthropic_response["stop_reason"] == "tool_use"
