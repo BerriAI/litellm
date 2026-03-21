@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORS_ENV_VARS = (
@@ -136,6 +137,49 @@ def test_apply_cors_settings_invalid_credentials_type_raises_click_exception():
         _apply_cors_settings_from_general_settings(
             {"cors_allow_credentials": [True, False]}
         )
+
+
+def test_run_server_applies_config_cors_before_proxy_server_import(tmp_path):
+    from litellm.proxy.proxy_cli import run_server
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "general_settings:",
+                "  cors_allow_origins:",
+                "    - https://cli.example.com",
+                "  cors_allow_credentials: false",
+                "  cors_allow_methods:",
+                "    - GET",
+                "    - POST",
+                "  cors_allow_headers:",
+                "    - Authorization",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for module_name in CORS_MODULES:
+        sys.modules.pop(module_name, None)
+
+    result = CliRunner().invoke(
+        run_server,
+        [
+            "--config",
+            str(config_path),
+            "--skip_server_startup",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    assert proxy_server.cors_allow_origins == ["https://cli.example.com"]
+    assert proxy_server.cors_allow_credentials is False
+    assert proxy_server.cors_allow_methods == ["GET", "POST"]
+    assert proxy_server.cors_allow_headers == ["Authorization"]
 
 
 def test_cors_defaults_preserve_existing_proxy_behavior():

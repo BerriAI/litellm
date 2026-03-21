@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
+import yaml
 from dotenv import load_dotenv
 
 import litellm
@@ -123,6 +124,113 @@ def _apply_cors_settings_from_general_settings(general_settings: dict) -> None:
         )
     _set_env_var_if_unset("LITELLM_CORS_ALLOW_METHODS", normalized_methods)
     _set_env_var_if_unset("LITELLM_CORS_ALLOW_HEADERS", normalized_headers)
+
+
+def _process_config_includes(config: dict, base_dir: str) -> dict:
+    if "include" not in config:
+        return config
+    if not isinstance(config["include"], list):
+        raise click.ClickException("Invalid config file: 'include' must be a list.")
+
+    for include_file in config["include"]:
+        file_path = os.path.join(base_dir, include_file)
+        if not os.path.exists(file_path):
+            raise click.ClickException(f"Included config file not found: {file_path}")
+
+        with open(file_path, "r", encoding="utf-8") as file:
+            included_config = yaml.safe_load(file) or {}
+
+        if not isinstance(included_config, dict):
+            raise click.ClickException(
+                f"Invalid included config file {file_path}: expected a top-level mapping."
+            )
+
+        for key, value in included_config.items():
+            if isinstance(value, list) and key in config:
+                config[key].extend(value)
+            else:
+                config[key] = value
+
+    del config["include"]
+    return config
+
+
+def _resolve_os_environ_refs(config: dict) -> dict:
+    for key, value in config.items():
+        if isinstance(value, dict):
+            config[key] = _resolve_os_environ_refs(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _resolve_os_environ_refs(item)
+        elif isinstance(value, str) and value.startswith("os.environ/"):
+            from litellm import get_secret_str
+
+            config[key] = get_secret_str(value, default_value=None)
+    return config
+
+
+def _load_general_settings_for_early_cors(
+    config_file_path: Optional[str],
+) -> dict:
+    config: Optional[dict] = None
+
+    if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        import asyncio
+
+        from litellm.proxy.common_utils.load_config_utils import (
+            get_config_file_contents_from_gcs,
+            get_file_contents_from_s3,
+        )
+
+        bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
+        object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+        bucket_type = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
+
+        if bucket_type == "gcs":
+            config = asyncio.run(
+                get_config_file_contents_from_gcs(
+                    bucket_name=bucket_name, object_key=object_key
+                )
+            )
+        else:
+            config = get_file_contents_from_s3(
+                bucket_name=bucket_name, object_key=object_key
+            )
+        if config is None:
+            raise click.ClickException("Unable to load config from given source.")
+    elif config_file_path is not None:
+        if not os.path.exists(config_file_path):
+            raise click.ClickException(f"Config file not found: {config_file_path}")
+
+        with open(config_file_path, "r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file)
+
+        if config is None:
+            raise click.ClickException("Config cannot be None or empty.")
+
+        if not isinstance(config, dict):
+            raise click.ClickException(
+                "Invalid config file: expected a top-level mapping."
+            )
+
+        config = _process_config_includes(
+            config=config,
+            base_dir=os.path.dirname(os.path.abspath(config_file_path)),
+        )
+    else:
+        return {}
+
+    if not isinstance(config, dict):
+        raise click.ClickException("Invalid config file: expected a top-level mapping.")
+
+    general_settings = config.get("general_settings", {}) or {}
+    if not isinstance(general_settings, dict):
+        raise click.ClickException(
+            "Invalid config file: 'general_settings' must be a mapping."
+        )
+
+    return _resolve_os_environ_refs(general_settings)
 
 
 class ProxyInitializationHelpers:
@@ -691,6 +799,10 @@ def run_server(  # noqa: PLR0915
 
         run_setup_wizard()
         return
+
+    if config is not None or os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        early_general_settings = _load_general_settings_for_early_cors(config)
+        _apply_cors_settings_from_general_settings(early_general_settings)
 
     args = locals()
     if local:
