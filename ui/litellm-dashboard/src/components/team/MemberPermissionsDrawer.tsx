@@ -74,14 +74,23 @@ const MemberPermissionsDrawer: React.FC<MemberPermissionsDrawerProps> = ({
     if (!accessToken || !member) return;
     setSaving(true);
     try {
+      // Preserve unknown permissions not present in the available set
+      const availableValues = new Set(availablePermissions.map((p) => p.value));
+      const existingUnknown = (member.extra_permissions || []).filter(
+        (p) => !availableValues.has(p),
+      );
       const updatedMember: Member = {
         ...member,
-        extra_permissions: Array.from(selected),
+        extra_permissions: [...existingUnknown, ...Array.from(selected)],
       };
       await teamMemberUpdateCall(accessToken, teamId, updatedMember);
       NotificationsManager.success("Permissions updated successfully");
-      await onUpdate();
       onClose();
+      try {
+        await onUpdate();
+      } catch (refreshError) {
+        console.error("Failed to refresh team data after permission update:", refreshError);
+      }
     } catch (error: any) {
       const errMsg = error?.message || "Failed to update permissions";
       NotificationsManager.fromBackend(errMsg);
