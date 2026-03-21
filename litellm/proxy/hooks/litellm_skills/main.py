@@ -89,7 +89,7 @@ class SkillsInjectionHook(CustomLogger):
         if not container or not isinstance(container, dict):
             return data
 
-        skills = container.get("skills")    
+        skills = container.get("skills")
         if not skills or not isinstance(skills, list):
             return data
 
