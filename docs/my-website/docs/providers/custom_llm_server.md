@@ -31,7 +31,7 @@ from litellm import CustomLLM, completion, get_llm_provider
 class MyCustomLLM(CustomLLM):
     def completion(self, *args, **kwargs) -> litellm.ModelResponse:
         return litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )  # type: ignore
@@ -62,14 +62,14 @@ from litellm import CustomLLM, completion, get_llm_provider
 class MyCustomLLM(CustomLLM):
     def completion(self, *args, **kwargs) -> litellm.ModelResponse:
         return litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )  # type: ignore
 
     async def acompletion(self, *args, **kwargs) -> litellm.ModelResponse:
         return litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )  # type: ignore
@@ -135,7 +135,7 @@ Expected Response
         }
     ],
     "created": 1721955063,
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "object": "chat.completion",
     "system_fingerprint": null,
     "usage": {
@@ -356,7 +356,7 @@ from litellm import CustomLLM, completion, get_llm_provider
 class MyCustomLLM(CustomLLM):
     async def acompletion(self, *args, **kwargs) -> litellm.ModelResponse:
         return litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )  # type: ignore
@@ -420,7 +420,7 @@ Expected Response
     "id": "chatcmpl-Bm4qEp4h4vCe7Zi4Gud1MAxTWgibO",
     "type": "message",
     "role": "assistant",
-    "model": "gpt-3.5-turbo-0125",
+    "model": "gpt-4o-0125",
     "stop_sequence": null,
     "usage": {
         "input_tokens": 18,
@@ -455,7 +455,7 @@ class MyCustomLLM(CustomLLM):
     def completion(self, *args, **kwargs) -> litellm.ModelResponse:
         assert kwargs["optional_params"] == {"my_custom_param": "my-custom-param"} # 👈 CHECK HERE
         return litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )  # type: ignore

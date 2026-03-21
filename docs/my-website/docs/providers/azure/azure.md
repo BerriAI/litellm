@@ -100,7 +100,7 @@ export AZURE_API_KEY=""
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -117,7 +117,7 @@ model_list:
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -137,7 +137,7 @@ client = openai.OpenAI(
     base_url="http://0.0.0.0:4000"
 )
 
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-4o", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -161,7 +161,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
+    model = "gpt-4o",
     temperature=0.1
 )
 
@@ -224,11 +224,11 @@ model_list:
 | gpt-4-32k-0613            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-1106-preview            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-0125-preview            | `completion('azure/<your deployment name>', messages)`         | 
-| gpt-3.5-turbo    | `completion('azure/<your deployment name>', messages)` |
-| gpt-3.5-turbo-0301    | `completion('azure/<your deployment name>', messages)` |
-| gpt-3.5-turbo-0613    | `completion('azure/<your deployment name>', messages)` |
-| gpt-3.5-turbo-16k    | `completion('azure/<your deployment name>', messages)` |
-| gpt-3.5-turbo-16k-0613    | `completion('azure/<your deployment name>', messages)`
+| gpt-4o    | `completion('azure/<your deployment name>', messages)` |
+| gpt-4o-0301    | `completion('azure/<your deployment name>', messages)` |
+| gpt-4o-0613    | `completion('azure/<your deployment name>', messages)` |
+| gpt-4o-16k    | `completion('azure/<your deployment name>', messages)` |
+| gpt-4o-16k-0613    | `completion('azure/<your deployment name>', messages)`
 
 ## Azure OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
@@ -524,8 +524,8 @@ Use `model="azure_text/<your-deployment>"`
 
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
-| gpt-3.5-turbo-instruct | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
-| gpt-3.5-turbo-instruct-0914 | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
+| gpt-4o-instruct | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
+| gpt-4o-instruct-0914 | `response = completion(model="azure_text/<your deployment name>", messages=messages)` |
 
 
 ```python
@@ -604,7 +604,7 @@ response = litellm.completion(
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -620,7 +620,7 @@ model_list:
 Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -637,7 +637,7 @@ Test it
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -657,7 +657,7 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -674,7 +674,7 @@ Test it
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [
         {
           "role": "user",
@@ -746,7 +746,7 @@ export AZURE_CLIENT_SECRET=""
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/your-deployment-name
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -761,7 +761,7 @@ Perfect for AKS clusters, Azure VMs, or other managed environments where Azure a
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/your-deployment-name
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -776,7 +776,7 @@ If you're authenticated via `az login`, no additional configuration needed:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/your-deployment-name
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -1150,7 +1150,7 @@ pip install litellm
 from litellm import Router
 
 model_list = [{ # list of model deployments 
-	"model_name": "gpt-3.5-turbo", # openai model name 
+	"model_name": "gpt-4o", # openai model name 
 	"litellm_params": { # params for litellm completion/embedding call 
 		"model": "azure/chatgpt-v-2", 
 		"api_key": os.getenv("AZURE_API_KEY"),
@@ -1160,7 +1160,7 @@ model_list = [{ # list of model deployments
 	"tpm": 240000,
 	"rpm": 1800
 }, {
-    "model_name": "gpt-3.5-turbo", # openai model name 
+    "model_name": "gpt-4o", # openai model name 
 	"litellm_params": { # params for litellm completion/embedding call 
 		"model": "azure/chatgpt-functioncalling", 
 		"api_key": os.getenv("AZURE_API_KEY"),
@@ -1170,9 +1170,9 @@ model_list = [{ # list of model deployments
 	"tpm": 240000,
 	"rpm": 1800
 }, {
-    "model_name": "gpt-3.5-turbo", # openai model name 
+    "model_name": "gpt-4o", # openai model name 
 	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "gpt-3.5-turbo", 
+		"model": "gpt-4o", 
 		"api_key": os.getenv("OPENAI_API_KEY"),
 	},
 	"tpm": 1000000,
@@ -1182,7 +1182,7 @@ model_list = [{ # list of model deployments
 router = Router(model_list=model_list)
 
 # openai.chat.completions.create replacement
-response = router.completion(model="gpt-3.5-turbo", 
+response = router.completion(model="gpt-4o", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
 
 print(response)

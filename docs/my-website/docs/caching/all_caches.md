@@ -39,11 +39,11 @@ litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -77,11 +77,11 @@ litellm.cache = RedisClusterCache(
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -132,11 +132,11 @@ from litellm.caching.caching import Cache
 litellm.cache = Cache(type="gcs", gcs_bucket_name="my-cache-bucket", gcs_path_service_account="/path/to/service_account.json")
 
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -170,11 +170,11 @@ litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_regio
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -201,11 +201,11 @@ litellm.cache = Cache(type="azure-blob", azure_account_url="https://example.blob
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -244,7 +244,7 @@ litellm.cache = Cache(
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {
             "role": "user",
@@ -258,7 +258,7 @@ print(f"response1: {response1}")
 random_number = random.randint(1, 100000)
 
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {
             "role": "user",
@@ -301,7 +301,7 @@ litellm.cache = Cache(
 )
 
 response1 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {
             "role": "user",
@@ -315,7 +315,7 @@ print(f"response1: {response1}")
 random_number = random.randint(1, 100000)
 
 response2 = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {
             "role": "user",
@@ -343,12 +343,12 @@ litellm.cache = Cache()
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
@@ -379,12 +379,12 @@ litellm.cache = Cache(type="disk")
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
@@ -416,7 +416,7 @@ Example usage `no-cache` - When `True`, Will not return a cached response
 
 ```python
 response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[
             {
                 "role": "user",
@@ -435,7 +435,7 @@ Example usage `no-store` - When `True`, Will not cache the response.
 
 ```python
 response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[
             {
                 "role": "user",
@@ -453,7 +453,7 @@ Example usage `ttl` - cache the response for 10 seconds
 
 ```python
 response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[
             {
                 "role": "user",
@@ -471,7 +471,7 @@ Example usage `s-maxage` - Will only accept cached responses for 60 seconds
 
 ```python
 response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[
             {
                 "role": "user",
