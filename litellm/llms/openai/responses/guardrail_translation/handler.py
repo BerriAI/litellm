@@ -867,9 +867,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             if output_idx >= len(response_output):
                 continue
 
+            # Strip internal metadata before field-level writeback
+            if isinstance(guardrailed_tool_call, dict):
+                guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
+
             output_item = response_output[output_idx]
 
-            # Extract arguments and name from guardrailed tool call
             func = None
             if (
                 isinstance(guardrailed_tool_call, dict)

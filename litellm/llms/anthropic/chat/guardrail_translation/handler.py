@@ -830,6 +830,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 indices_to_delete.append(content_idx)
                 continue
 
+            # Strip internal metadata before field-level writeback
+            if isinstance(guardrailed_tool_call, dict):
+                guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
+
             if content_idx < len(response_content):
                 self._apply_tool_call_to_content_block(
                     response_content[content_idx], guardrailed_tool_call

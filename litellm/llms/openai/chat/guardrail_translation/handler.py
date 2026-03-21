@@ -587,40 +587,28 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self, response: Union["ModelResponse", "ModelResponseStream"]
     ) -> bool:
         """
-        Check if response has any text content or tool calls to process.
+        Check if response has any text content to process.
 
-        Override this method to customize text content detection.
+        Note: this is only used in the streaming path. Tool calls are NOT
+        checked here — they are gated by guardrail_handles_tool_calls in the
+        non-streaming process_output_response path instead.
         """
         from litellm.types.utils import ModelResponse, ModelResponseStream
 
         if isinstance(response, ModelResponse):
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    # Check for text content
                     if choice.message.content and isinstance(
                         choice.message.content, str
                     ):
                         return True
-                    # Check for tool calls
-                    if choice.message.tool_calls and isinstance(
-                        choice.message.tool_calls, list
-                    ):
-                        if len(choice.message.tool_calls) > 0:
-                            return True
         elif isinstance(response, ModelResponseStream):
             for streaming_choice in response.choices:
                 if isinstance(streaming_choice, litellm.StreamingChoices):
-                    # Check for text content
                     if streaming_choice.delta.content and isinstance(
                         streaming_choice.delta.content, str
                     ):
                         return True
-                    # Check for tool calls
-                    if streaming_choice.delta.tool_calls and isinstance(
-                        streaming_choice.delta.tool_calls, list
-                    ):
-                        if len(streaming_choice.delta.tool_calls) > 0:
-                            return True
         return False
 
     def _extract_output_text_images_and_tool_calls(
@@ -786,6 +774,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     deletions_by_choice.setdefault(choice_idx, []).append(tool_call_idx)
                     continue
 
+                # Strip internal metadata before field-level writeback
+                guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
+
                 choice = cast(Choices, response.choices[choice_idx])
                 choice_tool_calls = choice.message.tool_calls
 
@@ -793,9 +784,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     choice_tool_calls, list
                 ):
                     if tool_call_idx < len(choice_tool_calls):
-                        # Update the tool call with guardrailed version
                         existing_tool_call = choice_tool_calls[tool_call_idx]
-                        # Update object attributes (output responses always have typed objects)
                         if "function" in guardrailed_tool_call:
                             func_dict = guardrailed_tool_call["function"]
                             if "arguments" in func_dict:

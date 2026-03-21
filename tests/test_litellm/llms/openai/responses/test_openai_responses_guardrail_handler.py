@@ -16,7 +16,6 @@ sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
 
-from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -41,14 +40,12 @@ class MockGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """
         For requests: Append [GUARDRAILED] to text
-        For responses: Block by raising HTTPException (masking responses is no longer supported)
+        For responses: Block by raising ValueError
         """
         texts = inputs.get("texts", [])
         if input_type == "response":
-            # Responses should be blocked, not masked
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Response blocked by guardrail", "texts": texts},
+            raise ValueError(
+                f"Response blocked by guardrail: {texts}"
             )
         # For requests, we can still mask/transform
         inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
@@ -217,11 +214,8 @@ class TestOpenAIResponsesHandlerOutputProcessing:
         )
 
         # Response should be blocked, not masked
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValueError, match="Response blocked by guardrail"):
             await handler.process_output_response(response, guardrail)
-
-        assert exc_info.value.status_code == 400
-        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_multiple_items(self):
@@ -263,11 +257,8 @@ class TestOpenAIResponsesHandlerOutputProcessing:
         )
 
         # Response should be blocked, not masked
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValueError, match="Response blocked by guardrail"):
             await handler.process_output_response(response, guardrail)
-
-        assert exc_info.value.status_code == 400
-        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_multiple_content_items(self):
@@ -301,11 +292,8 @@ class TestOpenAIResponsesHandlerOutputProcessing:
         )
 
         # Response should be blocked, not masked
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValueError, match="Response blocked by guardrail"):
             await handler.process_output_response(response, guardrail)
-
-        assert exc_info.value.status_code == 400
-        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_dict_format(self):
@@ -338,11 +326,8 @@ class TestOpenAIResponsesHandlerOutputProcessing:
         )
 
         # Response should be blocked, not masked
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValueError, match="Response blocked by guardrail"):
             await handler.process_output_response(response, guardrail)
-
-        assert exc_info.value.status_code == 400
-        assert "Response blocked by guardrail" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_process_output_response_no_text_content(self):
