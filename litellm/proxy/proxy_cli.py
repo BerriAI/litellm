@@ -110,7 +110,8 @@ def _apply_cors_settings_from_general_settings(general_settings: dict) -> None:
     _set_env_var_if_unset("LITELLM_CORS_ALLOW_ORIGINS", normalized_origins)
     if cors_allow_credentials is not None:
         _set_env_var_if_unset(
-            "LITELLM_CORS_ALLOW_CREDENTIALS", str(cors_allow_credentials)
+            "LITELLM_CORS_ALLOW_CREDENTIALS",
+            str(cors_allow_credentials).lower(),
         )
     _set_env_var_if_unset("LITELLM_CORS_ALLOW_METHODS", normalized_methods)
     _set_env_var_if_unset("LITELLM_CORS_ALLOW_HEADERS", normalized_headers)

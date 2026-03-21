@@ -1154,8 +1154,8 @@ def _is_wildcard_cors_origin(origin: str) -> bool:
     normalized_origin = origin.strip()
     return (
         normalized_origin == "*"
-        or normalized_origin.startswith("https://*.")
-        or normalized_origin.startswith("http://*.")
+        or normalized_origin.startswith("https://*")
+        or normalized_origin.startswith("http://*")
     )
 
 
@@ -1172,6 +1172,13 @@ cors_origins_were_configured = configured_cors_allow_origins is not None
 cors_allow_origins = (
     ["*"] if configured_cors_allow_origins is None else configured_cors_allow_origins
 )
+if cors_origins_were_configured and len(cors_allow_origins) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_origins resolved to an empty list. "
+        "All cross-origin requests will be rejected. "
+        "Set cors_allow_origins to explicit origins or remove the setting to "
+        "restore the default wildcard behavior."
+    )
 cors_allow_credentials = _get_cors_allow_credentials(
     origins_were_configured=cors_origins_were_configured
 )

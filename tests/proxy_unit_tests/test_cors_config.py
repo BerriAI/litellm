@@ -109,7 +109,7 @@ def test_apply_cors_settings_sets_env_when_unset(monkeypatch):
     )
 
     assert os.getenv("LITELLM_CORS_ALLOW_ORIGINS") == "https://config.example.com"
-    assert os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") == "True"
+    assert os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") == "true"
     assert os.getenv("LITELLM_CORS_ALLOW_METHODS") == "GET,POST"
     assert os.getenv("LITELLM_CORS_ALLOW_HEADERS") == "Authorization"
 
@@ -164,6 +164,16 @@ def test_path_wildcard_origin_does_not_trigger_credentials_guard(monkeypatch):
     assert proxy_server.cors_allow_origins == ["https://example.com/*"]
 
 
+def test_scheme_wildcard_origin_disables_credentials(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "https://*")
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "true")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_credentials is False
+    assert proxy_server.cors_allow_origins == ["https://*"]
+
+
 def test_cors_credentials_enabled_with_explicit_origins(monkeypatch):
     monkeypatch.setenv(
         "LITELLM_CORS_ALLOW_ORIGINS", "https://example.com, https://other.com"
@@ -203,6 +213,26 @@ def test_explicit_empty_origins_stay_empty(monkeypatch):
     proxy_server = _reload_local_proxy_server()
 
     assert proxy_server.cors_allow_origins == []
+
+
+def test_explicit_empty_origins_log_warning(monkeypatch):
+    import litellm._logging as litellm_logging
+
+    warning_messages = []
+
+    def capture_warning(message, *args, **kwargs):
+        warning_messages.append(message % args if args else message)
+
+    monkeypatch.setattr(litellm_logging.verbose_proxy_logger, "warning", capture_warning)
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_origins == []
+    assert any(
+        "cors_allow_origins resolved to an empty list" in message
+        for message in warning_messages
+    )
 
 
 def test_methods_and_headers_are_trimmed(monkeypatch):
