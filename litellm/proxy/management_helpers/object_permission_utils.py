@@ -366,11 +366,17 @@ async def validate_key_mcp_servers_against_team(
             )
 
 
-def _invalidate_team_cache(team_id: str) -> None:
-    """Invalidate the cached team object so subsequent reads see updated data."""
+def _invalidate_team_cache(
+    team_id: str, object_permission_id: Optional[str] = None
+) -> None:
+    """Invalidate the cached team object and its ObjectPermissionTable so subsequent reads see updated data."""
     from litellm.proxy.proxy_server import user_api_key_cache
 
     user_api_key_cache.delete_cache(key="team_id:{}".format(team_id))
+    if object_permission_id:
+        user_api_key_cache.delete_cache(
+            key="object_permission_id:{}".format(object_permission_id)
+        )
 
 
 async def add_mcp_server_to_team(
@@ -429,7 +435,7 @@ async def add_mcp_server_to_team(
             )
 
     # Invalidate team cache so the updated mcp_servers list is visible immediately
-    _invalidate_team_cache(team_id)
+    _invalidate_team_cache(team_id, object_permission_id)
 
 
 async def remove_mcp_server_from_team(
@@ -464,4 +470,6 @@ async def remove_mcp_server_from_team(
             )
 
     # Invalidate team cache so the updated mcp_servers list is visible immediately
-    _invalidate_team_cache(team_id)
+    _invalidate_team_cache(
+        team_id, team.object_permission_id if team else None
+    )
