@@ -3,10 +3,9 @@ import os
 import litellm
 
 
-def is_default_reasoning_summary_disabled() -> bool:
-    """Check whether the default 'summary: detailed' injection should be suppressed."""
+def is_reasoning_auto_summary_enabled() -> bool:
+    """Check whether the default 'summary: detailed' injection is enabled (opt-in)."""
     return (
-        litellm.disable_default_reasoning_summary
-        or os.getenv("LITELLM_DISABLE_DEFAULT_REASONING_SUMMARY", "false").lower()
-        == "true"
+        litellm.reasoning_auto_summary
+        or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
     )
