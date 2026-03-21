@@ -181,6 +181,57 @@ def test_remove_ttl_from_cache_control():
     assert request5 == {}
 
 
+def test_inference_geo_not_in_supported_params():
+    """Test that inference_geo is NOT in Bedrock's supported anthropic messages params."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    supported = cfg.get_supported_anthropic_messages_params(
+        "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert "inference_geo" not in supported
+    assert "speed" not in supported
+    # Verify other params are still present
+    assert "max_tokens" in supported
+    assert "tools" in supported
+    assert "thinking" in supported
+
+
+def test_transform_request_strips_inference_geo():
+    """Test that transform_anthropic_messages_request removes inference_geo from request body."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=[{"role": "user", "content": "Test"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "inference_geo": "us",
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "inference_geo" not in result
+    assert result["max_tokens"] == 100
+    assert result["anthropic_version"] == "bedrock-2023-05-31"
+
+
+def test_transform_request_strips_speed():
+    """Test that transform_anthropic_messages_request removes speed from request body."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=[{"role": "user", "content": "Test"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "speed": "fast",
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+    assert result["max_tokens"] == 100
+
+
 def test_remove_custom_field_from_tools():
     """
     Ensure the `custom` field is stripped from every tool definition.

@@ -1241,6 +1241,12 @@ class AmazonConverseConfig(BaseConfig):
 
         additional_request_params.pop("parallel_tool_calls", None)
 
+        # Remove Anthropic-only params that aren't supported by Bedrock Converse.
+        # These bypass the drop_params mechanism because they're injected as
+        # provider-specific params in add_provider_specific_params_to_optional_params().
+        additional_request_params.pop("inference_geo", None)
+        additional_request_params.pop("speed", None)
+
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)

@@ -3803,3 +3803,43 @@ def test_streaming_without_json_mode_passes_all_tools():
     assert tool_use_delta is not None
     assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
 
+
+def test_inference_geo_not_in_additional_model_request_fields():
+    """Test that inference_geo does not leak into additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    optional_params = {
+        "inference_geo": "us",
+        "temperature": 0.7,
+    }
+
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Test"}]}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "inference_geo" not in additional
+
+
+def test_speed_not_in_additional_model_request_fields():
+    """Test that speed does not leak into additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    optional_params = {
+        "speed": "fast",
+        "temperature": 0.7,
+    }
+
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Test"}]}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "speed" not in additional
+

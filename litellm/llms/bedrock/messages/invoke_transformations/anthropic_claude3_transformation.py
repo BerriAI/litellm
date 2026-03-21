@@ -57,9 +57,23 @@ class AmazonAnthropicClaudeMessagesConfig(
     # Beta header patterns that are not supported by Bedrock Invoke API
     # These will be filtered out to prevent 400 "invalid beta flag" errors
 
+    # Anthropic-only params that are not supported by Bedrock
+    BEDROCK_UNSUPPORTED_ANTHROPIC_PARAMS = {"inference_geo", "speed"}
+
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
+
+    def get_supported_anthropic_messages_params(self, model: str) -> list:
+        """
+        Override parent to exclude Anthropic-only params not supported by Bedrock.
+        """
+        supported = super().get_supported_anthropic_messages_params(model)
+        return [
+            p
+            for p in supported
+            if p not in self.BEDROCK_UNSUPPORTED_ANTHROPIC_PARAMS
+        ]
 
     def validate_anthropic_messages_environment(
         self,
@@ -423,7 +437,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Fixes: https://github.com/BerriAI/litellm/issues/22797
         anthropic_messages_request.pop("output_config", None)
 
-        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # 5c. Remove Anthropic-only params not supported by Bedrock Invoke
+        anthropic_messages_request.pop("inference_geo", None)
+        anthropic_messages_request.pop("speed", None)
+
+        # 5d. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
