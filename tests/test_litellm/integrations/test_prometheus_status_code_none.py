@@ -39,3 +39,10 @@ def test_extract_status_code_defaults_to_500_for_bare_exception(prometheus_logge
 def test_extract_status_code_returns_none_when_no_exception(prometheus_logger):
     """When no exception is provided at all, should return None."""
     assert prometheus_logger._extract_status_code() is None
+
+
+def test_extract_status_code_defaults_to_500_for_bare_exception_in_kwargs(prometheus_logger):
+    """Bare exception passed through kwargs should also default to 500."""
+    exc = Exception("something broke")
+    result = prometheus_logger._extract_status_code(kwargs={"exception": exc})
+    assert result == 500, f"Expected 500 for bare exception in kwargs, got {result}"

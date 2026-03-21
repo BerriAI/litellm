@@ -1448,7 +1448,8 @@ class PrometheusLogger(CustomLogger):
             exception: Exception object to extract status code from directly
 
         Returns:
-            Status code as integer if found, None otherwise
+            Status code as integer if found, 500 when an exception is present
+            but carries no status code attribute, or None when no inputs provided
         """
         status_code = None
 
@@ -1485,6 +1486,14 @@ class PrometheusLogger(CustomLogger):
                         status_code = int(status_code)
                     except (ValueError, TypeError):
                         status_code = None
+
+        # If an exception was provided (directly or via kwargs) but no status code
+        # could be extracted, default to 500 — an unclassified server error is still a 5xx.
+        if status_code is None and (
+            exception is not None
+            or (kwargs and kwargs.get("exception") is not None)
+        ):
+            return 500
 
         return status_code
 
