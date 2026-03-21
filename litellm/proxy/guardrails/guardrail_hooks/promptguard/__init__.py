@@ -17,7 +17,7 @@ def initialize_guardrail(
     _cb = PromptGuardGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
-        block_on_error=getattr(litellm_params, "block_on_error", None),
+        block_on_error=litellm_params.block_on_error,
         guardrail_name=guardrail.get(
             "guardrail_name",
             "",

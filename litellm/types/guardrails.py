@@ -23,6 +23,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
+    PromptGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
@@ -740,6 +743,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
+    PromptGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,

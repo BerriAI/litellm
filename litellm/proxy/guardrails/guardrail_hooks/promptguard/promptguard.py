@@ -186,10 +186,8 @@ class PromptGuardGuardrail(CustomGuardrail):
                 if structured_messages:
                     inputs["structured_messages"] = redacted
                 if "texts" in inputs:
-                    extracted = (
-                        self._extract_texts_from_messages(
-                            redacted,
-                        )
+                    extracted = self._extract_texts_from_messages(
+                        redacted,
                     )
                     if extracted:
                         inputs["texts"] = extracted
