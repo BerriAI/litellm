@@ -2496,6 +2496,11 @@ async def team_member_update(
             data={"members_with_roles": json.dumps(_db_team_members_perms)},  # type: ignore
         )
 
+    # Invalidate team cache so permission changes take effect immediately
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_api_key_cache.delete_cache(key="team_id:{}".format(data.team_id))
+
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
         user_id=received_user_id,
