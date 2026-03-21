@@ -2421,20 +2421,7 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
-    ### upsert new budget
-    async with prisma_client.db.tx() as tx:
-        await _upsert_budget_and_membership(
-            tx=tx,
-            team_id=data.team_id,
-            user_id=received_user_id,
-            max_budget=data.max_budget_in_team,
-            existing_budget_id=identified_budget_id,
-            user_api_key_dict=user_api_key_dict,
-            tpm_limit=data.tpm_limit,
-            rpm_limit=data.rpm_limit,
-        )
-
-    ### Validate extra_permissions before applying any changes
+    ### Validate extra_permissions BEFORE any DB writes
     if data.extra_permissions is not None:
         from litellm.proxy.auth.permissions import VALID_PERMISSIONS
 
@@ -2447,6 +2434,19 @@ async def team_member_update(
                     f"Valid permissions: {sorted(VALID_PERMISSIONS)}"
                 },
             )
+
+    ### upsert new budget
+    async with prisma_client.db.tx() as tx:
+        await _upsert_budget_and_membership(
+            tx=tx,
+            team_id=data.team_id,
+            user_id=received_user_id,
+            max_budget=data.max_budget_in_team,
+            existing_budget_id=identified_budget_id,
+            user_api_key_dict=user_api_key_dict,
+            tpm_limit=data.tpm_limit,
+            rpm_limit=data.rpm_limit,
+        )
 
     ### Apply role and extra_permissions updates in-memory, then do a single DB write
     members_changed = data.role is not None or data.extra_permissions is not None
