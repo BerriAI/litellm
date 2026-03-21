@@ -58,6 +58,13 @@ def test_service_name_defaults_to_unknown_when_both_blank():
     assert result["ServiceName"][0] == "unknown"
 
 
+def test_service_name_defaults_to_unknown_when_both_null():
+    row = _make_row(custom_llm_provider=None, model=None)
+    frame = pl.DataFrame([row])
+    result = FocusTransformer().transform(frame)
+    assert result["ServiceName"][0] == "unknown"
+
+
 def test_service_category_uses_model_group_when_present():
     row = _make_row(model_group="sonnet-group")
     frame = pl.DataFrame([row])
