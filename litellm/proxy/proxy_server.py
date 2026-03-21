@@ -3321,7 +3321,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-        )  # type:ignore
+        )  # type: ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
@@ -5383,8 +5383,8 @@ async def initialize(  # noqa: PLR0915
         litellm.add_function_to_prompt = True
         dynamic_config["general"]["add_function_to_prompt"] = True
     if max_budget:  # litellm-specific param
-        litellm.max_budget = max_budget
-        dynamic_config["general"]["max_budget"] = max_budget
+        litellm.max_budget = float(max_budget)
+        dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
     user_telemetry = telemetry

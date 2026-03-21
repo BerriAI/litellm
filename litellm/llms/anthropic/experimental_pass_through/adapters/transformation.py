@@ -14,6 +14,10 @@ from typing import (
     cast,
 )
 
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
+)
+
 # OpenAI has a 64-character limit for function/tool names
 # Anthropic does not have this limit, so we need to truncate long names
 OPENAI_MAX_TOOL_NAME_LENGTH = 64
@@ -734,6 +738,24 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
+                summary = (
+                    thinking.get("summary") if isinstance(thinking, dict) else None
+                )
+                auto_summary = is_reasoning_auto_summary_enabled()
+                if summary:
+                    return {
+                        "reasoning_effort": {
+                            "effort": reasoning_effort,
+                            "summary": summary,
+                        }
+                    }
+                elif auto_summary:
+                    return {
+                        "reasoning_effort": {
+                            "effort": reasoning_effort,
+                            "summary": "detailed",
+                        }
+                    }
                 return {"reasoning_effort": reasoning_effort}
             return {}
 
@@ -924,6 +946,144 @@ class LiteLLMAnthropicMessagesAdapter:
                     ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
                 )
 
+    def _translate_metadata_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate metadata fields from Anthropic request to OpenAI request."""
+        if "metadata" in anthropic_message_request:
+            metadata = anthropic_message_request["metadata"]
+            if metadata and "user_id" in metadata:
+                new_kwargs["user"] = metadata["user_id"]
+
+        if "litellm_metadata" in anthropic_message_request:
+            # metadata will be passed to litellm.acompletion(), it's a litellm_param
+            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
+
+    def _translate_tool_choice_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic tool_choice to OpenAI format."""
+        if "tool_choice" not in anthropic_message_request:
+            return
+        tool_choice = anthropic_message_request["tool_choice"]
+        if not tool_choice:
+            return
+        new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
+            tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
+        )
+
+    def _translate_tools_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> Dict[str, str]:
+        """Translate tools and extract web_search_options when needed."""
+        if "tools" not in anthropic_message_request:
+            return {}
+
+        tools = anthropic_message_request["tools"]
+        if not tools:
+            return {}
+
+        web_search_tools: List[AllAnthropicToolsValues] = []
+        regular_tools: List[AllAnthropicToolsValues] = []
+        for tool in tools:
+            cast_tool = cast(Dict[str, Any], tool)
+            if self._is_web_search_tool(cast_tool):
+                web_search_tools.append(cast(AllAnthropicToolsValues, tool))
+            else:
+                regular_tools.append(cast(AllAnthropicToolsValues, tool))
+
+        if web_search_tools:
+            new_kwargs["web_search_options"] = {}  # type: ignore
+
+        if not regular_tools:
+            return {}
+
+        translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
+            tools=regular_tools,
+            model=new_kwargs.get("model"),
+        )
+        new_kwargs["tools"] = translated_tools
+        return tool_name_mapping
+
+    def _translate_thinking_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic thinking to either thinking or reasoning_effort."""
+        if "thinking" not in anthropic_message_request:
+            return
+
+        thinking = anthropic_message_request["thinking"]
+        if not thinking:
+            return
+
+        model = new_kwargs.get("model", "")
+        if self.is_anthropic_claude_model(model):
+            new_kwargs["thinking"] = thinking  # type: ignore
+            return
+
+        reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(
+            cast(Dict[str, Any], thinking)
+        )
+        if not reasoning_effort:
+            return
+
+        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+        auto_summary = is_reasoning_auto_summary_enabled()
+        if summary:
+            new_kwargs["reasoning_effort"] = cast(
+                Any,
+                {
+                    "effort": reasoning_effort,
+                    "summary": summary,
+                },
+            )
+        elif auto_summary:
+            new_kwargs["reasoning_effort"] = cast(
+                Any,
+                {
+                    "effort": reasoning_effort,
+                    "summary": "detailed",
+                },
+            )
+        else:
+            new_kwargs["reasoning_effort"] = reasoning_effort
+
+    def _translate_output_format_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate output_format to response_format when applicable."""
+        if "output_format" not in anthropic_message_request:
+            return
+        output_format = anthropic_message_request["output_format"]
+        if not output_format:
+            return
+        response_format = self.translate_anthropic_output_format_to_openai(
+            output_format=output_format
+        )
+        if response_format:
+            new_kwargs["response_format"] = response_format
+
+    def _copy_untranslated_anthropic_params(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Copy through anthropic params that do not require translation."""
+        translatable_params = self.translatable_anthropic_params()
+        for k, v in anthropic_message_request.items():
+            if k not in translatable_params:  # pass remaining params as is
+                new_kwargs[k] = v  # type: ignore
+
     def translate_anthropic_to_openai(
         self, anthropic_message_request: AnthropicMessagesRequest
     ) -> Tuple[ChatCompletionRequest, Dict[str, str]]:
@@ -964,83 +1124,35 @@ class LiteLLMAnthropicMessagesAdapter:
             "model": anthropic_message_request["model"],
             "messages": new_messages,
         }
-        ## CONVERT METADATA (user_id)
-        if "metadata" in anthropic_message_request:
-            metadata = anthropic_message_request["metadata"]
-            if metadata and "user_id" in metadata:
-                new_kwargs["user"] = metadata["user_id"]
-
-        # Pass litellm proxy specific metadata
-        if "litellm_metadata" in anthropic_message_request:
-            # metadata will be passed to litellm.acompletion(), it's a litellm_param
-            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
-
+        ## CONVERT METADATA (user_id + litellm metadata)
+        self._translate_metadata_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT TOOL CHOICE
-        if "tool_choice" in anthropic_message_request:
-            tool_choice = anthropic_message_request["tool_choice"]
-            if tool_choice:
-                new_kwargs[
-                    "tool_choice"
-                ] = self.translate_anthropic_tool_choice_to_openai(
-                    tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                )
+        self._translate_tool_choice_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT TOOLS
-        if "tools" in anthropic_message_request:
-            tools = anthropic_message_request["tools"]
-            if tools:
-                # Separate web search tools from regular tools
-                web_search_tools = []
-                regular_tools = []
-                for tool in tools:
-                    if self._is_web_search_tool(cast(Dict[str, Any], tool)):
-                        web_search_tools.append(tool)
-                    else:
-                        regular_tools.append(tool)
-
-                # If web search tools are present, add web_search_options parameter
-                if web_search_tools:
-                    new_kwargs["web_search_options"] = {}  # type: ignore
-
-                # Only translate regular tools (non-web-search)
-                if regular_tools:
-                    (
-                        new_kwargs["tools"],
-                        tool_name_mapping,
-                    ) = self.translate_anthropic_tools_to_openai(
-                        tools=cast(List[AllAnthropicToolsValues], regular_tools),
-                        model=new_kwargs.get("model"),
-                    )
-
+        tool_name_mapping = self._translate_tools_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT THINKING
-        if "thinking" in anthropic_message_request:
-            thinking = anthropic_message_request["thinking"]
-            if thinking:
-                model = new_kwargs.get("model", "")
-                if self.is_anthropic_claude_model(model):
-                    new_kwargs["thinking"] = thinking  # type: ignore
-                else:
-                    reasoning_effort = (
-                        self.translate_anthropic_thinking_to_reasoning_effort(
-                            cast(Dict[str, Any], thinking)
-                        )
-                    )
-                    if reasoning_effort:
-                        new_kwargs["reasoning_effort"] = reasoning_effort
-
+        self._translate_thinking_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
-        if "output_format" in anthropic_message_request:
-            output_format = anthropic_message_request["output_format"]
-            if output_format:
-                response_format = self.translate_anthropic_output_format_to_openai(
-                    output_format=output_format
-                )
-                if response_format:
-                    new_kwargs["response_format"] = response_format
-
-        translatable_params = self.translatable_anthropic_params()
-        for k, v in anthropic_message_request.items():
-            if k not in translatable_params:  # pass remaining params as is
-                new_kwargs[k] = v  # type: ignore
+        self._translate_output_format_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        self._copy_untranslated_anthropic_params(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
 
         return new_kwargs, tool_name_mapping
 
