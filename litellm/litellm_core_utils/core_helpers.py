@@ -98,6 +98,8 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Azure AI Foundry content filtering
+    "refusal": "content_filter",
 }
 
 

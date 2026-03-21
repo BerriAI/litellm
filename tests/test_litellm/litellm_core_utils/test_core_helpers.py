@@ -123,6 +123,12 @@ class TestMapFinishReasonBedrock:
         assert map_finish_reason("guardrail_intervened") == "content_filter"
 
 
+class TestMapFinishReasonAzureAIFoundry:
+    def test_refusal(self):
+        # GH#24141: Azure AI Foundry returns 'refusal' for content filtering
+        assert map_finish_reason("refusal") == "content_filter"
+
+
 class TestMapFinishReasonOpenAIPassthrough:
     @pytest.mark.parametrize(
         "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
