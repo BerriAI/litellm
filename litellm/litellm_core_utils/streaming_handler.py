@@ -2150,22 +2150,36 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
+                _deferred_cb = getattr(
+                    self.logging_obj,
+                    "_on_deferred_stream_complete",
+                    None,
+                )
+                if _deferred_cb is not None:
+                    # Proxy has post-call guardrails — let the closure
+                    # run guardrails on the assembled response, then
+                    # fire logging with guardrail_information populated.
+                    self.logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    asyncio.create_task(
+                        _deferred_cb(complete_streaming_response, cache_hit)
+                    )
+                else:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+                    executor.submit(
+                        self.logging_obj.success_handler,
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                     )
-                )
-
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:
