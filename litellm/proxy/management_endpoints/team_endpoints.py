@@ -2542,14 +2542,14 @@ async def team_member_update(  # noqa: PLR0915
         if _tm_row is not None:
             stored_models = _tm_row.models or []
 
-    if data.role is not None:
+    if data.role is not None or data.models is not None:
         team_members: List[Member] = []
         for member in team_table.members_with_roles:
             if member.user_id == received_user_id:
                 team_members.append(
                     Member(
                         user_id=member.user_id,
-                        role=data.role,
+                        role=data.role or member.role,
                         user_email=data.user_email or member.user_email,
                         models=stored_models,
                     )
