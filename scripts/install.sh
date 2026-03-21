@@ -91,8 +91,8 @@ LITELLM_BIN=""
 if command -v pipx >/dev/null 2>&1; then
   info "Using pipx (isolated install)"
   if pipx install --force "${LITELLM_PACKAGE}"; then
-    # pipx installs to ~/.local/bin by default; try PIPX_BIN_DIR, then PATH
-    for try in "${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm" "$(command -v litellm 2>/dev/null || true)"; do
+    # pipx installs to ~/.local/bin by default; try PIPX_BIN_DIR, then pipx venv (avoid PATH—may have stale binary)
+    for try in "${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm" "${PIPX_HOME:-${HOME}/.local/pipx}/venvs/litellm/bin/litellm"; do
       if [ -n "$try" ] && [ -x "$try" ]; then
         LITELLM_BIN="$try"
         break
