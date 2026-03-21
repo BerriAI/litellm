@@ -4,6 +4,7 @@ import { Button, Typography, Spin, Switch, Select, InputNumber } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
+import ConfirmSettingsChangeModal, { SettingsChange } from "./common_components/ConfirmSettingsChangeModal";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import NotificationManager from "./molecules/notifications_manager";
@@ -21,6 +22,162 @@ interface TeamEntry {
   user_role: "user" | "admin";
 }
 
+/** Normalize heterogeneous team arrays (strings or objects) to TeamEntry[]. */
+function normalizeTeams(teams: any[]): TeamEntry[] {
+  if (!teams || !Array.isArray(teams)) return [];
+
+  return teams.map((team) => {
+    if (typeof team === "string") {
+      return { team_id: team, user_role: "user" as const };
+    } else if (typeof team === "object" && team.team_id) {
+      return {
+        team_id: team.team_id,
+        max_budget_in_team: team.max_budget_in_team,
+        user_role: team.user_role || "user",
+      };
+    }
+    return { team_id: "", user_role: "user" as const };
+  });
+}
+
+/**
+ * Compare original settings values against edited values and return a list of
+ * human-readable changes. A change is "destructive" if something was removed,
+ * cleared, or reduced.
+ */
+export function computeSettingsDiff(
+  original: Record<string, any>,
+  edited: Record<string, any>,
+): { changes: SettingsChange[]; hasDestructiveChanges: boolean } {
+  const changes: SettingsChange[] = [];
+
+  const allKeys = new Set([...Object.keys(original), ...Object.keys(edited)]);
+
+  for (const key of allKeys) {
+    const oldVal = original[key];
+    const newVal = edited[key];
+
+    const displayName = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+
+    if (key === "teams") {
+      const oldTeams = normalizeTeams(oldVal || []);
+      const newTeams = normalizeTeams(newVal || []);
+
+      const oldIds = new Set(oldTeams.map((t) => t.team_id));
+      const newIds = new Set(newTeams.map((t) => t.team_id));
+
+      // Removed teams
+      for (const t of oldTeams) {
+        if (!newIds.has(t.team_id)) {
+          changes.push({
+            field: displayName,
+            type: "removed",
+            details: `Team "${t.team_id}" removed`,
+          });
+        }
+      }
+
+      // Added teams
+      for (const t of newTeams) {
+        if (t.team_id && !oldIds.has(t.team_id)) {
+          changes.push({
+            field: displayName,
+            type: "added",
+            details: `Team "${t.team_id}" added`,
+          });
+        }
+      }
+
+      // Budget/role changes for teams that still exist
+      for (const newTeam of newTeams) {
+        if (!oldIds.has(newTeam.team_id)) continue;
+        const oldTeam = oldTeams.find((t) => t.team_id === newTeam.team_id);
+        if (!oldTeam) continue;
+
+        if (oldTeam.max_budget_in_team !== newTeam.max_budget_in_team) {
+          const oldBudget = oldTeam.max_budget_in_team !== undefined ? `$${oldTeam.max_budget_in_team}` : "No limit";
+          const newBudget = newTeam.max_budget_in_team !== undefined ? `$${newTeam.max_budget_in_team}` : "No limit";
+          changes.push({
+            field: displayName,
+            type: "changed",
+            details: `Team "${newTeam.team_id}" budget: ${oldBudget} → ${newBudget}`,
+          });
+        }
+
+        if (oldTeam.user_role !== newTeam.user_role) {
+          changes.push({
+            field: displayName,
+            type: "changed",
+            details: `Team "${newTeam.team_id}" role: ${oldTeam.user_role} → ${newTeam.user_role}`,
+          });
+        }
+      }
+
+      continue;
+    }
+
+    if (key === "models") {
+      const oldModels: string[] = Array.isArray(oldVal) ? oldVal : [];
+      const newModels: string[] = Array.isArray(newVal) ? newVal : [];
+      const oldSet = new Set(oldModels);
+      const newSet = new Set(newModels);
+
+      const removed = oldModels.filter((m) => !newSet.has(m));
+      const added = newModels.filter((m) => !oldSet.has(m));
+
+      if (removed.length > 0) {
+        changes.push({
+          field: displayName,
+          type: "removed",
+          details: `${removed.join(", ")} removed`,
+        });
+      }
+      if (added.length > 0) {
+        changes.push({
+          field: displayName,
+          type: "added",
+          details: `${added.join(", ")} added`,
+        });
+      }
+      continue;
+    }
+
+    // Scalar fields
+    const oldNorm = oldVal === "" ? null : oldVal;
+    const newNorm = newVal === "" ? null : newVal;
+
+    if (oldNorm === newNorm) continue;
+    // Both null/undefined — no change
+    if (oldNorm == null && newNorm == null) continue;
+
+    if (oldNorm != null && newNorm == null) {
+      // Value cleared
+      changes.push({
+        field: displayName,
+        type: "removed",
+        details: `Cleared (was "${oldNorm}")`,
+      });
+    } else if (oldNorm == null && newNorm != null) {
+      // Value set
+      changes.push({
+        field: displayName,
+        type: "added",
+        details: `Set to "${newNorm}"`,
+      });
+    } else if (oldNorm !== newNorm) {
+      changes.push({
+        field: displayName,
+        type: "changed",
+        details: `"${oldNorm}" → "${newNorm}"`,
+      });
+    }
+  }
+
+  const hasDestructiveChanges = changes.some((c) => c.type === "removed" || c.type === "changed");
+
+  return { changes, hasDestructiveChanges };
+}
+
 const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   accessToken,
   possibleUIRoles,
@@ -33,6 +190,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   const [editedValues, setEditedValues] = useState<any>({});
   const [saving, setSaving] = useState<boolean>(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
+  const [pendingChanges, setPendingChanges] = useState<SettingsChange[]>([]);
+  const [pendingProcessedValues, setPendingProcessedValues] = useState<Record<string, any> | null>(null);
   const { Paragraph } = Typography;
   const { Option } = Select;
 
@@ -71,20 +231,12 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     fetchSSOSettings();
   }, [accessToken]);
 
-  const handleSaveSettings = async () => {
+  /** Perform the actual API save with the given processed values. */
+  const executeSave = async (processedValues: Record<string, any>) => {
     if (!accessToken) return;
 
     setSaving(true);
     try {
-      // Convert empty strings to null
-      const processedValues = Object.entries(editedValues).reduce(
-        (acc, [key, value]) => {
-          acc[key] = value === "" ? null : value;
-          return acc;
-        },
-        {} as Record<string, any>,
-      );
-
       const updatedSettings = await updateInternalUserSettings(accessToken, processedValues);
       setSettings({ ...settings, values: updatedSettings.settings });
       setIsEditing(false);
@@ -96,35 +248,49 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     }
   };
 
+  /** Called when user clicks "Save Changes". Shows modal if destructive. */
+  const handleSaveSettings = async () => {
+    if (!accessToken) return;
+
+    // Convert empty strings to null
+    const processedValues = Object.entries(editedValues).reduce(
+      (acc, [key, value]) => {
+        acc[key] = value === "" ? null : value;
+        return acc;
+      },
+      {} as Record<string, any>,
+    );
+
+    const { changes, hasDestructiveChanges } = computeSettingsDiff(
+      settings?.values || {},
+      processedValues,
+    );
+
+    if (hasDestructiveChanges) {
+      setPendingChanges(changes);
+      setPendingProcessedValues(processedValues);
+      setShowConfirmModal(true);
+      return;
+    }
+
+    // No destructive changes — save directly
+    await executeSave(processedValues);
+  };
+
+  /** Called when user confirms changes in the modal. */
+  const handleConfirmSave = async () => {
+    if (!pendingProcessedValues) return;
+    await executeSave(pendingProcessedValues);
+    setShowConfirmModal(false);
+    setPendingChanges([]);
+    setPendingProcessedValues(null);
+  };
+
   const handleTextInputChange = (key: string, value: any) => {
     setEditedValues((prev: Record<string, any>) => ({
       ...prev,
       [key]: value,
     }));
-  };
-
-  // Helper function to normalize teams array to consistent format
-  const normalizeTeams = (teams: any[]): TeamEntry[] => {
-    if (!teams || !Array.isArray(teams)) return [];
-
-    return teams.map((team) => {
-      if (typeof team === "string") {
-        return {
-          team_id: team,
-          user_role: "user" as const,
-        };
-      } else if (typeof team === "object" && team.team_id) {
-        return {
-          team_id: team.team_id,
-          max_budget_in_team: team.max_budget_in_team,
-          user_role: team.user_role || "user",
-        };
-      }
-      return {
-        team_id: "",
-        user_role: "user" as const,
-      };
-    });
   };
 
   // Teams editor component
@@ -484,6 +650,18 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
       <Divider />
 
       <div className="mt-4 space-y-4">{renderSettings()}</div>
+
+      <ConfirmSettingsChangeModal
+        isOpen={showConfirmModal}
+        changes={pendingChanges}
+        onConfirm={handleConfirmSave}
+        onCancel={() => {
+          setShowConfirmModal(false);
+          setPendingChanges([]);
+          setPendingProcessedValues(null);
+        }}
+        confirmLoading={saving}
+      />
     </Card>
   );
 };
