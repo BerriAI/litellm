@@ -262,6 +262,33 @@ def test_pickle_midstream_preserves_generated_content():
     assert restored.is_pre_first_chunk == original.is_pre_first_chunk
 
 
+def test_pickle_midstream_with_non_picklable_original_exception():
+    """MidStreamFallbackError must survive pickle even when original_exception
+    is a third-party exception that cannot be reconstructed by pickle.loads
+    (e.g. openai.RateLimitError which requires response and body kwargs).
+    The original_exception should be preserved as its string representation."""
+    import openai
+
+    request = _make_response(429).request
+    response = _make_response(429)
+    original_exc = openai.RateLimitError("rate limited", response=response, body={})
+
+    original = exc.MidStreamFallbackError(
+        message="fallback triggered mid-stream",
+        model="gpt-4",
+        llm_provider="openai",
+        original_exception=original_exc,
+        generated_content="partial text",
+    )
+    restored = _roundtrip(original)
+    assert restored.generated_content == original.generated_content
+    assert restored.model == original.model
+    assert restored.llm_provider == original.llm_provider
+    # original_exception falls back to str() when it cannot be round-tripped
+    assert restored.original_exception == str(original_exc)
+    assert isinstance(restored, exc.MidStreamFallbackError)
+
+
 def test_pickle_with_retries_info():
     original = exc.RateLimitError(
         message="too many requests",
