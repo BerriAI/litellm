@@ -28,6 +28,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
     - text: str
 """
 
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -799,7 +800,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 response_output.append(
                     GenericResponseOutputItem(
                         type="message",
-                        id=f"guardrail_msg_{i}",
+                        id=f"guardrail_msg_{uuid.uuid4().hex[:12]}",
                         status="completed",
                         role="assistant",
                         content=[
