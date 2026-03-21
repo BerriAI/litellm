@@ -1251,7 +1251,9 @@ class ModelResponseIterator:
             try:
                 data_json = json.loads(chunk_str)
                 return self.chunk_parser(chunk=data_json)
-            except json.JSONDecodeError as e:
-                pass
+            except json.JSONDecodeError:
+                verbose_logger.debug(
+                    f"Non-JSON SSE chunk received, ignoring: {chunk_str!r}"
+                )
 
         return ModelResponseStream(id=self.response_id)
