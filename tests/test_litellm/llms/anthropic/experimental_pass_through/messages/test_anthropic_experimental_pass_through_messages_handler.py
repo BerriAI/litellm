@@ -190,6 +190,7 @@ def test_openai_model_with_thinking_converts_to_reasoning():
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
             f"got {call_kwargs.get('reasoning')}"
         )
+        assert "summary" not in call_kwargs["reasoning"]
 
         # Verify thinking is NOT passed directly to the Responses API
         assert (
@@ -230,6 +231,7 @@ class TestThinkingParameterTransformation:
         # reasoning_auto_summary is False by default, so no summary key
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
+        assert "summary" not in str(result["reasoning_effort"])
 
     def test_translate_thinking_for_model_summary_when_enabled(self):
         """When reasoning_auto_summary is True, summary='detailed' is injected."""
@@ -479,7 +481,7 @@ class TestThinkingSummaryPreservation:
                 )
             )
             assert result == {"effort": "medium"}
-            assert "summary" not in result
+            assert result is not None and "summary" not in result
         finally:
             litellm.reasoning_auto_summary = original
 

@@ -614,7 +614,9 @@ class TestTranslateThinkingToReasoning:
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 10000}
         )
+        # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
+        assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
@@ -622,24 +624,28 @@ class TestTranslateThinkingToReasoning:
         )
         assert result is not None
         assert result["effort"] == "high"
+        assert "summary" not in result
 
     def test_budget_medium_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 7500}
         )
         assert result == {"effort": "medium"}
+        assert result is not None and "summary" not in result
 
     def test_budget_low_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 3000}
         )
         assert result == {"effort": "low"}
+        assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
         result = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 500}
         )
         assert result == {"effort": "minimal"}
+        assert result is not None and "summary" not in result
 
     def test_budget_at_exact_thresholds(self):
         result_medium = _ADAPTER.translate_thinking_to_reasoning(
@@ -647,11 +653,13 @@ class TestTranslateThinkingToReasoning:
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
+        assert "summary" not in result_medium
         result_low = _ADAPTER.translate_thinking_to_reasoning(
             {"type": "enabled", "budget_tokens": 2000}
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
+        assert "summary" not in result_low
 
     def test_disabled_type_returns_none(self):
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
@@ -665,6 +673,7 @@ class TestTranslateThinkingToReasoning:
         """Missing budget_tokens defaults to 0, which is < 2000 -> minimal."""
         result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
         assert result == {"effort": "minimal"}
+        assert result is not None and "summary" not in result
 
     def test_summary_added_when_auto_summary_enabled(self):
         """When reasoning_auto_summary is True, summary='detailed' is included."""
@@ -774,6 +783,7 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         # reasoning_auto_summary is False by default, so no summary key
         assert kwargs["reasoning"] == {"effort": "high"}
+        assert "summary" not in kwargs["reasoning"]
 
     def test_disabled_thinking_not_included_in_kwargs(self):
         req = _make_request(thinking={"type": "disabled"})
