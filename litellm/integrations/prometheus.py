@@ -180,6 +180,31 @@ class PrometheusLogger(CustomLogger):
                 ),
             )
 
+            # Remaining Budget for Org
+            self.litellm_remaining_org_budget_metric = self._gauge_factory(
+                "litellm_remaining_org_budget_metric",
+                "Remaining budget for org",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_remaining_org_budget_metric"
+                ),
+            )
+
+            # Max Budget for Org
+            self.litellm_org_max_budget_metric = self._gauge_factory(
+                "litellm_org_max_budget_metric",
+                "Maximum budget set for org",
+                labelnames=self.get_labels_for_metric("litellm_org_max_budget_metric"),
+            )
+
+            # Org Budget Reset At
+            self.litellm_org_budget_remaining_hours_metric = self._gauge_factory(
+                "litellm_org_budget_remaining_hours_metric",
+                "Remaining hours for org budget to be reset",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_org_budget_remaining_hours_metric"
+                ),
+            )
+
             # Remaining Budget for API Key
             self.litellm_remaining_api_key_budget_metric = self._gauge_factory(
                 "litellm_remaining_api_key_budget_metric",
@@ -922,6 +947,9 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
+        user_api_key_org_id = standard_logging_payload["metadata"].get(
+            "user_api_key_org_id"
+        )
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
@@ -1026,6 +1054,7 @@ class PrometheusLogger(CustomLogger):
             litellm_params=litellm_params,
             response_cost=response_cost,
             user_id=user_id,
+            user_api_key_org_id=user_api_key_org_id,
         )
 
         # set proxy virtual key rpm/tpm metrics
@@ -1181,6 +1210,7 @@ class PrometheusLogger(CustomLogger):
         litellm_params: dict,
         response_cost: float,
         user_id: Optional[str] = None,
+        user_api_key_org_id: Optional[str] = None,
     ):
         _metadata = litellm_params.get("metadata") or {}
         _team_spend = _metadata.get("user_api_key_team_spend", None)
@@ -1213,12 +1243,16 @@ class PrometheusLogger(CustomLogger):
                 user_max_budget=_user_max_budget,
                 response_cost=response_cost,
             ),
+            self._set_org_budget_metrics_after_api_request(
+                org_id=user_api_key_org_id,
+                response_cost=response_cost,
+            ),
             return_exceptions=True,
         )
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 verbose_logger.debug(
-                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user'][i]} failed: {r}"
+                    f"[Non-Blocking] Prometheus: Budget metric lookup {['key', 'team', 'user', 'org'][i]} failed: {r}"
                 )
 
     def _increment_top_level_request_and_spend_metrics(
@@ -2741,6 +2775,110 @@ class PrometheusLogger(CustomLogger):
             self.litellm_team_budget_remaining_hours_metric.labels(**_labels).set(
                 self._get_remaining_hours_for_budget_reset(
                     budget_reset_at=team.budget_reset_at
+                )
+            )
+
+    async def _set_org_budget_metrics_after_api_request(
+        self,
+        org_id: Optional[str],
+        response_cost: float,
+    ):
+        """
+        Set org budget metrics after an LLM API request
+
+        - Fetches org info from db
+        - Sets org budget metrics
+        """
+        if not org_id:
+            return
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id},
+                include={"litellm_budget_table": True},
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"[Non-Blocking] Prometheus: Error getting org info: {str(e)}"
+            )
+            return
+
+        if org_row is None:
+            return
+
+        org_alias = org_row.organization_alias or ""
+        spend = org_row.spend or 0.0
+        budget_table = org_row.litellm_budget_table
+        max_budget = budget_table.max_budget if budget_table else None
+        budget_reset_at = (
+            getattr(budget_table, "budget_reset_at", None) if budget_table else None
+        )
+
+        self._set_org_budget_metrics(
+            org_id=org_id,
+            org_alias=org_alias,
+            spend=spend,
+            max_budget=max_budget,
+            budget_reset_at=budget_reset_at,
+        )
+
+    def _set_org_budget_metrics(
+        self,
+        org_id: str,
+        org_alias: str,
+        spend: float,
+        max_budget: Optional[float],
+        budget_reset_at: Optional[datetime],
+    ):
+        """
+        Set org budget metrics for a single org
+
+        - Remaining Budget
+        - Max Budget
+        - Budget Reset At
+        """
+        enum_values = UserAPIKeyLabelValues(
+            org_id=org_id,
+            org_alias=org_alias,
+        )
+
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_remaining_org_budget_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_org_budget_metric.labels(**_labels).set(
+            self._safe_get_remaining_budget(
+                max_budget=max_budget,
+                spend=spend,
+            )
+        )
+
+        if max_budget is not None:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_org_max_budget_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_org_max_budget_metric.labels(**_labels).set(max_budget)
+
+        if budget_reset_at is not None:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_org_budget_remaining_hours_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_org_budget_remaining_hours_metric.labels(**_labels).set(
+                self._get_remaining_hours_for_budget_reset(
+                    budget_reset_at=budget_reset_at
                 )
             )
 
