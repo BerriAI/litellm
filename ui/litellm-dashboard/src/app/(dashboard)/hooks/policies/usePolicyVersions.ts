@@ -17,7 +17,7 @@ export const policyVersionKeys = createQueryKeys("policyVersions");
 
 export interface PolicyVersionsResponse {
   policy_name: string;
-  versions: Policy[];
+  versions: Policy[] | undefined;
   total_count: number;
 }
 
@@ -95,8 +95,8 @@ export const useUpdatePolicyVersionStatus = (
     { policyId: string; status: "published" | "production" }
   >({
     mutationFn: async ({ policyId, status }) => {
-      if (!accessToken) {
-        throw new Error("Missing access token");
+      if (!accessToken || !policyName) {
+        throw new Error("Missing access token or policy name");
       }
       return await updatePolicyVersionStatus(accessToken, policyId, status);
     },

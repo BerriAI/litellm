@@ -304,4 +304,15 @@ describe("useUpdatePolicyVersionStatus", () => {
       "Failed to promote to production: Not found"
     );
   });
+
+  it("throws when policyName is null", async () => {
+    const { result } = renderHook(
+      () => useUpdatePolicyVersionStatus(null),
+      { wrapper }
+    );
+
+    await expect(
+      result.current.mutateAsync({ policyId: "v2", status: "published" })
+    ).rejects.toThrow("Missing access token or policy name");
+  });
 });
