@@ -247,6 +247,240 @@ async def test_nvidia_nim_rerank_ranking_endpoint():
         assert request_data["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
 
 
+def test_nvidia_nim_non_streaming_think_tags_parsed_when_reasoning_content_null():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24253
+
+    When nvidia_nim (e.g. minimax-m1) returns a response where:
+      - content contains raw <think>...</think> tags, AND
+      - reasoning_content is explicitly null in the message dict
+
+    _extract_reasoning_content must still parse the tags out of content and
+    populate reasoning_content, rather than returning (None, content_with_tags).
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    # Simulates what model_dump() produces when the API returns reasoning_content: null
+    message = {
+        "role": "assistant",
+        "content": "<think>The user sent ping</think>\n\npong",
+        "reasoning_content": None,
+    }
+    reasoning_content, content = _extract_reasoning_content(message)
+
+    assert reasoning_content == "The user sent ping"
+    assert content == "\n\npong"
+
+
+def test_nvidia_nim_non_streaming_think_tags_parsed_without_reasoning_content_field():
+    """
+    When the API response does not include a reasoning_content field at all,
+    _extract_reasoning_content should still parse <think> tags from content.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "role": "assistant",
+        "content": "<think>internal reasoning here</think>final answer",
+    }
+    reasoning_content, content = _extract_reasoning_content(message)
+
+    assert reasoning_content == "internal reasoning here"
+    assert content == "final answer"
+
+
+def test_nvidia_nim_non_streaming_explicit_reasoning_content_not_overwritten():
+    """
+    When reasoning_content is already populated by the provider (non-null),
+    it should take precedence over any <think> tags that might appear in content.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "role": "assistant",
+        "content": "final answer",
+        "reasoning_content": "provider supplied reasoning",
+    }
+    reasoning_content, content = _extract_reasoning_content(message)
+
+    assert reasoning_content == "provider supplied reasoning"
+    assert content == "final answer"
+
+
+def test_nvidia_nim_streaming_think_tags_extracted_single_chunk():
+    """
+    When a streaming chunk contains a complete <think>...</think> block inside
+    delta.content, the block should be moved to delta.reasoning_content and
+    stripped from delta.content.
+    """
+    from unittest.mock import MagicMock
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nvidia_nim/minimax/minimax-m1",
+        logging_obj=MagicMock(),
+        custom_llm_provider="nvidia_nim",
+    )
+
+    model_response = ModelResponseStream(
+        id="test-id",
+        object="chat.completion.chunk",
+        created=1234567890,
+        model="nvidia_nim/minimax/minimax-m1",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="<think>thinking step</think>pong"),
+            )
+        ],
+    )
+
+    wrapper._maybe_extract_think_tags_from_streaming_content(model_response)
+
+    assert model_response.choices[0].delta.reasoning_content == "thinking step"
+    assert model_response.choices[0].delta.content == "pong"
+
+
+def test_nvidia_nim_streaming_think_tags_extracted_across_chunks():
+    """
+    When <think> and </think> span multiple streaming chunks, the state is
+    tracked across calls and reasoning_content is populated correctly.
+    """
+    from unittest.mock import MagicMock
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nvidia_nim/minimax/minimax-m1",
+        logging_obj=MagicMock(),
+        custom_llm_provider="nvidia_nim",
+    )
+
+    def make_chunk(content):
+        return ModelResponseStream(
+            id="test-id",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="nvidia_nim/minimax/minimax-m1",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content=content),
+                )
+            ],
+        )
+
+    chunk1 = make_chunk("<think>")
+    chunk2 = make_chunk("step one")
+    chunk3 = make_chunk("</think>")
+    chunk4 = make_chunk("pong")
+
+    wrapper._maybe_extract_think_tags_from_streaming_content(chunk1)
+    wrapper._maybe_extract_think_tags_from_streaming_content(chunk2)
+    wrapper._maybe_extract_think_tags_from_streaming_content(chunk3)
+    wrapper._maybe_extract_think_tags_from_streaming_content(chunk4)
+
+    # chunk1: <think> with no text → no reasoning_content, content cleared
+    assert getattr(chunk1.choices[0].delta, "reasoning_content", None) is None
+    assert chunk1.choices[0].delta.content is None
+
+    # chunk2: inside think block → becomes reasoning_content
+    assert chunk2.choices[0].delta.reasoning_content == "step one"
+    assert chunk2.choices[0].delta.content is None
+
+    # chunk3: </think> with no remaining text → closes block
+    assert getattr(chunk3.choices[0].delta, "reasoning_content", None) is None
+    assert chunk3.choices[0].delta.content is None
+
+    # chunk4: after think block → regular content
+    assert getattr(chunk4.choices[0].delta, "reasoning_content", None) is None
+    assert chunk4.choices[0].delta.content == "pong"
+
+
+def test_nvidia_nim_streaming_no_think_tags_unaffected():
+    """
+    Regular streaming chunks without <think> tags must not be modified.
+    """
+    from unittest.mock import MagicMock
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nvidia_nim/minimax/minimax-m1",
+        logging_obj=MagicMock(),
+        custom_llm_provider="nvidia_nim",
+    )
+
+    model_response = ModelResponseStream(
+        id="test-id",
+        object="chat.completion.chunk",
+        created=1234567890,
+        model="nvidia_nim/minimax/minimax-m1",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello, world!"),
+            )
+        ],
+    )
+
+    wrapper._maybe_extract_think_tags_from_streaming_content(model_response)
+
+    assert getattr(model_response.choices[0].delta, "reasoning_content", None) is None
+    assert model_response.choices[0].delta.content == "Hello, world!"
+
+
+def test_nvidia_nim_streaming_skipped_when_merge_reasoning_content_in_choices():
+    """
+    When merge_reasoning_content_in_choices=True, think-tag extraction must be
+    skipped (the merge path owns the think-tag lifecycle).
+    """
+    from unittest.mock import MagicMock
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="nvidia_nim/minimax/minimax-m1",
+        logging_obj=MagicMock(),
+        custom_llm_provider="nvidia_nim",
+    )
+    wrapper.merge_reasoning_content_in_choices = True
+
+    model_response = ModelResponseStream(
+        id="test-id",
+        object="chat.completion.chunk",
+        created=1234567890,
+        model="nvidia_nim/minimax/minimax-m1",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="<think>thinking</think>answer"),
+            )
+        ],
+    )
+
+    wrapper._maybe_extract_think_tags_from_streaming_content(model_response)
+
+    # Content must be untouched when merge path is active
+    assert getattr(model_response.choices[0].delta, "reasoning_content", None) is None
+    assert model_response.choices[0].delta.content == "<think>thinking</think>answer"
+
+
 class TestNvidiaNim(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.NVIDIA_NIM

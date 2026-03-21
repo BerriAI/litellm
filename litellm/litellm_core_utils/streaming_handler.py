@@ -108,6 +108,7 @@ class CustomStreamWrapper:
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
+        self._in_think_content_block: bool = False
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
@@ -994,6 +995,9 @@ class CustomStreamWrapper:
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
+                self._maybe_extract_think_tags_from_streaming_content(
+                    model_response=model_response
+                )
 
                 return model_response
             else:
@@ -1092,6 +1096,67 @@ class CustomStreamWrapper:
             if hasattr(model_response.choices[0].delta, "reasoning_content"):
                 del model_response.choices[0].delta.reasoning_content
         return
+
+    def _maybe_extract_think_tags_from_streaming_content(
+        self, model_response: ModelResponseStream
+    ) -> None:
+        """
+        For providers that embed <think>...</think> tags directly in streaming
+        content (e.g. nvidia_nim with minimax reasoning models), extract the
+        thinking content from delta.content and set delta.reasoning_content.
+
+        This is the streaming counterpart to _parse_content_for_reasoning used
+        for non-streaming responses.
+
+        Only runs when:
+        - merge_reasoning_content_in_choices is False (the default), and
+        - reasoning_content is not already set by the provider on the delta.
+        """
+        if self.merge_reasoning_content_in_choices:
+            return
+
+        choice = model_response.choices[0]
+        if not isinstance(choice, StreamingChoices):
+            return
+
+        delta = choice.delta
+        if getattr(delta, "reasoning_content", None) is not None:
+            return
+
+        content = delta.content
+
+        if not self._in_think_content_block:
+            if not content or "<think>" not in content:
+                return
+
+            idx = content.index("<think>")
+            pre_think = content[:idx]
+            after_start = content[idx + len("<think>") :]
+
+            if "</think>" in after_start:
+                end_idx = after_start.index("</think>")
+                think_text = after_start[:end_idx]
+                post_think = after_start[end_idx + len("</think>") :]
+                if think_text:
+                    delta.reasoning_content = think_text
+                delta.content = (pre_think + post_think) or None
+            else:
+                self._in_think_content_block = True
+                if after_start:
+                    delta.reasoning_content = after_start
+                delta.content = pre_think or None
+        else:
+            if content and "</think>" in content:
+                end_idx = content.index("</think>")
+                think_text = content[:end_idx]
+                post_think = content[end_idx + len("</think>") :]
+                self._in_think_content_block = False
+                if think_text:
+                    delta.reasoning_content = think_text
+                delta.content = post_think or None
+            elif content:
+                delta.reasoning_content = content
+                delta.content = None
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         if hasattr(chunk, "id"):
