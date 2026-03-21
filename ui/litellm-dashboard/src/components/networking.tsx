@@ -7269,12 +7269,11 @@ export const getTeamPermissionsCall = async (accessToken: string, teamId: string
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
+      console.error("Available permissions fetch failed:", errorMessage);
+      return { all_available_permissions: [], team_member_permissions: [] };
     }
 
     const data = await response.json();
-    console.log("Team permissions response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get team permissions:", error);
