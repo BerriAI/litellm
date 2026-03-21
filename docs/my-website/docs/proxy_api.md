@@ -15,7 +15,7 @@ os.environ["COHERE_API_KEY"] = "your-api-key"
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 
 # cohere call
 response = completion("command-nightly", messages)
@@ -31,8 +31,8 @@ For a complete list of models/providers that you can call with LiteLLM, [check o
 
 * OpenAI models - [OpenAI docs](./providers/openai.md)
     * gpt-4
-    * gpt-3.5-turbo
-    * gpt-3.5-turbo-16k
+    * gpt-4o
+    * gpt-4o-16k
 * Llama2 models - [TogetherAI docs](./providers/togetherai.md)
     * togethercomputer/llama-2-70b-chat
     * togethercomputer/llama-2-70b

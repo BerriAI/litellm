@@ -42,7 +42,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is john@example.com"}
     ],
@@ -68,7 +68,7 @@ client = openai.OpenAI(
 
 # This request will trigger MCP guardrails
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Send an email to 555-123-4567 with my SSN 123-45-6789"}
     ],

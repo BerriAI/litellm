@@ -32,9 +32,9 @@ from litellm import Router
 router = Router(
     model_list=[
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-4o",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4o",
                 "mock_response": "Hello world this is Macintosh!", # fakes the LLM API call
                 "rpm": 1,
             },
@@ -47,7 +47,7 @@ router = Router(
 
 try:
     _response = await router.acompletion( # 👈 ADDS TO QUEUE + POLLS + MAKES CALL
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{"role": "user", "content": "Hey!"}],
         priority=0, # 👈 LOWER IS BETTER
     )
@@ -67,7 +67,7 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-    "model": "gpt-3.5-turbo-fake-model",
+    "model": "gpt-4o-fake-model",
     "messages": [
         {
         "role": "user",
@@ -89,7 +89,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -118,9 +118,9 @@ from litellm import Router
 router = Router(
     model_list=[
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-4o",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4o",
                 "mock_response": "Hello world this is Macintosh!", # fakes the LLM API call
                 "rpm": 1,
             },
@@ -134,7 +134,7 @@ router = Router(
 
 try:
     _response = await router.acompletion( # 👈 ADDS TO QUEUE + POLLS + MAKES CALL
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{"role": "user", "content": "Hey!"}],
         priority=0, # 👈 LOWER IS BETTER
     )
@@ -146,9 +146,9 @@ except Exception as e:
 
 ```yaml
 model_list:
-    - model_name: gpt-3.5-turbo-fake-model
+    - model_name: gpt-4o-fake-model
       litellm_params:
-        model: gpt-3.5-turbo
+        model: gpt-4o
         mock_response: "hello world!" 
         api_key: my-good-key
 
@@ -172,7 +172,7 @@ curl -X POST 'http://localhost:4000/queue/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-    "model": "gpt-3.5-turbo-fake-model",
+    "model": "gpt-4o-fake-model",
     "messages": [
         {
         "role": "user",

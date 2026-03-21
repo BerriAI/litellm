@@ -69,7 +69,7 @@ except openai.APITimeoutError as e:
 import litellm
 try:
     response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[
             {
                 "role": "user",

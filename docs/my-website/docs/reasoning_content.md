@@ -520,7 +520,7 @@ assert litellm.supports_reasoning(model="anthropic/claude-3-7-sonnet-20250219") 
 assert litellm.supports_reasoning(model="deepseek/deepseek-chat") == True 
 
 # Example models that do not support reasoning
-assert litellm.supports_reasoning(model="openai/gpt-3.5-turbo") == False 
+assert litellm.supports_reasoning(model="openai/gpt-4o") == False 
 ```
 </TabItem>
 

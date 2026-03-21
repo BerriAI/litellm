@@ -22,7 +22,7 @@ from litellm import Router
 
 model_list = [
     {
-        "model_name": "gpt-3.5-turbo",
+        "model_name": "gpt-4o",
         "litellm_params": {
             "model": "azure/chatgpt-v-2",
             "api_key": "...",
@@ -40,9 +40,9 @@ model_list = [
 
 router = Router(model_list=model_list)
 
-# The request to "gpt-3.5-turbo" will trigger a background call to "gpt-4"
+# The request to "gpt-4o" will trigger a background call to "gpt-4"
 response = await router.acompletion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "How does traffic mirroring work?"}]
 )
 ```
