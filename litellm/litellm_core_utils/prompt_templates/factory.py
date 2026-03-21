@@ -119,8 +119,12 @@ def map_system_message_pt(messages: list) -> list:
                     next_role == "user" or next_role == "assistant"
                 ):  # Next message is a user or assistant message
                     # Merge system prompt into the next message
+                    # Copy to avoid mutating the caller's original dict
+                    next_m = messages[i + 1] = {**next_m}
                     next_text = _get_content_as_str(next_m["content"])
-                    next_m["content"] = system_text + " " + next_text
+                    next_m["content"] = " ".join(
+                        filter(None, [system_text, next_text])
+                    )
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": system_text}
