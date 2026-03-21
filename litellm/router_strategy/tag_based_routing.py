@@ -20,17 +20,28 @@ else:
 
 
 def is_valid_deployment_tag(
-    deployment_tags: List[str], request_tags: List[str]
+    deployment_tags: List[str], request_tags: List[str], match_any: bool = True
 ) -> bool:
     """
-    Check if a tag is valid
+    Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
+    if not request_tags:
+        return False
 
-    if any(tag in deployment_tags for tag in request_tags):
+    dep_set = set(deployment_tags)
+    req_set = set(request_tags)
+
+    if match_any:
+        is_valid_deployment = bool(dep_set & req_set)
+    else:
+        is_valid_deployment = req_set.issubset(dep_set)
+
+    if is_valid_deployment:
         verbose_logger.debug(
-            "adding deployment with tags: %s, request tags: %s",
+            "adding deployment with tags: %s, request tags: %s for match_any=%s",
             deployment_tags,
             request_tags,
+            match_any,
         )
         return True
     return False
@@ -64,10 +75,13 @@ async def get_deployments_for_tag(
         )
         return healthy_deployments
 
-    verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
+    verbose_logger.debug(
+        "request metadata: %s", request_kwargs.get(metadata_variable_name)
+    )
     if metadata_variable_name in request_kwargs:
         metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
+        match_any = llm_router_instance.tag_filtering_match_any
 
         new_healthy_deployments = []
         default_deployments = []
@@ -76,7 +90,6 @@ async def get_deployments_for_tag(
                 "get_deployments_for_tag routing: router_keys: %s", request_tags
             )
             # example this can be router_keys=["free", "custom"]
-            # get all deployments that have a superset of these router keys
             for deployment in healthy_deployments:
                 deployment_litellm_params = deployment.get("litellm_params")
                 deployment_tags = deployment_litellm_params.get("tags")
@@ -90,7 +103,7 @@ async def get_deployments_for_tag(
                 if deployment_tags is None:
                     continue
 
-                if is_valid_deployment_tag(deployment_tags, request_tags):
+                if is_valid_deployment_tag(deployment_tags, request_tags, match_any):
                     new_healthy_deployments.append(deployment)
 
                 if "default" in deployment_tags:
@@ -101,7 +114,11 @@ async def get_deployments_for_tag(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
+            return (
+                new_healthy_deployments
+                if len(new_healthy_deployments) > 0
+                else default_deployments
+            )
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []

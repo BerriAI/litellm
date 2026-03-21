@@ -854,7 +854,7 @@ class BaseLLMChatTest(ABC):
         "image_url",
         [
             "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+            "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )
     @pytest.mark.flaky(retries=4, delay=2)
@@ -868,8 +868,9 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
-        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
-            "model"
+        elif "http://" in image_url and (
+            "fireworks_ai" in base_completion_call_args.get("model", "")
+            or "mistral" in base_completion_call_args.get("model", "")
         ):
             pytest.skip("Model does not support http:// input")
 
@@ -920,7 +921,7 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+        image_url = "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
 
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):

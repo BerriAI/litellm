@@ -1,6 +1,6 @@
-import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
+import { Model, modelCreateCall } from "../networking";
+import { provider_map } from "../provider_info_helpers";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -14,8 +14,10 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     // Handle wildcard case
     if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-      const customProvider: Providers = formValues["custom_llm_provider"];
-      const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
+      const customProviderKey = formValues["custom_llm_provider"] as string;
+      const mappedProvider =
+        provider_map[customProviderKey as keyof typeof provider_map] ?? customProviderKey.toLowerCase();
+      const litellm_custom_provider = mappedProvider;
       const wildcardModel = litellm_custom_provider + "/*";
       formValues["model_name"] = wildcardModel;
       modelMappings.push({
@@ -36,10 +38,11 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
       litellmParamsObj["model"] = mapping.litellm_model;
 
       // Handle pricing conversion before processing other fields
-      if (formValues.input_cost_per_token) {
+      // Use explicit checks to allow 0 (zero cost models for budget bypass)
+      if (formValues.input_cost_per_token !== undefined && formValues.input_cost_per_token !== null && formValues.input_cost_per_token !== "") {
         formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
       }
-      if (formValues.output_cost_per_token) {
+      if (formValues.output_cost_per_token !== undefined && formValues.output_cost_per_token !== null && formValues.output_cost_per_token !== "") {
         formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
       }
       // Keep input_cost_per_second as is, no conversion needed
@@ -59,7 +62,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
           console.log("custom_llm_provider:", value);
-          const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
+          const providerKey = value as string;
+          const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
           litellmParamsObj["custom_llm_provider"] = mappingResult;
           console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
@@ -87,6 +91,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
+              if ("litellm_credential_name" in litellmExtraParams) {
+                delete litellmExtraParams.litellm_credential_name;
+              }
             } catch (error) {
               NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
@@ -113,7 +120,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
         // Handle the pricing fields
         else if (key === "input_cost_per_token" || key === "output_cost_per_token" || key === "input_cost_per_second") {
-          if (value) {
+          if (value !== undefined && value !== null && value !== "") {
             litellmParamsObj[key] = Number(value);
           }
           continue;

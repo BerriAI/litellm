@@ -7,7 +7,7 @@ import re
 from re import Match
 from typing import Dict, List, Optional, Tuple
 
-from litellm import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm._logging import verbose_router_logger
 
 

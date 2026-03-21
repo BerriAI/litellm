@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # ✨ Enterprise Features
 :::tip
 
-To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+To get a license, get in touch with us [here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -15,8 +15,7 @@ Features:
     - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
     - ✅ [Audit Logs with retention policy](#audit-logs)
     - ✅ [JWT-Auth](./token_auth.md)
-    - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
-    - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [Control available public, private routes](./public_routes.md)
     - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
@@ -30,15 +29,11 @@ Features:
 - **Spend Tracking & Data Exports**
     - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
-    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](../observability/gcs_bucket_integration)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
-- **Prometheus Metrics**
-    - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
-    - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
-- **Control Guardrails per API Key**
+- **Control Guardrails per API Key/Team**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](#public-model-hub)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
 
@@ -185,148 +180,7 @@ Expected Response
 
 ### Control available public, private routes
 
-**Restrict certain endpoints of proxy**
-
-:::info
-
-❓ Use this when you want to:
-- make an existing private route -> public
-- set certain routes as admin_only routes 
-
-:::
-
-#### Usage - Define public, admin only routes
-
-**Step 1** - Set  on config.yaml 
-
-
-| Route Type | Optional | Requires Virtual Key Auth | Admin Can Access | All Roles Can Access | Description |
-|------------|----------|---------------------------|-------------------|----------------------|-------------|
-| `public_routes` | ✅ | ❌ | ✅ | ✅ | Routes that can be accessed without any authentication  |
-| `admin_only_routes` | ✅ | ✅ | ✅ | ❌ | Routes that can only be accessed by [Proxy Admin](./self_serve#available-roles) |
-| `allowed_routes` | ✅ | ✅ | ✅ | ✅ | Routes are exposed on the proxy. If not set then all routes exposed.  |
-
-`LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]     # routes that can be accessed without any auth
-  admin_only_routes: ["/key/generate"]  # Optional - routes that can only be accessed by Proxy Admin
-  allowed_routes: ["/chat/completions", "/spend/calculate", "LiteLLMRoutes.public_routes"] # Optional - routes that can be accessed by anyone after Authentication
-```
-
-**Step 2** - start proxy 
-
-```shell
-litellm --config config.yaml
-```
-
-**Step 3** - Test it 
-
-<Tabs>
-
-<TabItem value="public" label="Test `public_routes`">
-
-```shell
-curl --request POST \
-  --url 'http://localhost:4000/spend/calculate' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hey, how'\''s it going?"}]
-  }'
-```
-
-🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
-
-</TabItem>
-
-<TabItem value="admin_only_routes" label="Test `admin_only_routes`">
-
-
-**Successful Request**
-
-```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{}'
-```
-
-
-**Un-successfull Request**
-
-```shell
- curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <virtual-key-from-non-admin>' \
---header 'Content-Type: application/json' \
---data '{"user_role": "internal_user"}'
-```
-
-**Expected Response**
-
-```json
-{
-  "error": {
-    "message": "user not allowed to access this route. Route=/key/generate is an admin only route",
-    "type": "auth_error",
-    "param": "None",
-    "code": "403"
-  }
-}
-```
-
-
-</TabItem>
-
-<TabItem value="allowed_routes" label="Test `allowed_routes`">
-
-
-**Successful Request**
-
-```shell
-curl http://localhost:4000/chat/completions \
--H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
--d '{
-"model": "fake-openai-endpoint",
-"messages": [
-    {"role": "user", "content": "Hello, Claude"}
-]
-}'
-```
-
-
-**Un-successfull Request**
-
-```shell
-curl --location 'http://0.0.0.0:4000/embeddings' \
---header 'Content-Type: application/json' \
--H "Authorization: Bearer sk-1234" \
---data ' {
-"model": "text-embedding-ada-002",
-"input": ["write a litellm poem"]
-}'
-```
-
-**Expected Response**
-
-```json
-{
-  "error": {
-    "message": "Route /embeddings not allowed",
-    "type": "auth_error",
-    "param": "None",
-    "code": "403"
-  }
-}
-```
-
-
-</TabItem>
-
-</Tabs>
+See [Control Public & Private Routes](./public_routes.md) for detailed documentation on configuring public routes, admin-only routes, allowed routes, and wildcard patterns.
 
 ## Spend Tracking
 
@@ -905,9 +759,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
-## Public Model Hub 
+## Public AI Hub 
 
-Share a public page of available models for users
+Share a public page of available models and agents for users
+
+[Learn more](./ai_hub.md)
 
 <Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
 

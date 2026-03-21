@@ -1,12 +1,13 @@
-import unittest
-import asyncio
-from unittest.mock import patch, MagicMock
-from typing import Optional
-import sys
-import os
 import datetime
-import json
+import os
+import sys
+import types
+import unittest
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
@@ -20,6 +21,9 @@ from litellm.types.integrations.langfuse import *
 
 class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
+        # Save global Langfuse client counter to restore after test
+        self._original_langfuse_clients_count = litellm.initialized_langfuse_clients
+
         # Set up environment variables for testing
         self.env_patcher = patch.dict(
             "os.environ",
@@ -33,12 +37,26 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Create mock objects
         self.mock_langfuse_client = MagicMock()
+        # Mock the client attribute to prevent errors during logger initialization
+        self.mock_langfuse_client.client = MagicMock()
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+
+        # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
+        self.mock_langfuse_span = MagicMock()
+        self.mock_langfuse_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
 
         # Setup the trace and generation chain
         self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.last_trace_kwargs = {}
+
+        def _trace_side_effect(*args, **kwargs):
+            self.last_trace_kwargs = kwargs
+            return self.mock_langfuse_trace
+
+        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
 
         # Mock the langfuse module that's imported locally in methods
         self.langfuse_module_patcher = patch.dict(
@@ -61,22 +79,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         sys.modules["langfuse"] = self.mock_langfuse
         sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
-        # Mock the Langfuse client
-        self.mock_langfuse_client = MagicMock()
-        self.mock_langfuse_trace = MagicMock()
-        self.mock_langfuse_generation = MagicMock()
-
-        # Setup the trace and generation chain
-        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
-
-        # Mock the Langfuse class
-        self.mock_langfuse_class = MagicMock()
-        self.mock_langfuse_class.return_value = self.mock_langfuse_client
-        self.mock_langfuse.Langfuse = self.mock_langfuse_class
-
-        # Create the logger
+        # Create a fresh logger instance for each test
         self.logger = LangFuseLogger()
+
+        # Explicitly set the Langfuse client to our mock
+        self.logger.Langfuse = self.mock_langfuse_client
+        # Ensure langfuse_sdk_version is set correctly for _supports_* methods
+        self.logger.langfuse_sdk_version = "3.0.0"
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
@@ -103,12 +112,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
-        import types
-
         self.logger.log_event_on_langfuse = types.MethodType(
             log_event_on_langfuse, self.logger
         )
@@ -120,8 +126,18 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger._is_langfuse_v2 = types.MethodType(mock_is_langfuse_v2, self.logger)
 
     def tearDown(self):
+        # Clean up logger instance to prevent state leakage
+        if hasattr(self, 'logger'):
+            # Reset logger's Langfuse client to break any references
+            self.logger.Langfuse = None
+            # Delete logger instance to ensure complete cleanup
+            del self.logger
+
+        # Restore global Langfuse client counter to prevent cross-test pollution
+        litellm.initialized_langfuse_clients = self._original_langfuse_clients_count
+
         self.env_patcher.stop()
-        self.langfuse_module_patcher.stop()
+        self.langfuse_module_patcher.stop()  # patch.dict automatically restores sys.modules
 
     def test_langfuse_usage_details_type(self):
         """Test that LangfuseUsageDetails TypedDict is properly defined with the correct fields"""
@@ -252,10 +268,29 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
+        # Reset the mock to ensure clean state; clear side_effect so return_value takes effect
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        # Re-setup the trace and generation chain with clean state
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+
+        # Ensure trace returns our mock
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
-        ) as mock_add_prompt_params:
+            create=True,
+        ) as mock_add_prompt_params, patch.object(
+            self.logger, "_supports_prompt", return_value=True
+        ):
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
             response_obj.usage = MagicMock()
@@ -282,21 +317,31 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 "response_cost": 0.0,
             }
 
+            # Use fixed timestamps to avoid timing-related flakiness
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+            
             # Call the method under test
-            self.logger._log_langfuse_v2(
-                user_id="test-user",
-                metadata={},
-                litellm_params=kwargs["litellm_params"],
-                output={"role": "assistant", "content": "Response"},
-                start_time=datetime.datetime.now(),
-                end_time=datetime.datetime.now(),
-                kwargs=kwargs,
-                optional_params=kwargs["optional_params"],
-                input={"messages": kwargs["messages"]},
-                response_obj=response_obj,
-                level="DEFAULT",
-                litellm_call_id=kwargs["litellm_call_id"],
-            )
+            try:
+                self.logger._log_langfuse_v2(
+                    user_id="test-user",
+                    metadata={},
+                    litellm_params=kwargs["litellm_params"],
+                    output={"role": "assistant", "content": "Response"},
+                    start_time=fixed_time,
+                    end_time=fixed_time + datetime.timedelta(seconds=1),
+                    kwargs=kwargs,
+                    optional_params=kwargs["optional_params"],
+                    input={"messages": kwargs["messages"]},
+                    response_obj=response_obj,
+                    level="DEFAULT",
+                    litellm_call_id=kwargs["litellm_call_id"],
+                )
+            except Exception as e:
+                self.fail(f"_log_langfuse_v2 raised an exception: {e}")
+
+            # Verify that trace was called first
+            self.mock_langfuse_client.trace.assert_called()
+
             #  Check the arguments passed to the mocked langfuse generation call
             self.mock_langfuse_trace.generation.assert_called_once()
             call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
@@ -320,13 +365,123 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
+    def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
+        payload = {
+            "id": "payload-id",
+            "call_type": "completion",
+            "response_cost": 0.0,
+            "status": "success",
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "startTime": 0.0,
+            "endTime": 0.0,
+            "completionStartTime": 0.0,
+            "model": "gpt-4",
+            "model_id": "model-123",
+            "model_group": "openai",
+            "api_base": "https://api.openai.com",
+            "metadata": {
+                "user_api_key_end_user_id": None,
+                "prompt_management_metadata": None,
+                "session_id": None,
+                "trace_name": None,
+                "trace_version": None,
+                "headers": None,
+                "endpoint": None,
+                "caching_groups": None,
+                "previous_models": None,
+            },
+            "hidden_params": {},
+            "request_tags": [],
+            "messages": [],
+            "response": {"id": "resp"},
+            "model_parameters": {},
+            "guardrail_information": None,
+            "standard_built_in_tools_params": None,
+        }
+        if trace_id is not None:
+            payload["trace_id"] = trace_id
+        return payload
+
+    def _build_langfuse_kwargs(self, standard_logging_payload):
+        return {
+            "standard_logging_object": standard_logging_payload,
+            "model": standard_logging_payload["model"],
+            "call_type": standard_logging_payload["call_type"],
+            "cache_hit": False,
+            "messages": [],
+        }
+
+    def test_log_langfuse_v2_uses_standard_trace_id_when_available(self):
+        payload = self._build_standard_logging_payload(trace_id="std-trace-id")
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-xyz",
+            )
+
+        assert self.last_trace_kwargs.get("id") == "std-trace-id"
+
+    def test_log_langfuse_v2_defaults_to_call_id_without_standard_trace_id(self):
+        payload = self._build_standard_logging_payload()
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-xyz",
+            )
+
+        assert self.last_trace_kwargs.get("id") == "call-id-xyz"
+
 
 def test_max_langfuse_clients_limit():
     """
     Test that the max langfuse clients limit is respected when initializing multiple clients
     """
+    # Mock langfuse package to avoid triggering real import.
+    # The real langfuse import fails on Python 3.14 due to pydantic v1 incompatibility,
+    # and sys.modules["langfuse"] may be absent after other tests in the suite clean up.
+    mock_langfuse = MagicMock()
+    mock_langfuse.version.__version__ = "3.0.0"
     # Set max clients to 2 for testing
-    with patch.object(langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2):
+    original_initialized_langfuse_clients = litellm.initialized_langfuse_clients
+    with patch.dict("sys.modules", {"langfuse": mock_langfuse}), patch.object(
+        langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
+    ):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
 
@@ -359,3 +514,5 @@ def test_max_langfuse_clients_limit():
 
         # Counter should still be 2 (third client failed to initialize)
         assert litellm.initialized_langfuse_clients == 2
+
+    litellm.initialized_langfuse_clients = original_initialized_langfuse_clients

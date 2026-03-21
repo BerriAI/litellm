@@ -2634,6 +2634,7 @@ def test_redis_caching_multiple_namespaces():
         ), f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_caching_with_reasoning_content():
     """
     Test that reasoning content is cached
@@ -2641,24 +2642,27 @@ def test_caching_with_reasoning_content():
 
     from litellm._uuid import uuid
 
-    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
-    litellm.cache = Cache()
+    try:
+        messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+        litellm.cache = Cache()
 
-    response_1 = completion(
-        model="anthropic/claude-3-7-sonnet-latest",
-        messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
+        response_1 = completion(
+            model="anthropic/claude-sonnet-4-5-20250929",
+            messages=messages,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
 
-    response_2 = completion(
-        model="anthropic/claude-3-7-sonnet-latest",
-        messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
+        response_2 = completion(
+            model="anthropic/claude-sonnet-4-5-20250929",
+            messages=messages,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
 
-    print(f"response 2: {response_2.model_dump_json(indent=4)}")
-    assert response_2._hidden_params["cache_hit"] == True
-    assert response_2.choices[0].message.reasoning_content is not None
+        print(f"response 2: {response_2.model_dump_json(indent=4)}")
+        assert response_2._hidden_params["cache_hit"] == True
+        assert response_2.choices[0].message.reasoning_content is not None
+    except litellm.InternalServerError as e:
+        pytest.skip(f"Anthropic API returned InternalServerError - {str(e)}")
 
 
 def test_caching_reasoning_args_miss():  # test in memory cache
@@ -2667,14 +2671,14 @@ def test_caching_reasoning_args_miss():  # test in memory cache
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             reasoning_effort="low",
             mock_response="My response",
         )
         response2 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             mock_response="My response",
@@ -2693,14 +2697,14 @@ def test_caching_reasoning_args_hit():  # test in memory cache
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             reasoning_effort="low",
             mock_response="My response",
         )
         response2 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             reasoning_effort="low",
@@ -2720,14 +2724,14 @@ def test_caching_thinking_args_miss():  # test in memory cache
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
             mock_response="My response",
         )
         response2 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             mock_response="My response",
@@ -2746,14 +2750,14 @@ def test_caching_thinking_args_hit():  # test in memory cache
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             thinking={"type": "enabled", "budget_tokens": 1024},
             mock_response="My response",
         )
         response2 = completion(
-            model="claude-3-7-sonnet-latest",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             caching=True,
             thinking={"type": "enabled", "budget_tokens": 1024},

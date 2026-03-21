@@ -1,47 +1,56 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { jwtDecode } from "jwt-decode";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Team } from "@/components/key_team_helpers/key_list";
-import Navbar from "@/components/navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import UserDashboard from "@/components/user_dashboard";
-import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import ViewUserDashboard from "@/components/view_users";
-import Organizations from "@/components/organizations";
-import { fetchOrganizations } from "@/components/organizations";
-import AdminPanel from "@/components/admins";
-import Settings from "@/components/settings";
-import GeneralSettings from "@/components/general_settings";
-import PassThroughSettings from "@/components/pass_through_settings";
-import BudgetPanel from "@/components/budgets/budget_panel";
-import SpendLogsTable from "@/components/view_logs";
-import ModelHubTable from "@/components/model_hub_table";
-import NewUsagePage from "@/components/new_usage";
 import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
-import ChatUI from "@/components/chat_ui/ChatUI";
-import Usage from "@/components/usage";
-import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
-import { Organization } from "@/components/networking";
-import GuardrailsPanel from "@/components/guardrails";
-import PromptsPanel from "@/components/prompts";
-import TransformRequestPanel from "@/components/transform_request";
-import { fetchUserModels } from "@/components/organisms/create_key_button";
-import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { MCPServers } from "@/components/mcp_tools";
-import TagManagement from "@/components/tag_management";
-import VectorStoreManagement from "@/components/vector_store_management";
-import UIThemeSettings from "@/components/ui_theme_settings";
-import { CostTrackingSettings } from "@/components/CostTrackingSettings";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cx } from "@/lib/cva.config";
-import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
+import PlaygroundPage from "@/app/(dashboard)/playground/page";
+import AdminPanel from "@/components/AdminPanel";
+import AgentsPanel from "@/components/agents";
+import BudgetPanel from "@/components/budgets/budget_panel";
+import CacheDashboard from "@/components/cache_dashboard";
+import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
+import { CostTrackingSettings } from "@/components/CostTrackingSettings";
+import GeneralSettings from "@/components/general_settings";
+import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
+import GuardrailsPanel from "@/components/guardrails";
+import PoliciesPanel from "@/components/policies";
+import { Team } from "@/components/key_team_helpers/key_list";
+import { MCPServers } from "@/components/mcp_tools";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
+import Navbar from "@/components/navbar";
+import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
+import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
-import { SearchTools } from "@/components/search_tools";
+import { fetchUserModels, CreateKeyPrefillData } from "@/components/organisms/create_key_button";
+import Organizations, { fetchOrganizations } from "@/components/organizations";
+import PassThroughSettings from "@/components/pass_through_settings";
+import PromptsPanel from "@/components/prompts";
+import PublicModelHub from "@/components/public_model_hub";
+import { SearchTools } from "@/components/SearchTools";
+import Settings from "@/components/settings";
+import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
+import TagManagement from "@/components/tag_management";
+import TransformRequestPanel from "@/components/transform_request";
+import UIThemeSettings from "@/components/ui_theme_settings";
+import Usage from "@/components/usage";
+import UserDashboard from "@/components/user_dashboard";
+import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
+import { ProjectsPage } from "@/components/Projects/ProjectsPage";
+import VectorStoreManagement from "@/components/vector_store_management";
+import ToolPoliciesView from "@/components/ToolPoliciesView";
+import SpendLogsTable from "@/components/view_logs";
+import ViewUserDashboard from "@/components/view_users";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import { isJwtExpired } from "@/utils/jwtUtils";
+import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { formatUserRole, isAdminRole } from "@/utils/roles";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { jwtDecode } from "jwt-decode";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ConfigProvider, theme } from "antd";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -60,69 +69,13 @@ function deleteCookie(name: string, path = "/") {
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
 }
 
-function isJwtExpired(token: string): boolean {
-  try {
-    const decoded: any = jwtDecode(token);
-    if (decoded && typeof decoded.exp === "number") {
-      return decoded.exp * 1000 <= Date.now();
-    }
-    return false;
-  } catch {
-    // If we can't decode, treat as invalid/expired
-    return true;
-  }
-}
-
-function formatUserRole(userRole: string) {
-  if (!userRole) {
-    return "Undefined Role";
-  }
-  switch (userRole.toLowerCase()) {
-    case "app_owner":
-      return "App Owner";
-    case "demo_app_owner":
-      return "App Owner";
-    case "app_admin":
-      return "Admin";
-    case "proxy_admin":
-      return "Admin";
-    case "proxy_admin_viewer":
-      return "Admin Viewer";
-    case "org_admin":
-      return "Org Admin";
-    case "internal_user":
-      return "Internal User";
-    case "internal_user_viewer":
-    case "internal_viewer": // TODO:remove if deprecated
-      return "Internal Viewer";
-    case "app_user":
-      return "App User";
-    default:
-      return "Unknown Role";
-  }
-}
-
 interface ProxySettings {
   PROXY_BASE_URL: string;
   PROXY_LOGOUT_URL: string;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
-const queryClient = new QueryClient();
-
-function LoadingScreen() {
-  return (
-    <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
-      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">🚅 LiteLLM</div>
-
-      <div className="flex items-center justify-center gap-2">
-        <UiLoadingSpinner className="size-4" />
-        <span className="text-gray-600 text-sm">Loading...</span>
-      </div>
-    </div>
-  );
-}
-
-export default function CreateKeyPage() {
+function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
@@ -143,9 +96,75 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
-  const { refactoredUIFlag } = useFeatureFlags();
+
+  // Survey state - always show by default
+  const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
+
+  // Claude Code feedback state
+  const [isClaudeCode, setIsClaudeCode] = useState(false);
+  const [showClaudeCodePrompt, setShowClaudeCodePrompt] = useState(false);
+  const [showClaudeCodeModal, setShowClaudeCodeModal] = useState(false);
+
+  // Dark mode state
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const toggleDarkMode = () => {
+    setIsDarkMode(!isDarkMode);
+  };
 
   const invitation_id = searchParams.get("invitation_id");
+
+  // Parse URL query parameters for pre-filling the create key form
+  // Includes validation to prevent injection and DoS attacks
+  const autoOpenCreate = searchParams.get("create") === "true";
+  const prefillData: CreateKeyPrefillData | undefined = useMemo(() => {
+    if (!autoOpenCreate) return undefined;
+
+    const ownedBy = searchParams.get("owned_by");
+    const teamId = searchParams.get("team_id");
+    const keyAlias = searchParams.get("key_alias");
+    const modelsParam = searchParams.get("models");
+    const keyType = searchParams.get("key_type");
+
+    // Only return prefill data if at least one field is provided
+    if (!ownedBy && !teamId && !keyAlias && !modelsParam && !keyType) {
+      return undefined;
+    }
+
+    // Validate owned_by against allowed values
+    const validOwnedByValues = ["you", "service_account", "another_user"];
+    const validatedOwnedBy = ownedBy && validOwnedByValues.includes(ownedBy)
+      ? (ownedBy as CreateKeyPrefillData["owned_by"])
+      : undefined;
+
+    // Validate key_type against allowed values
+    const validKeyTypes = ["default", "llm_api", "management"];
+    const validatedKeyType = keyType && validKeyTypes.includes(keyType)
+      ? (keyType as CreateKeyPrefillData["key_type"])
+      : undefined;
+
+    // Sanitize key_alias (limit length, trim whitespace)
+    const sanitizedKeyAlias = keyAlias
+      ? keyAlias.trim().slice(0, 256) // Reasonable max length
+      : undefined;
+
+    // Sanitize models (limit array size and individual model name length)
+    const sanitizedModels = modelsParam
+      ? modelsParam
+          .split(",")
+          .slice(0, 100) // Limit number of models to prevent DoS
+          .map(m => m.trim().slice(0, 256)) // Limit individual model name length
+          .filter(m => m.length > 0) // Remove empty strings
+      : undefined;
+
+    return {
+      owned_by: validatedOwnedBy,
+      team_id: teamId?.trim() || undefined,
+      key_alias: sanitizedKeyAlias,
+      models: sanitizedModels && sanitizedModels.length > 0 ? sanitizedModels : undefined,
+      key_type: validatedKeyType,
+    };
+  }, [searchParams, autoOpenCreate]);
 
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
@@ -166,6 +185,9 @@ export default function CreateKeyPage() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Track if we've already attempted a return URL redirect to prevent race conditions
+  const hasAttemptedReturnRedirectRef = useRef(false);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(!sidebarCollapsed);
@@ -211,11 +233,47 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
+      // Store the current URL so we can redirect back after login
+      storeReturnUrl();
+      // Build login URL with return URL parameter
+      const baseLoginUrl = (proxyBaseUrl || "") + "/ui/login";
+      const dest = buildLoginUrlWithReturn(baseLoginUrl);
       // Replace instead of assigning to avoid back-button loops
-      const dest = (proxyBaseUrl || "") + "/sso/key/generate";
       window.location.replace(dest);
     }
   }, [redirectToLogin]);
+
+  // Check for a stored return URL after successful authentication
+  // This handles the case where user comes back from SSO and we need to redirect to the original URL
+  useEffect(() => {
+    // Skip if still loading, no token, or we've already attempted a redirect
+    if (authLoading || !token || hasAttemptedReturnRedirectRef.current) {
+      return;
+    }
+
+    // Mark that we've attempted the redirect to prevent race conditions
+    // This prevents duplicate redirects if token changes (e.g., refresh)
+    hasAttemptedReturnRedirectRef.current = true;
+
+    // Check for a stored return URL
+    const returnUrl = consumeReturnUrl();
+    if (returnUrl) {
+      const currentUrl = window.location.href;
+      const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
+      const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
+      // Only redirect if the return URL is different from the current URL
+      // This prevents infinite redirect loops
+      if (normalizedReturnUrl !== normalizedCurrentUrl) {
+        window.location.replace(returnUrl);
+      }
+    }
+  }, [authLoading, token]);
+
+  useEffect(() => {
+    if (!token) {
+      hasAttemptedReturnRedirectRef.current = false;
+    }
+  }, [token]);
 
   useEffect(() => {
     if (!token) {
@@ -288,211 +346,329 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
+  // Fetch in-product nudges configuration from backend
+  useEffect(() => {
+    if (accessToken && token) {
+      (async () => {
+        try {
+          const nudgesConfig = await getInProductNudgesCall(accessToken);
+          const isUsingClaudeCode = nudgesConfig?.is_claude_code_enabled || false;
+          setIsClaudeCode(isUsingClaudeCode);
+
+          // Show Claude Code prompt on login if enabled
+          if (isUsingClaudeCode) {
+            setShowClaudeCodePrompt(true);
+            // Don't show the regular survey prompt if showing Claude Code prompt
+            setShowSurveyPrompt(false);
+          }
+        } catch (error) {
+          console.error("Failed to fetch in-product nudges:", error);
+          // Silently fail and don't show Claude Code nudge
+        }
+      })();
+    }
+  }, [accessToken, token]);
+
+  // Auto-dismiss survey prompt after 15 seconds
+  useEffect(() => {
+    if (showSurveyPrompt && !showSurveyModal) {
+      const timer = setTimeout(() => {
+        setShowSurveyPrompt(false);
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [showSurveyPrompt, showSurveyModal]);
+
+  // Auto-dismiss Claude Code prompt after 15 seconds
+  useEffect(() => {
+    if (showClaudeCodePrompt && !showClaudeCodeModal) {
+      const timer = setTimeout(() => {
+        setShowClaudeCodePrompt(false);
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [showClaudeCodePrompt, showClaudeCodeModal]);
+
+  const handleOpenSurvey = () => {
+    setShowSurveyPrompt(false);
+    setShowSurveyModal(true);
+  };
+
+  const handleDismissSurveyPrompt = () => {
+    setShowSurveyPrompt(false);
+  };
+
+  const handleSurveyComplete = () => {
+    setShowSurveyModal(false);
+  };
+
+  const handleSurveyModalClose = () => {
+    // If they close the modal without completing, show the prompt again
+    setShowSurveyModal(false);
+    setShowSurveyPrompt(true);
+  };
+
+  const handleOpenClaudeCode = () => {
+    setShowClaudeCodePrompt(false);
+    setShowClaudeCodeModal(true);
+  };
+
+  const handleDismissClaudeCodePrompt = () => {
+    setShowClaudeCodePrompt(false);
+  };
+
+  const handleClaudeCodeComplete = () => {
+    setShowClaudeCodeModal(false);
+  };
+
+  const handleClaudeCodeModalClose = () => {
+    // If they close the modal without completing, show the prompt again
+    setShowClaudeCodeModal(false);
+    setShowClaudeCodePrompt(true);
+  };
+
   if (authLoading || redirectToLogin) {
     return <LoadingScreen />;
   }
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider accessToken={accessToken}>
-          {invitation_id ? (
-            <UserDashboard
-              userID={userID}
-              userRole={userRole}
-              premiumUser={premiumUser}
-              teams={teams}
-              keys={keys}
-              setUserRole={setUserRole}
-              userEmail={userEmail}
-              setUserEmail={setUserEmail}
-              setTeams={setTeams}
-              setKeys={setKeys}
-              organizations={organizations}
-              addKey={addKey}
-              createClicked={createClicked}
-            />
-          ) : (
-            <div className="flex flex-col min-h-screen">
-              <Navbar
+      <ConfigProvider theme={{
+          algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        }}>
+          <ThemeProvider accessToken={accessToken}>
+            {invitation_id ? (
+              <UserDashboard
                 userID={userID}
                 userRole={userRole}
                 premiumUser={premiumUser}
+                teams={teams}
+                keys={keys}
+                setUserRole={setUserRole}
                 userEmail={userEmail}
-                setProxySettings={setProxySettings}
-                proxySettings={proxySettings}
-                accessToken={accessToken}
-                isPublicPage={false}
-                sidebarCollapsed={sidebarCollapsed}
-                onToggleSidebar={toggleSidebar}
+                setUserEmail={setUserEmail}
+                setTeams={setTeams}
+                setKeys={setKeys}
+                organizations={organizations}
+                addKey={addKey}
+                createClicked={createClicked}
               />
-              <div className="flex flex-1 overflow-auto">
-                <div className="mt-2">
+            ) : (
+              <div className="flex flex-col min-h-screen">
+                <Navbar
+                  userID={userID}
+                  userRole={userRole}
+                  premiumUser={premiumUser}
+                  userEmail={userEmail}
+                  setProxySettings={setProxySettings}
+                  proxySettings={proxySettings}
+                  accessToken={accessToken}
+                  isPublicPage={false}
+                  sidebarCollapsed={sidebarCollapsed}
+                  onToggleSidebar={toggleSidebar}
+                  isDarkMode={isDarkMode}
+                  toggleDarkMode={toggleDarkMode}
+                />
+                <div className="flex flex-1">
+                  <div className="mt-2">
                   <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>
+                  {page == "api-keys" ? (
+                    <UserDashboard
+                      userID={userID}
+                      userRole={userRole}
+                      premiumUser={premiumUser}
+                      teams={teams}
+                      keys={keys}
+                      setUserRole={setUserRole}
+                      userEmail={userEmail}
+                      setUserEmail={setUserEmail}
+                      setTeams={setTeams}
+                      setKeys={setKeys}
+                      organizations={organizations}
+                      addKey={addKey}
+                      createClicked={createClicked}
+                      autoOpenCreate={autoOpenCreate}
+                      prefillData={prefillData}
+                    />
+                  ) : page == "models" ? (
+                    <OldModelDashboard
+                      token={token}
+                      keys={keys}
+                      modelData={modelData}
+                      setModelData={setModelData}
+                      premiumUser={premiumUser}
+                      teams={teams}
+                    />
+                  ) : page == "llm-playground" ? (
+                    <PlaygroundPage />
+                  ) : page == "users" ? (
+                    <ViewUserDashboard
+                      userID={userID}
+                      userRole={userRole}
+                      token={token}
+                      keys={keys}
+                      teams={teams}
+                      accessToken={accessToken}
+                      setKeys={setKeys}
+                    />
+                  ) : page == "teams" ? (
+                    <OldTeams
+                      teams={teams}
+                      setTeams={setTeams}
+                      accessToken={accessToken}
+                      userID={userID}
+                      userRole={userRole}
+                      organizations={organizations}
+                      premiumUser={premiumUser}
+                      searchParams={searchParams}
+                    />
+                  ) : page == "organizations" ? (
+                    <Organizations
+                      organizations={organizations}
+                      setOrganizations={setOrganizations}
+                      userModels={userModels}
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      premiumUser={premiumUser}
+                    />
+                  ) : page == "admin-panel" ? (
+                    <AdminPanel
+                      proxySettings={proxySettings}
+                    />
+                  ) : page == "api_ref" ? (
+                    <APIReferenceView proxySettings={proxySettings} />
+                  ) : page == "logging-and-alerts" ? (
+                    <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
+                  ) : page == "budgets" ? (
+                    <BudgetPanel accessToken={accessToken} />
+                  ) : page == "guardrails" ? (
+                    <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "policies" ? (
+                    <PoliciesPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "agents" ? (
+                    <AgentsPanel accessToken={accessToken} userRole={userRole} teams={teams} />
+                  ) : page == "prompts" ? (
+                    <PromptsPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "transform-request" ? (
+                    <TransformRequestPanel accessToken={accessToken} />
+                  ) : page == "router-settings" ? (
+                    <GeneralSettings
+                      userID={userID}
+                      userRole={userRole}
+                      accessToken={accessToken}
+                      modelData={modelData}
+                    />
+                  ) : page == "ui-theme" ? (
+                    <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
+                  ) : page == "cost-tracking" ? (
+                    <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
+                  ) : page == "model-hub-table" ? (
+                    isAdminRole(userRole) ? (
+                      <ModelHubTable
+                        accessToken={accessToken}
+                        publicPage={false}
+                        premiumUser={premiumUser}
+                        userRole={userRole}
+                      />
+                    ) : (
+                      <PublicModelHub accessToken={accessToken} isEmbedded={true} />
+                    )
+                  ) : page == "caching" ? (
+                    <CacheDashboard
+                      userID={userID}
+                      userRole={userRole}
+                      token={token}
+                      accessToken={accessToken}
+                      premiumUser={premiumUser}
+                    />
+                  ) : page == "pass-through-settings" ? (
+                    <PassThroughSettings
+                      userID={userID}
+                      userRole={userRole}
+                      accessToken={accessToken}
+                      modelData={modelData}
+                      premiumUser={premiumUser}
+                    />
+                  ) : page == "logs" ? (
+                    <SpendLogsTable
+                      userID={userID}
+                      userRole={userRole}
+                      token={token}
+                      accessToken={accessToken}
+                      allTeams={(teams as Team[]) ?? []}
+                      premiumUser={premiumUser}
+                    />
+                  ) : page == "mcp-servers" ? (
+                    <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "search-tools" ? (
+                    <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "tag-management" ? (
+                    <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "claude-code-plugins" ? (
+                    <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "access-groups" ? (
+                    <AccessGroupsPage />
+                  ) : page == "projects" ? (
+                    <ProjectsPage />
+                  ) : page == "vector-stores" ? (
+                    <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "tool-policies" ? (
+                    <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
+                  ) : page == "guardrails-monitor" ? (
+                    <GuardrailsMonitorView accessToken={accessToken} />
+                  ) : page == "new_usage" ? (
+                    <NewUsagePage
+                      teams={(teams as Team[]) ?? []}
+                      organizations={(organizations as Organization[]) ?? []}
+                    />
+                  ) : (
+                    <Usage
+                      userID={userID}
+                      userRole={userRole}
+                      token={token}
+                      accessToken={accessToken}
+                      keys={keys}
+                      premiumUser={premiumUser}
+                    />
+                  )}
+                </div>
 
-                {page == "api-keys" ? (
-                  <UserDashboard
-                    userID={userID}
-                    userRole={userRole}
-                    premiumUser={premiumUser}
-                    teams={teams}
-                    keys={keys}
-                    setUserRole={setUserRole}
-                    userEmail={userEmail}
-                    setUserEmail={setUserEmail}
-                    setTeams={setTeams}
-                    setKeys={setKeys}
-                    organizations={organizations}
-                    addKey={addKey}
-                    createClicked={createClicked}
-                  />
-                ) : page == "models" ? (
-                  <OldModelDashboard
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    keys={keys}
-                    accessToken={accessToken}
-                    modelData={modelData}
-                    setModelData={setModelData}
-                    premiumUser={premiumUser}
-                    teams={teams}
-                  />
-                ) : page == "llm-playground" ? (
-                  <ChatUI
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-                  />
-                ) : page == "users" ? (
-                  <ViewUserDashboard
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    keys={keys}
-                    teams={teams}
-                    accessToken={accessToken}
-                    setKeys={setKeys}
-                  />
-                ) : page == "teams" ? (
-                  <OldTeams
-                    teams={teams}
-                    setTeams={setTeams}
-                    accessToken={accessToken}
-                    userID={userID}
-                    userRole={userRole}
-                    organizations={organizations}
-                    premiumUser={premiumUser}
-                    searchParams={searchParams}
-                  />
-                ) : page == "organizations" ? (
-                  <Organizations
-                    organizations={organizations}
-                    setOrganizations={setOrganizations}
-                    userModels={userModels}
-                    accessToken={accessToken}
-                    userRole={userRole}
-                    premiumUser={premiumUser}
-                  />
-                ) : page == "admin-panel" ? (
-                  <AdminPanel
-                    setTeams={setTeams}
-                    searchParams={searchParams}
-                    accessToken={accessToken}
-                    userID={userID}
-                    showSSOBanner={showSSOBanner}
-                    premiumUser={premiumUser}
-                    proxySettings={proxySettings}
-                  />
-                ) : page == "api_ref" ? (
-                  <APIReferenceView proxySettings={proxySettings} />
-                ) : page == "settings" ? (
-                  <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
-                ) : page == "budgets" ? (
-                  <BudgetPanel accessToken={accessToken} />
-                ) : page == "guardrails" ? (
-                  <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-                ) : page == "prompts" ? (
-                  <PromptsPanel accessToken={accessToken} userRole={userRole} />
-                ) : page == "transform-request" ? (
-                  <TransformRequestPanel accessToken={accessToken} />
-                ) : page == "general-settings" ? (
-                  <GeneralSettings
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
-                    modelData={modelData}
-                  />
-                ) : page == "ui-theme" ? (
-                  <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-                ) : page == "cost-tracking-settings" ? (
-                  <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
-                ) : page == "model-hub-table" ? (
-                  <ModelHubTable
-                    accessToken={accessToken}
-                    publicPage={false}
-                    premiumUser={premiumUser}
-                    userRole={userRole}
-                  />
-                ) : page == "caching" ? (
-                  <CacheDashboard
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    premiumUser={premiumUser}
-                  />
-                ) : page == "pass-through-settings" ? (
-                  <PassThroughSettings
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
-                    modelData={modelData}
-                    premiumUser={premiumUser}
-                  />
-                ) : page == "logs" ? (
-                  <SpendLogsTable
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    allTeams={(teams as Team[]) ?? []}
-                    premiumUser={premiumUser}
-                  />
-                ) : page == "mcp-servers" ? (
-                  <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
-                ) : page == "search-tools" ? (
-                  <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
-                ) : page == "tag-management" ? (
-                  <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                ) : page == "vector-stores" ? (
-                  <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                ) : page == "new_usage" ? (
-                  <NewUsagePage
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
-                    teams={(teams as Team[]) ?? []}
-                    premiumUser={premiumUser}
-                  />
-                ) : (
-                  <Usage
-                    userID={userID}
-                    userRole={userRole}
-                    token={token}
-                    accessToken={accessToken}
-                    keys={keys}
-                    premiumUser={premiumUser}
-                  />
-                )}
+                {/* Survey Components */}
+                <SurveyPrompt
+                  isVisible={showSurveyPrompt}
+                  onOpen={handleOpenSurvey}
+                  onDismiss={handleDismissSurveyPrompt}
+                />
+                <SurveyModal
+                  isOpen={showSurveyModal}
+                  onClose={handleSurveyModalClose}
+                  onComplete={handleSurveyComplete}
+                />
+
+                {/* Claude Code Components */}
+                <ClaudeCodePrompt
+                  isVisible={showClaudeCodePrompt}
+                  onOpen={handleOpenClaudeCode}
+                  onDismiss={handleDismissClaudeCodePrompt}
+                />
+                <ClaudeCodeModal
+                  isOpen={showClaudeCodeModal}
+                  onClose={handleClaudeCodeModalClose}
+                  onComplete={handleClaudeCodeComplete}
+                />
               </div>
-            </div>
-          )}
-        </ThemeProvider>
-      </QueryClientProvider>
+            )}
+          </ThemeProvider>
+        </ConfigProvider>
+    </Suspense>
+  );
+}
+
+export default function CreateKeyPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <CreateKeyPageContent />
     </Suspense>
   );
 }

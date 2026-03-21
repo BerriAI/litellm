@@ -22,9 +22,7 @@ class LowestTPMLoggingHandler(CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(
-        self, router_cache: DualCache, routing_args: dict = {}
-    ):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
@@ -33,6 +31,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
@@ -92,16 +92,19 @@ class LowestTPMLoggingHandler(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
+            if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
+                return
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                if "litellm_params" not in kwargs:
-                    return
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                model_info = kwargs["litellm_params"].get("model_info")
+                id = None
+                if model_info is not None and isinstance(model_info, dict):
+                    id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):

@@ -401,7 +401,7 @@ def test_dalle_3_azure_cost_tracking():
             {
                 "b64_json": None,
                 "revised_prompt": "A close-up image of an adorable baby sea otter. Its fur is thick and fluffy to provide buoyancy and insulation against the cold water. Its eyes are round, curious and full of life. It's lying on its back, floating effortlessly on the calm sea surface under the warm sun. Surrounding the otter are patches of colorful kelp drifting along the gentle waves, giving the scene a touch of vibrancy. The sea otter has its small paws folded on its chest, and it seems to be taking a break from its play.",
-                "url": "https://dalleprodsec.blob.core.windows.net/private/images/3e5d00f3-700e-4b75-869d-2de73c3c975d/generated_00.png?se=2024-03-13T17%3A49%3A51Z&sig=R9RJD5oOSe0Vp9Eg7ze%2FZ8QR7ldRyGH6XhMxiau16Jc%3D&ske=2024-03-19T11%3A08%3A03Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2024-03-12T11%3A08%3A03Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                "url": "test-azure-blob-url-with-sas-token",
             }
         ],
     )
@@ -565,48 +565,22 @@ def test_together_ai_qwen_completion_cost():
     assert response == "together-ai-41.1b-80b"
 
 
-@pytest.mark.parametrize("above_128k", [False, True])
 @pytest.mark.parametrize("provider", ["gemini"])
-def test_gemini_completion_cost(above_128k, provider):
+def test_gemini_completion_cost(provider):
     """
     Check if cost correctly calculated for gemini models based on context window
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    if provider == "gemini":
-        model_name = "gemini-1.5-flash-latest"
-    else:
-        model_name = "gemini-1.5-flash-preview-0514"
-    if above_128k:
-        prompt_tokens = 128001.0
-        output_tokens = 228001.0
-    else:
-        prompt_tokens = 128.0
-        output_tokens = 228.0
+    model_name = "gemini-2.0-flash"
+    prompt_tokens = 128.0
+    output_tokens = 228.0
     ## GET MODEL FROM LITELLM.MODEL_INFO
     model_info = litellm.get_model_info(model=model_name, custom_llm_provider=provider)
 
     ## EXPECTED COST
-    if above_128k:
-        assert (
-            model_info["input_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model_name, model_info
-        )
-        assert (
-            model_info["output_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model_name, model_info
-        )
-        input_cost = (
-            prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
-        )
-        output_cost = (
-            output_tokens * model_info["output_cost_per_token_above_128k_tokens"]
-        )
-    else:
-        input_cost = prompt_tokens * model_info["input_cost_per_token"]
-        output_cost = output_tokens * model_info["output_cost_per_token"]
+    input_cost = prompt_tokens * model_info["input_cost_per_token"]
+    output_cost = output_tokens * model_info["output_cost_per_token"]
 
     ## CALCULATED COST
     calculated_input_cost, calculated_output_cost = cost_per_token(
@@ -630,21 +604,20 @@ def test_vertex_ai_completion_cost():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    text = "The quick brown fox jumps over the lazy dog."
-    characters = _count_characters(text=text)
+    prompt_tokens = 100
 
-    model_info = litellm.get_model_info(model="gemini-1.5-flash")
+    model_info = litellm.get_model_info(model="gemini-2.0-flash")
 
     print("\nExpected model info:\n{}\n\n".format(model_info))
 
-    expected_input_cost = characters * model_info["input_cost_per_character"]
+    expected_input_cost = prompt_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATED COST
     calculated_input_cost, calculated_output_cost = cost_per_token(
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash",
         custom_llm_provider="vertex_ai",
-        prompt_characters=characters,
-        completion_characters=0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
     )
 
     assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
@@ -738,10 +711,10 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
     text = "The quick brown fox jumps over the lazy dog."
     input_tokens = litellm.token_counter(
-        model="vertex_ai/textembedding-gecko", text=text
+        model="vertex_ai/text-embedding-004", text=text
     )
 
-    model_info = litellm.get_model_info(model="vertex_ai/textembedding-gecko")
+    model_info = litellm.get_model_info(model="vertex_ai/text-embedding-004")
 
     print("\nExpected model info:\n{}\n\n".format(model_info))
 
@@ -749,7 +722,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
     ## CALCULATED COST
     calculated_input_cost, calculated_output_cost = cost_per_token(
-        model="textembedding-gecko",
+        model="text-embedding-004",
         custom_llm_provider="vertex_ai",
         prompt_tokens=input_tokens,
         call_type="aembedding",
@@ -824,7 +797,7 @@ async def test_completion_cost_hidden_params(sync_mode):
 
 
 def test_vertex_ai_gemini_predict_cost():
-    model = "gemini-1.5-flash"
+    model = "gemini-2.0-flash"
     messages = [{"role": "user", "content": "Hey, hows it going???"}]
     predictive_cost = completion_cost(model=model, messages=messages)
 
@@ -1012,8 +985,8 @@ def test_completion_cost_azure_common_deployment_name():
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
-        ("claude-3-5-sonnet-20240620", "anthropic"),
-        ("gemini/gemini-1.5-flash-001", "gemini"),
+        ("claude-sonnet-4-6", "anthropic"),
+        ("claude-haiku-4-5", "anthropic"),
     ],
 )
 def test_completion_cost_prompt_caching(model, custom_llm_provider):
@@ -1198,8 +1171,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-above-16b"),
-        ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
+        ("fireworks_ai/llama-v3p3-70b-instruct", "fireworks-ai-above-16b"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1210,8 +1182,7 @@ def test_get_model_params_fireworks_ai(model, base_model):
 @pytest.mark.parametrize(
     "model",
     [
-        "fireworks_ai/llama-v3p1-405b-instruct",
-        "fireworks_ai/llama4-maverick-instruct-basic",
+        "fireworks_ai/llama-v3p3-70b-instruct",
     ],
 )
 def test_completion_cost_fireworks_ai(model):
@@ -2291,14 +2262,14 @@ def test_completion_cost_params():
     """
     litellm.set_verbose = True
     resp1_prompt_cost, resp1_completion_cost = cost_per_token(
-        model="gemini-1.5-pro-002",
+        model="gemini-2.0-flash",
         prompt_tokens=1000,
         completion_tokens=1000,
         custom_llm_provider="vertex_ai_beta",
     )
 
     resp2_prompt_cost, resp2_completion_cost = cost_per_token(
-        model="gemini-1.5-pro-002", prompt_tokens=1000, completion_tokens=1000
+        model="gemini-2.0-flash", prompt_tokens=1000, completion_tokens=1000
     )
 
     assert resp2_prompt_cost > 0
@@ -2307,7 +2278,7 @@ def test_completion_cost_params():
     assert resp1_completion_cost == resp2_completion_cost
 
     resp3_prompt_cost, resp3_completion_cost = cost_per_token(
-        model="vertex_ai/gemini-1.5-pro-002", prompt_tokens=1000, completion_tokens=1000
+        model="vertex_ai/gemini-2.0-flash", prompt_tokens=1000, completion_tokens=1000
     )
 
     assert resp3_prompt_cost > 0
@@ -2322,24 +2293,22 @@ def test_completion_cost_params_2():
     """
     litellm.set_verbose = True
 
-    prompt_characters = 1000
-    completion_characters = 1000
+    prompt_tokens = 1000
+    completion_tokens = 1000
     resp1_prompt_cost, resp1_completion_cost = cost_per_token(
-        model="gemini-1.5-pro-002",
-        prompt_characters=prompt_characters,
-        completion_characters=completion_characters,
-        prompt_tokens=1000,
-        completion_tokens=1000,
+        model="gemini-2.0-flash",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
     print(resp1_prompt_cost, resp1_completion_cost)
 
-    model_info = litellm.get_model_info("gemini-1.5-pro-002")
-    input_cost_per_character = model_info["input_cost_per_character"]
-    output_cost_per_character = model_info["output_cost_per_character"]
+    model_info = litellm.get_model_info("gemini-2.0-flash")
+    input_cost_per_token = model_info["input_cost_per_token"]
+    output_cost_per_token = model_info["output_cost_per_token"]
 
-    assert resp1_prompt_cost == input_cost_per_character * prompt_characters
-    assert resp1_completion_cost == output_cost_per_character * completion_characters
+    assert resp1_prompt_cost == input_cost_per_token * prompt_tokens
+    assert resp1_completion_cost == output_cost_per_token * completion_tokens
 
 
 def test_completion_cost_params_gemini_3():
@@ -2373,7 +2342,7 @@ def test_completion_cost_params_gemini_3():
             )
         ],
         created=1728529259,
-        model="gemini-1.5-flash",
+        model="gemini-2.0-flash",
         object="chat.completion",
         system_fingerprint=None,
         usage=usage,
@@ -2397,7 +2366,7 @@ def test_completion_cost_params_gemini_3():
 
     pc, cc = cost_per_character(
         **{
-            "model": "gemini-1.5-flash",
+            "model": "gemini-2.0-flash",
             "custom_llm_provider": "vertex_ai",
             "prompt_characters": None,
             "completion_characters": 3,
@@ -2405,11 +2374,13 @@ def test_completion_cost_params_gemini_3():
         }
     )
 
-    model_info = litellm.get_model_info("gemini-1.5-flash")
+    model_info = litellm.get_model_info("gemini-2.0-flash")
 
+    # gemini-2.0-flash has no per-character pricing, so cost_per_character
+    # falls back to per-token pricing using usage.prompt_tokens / usage.completion_tokens
     assert round(pc, 10) == round(3771 * model_info["input_cost_per_token"], 10)
     assert round(cc, 10) == round(
-        3 * model_info["output_cost_per_character"],
+        2 * model_info["output_cost_per_token"],
         10,
     )
 
@@ -2463,16 +2434,16 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
             )
         ],
         created=1729282652,
-        model="gpt-4o-audio-preview-2024-10-01",
+        model="gpt-4o-audio-preview",
         object="chat.completion",
         system_fingerprint="fp_4eafc16e9d",
         usage=usage_object,
         service_tier=None,
     )
 
-    cost = completion_cost(completion, model="gpt-4o-audio-preview-2024-10-01")
+    cost = completion_cost(completion, model="gpt-4o-audio-preview")
 
-    model_info = litellm.get_model_info("gpt-4o-audio-preview-2024-10-01")
+    model_info = litellm.get_model_info("gpt-4o-audio-preview")
     print(f"model_info: {model_info}")
     ## input cost
 

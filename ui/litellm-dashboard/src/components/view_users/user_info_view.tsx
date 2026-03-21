@@ -2,12 +2,14 @@ import React, { useState } from "react";
 import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
-  userInfoCall,
+  userGetInfoV2,
+  UserInfoV2Response,
   userDeleteCall,
   userUpdateUserCall,
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
+  teamInfoCall,
 } from "../networking";
 import { Button as AntdButton } from "antd";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -17,6 +19,7 @@ import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "
 import { CopyIcon, CheckIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
 interface UserInfoViewProps {
   userId: string;
@@ -29,22 +32,10 @@ interface UserInfoViewProps {
   startInEditMode?: boolean;
 }
 
-interface UserInfo {
-  user_id: string;
-  user_info: {
-    user_email: string | null;
-    user_role: string | null;
-    teams: any[] | null;
-    models: string[] | null;
-    max_budget: number | null;
-    budget_duration: string | null;
-    spend: number | null;
-    metadata: Record<string, any> | null;
-    created_at: string | null;
-    updated_at: string | null;
-  };
-  keys: any[] | null;
-  teams: any[] | null;
+/** Team info used for display in user detail view */
+interface TeamDisplayInfo {
+  team_id: string;
+  team_alias: string | null;
 }
 
 export default function UserInfoView({
@@ -57,8 +48,10 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null);
+  const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
+  const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(startInEditMode);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -78,8 +71,30 @@ export default function UserInfoView({
     const fetchData = async () => {
       try {
         if (!accessToken) return;
-        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
+        const data = await userGetInfoV2(accessToken, userId);
         setUserData(data);
+
+        // Fetch team details for display (team aliases)
+        if (data.teams && data.teams.length > 0) {
+          try {
+            const teamPromises = data.teams.map(async (teamId: string) => {
+              try {
+                const teamData = await teamInfoCall(accessToken, teamId);
+                return {
+                  team_id: teamId,
+                  team_alias: teamData?.team_alias || null,
+                };
+              } catch {
+                return { team_id: teamId, team_alias: null };
+              }
+            });
+            const teams = await Promise.all(teamPromises);
+            setTeamDetails(teams);
+          } catch {
+            // Fall back to just team IDs
+            setTeamDetails(data.teams.map((id: string) => ({ team_id: id, team_alias: null })));
+          }
+        }
 
         // Fetch available models
         const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
@@ -114,6 +129,7 @@ export default function UserInfoView({
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
+      setIsDeletingUser(true);
       await userDeleteCall(accessToken, [userId]);
       NotificationsManager.success("User deleted successfully");
       if (onDelete) {
@@ -123,7 +139,14 @@ export default function UserInfoView({
     } catch (error) {
       console.error("Error deleting user:", error);
       NotificationsManager.fromBackend("Failed to delete user");
+    } finally {
+      setIsDeleteModalOpen(false);
+      setIsDeletingUser(false);
     }
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
   };
 
   const handleUserUpdate = async (formValues: Record<string, any>) => {
@@ -135,14 +158,12 @@ export default function UserInfoView({
       // Update local state with new values
       setUserData({
         ...userData,
-        user_info: {
-          ...userData.user_info,
-          user_email: formValues.user_email,
-          models: formValues.models,
-          max_budget: formValues.max_budget,
-          budget_duration: formValues.budget_duration,
-          metadata: formValues.metadata,
-        },
+        user_email: formValues.user_email ?? userData.user_email,
+        user_alias: formValues.user_alias ?? userData.user_alias,
+        models: formValues.models ?? userData.models,
+        max_budget: formValues.max_budget ?? userData.max_budget,
+        budget_duration: formValues.budget_duration ?? userData.budget_duration,
+        metadata: formValues.metadata ?? userData.metadata,
       });
 
       NotificationsManager.success("User updated successfully");
@@ -185,6 +206,20 @@ export default function UserInfoView({
     }
   };
 
+  // Build a legacy-compatible shape for UserEditView
+  const userDataForEdit = {
+    user_id: userData.user_id,
+    user_info: {
+      user_email: userData.user_email,
+      user_alias: userData.user_alias,
+      user_role: userData.user_role,
+      models: userData.models,
+      max_budget: userData.max_budget,
+      budget_duration: userData.budget_duration,
+      metadata: userData.metadata,
+    },
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -192,7 +227,7 @@ export default function UserInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             Back to Users
           </Button>
-          <Title>{userData.user_info?.user_email || "User"}</Title>
+          <Title>{userData.user_email || "User"}</Title>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
             <AntdButton
@@ -217,7 +252,7 @@ export default function UserInfoView({
               icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
+              className="flex items-center text-red-500 border-red-500 hover:text-red-600 hover:border-red-600"
             >
               Delete User
             </Button>
@@ -225,39 +260,33 @@ export default function UserInfoView({
         )}
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={() => setIsDeleteModalOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userData.user_email },
+          { label: "User ID", value: userData.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) ||
+              userData.user_role ||
+              "-",
+          },
+          {
+            label: "Total Spend (USD)",
+            value:
+              userData.spend !== null && userData.spend !== undefined
+                ? userData.spend.toFixed(2)
+                : undefined,
+          },
+        ]}
+        onCancel={cancelDelete}
+        onOk={handleDelete}
+        confirmLoading={isDeletingUser}
+      />
 
       <TabGroup defaultIndex={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
@@ -272,11 +301,11 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.user_info?.spend || 0, 4)}</Title>
+                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
                   <Text>
                     of{" "}
-                    {userData.user_info?.max_budget !== null
-                      ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                    {userData.max_budget !== null
+                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
                       : "Unlimited"}
                   </Text>
                 </div>
@@ -285,23 +314,23 @@ export default function UserInfoView({
               <Card>
                 <Text>Teams</Text>
                 <div className="mt-2">
-                  {userData.teams?.length && userData.teams?.length > 0 ? (
+                  {teamDetails.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
-                        <Badge key={index} color="blue" title={team.team_alias}>
-                          {team.team_alias}
+                      {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team, index) => (
+                        <Badge key={index} color="blue" title={team.team_alias || team.team_id}>
+                          {team.team_alias || team.team_id}
                         </Badge>
                       ))}
-                      {!isTeamsExpanded && userData.teams?.length > 20 && (
+                      {!isTeamsExpanded && teamDetails.length > 20 && (
                         <Badge
                           color="gray"
                           className="cursor-pointer hover:bg-gray-200 transition-colors"
                           onClick={() => setIsTeamsExpanded(true)}
                         >
-                          +{userData.teams.length - 20} more
+                          +{teamDetails.length - 20} more
                         </Badge>
                       )}
-                      {isTeamsExpanded && userData.teams?.length > 20 && (
+                      {isTeamsExpanded && teamDetails.length > 20 && (
                         <Badge
                           color="gray"
                           className="cursor-pointer hover:bg-gray-200 transition-colors"
@@ -318,17 +347,10 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <Text>API Keys</Text>
-                <div className="mt-2">
-                  <Text>{userData.keys?.length || 0} keys</Text>
-                </div>
-              </Card>
-
-              <Card>
                 <Text>Personal Models</Text>
                 <div className="mt-2">
-                  {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
-                    userData.user_info?.models?.map((model, index) => <Text key={index}>{model}</Text>)
+                  {userData.models?.length && userData.models?.length > 0 ? (
+                    userData.models?.map((model, index) => <Text key={index}>{model}</Text>)
                   ) : (
                     <Text>All proxy models</Text>
                   )}
@@ -343,18 +365,16 @@ export default function UserInfoView({
               <div className="flex justify-between items-center mb-4">
                 <Title>User Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
               {isEditing && userData ? (
                 <UserEditView
-                  userData={userData}
+                  userData={userDataForEdit}
                   onCancel={() => setIsEditing(false)}
                   onSubmit={handleUserUpdate}
-                  teams={userData.teams}
+                  teams={teamDetails}
                   accessToken={accessToken}
                   userID={userId}
                   userRole={userRole}
@@ -383,19 +403,24 @@ export default function UserInfoView({
 
                   <div>
                     <Text className="font-medium">Email</Text>
-                    <Text>{userData.user_info?.user_email || "Not Set"}</Text>
+                    <Text>{userData.user_email || "Not Set"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">User Alias</Text>
+                    <Text>{userData.user_alias || "Not Set"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Global Proxy Role</Text>
-                    <Text>{userData.user_info?.user_role || "Not Set"}</Text>
+                    <Text>{userData.user_role || "Not Set"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Created</Text>
                     <Text>
-                      {userData.user_info?.created_at
-                        ? new Date(userData.user_info.created_at).toLocaleString()
+                      {userData.created_at
+                        ? new Date(userData.created_at).toLocaleString()
                         : "Unknown"}
                     </Text>
                   </div>
@@ -403,8 +428,8 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Last Updated</Text>
                     <Text>
-                      {userData.user_info?.updated_at
-                        ? new Date(userData.user_info.updated_at).toLocaleString()
+                      {userData.updated_at
+                        ? new Date(userData.updated_at).toLocaleString()
                         : "Unknown"}
                     </Text>
                   </div>
@@ -412,9 +437,9 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Teams</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.teams?.length && userData.teams?.length > 0 ? (
+                      {teamDetails.length > 0 ? (
                         <>
-                          {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                          {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team, index) => (
                             <span
                               key={index}
                               className="px-2 py-1 bg-blue-100 rounded text-xs"
@@ -423,15 +448,15 @@ export default function UserInfoView({
                               {team.team_alias || team.team_id}
                             </span>
                           ))}
-                          {!isTeamsExpanded && userData.teams?.length > 20 && (
+                          {!isTeamsExpanded && teamDetails.length > 20 && (
                             <span
                               className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
                               onClick={() => setIsTeamsExpanded(true)}
                             >
-                              +{userData.teams.length - 20} more
+                              +{teamDetails.length - 20} more
                             </span>
                           )}
-                          {isTeamsExpanded && userData.teams?.length > 20 && (
+                          {isTeamsExpanded && teamDetails.length > 20 && (
                             <span
                               className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
                               onClick={() => setIsTeamsExpanded(false)}
@@ -449,8 +474,8 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
-                        userData.user_info?.models?.map((model, index) => (
+                      {userData.models?.length && userData.models?.length > 0 ? (
+                        userData.models?.map((model, index) => (
                           <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
                             {model}
                           </span>
@@ -462,38 +487,23 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">API Keys</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.keys?.length && userData.keys?.length > 0 ? (
-                        userData.keys.map((key, index) => (
-                          <span key={index} className="px-2 py-1 bg-green-100 rounded text-xs">
-                            {key.key_alias || key.token}
-                          </span>
-                        ))
-                      ) : (
-                        <Text>No API keys</Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
                     <Text className="font-medium">Max Budget</Text>
                     <Text>
-                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
-                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                      {userData.max_budget !== null && userData.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
                         : "Unlimited"}
                     </Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Budget Reset</Text>
-                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
+                    <Text>{getBudgetDurationLabel(userData.budget_duration ?? null)}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(userData.user_info?.metadata || {}, null, 2)}
+                      {JSON.stringify(userData.metadata || {}, null, 2)}
                     </pre>
                   </div>
                 </div>

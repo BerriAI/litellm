@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
+from .main import str_to_bool
 
 
 class CyberArkSecretManager(BaseSecretManager):
@@ -32,10 +33,13 @@ class CyberArkSecretManager(BaseSecretManager):
         self.tls_cert_path = os.getenv("CYBERARK_CLIENT_CERT", "")
         self.tls_key_path = os.getenv("CYBERARK_CLIENT_KEY", "")
 
+        # SSL verification - can be disabled for self-signed certificates
+        # Set CYBERARK_SSL_VERIFY=false to disable SSL verification
+        ssl_verify_env = str_to_bool(os.getenv("CYBERARK_SSL_VERIFY"))
+        self.ssl_verify: bool = ssl_verify_env if ssl_verify_env is not None else True
+
         # Validate environment
-        if not self.conjur_api_key and not (
-            self.tls_cert_path and self.tls_key_path
-        ):
+        if not self.conjur_api_key and not (self.tls_cert_path and self.tls_key_path):
             raise ValueError(
                 "Missing CyberArk credentials. Please set CYBERARK_API_KEY or both CYBERARK_CLIENT_CERT and CYBERARK_CLIENT_KEY in your environment."
             )
@@ -50,6 +54,11 @@ class CyberArkSecretManager(BaseSecretManager):
         if premium_user is not True:
             raise ValueError(
                 f"CyberArk secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        if not self.ssl_verify:
+            verbose_logger.warning(
+                "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             )
 
     def _authenticate(self) -> str:
@@ -71,13 +80,16 @@ class CyberArkSecretManager(BaseSecretManager):
 
         try:
             if self.tls_cert_path and self.tls_key_path:
-                # Certificate-based authentication
-                http_client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+                # Certificate-based authentication - need custom client for cert
+                http_client = httpx.Client(
+                    cert=(self.tls_cert_path, self.tls_key_path),
+                    verify=self.ssl_verify,
+                )
                 resp = http_client.post(auth_url, content=self.conjur_api_key)
             else:
                 # API key authentication
-                http_handler = _get_httpx_client()
-                resp = http_handler.post(auth_url, content=self.conjur_api_key)
+                http_handler = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+                resp = http_handler.client.post(auth_url, content=self.conjur_api_key)
 
             resp.raise_for_status()
 
@@ -117,8 +129,8 @@ class CyberArkSecretManager(BaseSecretManager):
         policy_yaml = f"- !variable {secret_name}\n"
 
         try:
-            client = _get_httpx_client()
-            resp = client.post(
+            client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+            resp = client.client.post(
                 policy_url,
                 headers={
                     **self._get_request_headers(),
@@ -180,6 +192,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
+            params={"ssl_verify": self.ssl_verify},
         )
 
         try:
@@ -227,11 +240,11 @@ class CyberArkSecretManager(BaseSecretManager):
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
 
-        sync_client = _get_httpx_client()
+        sync_client = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
 
         try:
             url = self.get_url(secret_name)
-            response = sync_client.get(url, headers=self._get_request_headers())
+            response = sync_client.client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # CyberArk Conjur returns the raw secret value as text
@@ -278,7 +291,7 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},
+            params={"ssl_verify": self.ssl_verify},
         )
 
         try:
@@ -302,7 +315,6 @@ class CyberArkSecretManager(BaseSecretManager):
         except Exception as e:
             verbose_logger.exception(f"Error writing secret to CyberArk Conjur: {e}")
             return {"status": "error", "message": str(e)}
-
 
     async def async_delete_secret(
         self,
@@ -336,4 +348,3 @@ class CyberArkSecretManager(BaseSecretManager):
             "status": "not_supported",
             "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
         }
-

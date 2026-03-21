@@ -46,6 +46,8 @@ export const guardrail_provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   Lakera: "lakera_v2",
   LitellmContentFilter: "litellm_content_filter",
+  ToolPermission: "tool_permission",
+  BlockCodeExecution: "block_code_execution",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -103,11 +105,12 @@ export const shouldRenderContentFilterConfigSettings = (provider: string | null)
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
-  "Presidio PII": `${asset_logos_folder}presidio.png`,
+  "Zscaler AI Guard": `${asset_logos_folder}zscaler.svg`,
+  "Presidio PII": `${asset_logos_folder}microsoft_azure.svg`,
   "Bedrock Guardrail": `${asset_logos_folder}bedrock.svg`,
   Lakera: `${asset_logos_folder}lakeraai.jpeg`,
-  "Azure Content Safety Prompt Shield": `${asset_logos_folder}presidio.png`,
-  "Azure Content Safety Text Moderation": `${asset_logos_folder}presidio.png`,
+  "Azure Content Safety Prompt Shield": `${asset_logos_folder}microsoft_azure.svg`,
+  "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
@@ -120,6 +123,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
+  "Prompt Security": `${asset_logos_folder}prompt_security.png`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
 };
 

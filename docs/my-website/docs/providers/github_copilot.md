@@ -15,7 +15,7 @@ https://docs.github.com/en/copilot
 |-------|-------|
 | Description | GitHub Copilot Chat API provides access to GitHub's AI-powered coding assistant. |
 | Provider Route on LiteLLM | `github_copilot/` |
-| Supported Endpoints | `/chat/completions` |
+| Supported Endpoints | `/chat/completions`, `/embeddings` |
 | API Reference | [GitHub Copilot docs](https://docs.github.com/en/copilot) |
 
 ## Authentication
@@ -35,11 +35,10 @@ from litellm import completion
 
 response = completion(
     model="github_copilot/gpt-4",
-    messages=[{"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}],
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    messages=[
+        {"role": "system", "content": "You are a helpful coding assistant"},
+        {"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}
+    ]
 )
 print(response)
 ```
@@ -50,16 +49,40 @@ from litellm import completion
 stream = completion(
     model="github_copilot/gpt-4",
     messages=[{"role": "user", "content": "Explain async/await in Python"}],
-    stream=True,
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    stream=True
 )
 
 for chunk in stream:
     if chunk.choices[0].delta.content is not None:
         print(chunk.choices[0].delta.content, end="")
+```
+
+### Responses
+
+For GPT Codex models, only responses API is supported.
+
+```python showLineNumbers title="GitHub Copilot Responses"
+import litellm
+
+response = await litellm.aresponses(
+    model="github_copilot/gpt-5.1-codex",
+    input="Write a Python hello world",
+    max_output_tokens=500
+)
+
+print(response)
+```
+
+### Embedding
+
+```python showLineNumbers title="GitHub Copilot Embedding"
+import litellm
+
+response = litellm.embedding(
+    model="github_copilot/text-embedding-3-small",
+    input=["good morning from litellm"]
+)
+print(response)
 ```
 
 ## Usage - LiteLLM Proxy
@@ -71,6 +94,16 @@ model_list:
   - model_name: github_copilot/gpt-4
     litellm_params:
       model: github_copilot/gpt-4
+  - model_name: github_copilot/gpt-5.1-codex
+    model_info:
+      mode: responses
+    litellm_params:
+      model: github_copilot/gpt-5.1-codex
+  - model_name: github_copilot/text-embedding-ada-002
+    model_info:
+      mode: embedding
+    litellm_params:
+      model: github_copilot/text-embedding-ada-002
 ```
 
 Start your LiteLLM Proxy server:
@@ -96,11 +129,7 @@ client = OpenAI(
 # Non-streaming response
 response = client.chat.completions.create(
     model="github_copilot/gpt-4",
-    messages=[{"role": "user", "content": "How do I optimize this SQL query?"}],
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    messages=[{"role": "user", "content": "How do I optimize this SQL query?"}]
 )
 
 print(response.choices[0].message.content)
@@ -118,11 +147,7 @@ response = litellm.completion(
     model="litellm_proxy/github_copilot/gpt-4",
     messages=[{"role": "user", "content": "Review this code for bugs"}],
     api_base="http://localhost:4000",
-    api_key="your-proxy-api-key",
-    extra_headers={
-        "editor-version": "vscode/1.85.1",
-        "Copilot-Integration-Id": "vscode-chat"
-    }
+    api_key="your-proxy-api-key"
 )
 
 print(response.choices[0].message.content)
@@ -136,8 +161,6 @@ print(response.choices[0].message.content)
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
-  -H "editor-version: vscode/1.85.1" \
-  -H "Copilot-Integration-Id: vscode-chat" \
   -d '{
     "model": "github_copilot/gpt-4",
     "messages": [{"role": "user", "content": "Explain this error message"}]
@@ -173,14 +196,16 @@ export GITHUB_COPILOT_API_KEY_FILE="api-key.json"
 
 ### Headers
 
-GitHub Copilot supports various editor-specific headers:
+LiteLLM automatically injects the required GitHub Copilot headers (simulating VSCode). You don't need to specify them manually.
 
-```python showLineNumbers title="Common Headers"
+If you want to override the defaults (e.g., to simulate a different editor), you can use `extra_headers`:
+
+```python showLineNumbers title="Custom Headers (Optional)"
 extra_headers = {
     "editor-version": "vscode/1.85.1",           # Editor version
     "editor-plugin-version": "copilot/1.155.0",  # Plugin version
     "Copilot-Integration-Id": "vscode-chat",     # Integration ID
-    "user-agent": "GithubCopilot/1.155.0"       # User agent
+    "user-agent": "GithubCopilot/1.155.0"        # User agent
 }
 ```
 

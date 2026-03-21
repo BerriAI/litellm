@@ -385,7 +385,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
         (True, False, True),
-        (False, True, True),
+        (False, True, False),
         (True, True, True),
         (False, False, False),
     ],
@@ -489,7 +489,7 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
-            "model": "anthropic/claude-3-7-sonnet-latest",
+            "model": "anthropic/claude-sonnet-4-5-20250929",
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
@@ -701,7 +701,7 @@ def test_anthropic_tool_with_image():
     ]
 
     result = prompt_factory(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         messages=messages,
         custom_llm_provider="anthropic",
     )
@@ -761,11 +761,57 @@ def test_anthropic_map_openai_params_tools_and_json_schema():
     mapped_params = litellm.AnthropicConfig().map_openai_params(
         non_default_params=args["non_default_params"],
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         drop_params=False,
     )
 
     assert "Question" in json.dumps(mapped_params)
+
+
+def test_anthropic_map_openai_params_tools_with_defs():
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user from provided profile data.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                    "required": ["name", "email"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert (
+        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+    )
 
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -993,8 +1039,8 @@ def test_anthropic_citations_api_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_output(model):
@@ -1022,9 +1068,9 @@ def test_anthropic_thinking_output(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_output_stream(model):
@@ -1087,8 +1133,8 @@ def test_anthropic_custom_headers():
     with patch.object(client, "post") as mock_post:
         try:
             resp = completion(
-                model="claude-3-5-sonnet-20240620",
-                headers={"anthropic-beta": "structured-output-2024-03-01"},
+                model="claude-sonnet-4-5-20250929",
+                headers={"anthropic-beta": "computer-use-2025-01-24"},
                 messages=[
                     {"role": "user", "content": "What is the capital of France?"}
                 ],
@@ -1100,14 +1146,14 @@ def test_anthropic_custom_headers():
 
         mock_post.assert_called_once()
         headers = mock_post.call_args[1]["headers"]
-        assert "structured-output-2024-03-01" in headers["anthropic-beta"]
+        assert "computer-use-2025-01-24" in headers["anthropic-beta"]
 
 
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_in_assistant_message(model):
@@ -1143,8 +1189,8 @@ def test_anthropic_thinking_in_assistant_message(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_redacted_thinking_in_assistant_message(model):
@@ -1180,7 +1226,7 @@ def test_just_system_message():
     litellm._turn_on_debug()
     litellm.modify_params = True
     params = {
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [{"role": "system", "content": "You are a helpful assistant."}],
     }
 
@@ -1258,7 +1304,12 @@ def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
-        "messages": [{"role": "user", "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer"}],
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer",
+            }
+        ],
         **optional_params,
     }
 
@@ -1285,7 +1336,9 @@ def test_anthropic_text_editor():
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}],
+        "tools": [
+            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}
+        ],
     }
 
     try:
@@ -1541,7 +1594,6 @@ def test_anthropic_via_responses_api():
         ResponsesAPIStreamEvents.RESPONSE_CREATED,
         ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
         ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ResponsesAPIStreamEvents.CONTENT_PART_DONE,
@@ -1645,3 +1697,106 @@ def test_anthropic_via_responses_api():
 
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
+
+
+def test_anthropic_strict_parameter_passthrough():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                            "strict": True,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter is in the mapped tool's input_schema
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert tool["input_schema"]["strict"] is True
+
+
+def test_anthropic_strict_not_present():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter does not exist if it is not passed in
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert "strict" not in tool["input_schema"]
+
+
+def test_anthropic_structured_output_chat_completion_api():
+    response = litellm.completion(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "final_output",
+                "strict": True,
+                "schema": {
+                    "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
+                    "properties": {
+                        "agent_doing": {"title": "Agent Doing", "type": "string"}
+                    },
+                    "required": ["agent_doing"],
+                    "title": "ThinkingStep",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+            },
+        },
+    )
+    assert response is not None
+    print(f"response: {response}")

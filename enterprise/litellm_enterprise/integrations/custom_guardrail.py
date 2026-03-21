@@ -10,10 +10,15 @@ class EnterpriseCustomGuardrailHelper:
         event_hook: Optional[
             Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
         ],
+        event_type: Optional[GuardrailEventHooks] = None,
     ) -> Optional[bool]:
         """
-        Assumes check for event match is done in `should_run_guardrail`
-        Returns True if the guardrail should be run by tag
+        Returns True if the guardrail should be run for this request and event_type.
+
+        Logic:
+        - If a request tag matches a Mode tag key, only run if event_type matches
+          the tag's value (the mode for that tag).
+        - If no request tag matches, fall back to default mode(s).
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
@@ -36,11 +41,31 @@ class EnterpriseCustomGuardrailHelper:
             proxy_server_request=proxy_server_request,
         )
 
-        if request_tags and any(tag in event_hook.tags for tag in request_tags):
+        # Check if any request tag matches a Mode tag key
+        matched_mode = None
+        if request_tags:
+            for tag in request_tags:
+                if tag in event_hook.tags:
+                    matched_mode = event_hook.tags[tag]
+                    break
+
+        if matched_mode is not None:
+            # Tag matched: only run if event_type matches the tag's mode value(s)
+            if event_type is not None:
+                if isinstance(matched_mode, list):
+                    return event_type.value in matched_mode
+                return event_type.value == matched_mode
             return True
-        elif event_hook.default and any(
-            tag in event_hook.default for tag in request_tags
-        ):
-            return True
+
+        # No tag matched: fall back to default mode(s)
+        if event_hook.default is not None:
+            if event_type is not None:
+                default_list = (
+                    event_hook.default
+                    if isinstance(event_hook.default, list)
+                    else [event_hook.default]
+                )
+                return event_type.value in default_list
+            return False
 
         return False

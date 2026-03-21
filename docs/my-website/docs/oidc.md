@@ -106,7 +106,7 @@ model_list:
       aws_region_name: us-west-2
       aws_session_name: "my-test-session"
       aws_role_name: "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-      aws_web_identity_token: "oidc/circleci_v2/"
+      aws_web_identity_token: "oidc/example-provider/"
 ```
 
 #### Amazon IAM Role Configuration for CircleCI v2 -> Bedrock

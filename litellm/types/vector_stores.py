@@ -3,17 +3,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from annotated_types import Ge
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
     """Supported vector store integrations."""
 
     BEDROCK = "bedrock"
+    RAGFLOW = "ragflow"
 
 
 class LiteLLM_VectorStoreConfig(TypedDict, total=False):
@@ -40,6 +38,10 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     # litellm_params
     litellm_params: Optional[Dict[str, Any]]
+
+    # access control fields
+    team_id: Optional[str]
+    user_id: Optional[str]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
@@ -241,6 +243,8 @@ class VectorStoreIndexEndpoints(TypedDict):
     write: List[
         Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
     ]  # endpoints for writing a vector store index
+
+
 VECTOR_STORE_OPENAI_PARAMS = Literal[
     "filters",
     "max_num_results",
@@ -249,14 +253,14 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 ]
 
 
-
 @dataclass
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
+
     filters: Optional[Dict] = None
     max_num_results: Optional[int] = None
     ranking_options: Optional[Dict] = None
-    
+
     def to_dict(self) -> Dict:
         """Convert to dict, excluding None values"""
         return {

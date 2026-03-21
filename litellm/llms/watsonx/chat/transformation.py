@@ -6,10 +6,10 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 
 from typing import Dict, List, Optional, Tuple, Union
 
+from litellm import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import (
     WatsonXAIEndpoint,
-    WatsonXAPIParams,
     WatsonXModelPattern,
 )
 
@@ -114,18 +114,6 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         )
         return url
 
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        """
-        Prepare payload for deployment models.
-        Deployment models cannot have 'model_id' or 'model' in the request body.
-        """
-        payload: dict = {}
-        payload["model_id"] = None if model.startswith("deployment/") else model
-        payload["project_id"] = (
-            None if model.startswith("deployment/") else api_params["project_id"]
-        )
-        return payload
-
     @staticmethod
     def _apply_prompt_template_core(
         model: str, messages: List[Dict[str, str]], hf_template_fn
@@ -142,10 +130,21 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         elif WatsonXModelPattern.IBM_MISTRAL.value in model:
             return mistral_instruct_pt(messages=messages)
         elif WatsonXModelPattern.GPT_OSS.value in model:
-            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
             try:
-                return hf_template_fn(model=hf_model, messages=messages)
+                result = hf_template_fn(model=hf_model, messages=messages)
+                # Return result if it's truthy (not None and not empty string)
+                # The caller will handle None/empty by falling back to default
+                if result:
+                    return result
             except Exception:
+                # Silently fall through to return None - caller will handle fallback
                 pass
         elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
             return custom_prompt(
@@ -188,15 +187,33 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         elif WatsonXModelPattern.IBM_MISTRAL.value in model:
             return mistral_instruct_pt(messages=messages)
         elif WatsonXModelPattern.GPT_OSS.value in model:
-            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
             try:
                 # Use sync if cached, async if not
                 if hf_model in litellm.known_tokenizer_config:
-                    return hf_chat_template(model=hf_model, messages=messages)
+                    result = hf_chat_template(model=hf_model, messages=messages)
                 else:
-                    return await ahf_chat_template(model=hf_model, messages=messages)
-            except Exception:
-                pass
+                    result = await ahf_chat_template(model=hf_model, messages=messages)
+                # Return result if it's truthy (not None and not empty string)
+                # The caller (_aconvert_watsonx_messages_core) will handle None/empty by falling back to default
+                if result:
+                    return result
+            except Exception as e:
+                # Log the exception for debugging but don't raise it
+                # The caller will fall back to default prompt factory
+                try:
+                    verbose_logger.debug(
+                        f"Failed to apply HuggingFace template for model {hf_model}: {e}"
+                    )
+                except Exception:
+                    # If logging fails, silently continue - don't break the flow
+                    pass
         elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
             return custom_prompt(
                 role_dict={
