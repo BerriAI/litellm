@@ -2405,7 +2405,7 @@ async def team_member_delete(
     response_model=TeamMemberUpdateResponse,
 )
 @management_endpoint_wrapper
-async def team_member_update(
+async def team_member_update(  # noqa: PLR0915
     data: TeamMemberUpdateRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
