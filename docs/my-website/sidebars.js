@@ -430,6 +430,7 @@ const sidebars = {
             "proxy/architecture",
             "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
+            "proxy/high_availability_control_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
             "proxy/image_handling",
