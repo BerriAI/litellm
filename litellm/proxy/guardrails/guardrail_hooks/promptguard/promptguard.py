@@ -10,6 +10,7 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
+    Dict,
     List,
     Literal,
     Optional,
@@ -120,7 +121,7 @@ class PromptGuardGuardrail(CustomGuardrail):
 
         direction = "input" if input_type == "request" else "output"
 
-        payload: dict[str, Any] = {
+        payload: Dict[str, Any] = {
             "messages": messages,
             "direction": direction,
         }
