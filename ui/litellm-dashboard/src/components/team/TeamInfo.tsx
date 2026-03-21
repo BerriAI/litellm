@@ -22,7 +22,8 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { EditOutlined, InfoCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button, Form, Input, message, Select, Switch, Tabs, Tooltip } from "antd";
+import { Button, Form, Input, Select, Switch, Tabs, Tooltip } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
@@ -387,7 +388,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         rpm_limit: values.rpm_limit,
         extra_permissions: values.extra_permissions,
       };
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
 
@@ -409,7 +410,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       setIsEditMemberModalVisible(false);
 
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       NotificationsManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);

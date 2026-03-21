@@ -1244,6 +1244,18 @@ if MCP_AVAILABLE:
                     },
                 )
 
+        # Block reserved special server IDs
+        if (
+            SpecialMCPServerName.all_team_servers == payload.server_id
+            or SpecialMCPServerName.all_proxy_servers == payload.server_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
+                },
+            )
+
         if payload.server_id is not None:
             # fail if the mcp server with id already exists
             mcp_server = await get_mcp_server(prisma_client, payload.server_id)
@@ -1254,16 +1266,6 @@ if MCP_AVAILABLE:
                         "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
                     },
                 )
-        elif (
-            SpecialMCPServerName.all_team_servers == payload.server_id
-            or SpecialMCPServerName.all_proxy_servers == payload.server_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
-                },
-            )
 
         # TODO: audit log for create
 
