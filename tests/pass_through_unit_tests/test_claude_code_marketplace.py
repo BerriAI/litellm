@@ -236,3 +236,49 @@ async def test_get_marketplace(mock_prisma_client):
     await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
         where={"name": plugin_name}
     )
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_git_subdir(mock_prisma_client):
+    """Test registering a plugin with git-subdir source type."""
+    setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    plugin_name = f"test-subdir-plugin-{int(time.time())}"
+
+    request = RegisterPluginRequest(
+        name=plugin_name,
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/test-org/monorepo.git",
+            "path": "plugins/my-plugin",
+        },
+        version="1.0.0",
+        description="Test git-subdir plugin",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    response = await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert response["status"] == "success"
+    assert response["action"] == "created"
+    assert response["plugin"]["name"] == plugin_name
+    assert response["plugin"]["source"]["source"] == "git-subdir"
+    assert response["plugin"]["source"]["url"] == "https://github.com/test-org/monorepo.git"
+    assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
+    assert response["plugin"]["enabled"] is True
+
+    # Cleanup
+    await mock_prisma_client.db.litellm_claudecodeplugintable.delete(
+        where={"name": plugin_name}
+    )
