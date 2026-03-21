@@ -306,6 +306,76 @@ class TestPromptGuardRedactAction:
             )
             assert result["texts"] == ["Email: ****@****.com"]
 
+    @pytest.mark.asyncio
+    async def test_redact_updates_structured_messages(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        original = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "My SSN is 123-45-6789"},
+        ]
+        redacted = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "My SSN is *********"},
+        ]
+        resp = _make_response(
+            {
+                "decision": "redact",
+                "event_id": "evt-007",
+                "confidence": 0.99,
+                "threat_type": "pii_detected",
+                "redacted_messages": redacted,
+                "threats": [],
+                "latency_ms": 40.0,
+            }
+        )
+        with patch.object(
+            promptguard_guardrail.async_handler,
+            "post",
+            return_value=resp,
+        ):
+            result = await promptguard_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["My SSN is 123-45-6789"],
+                    "structured_messages": original,
+                },
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["structured_messages"] == redacted
+            assert "My SSN is *********" in result["texts"]
+
+    @pytest.mark.asyncio
+    async def test_redact_texts_only_without_structured(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        redacted = [
+            {"role": "user", "content": "My SSN is *********"},
+        ]
+        resp = _make_response(
+            {
+                "decision": "redact",
+                "event_id": "evt-008",
+                "redacted_messages": redacted,
+            }
+        )
+        with patch.object(
+            promptguard_guardrail.async_handler,
+            "post",
+            return_value=resp,
+        ):
+            result = await promptguard_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["My SSN is 123-45-6789"],
+                },
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["texts"] == [
+                "My SSN is *********",
+            ]
+            assert "structured_messages" not in result
+
 
 # ---------------------------------------------------------------------------
 # Request payload verification

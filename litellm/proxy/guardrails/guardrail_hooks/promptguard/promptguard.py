@@ -44,23 +44,24 @@ class PromptGuardGuardrail(CustomGuardrail):
         api_base: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback,
-        )
         self.api_key = api_key or os.environ.get(
             "PROMPTGUARD_API_KEY",
         )
+        if not self.api_key:
+            raise PromptGuardMissingCredentials(
+                "PromptGuard API key is required. "
+                "Set PROMPTGUARD_API_KEY in the "
+                "environment or pass api_key in "
+                "the guardrail config."
+            )
+
         self.api_base = (
             api_base or os.environ.get("PROMPTGUARD_API_BASE") or _DEFAULT_API_BASE
         ).rstrip("/")
 
-        if not self.api_key:
-            raise PromptGuardMissingCredentials(
-                "PromptGuard API key is required. "
-                "Set PROMPTGUARD_API_KEY in the environment "
-                "or pass api_key in the guardrail config."
-            )
-
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
+        )
         super().__init__(**kwargs)
 
     @staticmethod
@@ -143,8 +144,12 @@ class PromptGuardGuardrail(CustomGuardrail):
             )
 
         if decision == "redact":
-            redacted_messages = result.get("redacted_messages")
+            redacted_messages = result.get(
+                "redacted_messages",
+            )
             if redacted_messages:
+                if structured_messages:
+                    inputs["structured_messages"] = redacted_messages
                 redacted_texts = self._extract_texts_from_messages(
                     redacted_messages,
                 )
