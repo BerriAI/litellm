@@ -1324,7 +1324,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ) -> EmbeddingResponse:
         super().embedding()
         try:
-            data = {"model": model, "input": input, **optional_params}
+            # Filter out None and empty string values from optional_params.
+            # This prevents sending e.g. encoding_format=null to strict
+            # OpenAI-compatible servers (llama.cpp, vLLM, TEI) that reject
+            # null values in JSON. Matches the pattern used in openai_like handler.
+            filtered_optional_params = {
+                k: v for k, v in optional_params.items() if v not in (None, "")
+            }
+            data = {"model": model, "input": input, **filtered_optional_params}
             max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
