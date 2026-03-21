@@ -974,3 +974,44 @@ describe("refetch button", () => {
     expect(screen.getByText("Fetch")).toBeInTheDocument();
   });
 });
+
+describe("search bar", () => {
+  it("should render the search input", () => {
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const searchInput = screen.getByPlaceholderText("Search keys by alias...");
+    expect(searchInput).toBeInTheDocument();
+  });
+
+  it("should show the ⌘K keyboard shortcut hint", () => {
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    expect(screen.getByText("⌘K")).toBeInTheDocument();
+  });
+
+  it("should allow typing in the search input", async () => {
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const searchInput = screen.getByPlaceholderText("Search keys by alias...");
+    fireEvent.change(searchInput, { target: { value: "test-search" } });
+
+    expect(searchInput).toHaveValue("test-search");
+  });
+
+  it("should pass selectedKeyAlias to useKeys when searching", async () => {
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const searchInput = screen.getByPlaceholderText("Search keys by alias...");
+    fireEvent.change(searchInput, { target: { value: "my-key" } });
+
+    await waitFor(
+      () => {
+        const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
+        expect(lastCall[2]).toEqual(
+          expect.objectContaining({ selectedKeyAlias: "my-key" }),
+        );
+      },
+      { timeout: 3000 },
+    );
+  });
+});
