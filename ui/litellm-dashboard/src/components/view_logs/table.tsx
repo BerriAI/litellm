@@ -65,9 +65,10 @@ export function DataTable<TData, TValue>({
                 const isSorted = header.column.getIsSorted();
                 
                 return (
-                  <TableHeaderCell 
-                    key={header.id} 
+                  <TableHeaderCell
+                    key={header.id}
                     className={`py-1 h-8 ${canSort ? 'cursor-pointer select-none hover:bg-gray-50' : ''}`}
+                    style={{ width: header.getSize() !== 150 ? header.getSize() : undefined }}
                     onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
                   >
                     {header.isPlaceholder ? null : (
@@ -103,7 +104,7 @@ export function DataTable<TData, TValue>({
                   onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
+                    <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap" style={{ width: cell.column.getSize() !== 150 ? cell.column.getSize() : undefined }}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
