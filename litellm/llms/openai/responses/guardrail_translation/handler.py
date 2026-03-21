@@ -797,15 +797,17 @@ class OpenAIResponsesHandler(BaseTranslation):
         if len(responses) > len(task_mappings):
             for i, extra_text in enumerate(responses[len(task_mappings) :]):
                 response_output.append(
-                    {
-                        "type": "message",
-                        "id": f"guardrail_msg_{i}",
-                        "status": "completed",
-                        "role": "assistant",
-                        "content": [
-                            {"type": "output_text", "text": extra_text},
+                    GenericResponseOutputItem(
+                        type="message",
+                        id=f"guardrail_msg_{i}",
+                        status="completed",
+                        role="assistant",
+                        content=[
+                            OutputText(
+                                type="output_text", text=extra_text, annotations=None
+                            ),
                         ],
-                    }
+                    )
                 )
 
     def _apply_guardrail_responses_to_output_tool_calls(
