@@ -17,8 +17,7 @@ For the LiteLLM PR submission.
 
 import json
 import os
-import re
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -64,9 +63,11 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
               guardrail: openguardrails
               mode: [pre_call, post_call]
               api_base: http://og-server:5001
-              api_key: sk-xxai-your-key
+              api_key: sk-xxai-your-key  # optional for keyless self-hosted deployments
               default_on: true
               private_model_name: og-private-model  # optional, default: og-private-model
+              fail_on_error: false  # optional, set true to block when API is unreachable
+              skip_output_for_private_model: true  # optional, set false to scan private model output
 
     The private model must also be defined in model_list:
         model_list:
@@ -82,6 +83,8 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         private_model_name: Optional[str] = None,
+        fail_on_error: bool = False,
+        skip_output_for_private_model: bool = True,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -96,13 +99,10 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             )
         self.api_base = base_url.rstrip("/")
 
-        resolved_key = api_key or os.environ.get("OPENGUARDRAILS_API_KEY")
-        if not resolved_key:
-            raise ValueError(
-                "api_key is required for OpenGuardrails. "
-                "Set OPENGUARDRAILS_API_KEY env var or pass in litellm_params."
-            )
-        self.api_key = resolved_key
+        self.api_key = api_key or os.environ.get("OPENGUARDRAILS_API_KEY")
+
+        self.fail_on_error = fail_on_error
+        self.skip_output_for_private_model = skip_output_for_private_model
 
         self.private_model_name = (
             private_model_name
@@ -128,10 +128,10 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------ #
 
     def _build_headers(self) -> dict:
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
     async def _call_og_api(
         self, path: str, payload: dict
@@ -166,15 +166,8 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
 
     @staticmethod
     def _get_metadata(data: dict) -> dict:
-        """Get or create the metadata dict inside data."""
-        if "metadata" not in data:
-            data["metadata"] = {}
-        return data["metadata"]
-
-    @staticmethod
-    def _get_litellm_metadata(data: dict) -> dict:
-        """Get metadata from litellm_metadata (used in post-call hooks)."""
-        return data.get("litellm_metadata", data.get("metadata", {}))
+        """Get or create the litellm_metadata dict inside data."""
+        return data.setdefault("litellm_metadata", {})
 
     # ------------------------------------------------------------------ #
     #  Pre-call hook: input detection                                      #
@@ -217,7 +210,11 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
 
         result = await self._call_og_api("/v1/gateway/process-input", payload)
         if result is None:
-            # API unreachable - fail open
+            if self.fail_on_error:
+                raise GuardrailRaisedException(
+                    guardrail_name=GUARDRAIL_NAME,
+                    message="OpenGuardrails API unreachable; blocking request (fail_on_error=True)",
+                )
             verbose_proxy_logger.warning(
                 "OpenGuardrails unreachable, proceeding without guardrail (fail-open)"
             )
@@ -298,8 +295,8 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             )
             data["model"] = self.private_model_name
 
-            # Skip output detection for private model (data is safe)
-            metadata[_META_SKIP_OUTPUT] = True
+            if self.skip_output_for_private_model:
+                metadata[_META_SKIP_OUTPUT] = True
 
             # If OG also anonymized the messages, apply that
             anonymized = result.get("anonymized_messages")
@@ -335,7 +332,7 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
         - If restore_mapping exists: restore anonymized placeholders
         - If output detection enabled: check response for risks
         """
-        metadata = self._get_litellm_metadata(data)
+        metadata = self._get_metadata(data)
 
         # Skip output detection for private model responses
         if metadata.get(_META_SKIP_OUTPUT):
@@ -367,6 +364,11 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
 
         result = await self._call_og_api("/v1/gateway/process-output", payload)
         if result is None:
+            if self.fail_on_error:
+                raise GuardrailRaisedException(
+                    guardrail_name=GUARDRAIL_NAME,
+                    message="OpenGuardrails API unreachable; blocking response (fail_on_error=True)",
+                )
             # API unreachable - fail open, but still do local restoration
             if restore_mapping:
                 self._restore_response_content(response, restore_mapping)
