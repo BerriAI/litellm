@@ -249,10 +249,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     refetch();
   }, [refetch]);
 
-  if (!accessToken || !userRole || !userID) {
-    return <div className="p-6 text-center text-gray-500">Loading...</div>;
-  }
-
   return (
     <div className="w-full h-full p-6">
       <Modal
