@@ -1600,6 +1600,13 @@ if MCP_AVAILABLE:
                     },
                 )
 
+        # For proxy admins, look up the server's team_id before deleting
+        # so we can clean up ObjectPermissionTable
+        if not team_id and LitellmUserRoles.PROXY_ADMIN == user_api_key_dict.user_role:
+            existing_server = await get_mcp_server(prisma_client, server_id)
+            if existing_server:
+                team_id = existing_server.team_id
+
         # try to delete the mcp server
         mcp_server_record_deleted = await delete_mcp_server(prisma_client, server_id)
 
