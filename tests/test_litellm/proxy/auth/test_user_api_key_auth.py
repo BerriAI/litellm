@@ -747,6 +747,14 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
+    _blocking_methods = [
+        "set_cache",
+        "get_cache",
+        "batch_get_cache",
+        "increment_cache",
+        "delete_cache",
+    ]
+
     api_key = "sk-test-no-blocking-cache"
     valid_token = UserAPIKeyAuth(
         api_key=api_key,
@@ -758,6 +766,11 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     mock_cache = AsyncMock()
     mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
     mock_cache.async_set_cache = AsyncMock(return_value=None)
+    # Wire sync methods on the instance as plain MagicMocks (no side_effect) so
+    # calls are recorded but not raised — the function's broad except Exception
+    # would swallow a raised error. We assert not_called() after the run instead.
+    for _m in _blocking_methods:
+        setattr(mock_cache, _m, MagicMock())
 
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
@@ -784,16 +797,6 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
         "litellm_proxy_admin_name": "admin",
     }
     _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
-
-    # Patch all sync DualCache methods at the class level so any call — on any
-    # instance — raises immediately with a clear message.
-    _blocking_methods = [
-        "set_cache",
-        "get_cache",
-        "batch_get_cache",
-        "increment_cache",
-        "delete_cache",
-    ]
 
     try:
         for k, v in _attrs.items():
@@ -844,6 +847,13 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                 google_ai_studio_api_key_header=None,
                 azure_apim_header=None,
                 request_data={},
+            )
+
+        for _m in _blocking_methods:
+            mock = getattr(mock_cache, _m)
+            assert mock.call_count == 0, (
+                f"Blocking DualCache.{_m}() was called {mock.call_count} time(s) "
+                f"on the async hot path — use async_{_m}() instead"
             )
 
     finally:
