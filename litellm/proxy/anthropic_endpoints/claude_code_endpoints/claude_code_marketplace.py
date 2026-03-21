@@ -157,7 +157,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github or url format)
+        - source: Git source reference (github, url, or git-subdir format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
