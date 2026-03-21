@@ -83,7 +83,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        self._flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
+        self._flush_task: Optional[
+            asyncio.Task[Any]
+        ] = self._start_periodic_flush_task()
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
