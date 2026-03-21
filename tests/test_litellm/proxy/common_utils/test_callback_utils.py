@@ -221,12 +221,14 @@ def test_initialize_callbacks_on_proxy_handles_instantiation_failure(
             litellm_settings={},
         )
 
-        # Verify the mock was actually called (guards against "logfire"
+        # Verify the mock was called for both events (guards against "logfire"
         # being silently removed from _known_custom_logger_compatible_callbacks).
-        assert mock_add_callback.call_count >= 1, (
+        assert mock_add_callback.call_count == 2, (
             "Expected _add_custom_logger_callback_to_specific_event to be "
-            f"called, but call_count={mock_add_callback.call_count}"
+            f"called twice (success + failure), but call_count={mock_add_callback.call_count}"
         )
+        mock_add_callback.assert_any_call("logfire", "success")
+        mock_add_callback.assert_any_call("logfire", "failure")
 
         # The string should be added as a fallback so it can be retried later
         assert "logfire" in litellm.callbacks, (
