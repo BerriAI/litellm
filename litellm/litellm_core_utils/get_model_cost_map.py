@@ -26,9 +26,9 @@ def _load_local_model_cost_map() -> dict:
     # Try loading from package resources (production)
     try:
         import importlib.resources
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window.json"
-        ) as f:
+        with importlib.resources.files("litellm").joinpath(
+            "model_prices_and_context_window.json"
+        ).open("r") as f:
             return json.load(f)
     except (FileNotFoundError, ModuleNotFoundError):
         pass
