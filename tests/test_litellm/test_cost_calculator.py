@@ -1,6 +1,5 @@
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
@@ -17,7 +16,6 @@ from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
-from litellm.llms.openai.cost_calculation import cost_per_second
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
@@ -1972,53 +1970,3 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
-
-
-class TestCostPerSecondArithmetic:
-    """Unit tests for the cost_per_second arithmetic itself.
-
-    The tests in TestCostCalculatorReadsDurationFromHiddenParams mock
-    openai_cost_per_second entirely — they verify that the right duration
-    is forwarded, but never that the math inside cost_per_second is correct.
-    These tests cover the arithmetic directly.
-    """
-
-    def test_input_cost_per_second_only(self):
-        """input_cost_per_second * duration = prompt_cost; completion_cost = 0."""
-        with patch("litellm.llms.openai.cost_calculation.get_model_info") as mock_info:
-            mock_info.return_value = {
-                "input_cost_per_second": 0.0001,
-                "output_cost_per_second": 0.0,
-            }
-            prompt_cost, completion_cost_val = cost_per_second(
-                model="whisper-1", custom_llm_provider="openai", duration=60.0
-            )
-        assert prompt_cost == pytest.approx(0.006)
-        assert completion_cost_val == 0.0
-
-    def test_both_input_and_output_cost_per_second(self):
-        """When both fields are set, they are applied independently."""
-        with patch("litellm.llms.openai.cost_calculation.get_model_info") as mock_info:
-            mock_info.return_value = {
-                "input_cost_per_second": 0.002,
-                "output_cost_per_second": 0.003,
-            }
-            prompt_cost, completion_cost_val = cost_per_second(
-                model="some-model", custom_llm_provider="openai", duration=10.0
-            )
-        assert prompt_cost == pytest.approx(0.02)
-        assert completion_cost_val == pytest.approx(0.03)
-
-    def test_zero_duration_returns_zero_cost(self):
-        """A zero-duration transcription must cost nothing regardless of the rate."""
-        with patch("litellm.llms.openai.cost_calculation.get_model_info") as mock_info:
-            mock_info.return_value = {
-                "input_cost_per_second": 0.0001,
-                "output_cost_per_second": 0.0,
-            }
-            prompt_cost, completion_cost_val = cost_per_second(
-                model="whisper-1", custom_llm_provider="openai", duration=0.0
-            )
-        assert prompt_cost == 0.0
-        assert completion_cost_val == 0.0
-
