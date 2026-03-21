@@ -179,36 +179,40 @@ class RegistryOrchestrator:
         tool_name: str,
         litellm_trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a message to an A2A agent via JSON-RPC 2.0 and return the result."""
+        """Send a message to an A2A agent via LiteLLM's asend_message and return the result."""
         import uuid
 
-        import httpx
+        from a2a.types import (
+            Message,
+            MessageSendParams,
+            Part,
+            Role,
+            SendMessageRequest,
+            TextPart,
+        )
 
-        request_id = str(uuid.uuid4())
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"type": "text", "text": message}],
-                }
-            },
-        }
+        from litellm.a2a_protocol.main import asend_message
 
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if litellm_trace_id:
-            headers["x-litellm-trace-id"] = litellm_trace_id
+        a2a_message = Message(
+            role=Role.user,
+            parts=[Part(root=TextPart(text=message))],
+            message_id=uuid.uuid4().hex,
+            context_id=litellm_trace_id,
+        )
+        request = SendMessageRequest(
+            id=str(uuid.uuid4()),
+            params=MessageSendParams(message=a2a_message),
+        )
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(agent_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-
-            result_text = _parse_a2a_response(data)
+            response = await asend_message(
+                api_base=agent_url,
+                request=request,
+                agent_id=agent_name,
+            )
+            result_text = _parse_a2a_response(
+                response.model_dump(mode="json", exclude_none=True)
+            )
             verbose_logger.debug(
                 "A2A agent '%s' returned: %s", agent_name, result_text[:200]
             )
