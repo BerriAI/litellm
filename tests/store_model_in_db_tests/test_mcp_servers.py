@@ -261,7 +261,7 @@ async def test_create_duplicate_mcp_server():
 @pytest.mark.asyncio
 async def test_create_mcp_server_auth_failure():
     """
-    Test that non-admin users cannot create MCP servers.
+    Test that non-admin users without a team_id cannot create MCP servers.
     """
     # Mock the database functions directly
     with mock.patch(
@@ -291,15 +291,15 @@ async def test_create_mcp_server_auth_failure():
             user_role=LitellmUserRoles.INTERNAL_USER,  # Not an admin
         )
 
-        # Expect HTTPException to be raised
+        # Expect HTTPException — non-admin users must provide team_id
         with pytest.raises(HTTPException) as exc_info:
             await add_mcp_server(
                 payload=mcp_server_request, user_api_key_dict=user_auth
             )
 
-        # Verify the exception details
-        assert exc_info.value.status_code == 403
-        assert "permission" in str(exc_info.value.detail)
+        # Non-admin without team_id gets a 400 requiring team_id
+        assert exc_info.value.status_code == 400
+        assert "team_id is required" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
