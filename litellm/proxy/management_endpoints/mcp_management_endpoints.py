@@ -1994,12 +1994,8 @@ if MCP_AVAILABLE:
                     "error": f"MCP Server not found, passed server_id={payload.server_id}"
                 },
             )
-        await global_mcp_server_manager.update_server(mcp_server_record_updated)
-
-        # Ensure registry is up to date by reloading from database
-        await global_mcp_server_manager.reload_servers_from_database()
-
         # Handle explicit team_id changes (including clearing to null/global)
+        # Must happen before registry reload so the cache reflects the new state.
         if is_admin and team_id_explicitly_set:
             new_team_id = payload.team_id  # could be a team ID or None (global)
 
@@ -2010,6 +2006,8 @@ if MCP_AVAILABLE:
                     where={"server_id": payload.server_id},
                     data={"team_id": None},
                 )
+                if mcp_server_record_updated is not None:
+                    mcp_server_record_updated.team_id = None
 
             # Sync ObjectPermissionTable
             if old_team_id != new_team_id:
@@ -2031,6 +2029,11 @@ if MCP_AVAILABLE:
                         verbose_proxy_logger.warning(
                             f"Failed to add server {payload.server_id} to new team {new_team_id}: {e}"
                         )
+
+        await global_mcp_server_manager.update_server(mcp_server_record_updated)
+
+        # Ensure registry is up to date by reloading from database
+        await global_mcp_server_manager.reload_servers_from_database()
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
