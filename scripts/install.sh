@@ -91,10 +91,16 @@ LITELLM_BIN=""
 if command -v pipx >/dev/null 2>&1; then
   info "Using pipx (isolated install)"
   if pipx install --force "${LITELLM_PACKAGE}"; then
-    # pipx installs to ~/.local/bin by default
-    PIPX_BIN="${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm"
-    if [ -x "$PIPX_BIN" ]; then
-      LITELLM_BIN="$PIPX_BIN"
+    # pipx installs to ~/.local/bin by default; try PIPX_BIN_DIR, then PATH
+    for try in "${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm" "$(command -v litellm 2>/dev/null)"; do
+      if [ -n "$try" ] && [ -x "$try" ]; then
+        LITELLM_BIN="$try"
+        break
+      fi
+    done
+    if [ -z "$LITELLM_BIN" ]; then
+      die "pipx install succeeded but litellm binary not found.
+  Check PIPX_BIN_DIR (current: ${PIPX_BIN_DIR:-${HOME}/.local/bin}). Run: pipx list"
     fi
   fi
 fi
@@ -105,8 +111,10 @@ if [ -z "$LITELLM_BIN" ]; then
   info "Using isolated venv: $LITELLM_VENV"
   mkdir -p "$(dirname "$LITELLM_VENV")"
   "$PYTHON_BIN" -m venv "$LITELLM_VENV" \
-    || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV"
-  "${LITELLM_VENV}/bin/pip" install -q --upgrade pip
+    || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV
+On Ubuntu/Debian you may first need: sudo apt install python3-venv"
+  "${LITELLM_VENV}/bin/pip" install -q --upgrade pip \
+    || die "Failed to upgrade pip in venv. Try: ${LITELLM_VENV}/bin/pip install --upgrade pip"
   "${LITELLM_VENV}/bin/pip" install --upgrade "${LITELLM_PACKAGE}" \
     || die "pip install failed. Try manually: ${LITELLM_VENV}/bin/pip install '${LITELLM_PACKAGE}'"
   LITELLM_BIN="${LITELLM_VENV}/bin/litellm"
