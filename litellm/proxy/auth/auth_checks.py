@@ -3612,11 +3612,16 @@ async def search_tool_access_check(
     Checks if the key/team has access to a specific search tool.
 
     Uses valid_token.object_permission_id (key level) and
-    valid_token.team_object_permission_id (team level) to look up permissions.
+    valid_token.team_object_permission_id (team level) to look up permissions
+    via the cached get_object_permission helper.
 
     Raises ProxyException if access is denied.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         verbose_proxy_logger.debug(
@@ -3626,10 +3631,12 @@ async def search_tool_access_check(
 
     # Check key-level permissions
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": valid_token.object_permission_id},
-            )
+        key_object_permission = await get_object_permission(
+            object_permission_id=valid_token.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(valid_token, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
         )
         if key_object_permission is not None:
             _can_object_call_search_tools(
@@ -3645,10 +3652,12 @@ async def search_tool_access_check(
         else None
     )
     if team_object_permission_id is not None:
-        team_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": team_object_permission_id},
-            )
+        team_object_permission = await get_object_permission(
+            object_permission_id=team_object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(valid_token, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
         )
         if team_object_permission is not None:
             _can_object_call_search_tools(

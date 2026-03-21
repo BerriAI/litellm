@@ -22,7 +22,12 @@ async def _get_allowed_search_tool_names(
         None  → no restriction (all tools accessible)
         list  → only those tool names are accessible (may be empty = none)
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.auth.auth_checks import get_object_permission
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         return None
@@ -30,25 +35,27 @@ async def _get_allowed_search_tool_names(
     key_allowed: Optional[List[str]] = None
     team_allowed: Optional[List[str]] = None
 
-    # Key-level permissions
+    # Key-level permissions (via cached helper)
     if user_api_key_dict.object_permission_id is not None:
-        key_perm = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={
-                    "object_permission_id": user_api_key_dict.object_permission_id
-                },
-            )
+        key_perm = await get_object_permission(
+            object_permission_id=user_api_key_dict.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
         )
         if key_perm is not None:
             key_allowed = key_perm.search_tools  # None means no restriction
 
-    # Team-level permissions
+    # Team-level permissions (via cached helper)
     team_perm_id = getattr(user_api_key_dict, "team_object_permission_id", None)
     if team_perm_id is not None:
-        team_perm = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": team_perm_id},
-            )
+        team_perm = await get_object_permission(
+            object_permission_id=team_perm_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
         )
         if team_perm is not None:
             team_allowed = team_perm.search_tools  # None means no restriction
@@ -225,6 +232,14 @@ async def search(
         await search_tool_access_check(
             search_tool_name=resolved_search_tool_name,
             valid_token=user_api_key_dict,
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "search_tool_name is required. Provide it in the URL path "
+                "(/v1/search/{search_tool_name}) or in the request body."
+            },
         )
 
     # Process request using ProxyBaseLLMRequestProcessing

@@ -13,6 +13,7 @@ from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette import status
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -149,10 +150,14 @@ class TestCanObjectCallSearchTools:
 # ===========================================================================
 
 
+_PROXY_SERVER = "litellm.proxy.proxy_server"
+_GET_OBJ_PERM = "litellm.proxy.auth.auth_checks.get_object_permission"
+
+
 @pytest.mark.asyncio
 async def test_should_allow_when_no_prisma_client():
     """No prisma client → allow."""
-    with patch("litellm.proxy.proxy_server.prisma_client", None):
+    with patch(f"{_PROXY_SERVER}.prisma_client", None):
         result = await search_tool_access_check(
             search_tool_name="any-tool",
             valid_token=None,
@@ -163,8 +168,9 @@ async def test_should_allow_when_no_prisma_client():
 @pytest.mark.asyncio
 async def test_should_allow_when_no_token():
     """No valid_token → allow."""
-    mock_prisma = MagicMock()
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()):
         result = await search_tool_access_check(
             search_tool_name="any-tool",
             valid_token=None,
@@ -175,12 +181,13 @@ async def test_should_allow_when_no_token():
 @pytest.mark.asyncio
 async def test_should_allow_when_no_permission_ids():
     """Token with no object_permission_id or team_object_permission_id → allow."""
-    mock_prisma = MagicMock()
     token = UserAPIKeyAuth(
         object_permission_id=None,
         team_object_permission_id=None,
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()):
         result = await search_tool_access_check(
             search_tool_name="any-tool",
             valid_token=token,
@@ -191,18 +198,17 @@ async def test_should_allow_when_no_permission_ids():
 @pytest.mark.asyncio
 async def test_should_allow_key_with_matching_permission():
     """Key with object_permission that includes the tool → allow."""
-    mock_prisma = MagicMock()
     mock_perm = MagicMock()
     mock_perm.search_tools = ["my-tool"]
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=mock_perm
-    )
 
     token = UserAPIKeyAuth(
         object_permission_id="key-perm-id",
         team_object_permission_id=None,
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(return_value=mock_perm)):
         result = await search_tool_access_check(
             search_tool_name="my-tool",
             valid_token=token,
@@ -213,18 +219,17 @@ async def test_should_allow_key_with_matching_permission():
 @pytest.mark.asyncio
 async def test_should_deny_key_with_empty_search_tools():
     """Key with empty search_tools → deny."""
-    mock_prisma = MagicMock()
     mock_perm = MagicMock()
     mock_perm.search_tools = []
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=mock_perm
-    )
 
     token = UserAPIKeyAuth(
         object_permission_id="key-perm-id",
         team_object_permission_id=None,
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(return_value=mock_perm)):
         with pytest.raises(ProxyException) as exc_info:
             await search_tool_access_check(
                 search_tool_name="any-tool",
@@ -236,18 +241,17 @@ async def test_should_deny_key_with_empty_search_tools():
 @pytest.mark.asyncio
 async def test_should_deny_team_with_empty_search_tools():
     """Team with empty search_tools → deny."""
-    mock_prisma = MagicMock()
     mock_team_perm = MagicMock()
     mock_team_perm.search_tools = []
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=mock_team_perm
-    )
 
     token = UserAPIKeyAuth(
         object_permission_id=None,
         team_object_permission_id="team-perm-id",
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(return_value=mock_team_perm)):
         with pytest.raises(ProxyException) as exc_info:
             await search_tool_access_check(
                 search_tool_name="any-tool",
@@ -259,30 +263,27 @@ async def test_should_deny_team_with_empty_search_tools():
 @pytest.mark.asyncio
 async def test_should_deny_when_key_allows_but_team_denies():
     """Key allows, team denies → deny (team check second)."""
-    mock_prisma = MagicMock()
-
     key_perm = MagicMock()
     key_perm.search_tools = ["the-tool"]
 
     team_perm = MagicMock()
     team_perm.search_tools = []
 
-    async def mock_find(where):
-        if where["object_permission_id"] == "key-perm-id":
+    async def mock_get_perm(object_permission_id, **kwargs):
+        if object_permission_id == "key-perm-id":
             return key_perm
-        elif where["object_permission_id"] == "team-perm-id":
+        elif object_permission_id == "team-perm-id":
             return team_perm
         return None
-
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=mock_find
-    )
 
     token = UserAPIKeyAuth(
         object_permission_id="key-perm-id",
         team_object_permission_id="team-perm-id",
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(side_effect=mock_get_perm)):
         with pytest.raises(ProxyException) as exc_info:
             await search_tool_access_check(
                 search_tool_name="the-tool",
@@ -294,30 +295,27 @@ async def test_should_deny_when_key_allows_but_team_denies():
 @pytest.mark.asyncio
 async def test_should_allow_when_both_key_and_team_allow():
     """Both key and team allow → allow."""
-    mock_prisma = MagicMock()
-
     key_perm = MagicMock()
     key_perm.search_tools = ["tool-x"]
 
     team_perm = MagicMock()
     team_perm.search_tools = ["tool-x", "tool-y"]
 
-    async def mock_find(where):
-        if where["object_permission_id"] == "key-perm-id":
+    async def mock_get_perm(object_permission_id, **kwargs):
+        if object_permission_id == "key-perm-id":
             return key_perm
-        elif where["object_permission_id"] == "team-perm-id":
+        elif object_permission_id == "team-perm-id":
             return team_perm
         return None
-
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=mock_find
-    )
 
     token = UserAPIKeyAuth(
         object_permission_id="key-perm-id",
         team_object_permission_id="team-perm-id",
     )
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(side_effect=mock_get_perm)):
         result = await search_tool_access_check(
             search_tool_name="tool-x",
             valid_token=token,
@@ -378,18 +376,18 @@ class TestSearchToolErrorTypes:
 
 
 class TestVectorStoreAccessNotBroken:
-    """should preserve existing vector store semantics: empty list = allow ALL."""
+    """Vector store access follows same semantics: None = all access, [] = no access."""
 
-    def test_should_allow_all_when_vector_stores_is_empty(self):
-        """Vector stores: empty list = access to ALL (existing behavior)."""
+    def test_should_deny_all_when_vector_stores_is_empty(self):
+        """Vector stores: empty list = no access (matches search_tools semantics)."""
         perm = MagicMock()
         perm.vector_stores = []
-        result = _can_object_call_vector_stores(
-            object_type="key",
-            vector_store_ids_to_run=["store-1"],
-            object_permissions=perm,
-        )
-        assert result is True
+        with pytest.raises(ProxyException):
+            _can_object_call_vector_stores(
+                object_type="key",
+                vector_store_ids_to_run=["store-1"],
+                object_permissions=perm,
+            )
 
     def test_should_allow_when_vector_stores_is_none(self):
         perm = MagicMock()
