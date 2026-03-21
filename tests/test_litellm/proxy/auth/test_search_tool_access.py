@@ -13,7 +13,6 @@ from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from starlette import status
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -376,18 +375,18 @@ class TestSearchToolErrorTypes:
 
 
 class TestVectorStoreAccessNotBroken:
-    """Vector store access follows same semantics: None = all access, [] = no access."""
+    """Preserves existing vector store semantics: empty list = allow ALL."""
 
-    def test_should_deny_all_when_vector_stores_is_empty(self):
-        """Vector stores: empty list = no access (matches search_tools semantics)."""
+    def test_should_allow_all_when_vector_stores_is_empty(self):
+        """Vector stores: empty list = access to ALL (existing behavior)."""
         perm = MagicMock()
         perm.vector_stores = []
-        with pytest.raises(ProxyException):
-            _can_object_call_vector_stores(
-                object_type="key",
-                vector_store_ids_to_run=["store-1"],
-                object_permissions=perm,
-            )
+        result = _can_object_call_vector_stores(
+            object_type="key",
+            vector_store_ids_to_run=["store-1"],
+            object_permissions=perm,
+        )
+        assert result is True
 
     def test_should_allow_when_vector_stores_is_none(self):
         perm = MagicMock()

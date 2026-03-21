@@ -15,7 +15,6 @@ from litellm.proxy._types import (
     UpdateProjectRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import get_user_object
 from litellm.proxy.utils import _premium_user_check
 
 if TYPE_CHECKING:
@@ -55,6 +54,7 @@ async def _is_user_org_admin_for_team(
     if not team_obj.organization_id or not user_api_key_dict.user_id:
         return False
 
+    from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -124,11 +124,14 @@ async def _user_has_admin_privileges(
         return False
 
     # Get user object to check team and org admin status
+    from litellm.caching import DualCache as DualCacheImport
+    from litellm.proxy.auth.auth_checks import get_user_object
+
     try:
         user_obj = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache or DualCache(),
+            user_api_key_cache=user_api_key_cache or DualCacheImport(),
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -270,8 +273,11 @@ async def admin_can_invite_user(
     if prisma_client is None or user_api_key_dict.user_id is None:
         return False
 
+    from litellm.caching import DualCache as DualCacheImport
+    from litellm.proxy.auth.auth_checks import get_user_object
+
     try:
-        cache = user_api_key_cache or DualCache()
+        cache = user_api_key_cache or DualCacheImport()
         admin_user_obj = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,

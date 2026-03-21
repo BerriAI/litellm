@@ -3543,16 +3543,9 @@ def _can_object_call_vector_stores(
     if object_permissions.vector_stores is None:
         return True
 
-    # Empty list = no access to any vector stores
+    # If length is 0, then the object has access to all vector stores.
     if len(object_permissions.vector_stores) == 0:
-        raise ProxyException(
-            message="User not allowed to access any vector stores. No vector stores are configured in object permissions.",
-            type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(
-                object_type
-            ),
-            param="vector_store",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+        return True
 
     for vector_store_id in vector_store_ids_to_run:
         if vector_store_id not in object_permissions.vector_stores:

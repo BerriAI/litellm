@@ -1831,8 +1831,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: Optional[List[str]] = None
-    mcp_access_groups: Optional[List[str]] = None
+    mcp_servers: Optional[List[str]] = []
+    mcp_access_groups: Optional[List[str]] = []
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     """
     Mapping - server_id -> list of tools
@@ -1843,10 +1843,10 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     }
     """
 
-    vector_stores: Optional[List[str]] = None
-    search_tools: Optional[List[str]] = None
-    agents: Optional[List[str]] = None
-    agent_access_groups: Optional[List[str]] = None
+    vector_stores: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = None  # NULL = all access, [] = no access
+    agents: Optional[List[str]] = []
+    agent_access_groups: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -3599,6 +3599,9 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_search_tool_access_denied
         elif object_type == "org":
             return cls.org_search_tool_access_denied
+        raise ValueError(
+            f"Unknown object_type '{object_type}' for search tool access error"
+        )
 
 
 DB_CONNECTION_ERROR_TYPES = (
