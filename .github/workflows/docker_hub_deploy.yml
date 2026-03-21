@@ -1,0 +1,204 @@
+name: CI/CD — Lint, Test & Deploy to Docker Hub
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same PR / branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Lint (runs on PRs only)
+  # ──────────────────────────────────────────────
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-lint-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-lint-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev
+
+      - name: Run Ruff linting
+        run: |
+          cd litellm
+          poetry run ruff check .
+          cd ..
+
+      - name: Check Black formatting
+        run: |
+          cd litellm
+          poetry run black --check --exclude '/enterprise/' .
+          cd ..
+
+      - name: Check for circular imports
+        run: |
+          cd litellm
+          poetry run python ../tests/documentation_tests/test_circular_imports.py
+          cd ..
+
+      - name: Check import safety
+        run: |
+          poetry run python -c "from litellm import *" || \
+            (echo '🚨 import failed — unprotected imports detected! 🚨'; exit 1)
+
+  # ──────────────────────────────────────────────
+  # Job 2: Unit Tests (runs on PRs only)
+  # ──────────────────────────────────────────────
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-test-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-test-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install "pytest-retry==1.6.3"
+          poetry run pip install pytest-xdist
+          poetry run pip install "google-genai==1.22.0"
+          poetry run pip install "google-cloud-aiplatform>=1.38"
+          poetry run pip install "fastapi-offline==1.7.3"
+          poetry run pip install "python-multipart>=0.0.20"
+          poetry run pip install "openapi-core"
+
+      - name: Setup litellm-enterprise as local package
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        run: |
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run unit tests
+        run: |
+          poetry run pytest tests/test_litellm \
+            --tb=short -vv \
+            --maxfail=10 \
+            -n 4 \
+            --durations=50
+
+  # ──────────────────────────────────────────────
+  # Job 3: Build & Push to Docker Hub (on merge to main)
+  # ──────────────────────────────────────────────
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          pip install toml
+          VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['commitizen']['version'])")
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "📦 Version: ${VERSION}"
+          echo "🔑 Short SHA: ${SHORT_SHA}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      # ── Main image (root Dockerfile) ──
+      - name: Build and push main image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm:${{ steps.version.outputs.short_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Database image (docker/Dockerfile.database) ──
+      - name: Build and push database image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.database
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm-database:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm-database:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/litellm-database:${{ steps.version.outputs.short_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### 🐳 Docker Images Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ secrets.DOCKER_HUB_USERNAME }}/litellm\` | \`latest\`, \`${{ steps.version.outputs.version }}\`, \`${{ steps.version.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ secrets.DOCKER_HUB_USERNAME }}/litellm-database\` | \`latest\`, \`${{ steps.version.outputs.version }}\`, \`${{ steps.version.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
