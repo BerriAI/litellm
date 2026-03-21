@@ -1,6 +1,5 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -9,7 +8,7 @@ import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
-import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
@@ -48,7 +47,7 @@ import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, stor
 import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
@@ -75,6 +74,16 @@ interface ProxySettings {
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
 
+/**
+ * Map of legacy query-param page keys → new path-based route segments.
+ * When a user visits ?page=<key>, they are redirected to /ui/<value>.
+ * Add entries here as pages are migrated from the if/else chain to path-based routes.
+ */
+const LEGACY_REDIRECTS: Record<string, string> = {
+  api_ref: "api-reference",
+  "api-reference": "api-reference",
+};
+
 function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
@@ -90,6 +99,7 @@ function CreateKeyPageContent() {
   });
 
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
+  const router = useRouter();
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [token, setToken] = useState<string | null>(null);
@@ -243,6 +253,15 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
+  // Redirect legacy query-param pages to their new path-based routes
+  const isLegacyRedirect = page in LEGACY_REDIRECTS;
+  useEffect(() => {
+    if (!authLoading && isLegacyRedirect) {
+      const base = (proxyBaseUrl || "") + "/ui";
+      router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+    }
+  }, [authLoading, isLegacyRedirect, page, router]);
+
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
   useEffect(() => {
@@ -339,7 +358,9 @@ function CreateKeyPageContent() {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
     if (accessToken && userID && userRole) {
-      fetchTeams(accessToken, userID, userRole, null, setTeams);
+      v2TeamListCall(accessToken, 1, 100, {
+        userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
+      }).then((response) => setTeams(response.teams ?? [])).catch(console.error);
     }
     if (accessToken) {
       fetchOrganizations(accessToken, setOrganizations);
@@ -427,7 +448,7 @@ function CreateKeyPageContent() {
     setShowClaudeCodePrompt(true);
   };
 
-  if (authLoading || redirectToLogin) {
+  if (authLoading || redirectToLogin || isLegacyRedirect) {
     return <LoadingScreen />;
   }
 
@@ -536,8 +557,6 @@ function CreateKeyPageContent() {
                     <AdminPanel
                       proxySettings={proxySettings}
                     />
-                  ) : page == "api_ref" ? (
-                    <APIReferenceView proxySettings={proxySettings} />
                   ) : page == "logging-and-alerts" ? (
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (

@@ -41,6 +41,17 @@ vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
   })),
 }));
 
+vi.mock("@/hooks/useWorker", () => ({
+  useWorker: vi.fn(() => ({
+    isControlPlane: false,
+    workers: [],
+    selectedWorkerId: null,
+    selectedWorker: null,
+    selectWorker: vi.fn(),
+    disconnectFromWorker: vi.fn(),
+  })),
+}));
+
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
@@ -108,7 +119,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("http://localhost:4000/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui");
     });
   });
 
@@ -189,7 +200,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("http://localhost:4000/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui");
     });
 
     expect(mockPush).not.toHaveBeenCalled();
