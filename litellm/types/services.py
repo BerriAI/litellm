@@ -29,6 +29,12 @@ class ServiceTypes(str, enum.Enum):
     POD_LOCK_MANAGER = "pod_lock_manager"
 
     """
+    Accurate DB operation metrics (instrumented at the Prisma query level)
+    """
+    DB_READ = "db_read"
+    DB_WRITE = "db_write"
+
+    """
     Operational metrics for DB Transaction Queues
     """
     # daily spend update queue - actual transaction events
@@ -81,6 +87,13 @@ DEFAULT_SERVICE_CONFIGS = {
         "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
     },
     ServiceTypes.PROXY_PRE_CALL.value: {
+        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+    },
+    # Accurate DB operation metrics (instrumented at Prisma query level)
+    ServiceTypes.DB_READ.value: {
+        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
+    },
+    ServiceTypes.DB_WRITE.value: {
         "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]
     },
     # Operational metrics for DB Transaction Queues

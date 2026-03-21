@@ -3,7 +3,7 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, FrozenSet, List, Optional, Union
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
@@ -15,6 +15,10 @@ from litellm.types.services import (
 )
 
 FAILED_REQUESTS_LABELS = ["error_class", "function_name"]
+
+_SERVICES_WITH_CALL_TYPE_LABEL: FrozenSet[str] = frozenset(
+    {ServiceTypes.DB_READ.value, ServiceTypes.DB_WRITE.value}
+)
 
 
 class PrometheusServicesLogger:
@@ -126,10 +130,13 @@ class PrometheusServicesLogger:
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
+        labelnames = [service]
+        if service in _SERVICES_WITH_CALL_TYPE_LABEL:
+            labelnames.append("call_type")
         return self.Histogram(
             metric_name,
             "Latency for {} service".format(service),
-            labelnames=[service],
+            labelnames=labelnames,
             buckets=LATENCY_BUCKETS,
         )
 
@@ -152,10 +159,13 @@ class PrometheusServicesLogger:
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
             return self._get_metric(metric_name)
+        labelnames = [service]
+        if service in _SERVICES_WITH_CALL_TYPE_LABEL:
+            labelnames.append("call_type")
         return self.Counter(
             metric_name,
             "Total {} for {} service".format(type_of_request, service),
-            labelnames=[service] + (additional_labels or []),
+            labelnames=labelnames + (additional_labels or []),
         )
 
     def observe_histogram(
@@ -163,10 +173,14 @@ class PrometheusServicesLogger:
         histogram,
         labels: str,
         amount: float,
+        call_type: Optional[str] = None,
     ):
         assert isinstance(histogram, self.Histogram)
 
-        histogram.labels(labels).observe(amount)
+        if call_type is not None:
+            histogram.labels(labels, call_type).observe(amount)
+        else:
+            histogram.labels(labels).observe(amount)
 
     def update_gauge(
         self,
@@ -183,19 +197,27 @@ class PrometheusServicesLogger:
         labels: str,
         amount: float,
         additional_labels: Optional[List[str]] = [],
+        call_type: Optional[str] = None,
     ):
         assert isinstance(counter, self.Counter)
 
+        label_values = [labels]
+        if call_type is not None:
+            label_values.append(call_type)
         if additional_labels:
-            counter.labels(labels, *additional_labels).inc(amount)
-        else:
-            counter.labels(labels).inc(amount)
+            label_values.extend(additional_labels)
+        counter.labels(*label_values).inc(amount)
 
     def service_success_hook(self, payload: ServiceLoggerPayload):
         if self.mock_testing:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
+            _call_type = (
+                payload.call_type
+                if payload.service.value in _SERVICES_WITH_CALL_TYPE_LABEL
+                else None
+            )
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
@@ -203,12 +225,14 @@ class PrometheusServicesLogger:
                         histogram=obj,
                         labels=payload.service.value,
                         amount=payload.duration,
+                        call_type=_call_type,
                     )
                 elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
-                        amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                        amount=1,
+                        call_type=_call_type,
                     )
 
     def service_failure_hook(self, payload: ServiceLoggerPayload):
@@ -216,13 +240,19 @@ class PrometheusServicesLogger:
             self.mock_testing_failure_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
+            _call_type = (
+                payload.call_type
+                if payload.service.value in _SERVICES_WITH_CALL_TYPE_LABEL
+                else None
+            )
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Counter):
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
-                        amount=1,  # LOG ERROR COUNT / TOTAL REQUESTS TO PROMETHEUS
+                        amount=1,
+                        call_type=_call_type,
                     )
 
     async def async_service_success_hook(self, payload: ServiceLoggerPayload):
@@ -233,6 +263,11 @@ class PrometheusServicesLogger:
             self.mock_testing_success_calls += 1
 
         if payload.service.value in self.payload_to_prometheus_map:
+            _call_type = (
+                payload.call_type
+                if payload.service.value in _SERVICES_WITH_CALL_TYPE_LABEL
+                else None
+            )
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
                 if isinstance(obj, self.Histogram):
@@ -240,12 +275,14 @@ class PrometheusServicesLogger:
                         histogram=obj,
                         labels=payload.service.value,
                         amount=payload.duration,
+                        call_type=_call_type,
                     )
                 elif isinstance(obj, self.Counter) and "total_requests" in obj._name:
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
-                        amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                        amount=1,
+                        call_type=_call_type,
                     )
                 elif isinstance(obj, self.Gauge):
                     if payload.event_metadata:
@@ -266,21 +303,26 @@ class PrometheusServicesLogger:
         function_name = payload.call_type
 
         if payload.service.value in self.payload_to_prometheus_map:
+            _call_type = (
+                payload.call_type
+                if payload.service.value in _SERVICES_WITH_CALL_TYPE_LABEL
+                else None
+            )
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
-                # increment both failed and total requests
                 if isinstance(obj, self.Counter):
                     if "failed_requests" in obj._name:
                         self.increment_counter(
                             counter=obj,
                             labels=payload.service.value,
-                            # log additional_labels=["error_class", "function_name"], used for debugging what's going wrong with the DB
                             additional_labels=[error_class, function_name],
-                            amount=1,  # LOG ERROR COUNT TO PROMETHEUS
+                            amount=1,
+                            call_type=_call_type,
                         )
                     else:
                         self.increment_counter(
                             counter=obj,
                             labels=payload.service.value,
-                            amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                            amount=1,
+                            call_type=_call_type,
                         )

@@ -549,6 +549,21 @@ litellm_settings:
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
 
+#### DB Read/Write Metrics
+
+These metrics are instrumented at the Prisma query level, so they only fire when an actual database call is made (cache hits are not counted).
+
+All DB read/write metrics include a `call_type` label showing the table and operation (e.g. `litellm_usertable.find_unique`, `litellm_teamtable.find_many`, `query_raw`, `execute_raw`), so you can identify exactly which queries are driving DB load.
+
+| Metric Name                      | Description                                          |
+|----------------------------------|------------------------------------------------------|
+| `litellm_db_read_latency`        | Histogram latency for actual DB read operations, with `call_type` label (e.g. `find_unique`, `find_many`, `query_raw`) |
+| `litellm_db_read_total_requests` | Total actual DB read operations, with `call_type` label |
+| `litellm_db_read_failed_requests`| Failed DB read operations (with `call_type`, `error_class`, and `function_name` labels) |
+| `litellm_db_write_latency`       | Histogram latency for actual DB write operations, with `call_type` label (e.g. `create`, `update`, `delete`, `execute_raw`) |
+| `litellm_db_write_total_requests`| Total actual DB write operations, with `call_type` label |
+| `litellm_db_write_failed_requests`| Failed DB write operations (with `call_type`, `error_class`, and `function_name` labels) |
+
 #### DB Transaction Queue Health Metrics
 
 Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitoring the size of the in-memory and redis buffers. 

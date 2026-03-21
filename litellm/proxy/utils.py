@@ -2042,23 +2042,26 @@ class PrismaClient:
             raise Exception(
                 "Unable to find Prisma binaries. Please run 'prisma generate' first."
             )
+        from litellm._service_logger import ServiceLogging
+
+        _iam_auth = (
+            self.iam_token_db_auth
+            if self.iam_token_db_auth is not None
+            else False
+        )
+        _service_logger_obj = ServiceLogging()
+
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
+                iam_token_db_auth=_iam_auth,
+                service_logger_obj=_service_logger_obj,
             )
         else:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
+                iam_token_db_auth=_iam_auth,
+                service_logger_obj=_service_logger_obj,
             )  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
