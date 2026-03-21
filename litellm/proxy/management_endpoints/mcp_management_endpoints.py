@@ -91,7 +91,6 @@ if MCP_AVAILABLE:
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
-        get_objectpermissions_for_mcp_server,
         get_user_oauth_credential,
         list_user_oauth_credentials,
         reject_mcp_server,
