@@ -2526,6 +2526,17 @@ async def team_member_update(
         )
 
     ### update team member role
+    # Resolve the effective models for this member (from the authoritative
+    # LiteLLM_TeamMembership table) so we can: (a) keep the members_with_roles
+    # JSON in sync, and (b) return the actual stored state in the response.
+    stored_models = data.models
+    if stored_models is None:
+        _tm_row = await prisma_client.db.litellm_teammembership.find_unique(
+            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+        )
+        if _tm_row is not None:
+            stored_models = _tm_row.models or []
+
     if data.role is not None:
         team_members: List[Member] = []
         for member in team_table.members_with_roles:
@@ -2535,6 +2546,7 @@ async def team_member_update(
                         user_id=member.user_id,
                         role=data.role,
                         user_email=data.user_email or member.user_email,
+                        models=stored_models,
                     )
                 )
             else:
@@ -2552,7 +2564,7 @@ async def team_member_update(
         team_id=data.team_id,
         user_id=received_user_id,
         user_email=data.user_email,
-        models=data.models,
+        models=stored_models,
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
