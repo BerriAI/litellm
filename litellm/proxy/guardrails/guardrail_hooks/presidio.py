@@ -441,6 +441,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: Any,
         output_parse_pii: bool,
         masked_entity_count: Dict[str, int],
+        request_data: Optional[Dict] = None,
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -489,11 +490,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
                 new_text = redacted_text["text"]
-                # Sort analyze_results right-to-left (Presidio processes entities
-                # right-to-left, so redacted_text["items"] is also right-to-left).
-                # We match by entity_type to get the original text positions from
-                # the Analyzer response, not the Anonymizer response (which returns
-                # positions in the *anonymized* text's coordinate space).
+                # Both lists sorted right-to-left by start position. Presidio
+                # preserves positional order in both analyzer and anonymizer
+                # responses, so consuming _sorted_ar in order correctly pairs
+                # each item with its analyze_results entry.
                 def _ar_val(ar, key, default=None):
                     return ar.get(key, default) if isinstance(ar, dict) else getattr(ar, key, default)
                 _sorted_ar = sorted(
@@ -538,7 +538,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                     _orig_val = text[_s:_e]
                                 _ar_used.add(_ar_i)
                                 break
-                        self.pii_tokens[replacement] = _orig_val if _orig_val is not None else new_text[start:end]
+                        _token_value = _orig_val if _orig_val is not None else new_text[start:end]
+                        # Store in request_data for per-request thread safety
+                        if request_data is not None:
+                            if "pii_tokens" not in request_data:
+                                request_data["pii_tokens"] = {}
+                            request_data["pii_tokens"][replacement] = _token_value
+                        # Also store on instance as fallback
+                        self.pii_tokens[replacement] = _token_value
 
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
@@ -683,6 +690,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
+                    request_data=request_data,
                 )
                 return anonymized_text
             return redacted_text["text"]
@@ -934,14 +942,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
-        ):  # /chat/completions requests
-            if isinstance(response.choices[0].message.content, str):
-                verbose_proxy_logger.debug(
-                    f"pii_tokens for unmask: {_pii_tokens}; initial response: {response.choices[0].message.content}"
-                )
-                response.choices[0].message.content = self._unmask_pii_text(
-                    response.choices[0].message.content, _pii_tokens
-                )
+        ):  # /chat/completions requests — handles all choices, list content, tool calls
+            await self._process_response_for_pii(
+                response=response,
+                request_data=data,
+                mode="unmask",
+            )
         elif (
             isinstance(response, dict)
             and response.get("type") == "message"
@@ -970,10 +976,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 continue
 
             # FALLBACK 1: LLM stripped angle brackets (e.g. <PERSON_abc> -> PERSON_abc)
+            # Use word-boundary anchoring to avoid false positives in technical text
             stripped = token.strip("<>")
-            if stripped and stripped in text:
-                text = text.replace(stripped, original_text)
-                continue
+            if stripped:
+                import re
+                _fb_pattern = r'(?<!\w)' + re.escape(stripped) + r'(?!\w)'
+                if re.search(_fb_pattern, text):
+                    text = re.sub(_fb_pattern, original_text, text)
+                    continue
 
             # FALLBACK 2: Handle truncated tokens (token cut off by max_tokens)
             # Only check at the very end of the text.
@@ -1479,6 +1489,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # When the unified guardrail calls apply_guardrail(input_type="response"),
         # we unmask PII tokens instead of masking. The tokens were stored in
         # request_data["pii_tokens"] during input masking.
+        # Unmask path only — applies when unified guardrail calls apply_guardrail()
+        # with input_type="response". The apply_to_output masking path is handled
+        # separately by async_post_call_*_hook, not by this method.
         if input_type == "response" and self.output_parse_pii:
             pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
             if pii_tokens:
