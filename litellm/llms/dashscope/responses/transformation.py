@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -120,10 +121,6 @@ class DashScopeResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         if base_url.endswith("/responses"):
             return base_url
-        if base_url.endswith("/v1"):
-            return f"{base_url}/responses"
-        if base_url.endswith("/compatible-mode/v1"):
-            return f"{base_url}/responses"
         return f"{base_url}/responses"
 
     def get_error_class(
@@ -131,16 +128,9 @@ class DashScopeResponsesAPIConfig(OpenAIResponsesAPIConfig):
         error_message: str,
         status_code: int,
         headers: Union[dict, httpx.Headers],
-    ) -> Exception:
-        from litellm.llms.openai.common_utils import OpenAIError
-
-        typed_headers: httpx.Headers = (
-            headers
-            if isinstance(headers, httpx.Headers)
-            else httpx.Headers(headers or {})
-        )
-        return OpenAIError(
+    ) -> BaseLLMException:
+        return BaseLLMException(
             status_code=status_code,
             message=error_message,
-            headers=typed_headers,
+            headers=headers,
         )
