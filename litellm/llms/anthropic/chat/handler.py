@@ -23,6 +23,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
