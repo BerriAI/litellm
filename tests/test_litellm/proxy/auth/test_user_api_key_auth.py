@@ -734,18 +734,16 @@ class TestJWTOAuth2Coexistence:
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_builder_no_blocking_set_cache():
+async def test_user_api_key_auth_builder_no_blocking_calls():
     """
-    Regression test: _user_api_key_auth_builder must never call the synchronous
-    DualCache.set_cache() on the hot auth path (blocks the event loop).
-    It should use async_set_cache() instead.
+    _user_api_key_auth_builder must never call any synchronous DualCache method
+    (set_cache, get_cache, batch_get_cache, increment_cache, delete_cache) on
+    the hot auth path — those methods call Redis synchronously and block the
+    event loop. Only async_* variants are allowed.
     """
-    from datetime import datetime, timezone
-
     from starlette.datastructures import URL
     from starlette.requests import Request
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
@@ -757,15 +755,9 @@ async def test_user_api_key_auth_builder_no_blocking_set_cache():
         team_id="team-abc",
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
+    mock_cache = AsyncMock()
     mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
     mock_cache.async_set_cache = AsyncMock(return_value=None)
-    # set_cache is sync — wrap it with a MagicMock so we can assert it's never called
-    mock_cache.set_cache = MagicMock(
-        side_effect=AssertionError(
-            "Blocking DualCache.set_cache() called on async hot path — use async_set_cache() instead"
-        )
-    )
 
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
@@ -792,6 +784,17 @@ async def test_user_api_key_auth_builder_no_blocking_set_cache():
         "litellm_proxy_admin_name": "admin",
     }
     _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    # Patch all sync DualCache methods at the class level so any call — on any
+    # instance — raises immediately with a clear message.
+    _blocking_methods = [
+        "set_cache",
+        "get_cache",
+        "batch_get_cache",
+        "increment_cache",
+        "delete_cache",
+    ]
+
     try:
         for k, v in _attrs.items():
             setattr(_proxy_server_mod, k, v)
@@ -799,16 +802,40 @@ async def test_user_api_key_auth_builder_no_blocking_set_cache():
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
 
-        with patch(
-            "litellm.proxy.auth.user_api_key_auth.get_key_object",
-            new_callable=AsyncMock,
-            return_value=valid_token,
-        ), patch(
-            "litellm.proxy.auth.user_api_key_auth.get_team_object",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            # Should complete without raising the AssertionError planted in set_cache
+        import contextlib
+
+        from litellm.caching.dual_cache import DualCache
+
+        blocking_patches = [
+            patch.object(
+                DualCache,
+                m,
+                MagicMock(
+                    side_effect=AssertionError(
+                        f"Blocking DualCache.{m}() called on async hot path — use async_{m}() instead"
+                    )
+                ),
+            )
+            for m in _blocking_methods
+        ]
+
+        with contextlib.ExitStack() as stack:
+            for p in blocking_patches:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                    new_callable=AsyncMock,
+                    return_value=valid_token,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                    new_callable=AsyncMock,
+                    return_value=None,
+                )
+            )
             await _user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
@@ -818,9 +845,6 @@ async def test_user_api_key_auth_builder_no_blocking_set_cache():
                 azure_apim_header=None,
                 request_data={},
             )
-
-        # Extra belt-and-suspenders: confirm the sync method was truly never called
-        mock_cache.set_cache.assert_not_called()
 
     finally:
         for k, v in _originals.items():
