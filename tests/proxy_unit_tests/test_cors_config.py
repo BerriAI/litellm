@@ -32,6 +32,18 @@ def _reload_local_proxy_server():
     return proxy_server
 
 
+def _capture_proxy_warning_messages(monkeypatch):
+    import litellm._logging as litellm_logging
+
+    warning_messages = []
+
+    def capture_warning(message, *args, **kwargs):
+        warning_messages.append(message % args if args else message)
+
+    monkeypatch.setattr(litellm_logging.verbose_proxy_logger, "warning", capture_warning)
+    return warning_messages
+
+
 def test_normalize_cors_value_string():
     from litellm.proxy.proxy_cli import _normalize_cors_value
 
@@ -216,14 +228,7 @@ def test_explicit_empty_origins_stay_empty(monkeypatch):
 
 
 def test_explicit_empty_origins_log_warning(monkeypatch):
-    import litellm._logging as litellm_logging
-
-    warning_messages = []
-
-    def capture_warning(message, *args, **kwargs):
-        warning_messages.append(message % args if args else message)
-
-    monkeypatch.setattr(litellm_logging.verbose_proxy_logger, "warning", capture_warning)
+    warning_messages = _capture_proxy_warning_messages(monkeypatch)
     monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "")
 
     proxy_server = _reload_local_proxy_server()
@@ -231,6 +236,48 @@ def test_explicit_empty_origins_log_warning(monkeypatch):
     assert proxy_server.cors_allow_origins == []
     assert any(
         "cors_allow_origins resolved to an empty list" in message
+        for message in warning_messages
+    )
+
+
+def test_explicit_empty_methods_stay_empty(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_METHODS", "")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_methods == []
+
+
+def test_explicit_empty_methods_log_warning(monkeypatch):
+    warning_messages = _capture_proxy_warning_messages(monkeypatch)
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_METHODS", "")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_methods == []
+    assert any(
+        "cors_allow_methods resolved to an empty list" in message
+        for message in warning_messages
+    )
+
+
+def test_explicit_empty_headers_stay_empty(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_HEADERS", "")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_headers == []
+
+
+def test_explicit_empty_headers_log_warning(monkeypatch):
+    warning_messages = _capture_proxy_warning_messages(monkeypatch)
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_HEADERS", "")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_headers == []
+    assert any(
+        "cors_allow_headers resolved to an empty list" in message
         for message in warning_messages
     )
 

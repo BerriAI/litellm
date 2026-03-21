@@ -1185,14 +1185,30 @@ cors_allow_credentials = _get_cors_allow_credentials(
 cors_allow_methods = (
     ["*"] if configured_cors_allow_methods is None else configured_cors_allow_methods
 )
+if configured_cors_allow_methods is not None and len(cors_allow_methods) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_methods resolved to an empty list. "
+        "All CORS preflight requests will be rejected. "
+        "Set cors_allow_methods to explicit methods or remove the setting to "
+        "restore the default wildcard behavior."
+    )
 cors_allow_headers = (
     ["*"] if configured_cors_allow_headers is None else configured_cors_allow_headers
 )
+if configured_cors_allow_headers is not None and len(cors_allow_headers) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_headers resolved to an empty list. "
+        "All CORS preflight requests will be rejected. "
+        "Set cors_allow_headers to explicit headers or remove the setting to "
+        "restore the default wildcard behavior."
+    )
 
 # Preserve the proxy's existing wildcard+credentials default only when CORS
 # origins are completely unconfigured. Setting credentials without origins
 # still triggers this guard because origins fall back to ["*"].
-has_wildcard_origin = any(_is_wildcard_cors_origin(origin) for origin in cors_allow_origins)
+has_wildcard_origin = any(
+    _is_wildcard_cors_origin(origin) for origin in cors_allow_origins
+)
 should_validate_cors_credentials = (
     cors_origins_were_configured or cors_credentials_was_configured
 )
