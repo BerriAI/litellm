@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -30,18 +31,6 @@ def _reload_local_proxy_server():
     import litellm.proxy.proxy_server as proxy_server
 
     return proxy_server
-
-
-def _capture_proxy_warning_messages(monkeypatch):
-    import litellm._logging as litellm_logging
-
-    warning_messages = []
-
-    def capture_warning(message, *args, **kwargs):
-        warning_messages.append(message % args if args else message)
-
-    monkeypatch.setattr(litellm_logging.verbose_proxy_logger, "warning", capture_warning)
-    return warning_messages
 
 
 def test_normalize_cors_value_string():
@@ -133,6 +122,20 @@ def test_apply_cors_settings_invalid_type_raises_click_exception():
 
     with pytest.raises(ClickException, match="Invalid CORS configuration"):
         _apply_cors_settings_from_general_settings({"cors_allow_origins": 42})
+
+
+def test_apply_cors_settings_invalid_credentials_type_raises_click_exception():
+    from click import ClickException
+
+    from litellm.proxy.proxy_cli import _apply_cors_settings_from_general_settings
+
+    with pytest.raises(
+        ClickException,
+        match="Invalid CORS setting for 'cors_allow_credentials'",
+    ):
+        _apply_cors_settings_from_general_settings(
+            {"cors_allow_credentials": [True, False]}
+        )
 
 
 def test_cors_defaults_preserve_existing_proxy_behavior():
@@ -227,16 +230,16 @@ def test_explicit_empty_origins_stay_empty(monkeypatch):
     assert proxy_server.cors_allow_origins == []
 
 
-def test_explicit_empty_origins_log_warning(monkeypatch):
-    warning_messages = _capture_proxy_warning_messages(monkeypatch)
+def test_explicit_empty_origins_log_warning(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "")
 
     proxy_server = _reload_local_proxy_server()
 
     assert proxy_server.cors_allow_origins == []
     assert any(
-        "cors_allow_origins resolved to an empty list" in message
-        for message in warning_messages
+        "cors_allow_origins resolved to an empty list" in record.message
+        for record in caplog.records
     )
 
 
@@ -248,16 +251,16 @@ def test_explicit_empty_methods_stay_empty(monkeypatch):
     assert proxy_server.cors_allow_methods == []
 
 
-def test_explicit_empty_methods_log_warning(monkeypatch):
-    warning_messages = _capture_proxy_warning_messages(monkeypatch)
+def test_explicit_empty_methods_log_warning(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     monkeypatch.setenv("LITELLM_CORS_ALLOW_METHODS", "")
 
     proxy_server = _reload_local_proxy_server()
 
     assert proxy_server.cors_allow_methods == []
     assert any(
-        "cors_allow_methods resolved to an empty list" in message
-        for message in warning_messages
+        "cors_allow_methods resolved to an empty list" in record.message
+        for record in caplog.records
     )
 
 
@@ -269,16 +272,16 @@ def test_explicit_empty_headers_stay_empty(monkeypatch):
     assert proxy_server.cors_allow_headers == []
 
 
-def test_explicit_empty_headers_log_warning(monkeypatch):
-    warning_messages = _capture_proxy_warning_messages(monkeypatch)
+def test_explicit_empty_headers_log_warning(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     monkeypatch.setenv("LITELLM_CORS_ALLOW_HEADERS", "")
 
     proxy_server = _reload_local_proxy_server()
 
     assert proxy_server.cors_allow_headers == []
     assert any(
-        "cors_allow_headers resolved to an empty list" in message
-        for message in warning_messages
+        "cors_allow_headers resolved to an empty list" in record.message
+        for record in caplog.records
     )
 
 
