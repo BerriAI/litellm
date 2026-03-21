@@ -20,9 +20,14 @@ class ResponseMetadata:
 
     def __init__(self, result: Any):
         self.result = result
-        self._hidden_params: Union[HiddenParams, dict] = (
-            getattr(result, "_hidden_params", {}) or {}
-        )
+        if isinstance(result, dict):
+            self._hidden_params: Union[HiddenParams, dict] = (
+                result.get("_hidden_params", {}) or {}
+            )
+        else:
+            self._hidden_params = (
+                getattr(result, "_hidden_params", {}) or {}
+            )
 
     @property
     def supports_response_time(self) -> bool:
@@ -169,6 +174,8 @@ class ResponseMetadata:
         """Apply metadata to the response object"""
         if hasattr(self.result, "_hidden_params"):
             self.result._hidden_params = self._hidden_params
+        elif isinstance(self.result, dict):
+            self.result["_hidden_params"] = self._hidden_params
 
 
 def update_response_metadata(
