@@ -101,4 +101,5 @@ STABILIZATION_TODO.md
 **/test-results
 **/playwright-report
 **/*.storageState.json
-**/coveragelitellm/model_prices_and_context_window.json
+**/coverage
+litellm/model_prices_and_context_window.json
