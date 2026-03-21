@@ -5,8 +5,13 @@ import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
-import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
+import { testPipelineCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import {
+  usePolicyVersions,
+  useCreatePolicyVersion,
+  useUpdatePolicyVersionStatus,
+} from "@/app/(dashboard)/hooks/policies/usePolicyVersions";
 import {
   getComplianceDatasetPrompts,
   getFrameworks,
@@ -1288,10 +1293,6 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const [pipeline, setPipeline] = useState<GuardrailPipeline>(
     () => derivePipelineFromPolicy(editingPolicy)
   );
-  const [versions, setVersions] = useState<Policy[]>([]);
-  const [isVersionsLoading, setIsVersionsLoading] = useState(false);
-  const [isCreatingVersion, setIsCreatingVersion] = useState(false);
-  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
   // Sync local state when editingPolicy changes (e.g. user switched version)
   React.useEffect(() => {
@@ -1300,45 +1301,28 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     setPipeline(derivePipelineFromPolicy(editingPolicy));
   }, [editingPolicy?.policy_id, editingPolicy?.policy_name, editingPolicy?.description, editingPolicy?.pipeline, editingPolicy?.guardrails_add]);
 
-  // Fetch versions when editing an existing policy by name
-  React.useEffect(() => {
-    if (!showVersionsSidebar || !editingPolicy?.policy_name || !accessToken) {
-      setVersions([]);
-      return;
-    }
-    let cancelled = false;
-    setIsVersionsLoading(true);
-    listPolicyVersions(accessToken, editingPolicy.policy_name)
-      .then((res) => {
-        if (!cancelled) setVersions(res.versions || []);
-      })
-      .catch(() => {
-        if (!cancelled) setVersions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setIsVersionsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showVersionsSidebar, editingPolicy?.policy_name, accessToken]);
+  // ── Version management via React Query hooks ──────────────────────────────
+
+  const {
+    data: versionsData,
+    isLoading: isVersionsLoading,
+  } = usePolicyVersions({
+    policyName: editingPolicy?.policy_name,
+    enabled: showVersionsSidebar,
+  });
+  const versions = versionsData?.versions ?? []; // versionsData?.versions is Policy[] after select, fallback covers undefined data
+
+  const createVersionMutation = useCreatePolicyVersion(editingPolicy?.policy_name);
+  const updateStatusMutation = useUpdatePolicyVersionStatus(editingPolicy?.policy_name);
 
   const handleNewVersion = async () => {
-    if (!accessToken || !editingPolicy?.policy_name) return;
-    setIsCreatingVersion(true);
+    let newPolicy: Policy;
     try {
-      const newPolicy = await createPolicyVersion(accessToken, editingPolicy.policy_name);
-      NotificationsManager.success("New draft version created");
-      onVersionCreated?.(newPolicy);
-      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name);
-      setVersions(list.versions ?? []);
-    } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to create version: " + (error instanceof Error ? error.message : String(error))
-      );
-    } finally {
-      setIsCreatingVersion(false);
+      newPolicy = await createVersionMutation.mutateAsync();
+    } catch {
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionCreated?.(newPolicy);
   };
 
   const handleSelectVersion = (policy: Policy) => {
@@ -1346,41 +1330,31 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   };
 
   const handlePublishVersion = async () => {
-    if (!accessToken || !editingPolicy?.policy_id) return;
-    setIsUpdatingStatus(true);
+    if (!editingPolicy?.policy_id) return;
+    let updated: Policy;
     try {
-      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "published");
-      NotificationsManager.success(
-        "Version published. You can test it in the Playground by selecting this version in the Policies dropdown."
-      );
-      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
-      setVersions(list.versions ?? []);
-      onVersionStatusUpdated?.(updated);
-    } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to publish: " + (error instanceof Error ? error.message : String(error))
-      );
-    } finally {
-      setIsUpdatingStatus(false);
+      updated = await updateStatusMutation.mutateAsync({
+        policyId: editingPolicy.policy_id,
+        status: "published",
+      });
+    } catch {
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionStatusUpdated?.(updated);
   };
 
   const handlePromoteToProduction = async () => {
-    if (!accessToken || !editingPolicy?.policy_id) return;
-    setIsUpdatingStatus(true);
+    if (!editingPolicy?.policy_id) return;
+    let updated: Policy;
     try {
-      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "production");
-      NotificationsManager.success("Version promoted to production");
-      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
-      setVersions(list.versions ?? []);
-      onVersionStatusUpdated?.(updated);
-    } catch (error) {
-      NotificationsManager.fromBackend(
-        "Failed to promote to production: " + (error instanceof Error ? error.message : String(error))
-      );
-    } finally {
-      setIsUpdatingStatus(false);
+      updated = await updateStatusMutation.mutateAsync({
+        policyId: editingPolicy.policy_id,
+        status: "production",
+      });
+    } catch {
+      return; // Notification already shown by onError in the mutation hook
     }
+    onVersionStatusUpdated?.(updated);
   };
 
   const handleSave = async () => {
@@ -1540,8 +1514,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             accessToken={accessToken}
             versions={versions}
             isLoading={isVersionsLoading}
-            isCreatingVersion={isCreatingVersion}
-            isUpdatingStatus={isUpdatingStatus}
+            isCreatingVersion={createVersionMutation.isPending}
+            isUpdatingStatus={updateStatusMutation.isPending}
             onNewVersion={handleNewVersion}
             onSelectVersion={handleSelectVersion}
             onPublish={handlePublishVersion}
