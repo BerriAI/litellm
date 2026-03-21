@@ -78,7 +78,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
     // Validate git URL for url/git-subdir source types
     if ((sourceType === "url" || sourceType === "git-subdir") && values.url && !isValidUrl(values.url)) {
-      message.error("Invalid git URL format");
+      MessageManager.error("Invalid git URL format");
       return;
     }
 

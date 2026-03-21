@@ -172,7 +172,7 @@ def _redis_circuit_breaker_guard(method):  # type: ignore
             result = await method(self, *args, **kwargs)
             self._circuit_breaker.record_success()
             return result
-        except Exception as e:
+        except Exception:
             self._circuit_breaker.record_failure()
             raise
 
