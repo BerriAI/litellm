@@ -43,7 +43,7 @@ model_list:
   - model_name: gpt-4
     litellm_params:
         model: ollama/llama2
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
         model: ollama/llama2
 
@@ -64,7 +64,7 @@ litellm --config /path/to/config.yaml
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
+--data-raw '{"models": ["gpt-4o", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
 ## Spend Tracking 
@@ -106,12 +106,12 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
         "spend": 0.0001065, # 👈 SPEND
         "expires": "2023-11-24T23:19:11.131000Z",
         "models": [
-            "gpt-3.5-turbo",
+            "gpt-4o",
             "gpt-4",
             "claude-2"
         ],
         "aliases": {
-            "mistral-7b": "gpt-3.5-turbo"
+            "mistral-7b": "gpt-4o"
         },
         "config": {}
     }
@@ -147,7 +147,7 @@ curl --location 'http://localhost:4000/user/new' \
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "user_id": "my-unique-id"}'
+--data-raw '{"models": ["gpt-4o", "gpt-4"], "user_id": "my-unique-id"}'
 ```
 
 Returns a key - `sk-...`.
@@ -200,7 +200,7 @@ curl --location 'http://localhost:4000/team/new' \
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "team_id": "my-unique-id"}'
+--data-raw '{"models": ["gpt-4o", "gpt-4"], "team_id": "my-unique-id"}'
 ```
 
 Returns a key - `sk-...`.
@@ -265,7 +265,7 @@ curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Content-Type: application/json" \
 -d '{
 	"models": ["my-free-tier"], 
-	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, # 👈 KEY CHANGE
+	"aliases": {"gpt-4o": "my-free-tier"}, # 👈 KEY CHANGE
 	"duration": "30min"
 }'
 ```
@@ -279,7 +279,7 @@ curl -X POST "https://0.0.0.0:4000/key/generate" \
 -H "Authorization: Bearer <user-key>" \
 -H "Content-Type: application/json" \
 -d '{
-    "model": "gpt-3.5-turbo", 
+    "model": "gpt-4o", 
     "messages": [
         {
             "role": "user",
@@ -336,7 +336,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 Expect to see a successful response from the litellm proxy since the key passed in `X-Litellm-Key` is valid
 ```shell
-{"id":"chatcmpl-f9b2b79a7c30477ab93cd0e717d1773e","choices":[{"finish_reason":"stop","index":0,"message":{"content":"\n\nHello there, how may I assist you today?","role":"assistant","tool_calls":null,"function_call":null}}],"created":1677652288,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":"fp_44709d6fcb","usage":{"completion_tokens":12,"prompt_tokens":9,"total_tokens":21}
+{"id":"chatcmpl-f9b2b79a7c30477ab93cd0e717d1773e","choices":[{"finish_reason":"stop","index":0,"message":{"content":"\n\nHello there, how may I assist you today?","role":"assistant","tool_calls":null,"function_call":null}}],"created":1677652288,"model":"gpt-4o-0125","object":"chat.completion","system_fingerprint":"fp_44709d6fcb","usage":{"completion_tokens":12,"prompt_tokens":9,"total_tokens":21}
 ```
 
 </TabItem>
@@ -473,7 +473,7 @@ e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, t
 model_list: 
   - model_name: "openai-model"
     litellm_params: 
-      model: "gpt-3.5-turbo"
+      model: "gpt-4o"
 
 litellm_settings:
   drop_params: True
@@ -548,7 +548,7 @@ curl 'http://localhost:4000/key/sk-1234/regenerate' \
     },
     "models": [
       "gpt-4",
-      "gpt-3.5-turbo"
+      "gpt-4o"
     ],
     "grace_period": "48h"
   }'

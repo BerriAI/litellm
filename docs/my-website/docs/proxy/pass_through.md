@@ -344,7 +344,7 @@ anthropic_adapter = AnthropicAdapter()
 model_list:
   - model_name: my-claude-endpoint
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 general_settings:

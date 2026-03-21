@@ -55,7 +55,7 @@ from litellm import Router
 import asyncio
 
 model_list = [{
-    "model_name": "gpt-3.5-turbo",
+    "model_name": "gpt-4o",
     "litellm_params": {
         "model": "azure/chatgpt-v-2",
         "api_key": os.getenv("AZURE_API_KEY"),
@@ -70,7 +70,7 @@ model_list = [{
 router = Router(model_list=model_list, routing_strategy="least-busy")
 async def router_acompletion():
     response = await router.acompletion(
-        model="gpt-3.5-turbo", 
+        model="gpt-4o", 
         messages=[{"role": "user", "content": "Hey, how's it going?"}]
     )
     print(response)
@@ -84,7 +84,7 @@ asyncio.run(router_acompletion())
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-small-eu
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
@@ -92,7 +92,7 @@ model_list:
       timeout: 0.1                      # timeout in (seconds)
       stream_timeout: 0.01              # timeout for stream requests (seconds)
       max_retries: 5
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
@@ -130,7 +130,7 @@ model_list = [{...}]
 router = Router(model_list=model_list)
 
 response = router.completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "what color is red"}],
     timeout=1
 )
@@ -146,7 +146,7 @@ response = router.completion(
 curl --location 'http://0.0.0.0:4000/chat/completions' \
      --header 'Content-Type: application/json' \
      --data-raw '{
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4o",
         "messages": [
             {"role": "user", "content": "what color is red"}
         ],
@@ -167,7 +167,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "what color is red"}
     ],

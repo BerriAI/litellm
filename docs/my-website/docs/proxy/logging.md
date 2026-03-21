@@ -34,7 +34,7 @@ curl -i -sSL --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
-      "model": "gpt-3.5-turbo",
+      "model": "gpt-4o",
       "messages": [{"role": "user", "content": "what llm are you"}]
     }' | grep 'x-litellm'
 ```
@@ -70,9 +70,9 @@ Set `litellm.turn_off_message_logging=True` This will prevent the messages and r
 **1. Setup config.yaml**
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["langfuse"]
   turn_off_message_logging: True # 👈 Key Change
@@ -83,7 +83,7 @@ litellm_settings:
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -116,9 +116,9 @@ Example config.yaml
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 ```
 
 **2. Setup per request header**
@@ -129,7 +129,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Authorization: Bearer sk-zV5HlSIm8ihj1F9C_ZbB1g' \
 -H 'x-litellm-enable-message-redaction: true' \
 -d '{
-  "model": "gpt-3.5-turbo-testing",
+  "model": "gpt-4o-testing",
   "messages": [
     {
       "role": "user",
@@ -176,7 +176,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --header 'LiteLLM-Disable-Message-Redaction: true' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -209,7 +209,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer <litellm-api-key>' \
 -d '{
-    "model": "openai/gpt-3.5-turbo",
+    "model": "openai/gpt-4o",
     "messages": [
       {
         "role": "user",
@@ -238,7 +238,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -358,9 +358,9 @@ pip install langfuse>=2.0.0
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["langfuse"]
 ```
@@ -404,7 +404,7 @@ Pass `metadata` as part of the request body
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -434,7 +434,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -468,7 +468,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
+    model = "gpt-4o",
     temperature=0.1,
     extra_body={
         "metadata": {
@@ -648,7 +648,7 @@ Pass `metadata` as part of the request body
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -675,7 +675,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -706,7 +706,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
+    model = "gpt-4o",
     temperature=0.1,
     extra_body={
         "metadata": {
@@ -783,7 +783,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -863,7 +863,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -909,7 +909,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -956,7 +956,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -1005,7 +1005,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -1288,7 +1288,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
@@ -1326,9 +1326,9 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["s3_v2"]
   s3_callback_params:
@@ -1755,9 +1755,9 @@ In the config below, we pass
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
@@ -1798,9 +1798,9 @@ custom_handler = MyCustomHandler()
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: ["s3://litellm-proxy/custom_callbacks.custom_handler"]
@@ -1810,9 +1810,9 @@ litellm_settings:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   callbacks: ["gcs://my-gcs-bucket/custom_callbacks.custom_handler"]
@@ -1898,7 +1898,7 @@ litellm --config proxy_config.yaml
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -1914,13 +1914,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ```shell
 On Success
-    Model: gpt-3.5-turbo,
+    Model: gpt-4o,
     Messages: [{'role': 'user', 'content': 'good morning good sir'}],
     User: ishaan-app,
     Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
     Cost: 3.65e-05,
-    Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+    Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-4o-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-4o', 'deployment': 'gpt-4o-ModelID-gpt-4o'}
 ```
 
 #### Logging Proxy Request Object, Header, Url
@@ -2404,9 +2404,9 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["dynamodb"]
   dynamodb_table_name: your-table-name
@@ -2458,13 +2458,13 @@ Your logs should be available on DynamoDB
     "S": "{}"
   },
   "model": {
-    "S": "gpt-3.5-turbo"
+    "S": "gpt-4o"
   },
   "modelParameters": {
     "S": "{'temperature': 0.7, 'max_tokens': 100, 'user': 'ishaan-2'}"
   },
   "response": {
-    "S": "ModelResponse(id='chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen', choices=[Choices(finish_reason='stop', index=0, message=Message(content='Great! What can I assist you with?', role='assistant'))], created=1702641357, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20))"
+    "S": "ModelResponse(id='chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen', choices=[Choices(finish_reason='stop', index=0, message=Message(content='Great! What can I assist you with?', role='assistant'))], created=1702641357, model='gpt-4o-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20))"
   },
   "startTime": {
     "S": "2023-12-15 17:25:56.047035"
@@ -2531,9 +2531,9 @@ export SENTRY_ENVIRONMENT="development" # Controls the Sentry Environment (defau
 
 ```yaml 
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   # other settings
   failure_callback: ["sentry"]
@@ -2571,9 +2571,9 @@ ATHINA_API_KEY = "your-athina-api-key"
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["athina"]
 ```
@@ -2592,7 +2592,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -2625,9 +2625,9 @@ AZURE_CONTENT_SAFETY_KEY = "<your-azure-content-safety-key>"
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["azure_content_safety"]
   azure_content_safety_params:
@@ -2649,7 +2649,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4o",
         "messages": [
             {
                 "role": "user",
@@ -2672,9 +2672,9 @@ You can customize the thresholds for each category by setting the `thresholds` i
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["azure_content_safety"]
   azure_content_safety_params:

@@ -67,7 +67,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -105,7 +105,7 @@ client = openai.AzureOpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -169,7 +169,7 @@ Pass `metadata` as part of the request body
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -201,7 +201,7 @@ os.environ["OPENAI_API_KEY"] = "anything"
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
+    model = "gpt-4o",
     temperature=0.1,
     extra_body={
         "metadata": {
@@ -261,7 +261,7 @@ const openai = new OpenAI({
 async function main() {
   const chatCompletion = await openai.chat.completions.create({
     messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
+    model: 'gpt-4o',
   }, {"metadata": {
             "generation_name": "ishaan-generation-openaijs-client",
             "generation_id": "openaijs-client-gen-id22",
@@ -372,7 +372,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}],
     extra_body={
         "metadata": {
@@ -414,7 +414,7 @@ response = chat.invoke([HumanMessage(content="Generate a blog post")])
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello!"}],
     "metadata": {
         "tags": ["api-test", "development"],
@@ -438,7 +438,7 @@ const openai = new OpenAI({
 async function main() {
   const response = await openai.chat.completions.create({
     messages: [{ role: 'user', content: 'Hello!' }],
-    model: 'gpt-3.5-turbo',
+    model: 'gpt-4o',
     metadata: {
       tags: ["javascript-client", "api-test"],
       trace_user_id: "js-user-789"
@@ -815,7 +815,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-4o", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -830,7 +830,7 @@ print(response)
 
 #### Start the LiteLLM proxy
 ```shell
-litellm --model gpt-3.5-turbo
+litellm --model gpt-4o
 
 #INFO: Proxy running on http://0.0.0.0:4000
 ```
@@ -972,11 +972,11 @@ Use this when you want to send 1 request to N Models
 
 #### Expected Request Format
 
-Pass model as a string of comma separated value of models. Example `"model"="llama3,gpt-3.5-turbo"`
+Pass model as a string of comma separated value of models. Example `"model"="llama3,gpt-4o"`
 
 This same request will be sent to the following model groups on the [litellm proxy config.yaml](https://docs.litellm.ai/docs/proxy/configs)
 - `model_name="llama3"`
-- `model_name="gpt-3.5-turbo"` 
+- `model_name="gpt-4o"` 
 
 <Tabs>
 
@@ -989,7 +989,7 @@ import openai
 client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo,llama3",
+    model="gpt-4o,llama3",
     messages=[
         {"role": "user", "content": "this is a test request, write a short poem"}
     ],
@@ -1022,7 +1022,7 @@ Get a list of responses when `model` is passed as a list
             )
         ],
         created=1715462919,
-        model='gpt-3.5-turbo-0125',
+        model='gpt-4o-0125',
         object='chat.completion',
         system_fingerprint=None,
         usage=CompletionUsage(
@@ -1072,7 +1072,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "llama3,gpt-3.5-turbo",
+    "model": "llama3,gpt-4o",
     "max_tokens": 10,
     "user": "litellm2",
     "messages": [
@@ -1128,7 +1128,7 @@ Get a list of responses when `model` is passed as a list
       }
     ],
     "created": 1715459877,
-    "model": "gpt-3.5-turbo-0125",
+    "model": "gpt-4o-0125",
     "object": "chat.completion",
     "system_fingerprint": null,
     "usage": {

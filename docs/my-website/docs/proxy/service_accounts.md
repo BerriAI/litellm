@@ -53,7 +53,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer <sk-your-service-account>' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -86,7 +86,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer <sk-your-service-account>' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -115,7 +115,7 @@ Expected Response
     }
   ],
   "created": 1677652288,
-  "model": "gpt-3.5-turbo-0125",
+  "model": "gpt-4o-0125",
   "object": "chat.completion",
   "system_fingerprint": "fp_44709d6fcb",
   "usage": {

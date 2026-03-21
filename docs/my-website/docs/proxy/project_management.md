@@ -41,7 +41,7 @@ curl --location 'http://0.0.0.0:4000/project/new' \
 --data '{
     "project_alias": "flight-search-assistant",
     "team_id": "ad898803-c8a3-4f4a-976a-a3c372cffa45",
-    "models": ["gpt-4", "gpt-3.5-turbo"],
+    "models": ["gpt-4", "gpt-4o"],
     "max_budget": 100,
     "metadata": {
         "use_case_id": "SNOW-12345",
@@ -56,7 +56,7 @@ curl --location 'http://0.0.0.0:4000/project/new' \
   "project_id": "e402a141-725a-4437-bff5-d47459189716",
   "project_alias": "flight-search-assistant",
   "team_id": "ad898803-c8a3-4f4a-976a-a3c372cffa45",
-  "models": ["gpt-4", "gpt-3.5-turbo"],
+  "models": ["gpt-4", "gpt-4o"],
   "max_budget": 100,
   ...
 }
@@ -69,7 +69,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-    "models": ["gpt-3.5-turbo", "gpt-4"],
+    "models": ["gpt-4o", "gpt-4"],
     "metadata": {"user": "ishaan@berri.ai"},
     "project_id": "e402a141-725a-4437-bff5-d47459189716"
 }' | jq
@@ -219,11 +219,11 @@ curl --location 'http://0.0.0.0:4000/project/info?project_id=project-abc' \
     "project_id": "project-abc",
     "project_alias": "flight-search-assistant",
     "team_id": "team-123",
-    "models": ["gpt-4", "gpt-3.5-turbo"],
+    "models": ["gpt-4", "gpt-4o"],
     "spend": 45.67,
     "model_spend": {
         "gpt-4": 42.30,
-        "gpt-3.5-turbo": 3.37
+        "gpt-4o": 3.37
     },
     "litellm_budget_table": {
         "budget_id": "budget-xyz",
@@ -300,17 +300,17 @@ curl --location 'http://0.0.0.0:4000/project/new' \
 --data '{
     "project_alias": "multi-model-project",
     "team_id": "team-123",
-    "models": ["gpt-4", "gpt-3.5-turbo", "claude-3-sonnet"],
+    "models": ["gpt-4", "gpt-4o", "claude-3-sonnet"],
     "max_budget": 500,
     "metadata": {
         "model_tpm_limit": {
             "gpt-4": 50000,
-            "gpt-3.5-turbo": 200000,
+            "gpt-4o": 200000,
             "claude-3-sonnet": 100000
         },
         "model_rpm_limit": {
             "gpt-4": 50,
-            "gpt-3.5-turbo": 500,
+            "gpt-4o": 500,
             "claude-3-sonnet": 100
         }
     }
