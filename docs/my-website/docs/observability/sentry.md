@@ -44,7 +44,7 @@ os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 # set bad key to trigger error 
 api_key="bad-key"
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}], stream=True, api_key=api_key)
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hey!"}], stream=True, api_key=api_key)
 
 print(response)
 ```

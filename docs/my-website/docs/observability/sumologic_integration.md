@@ -56,7 +56,7 @@ litellm.callbacks = ["sumologic"]
 
 # OpenAI call
 response = litellm.completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "user", "content": "Hi 👋 - I'm testing Sumo Logic integration"}
   ]
@@ -70,9 +70,9 @@ response = litellm.completion(
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -95,7 +95,7 @@ curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",
@@ -123,7 +123,7 @@ Example payload:
 {
   "id": "chatcmpl-123",
   "call_type": "litellm.completion",
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {"role": "user", "content": "Hello"}
   ],
@@ -156,9 +156,9 @@ The Sumo Logic integration uses **NDJSON (newline-delimited JSON)** format by de
 
 Each log entry is sent as a separate line in the HTTP request:
 ```
-{"id":"chatcmpl-1","model":"gpt-3.5-turbo","response_cost":0.0001,...}
+{"id":"chatcmpl-1","model":"gpt-4o","response_cost":0.0001,...}
 {"id":"chatcmpl-2","model":"gpt-4","response_cost":0.0003,...}
-{"id":"chatcmpl-3","model":"gpt-3.5-turbo","response_cost":0.0001,...}
+{"id":"chatcmpl-3","model":"gpt-4o","response_cost":0.0001,...}
 ```
 
 #### Benefits for Field Extraction Rules (FERs)
