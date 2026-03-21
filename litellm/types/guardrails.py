@@ -75,6 +75,7 @@ class SupportedGuardrailIntegrations(Enum):
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
+    PROMPTGUARD = "promptguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
