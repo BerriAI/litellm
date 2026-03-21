@@ -420,3 +420,19 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base # Should use the argument base
+
+
+def test_openrouter_model_prefix_stripped():
+    """
+    GH#24234: OpenRouter models like "openrouter/anthropic/claude-3.5-sonnet"
+    should have the "openrouter/" prefix stripped before being sent to the API.
+    The API expects "anthropic/claude-3.5-sonnet", not the full prefixed name.
+    """
+    model, provider, _, _ = litellm.get_llm_provider(
+        model="openrouter/anthropic/claude-3.5-sonnet"
+    )
+    assert provider == "openrouter"
+    assert model == "anthropic/claude-3.5-sonnet", (
+        f"Expected 'anthropic/claude-3.5-sonnet' but got '{model}'. "
+        "The 'openrouter/' prefix was not stripped."
+    )
