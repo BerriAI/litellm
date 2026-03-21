@@ -230,6 +230,12 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
         # Store input messages for output detection context
         metadata[_META_INPUT_MESSAGES] = messages
 
+        return self._handle_input_action(action, result, detection, data, metadata)
+
+    def _handle_input_action(
+        self, action: str, result: dict, detection: dict, data: dict, metadata: dict
+    ) -> dict:
+        """Process the action returned by OpenGuardrails input detection."""
         if action == "block":
             reason = self._extract_response_content(
                 result.get("block_response", {}),
@@ -242,7 +248,6 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             )
 
         elif action == "replace":
-            # Return replacement content as a 200 response (not an error)
             content = self._extract_response_content(
                 result.get("replace_response", {}),
                 fallback="Content filtered by OpenGuardrails.",
@@ -255,61 +260,47 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             )
 
         elif action == "anonymize":
-            anonymized = result.get("anonymized_messages")
-            if anonymized:
-                data["messages"] = anonymized
-
-            # Store restore mapping for post-call restoration
-            restore_mapping = result.get("restore_mapping")
-            if restore_mapping:
-                metadata[_META_RESTORE_MAPPING] = restore_mapping
-
-            session_id = result.get("session_id")
-            if session_id:
-                metadata[_META_SESSION_ID] = session_id
-
+            self._apply_anonymization(result, data, metadata)
             return data
 
-        elif action in ("switch_private_model", "proxy_response"):
-            if action == "proxy_response":
-                # OG already called the private model - return its response
-                proxy_resp = result.get("proxy_response", {})
-                content = self._extract_response_content(
-                    proxy_resp,
-                    fallback="Response from private model.",
-                )
-                raise ModifyResponseException(
-                    message=content,
-                    model=data.get("model", "unknown"),
-                    request_data=data,
-                    guardrail_name=GUARDRAIL_NAME,
-                )
+        elif action == "proxy_response":
+            proxy_resp = result.get("proxy_response", {})
+            content = self._extract_response_content(
+                proxy_resp,
+                fallback="Response from private model.",
+            )
+            raise ModifyResponseException(
+                message=content,
+                model=data.get("model", "unknown"),
+                request_data=data,
+                guardrail_name=GUARDRAIL_NAME,
+            )
 
-            # switch_private_model: route to private model via LiteLLM
+        elif action == "switch_private_model":
             verbose_proxy_logger.info(
                 "OpenGuardrails: switching to private model '%s'",
                 self.private_model_name,
             )
             data["model"] = self.private_model_name
-
             if self.skip_output_for_private_model:
                 metadata[_META_SKIP_OUTPUT] = True
-
-            # If OG also anonymized the messages, apply that
-            anonymized = result.get("anonymized_messages")
-            if anonymized:
-                data["messages"] = anonymized
-                restore_mapping = result.get("restore_mapping")
-                if restore_mapping:
-                    metadata[_META_RESTORE_MAPPING] = restore_mapping
-                session_id = result.get("session_id")
-                if session_id:
-                    metadata[_META_SESSION_ID] = session_id
-
+            self._apply_anonymization(result, data, metadata)
             return data
 
         # action == "pass"
         return data
+
+    def _apply_anonymization(self, result: dict, data: dict, metadata: dict):
+        """Apply anonymized messages and store restore mapping in metadata."""
+        anonymized = result.get("anonymized_messages")
+        if anonymized:
+            data["messages"] = anonymized
+        restore_mapping = result.get("restore_mapping")
+        if restore_mapping:
+            metadata[_META_RESTORE_MAPPING] = restore_mapping
+        session_id = result.get("session_id")
+        if session_id:
+            metadata[_META_SESSION_ID] = session_id
 
     # ------------------------------------------------------------------ #
     #  Post-call hook: output detection + restoration                      #
