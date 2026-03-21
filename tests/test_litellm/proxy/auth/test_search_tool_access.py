@@ -4,7 +4,6 @@ Tests for search tool access control.
 Covers:
 - _can_object_call_search_tools() with least-privilege semantics
 - search_tool_access_check() for key and team level permissions
-- get_permitted_search_tool_names() helper
 - ProxyErrorTypes for search tool access denied
 - Ensures vector store access check semantics are unchanged
 """
@@ -23,7 +22,6 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _can_object_call_search_tools,
     _can_object_call_vector_stores,
-    get_permitted_search_tool_names,
     search_tool_access_check,
 )
 
@@ -320,28 +318,6 @@ async def test_should_allow_when_both_key_and_team_allow():
             valid_token=token,
         )
     assert result is True
-
-
-# ===========================================================================
-# get_permitted_search_tool_names
-# ===========================================================================
-
-
-class TestGetPermittedSearchToolNames:
-    def test_should_return_none_for_none_permissions(self):
-        assert get_permitted_search_tool_names(None) is None
-
-    def test_should_return_none_when_search_tools_is_none(self):
-        perm = _make_object_permission(search_tools=None)
-        assert get_permitted_search_tool_names(perm) is None
-
-    def test_should_return_empty_list_for_empty_search_tools(self):
-        perm = _make_object_permission(search_tools=[])
-        assert get_permitted_search_tool_names(perm) == []
-
-    def test_should_return_specific_tools(self):
-        perm = _make_object_permission(search_tools=["a", "b"])
-        assert get_permitted_search_tool_names(perm) == ["a", "b"]
 
 
 # ===========================================================================

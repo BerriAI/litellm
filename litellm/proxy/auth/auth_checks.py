@@ -3565,7 +3565,7 @@ def _can_object_call_search_tools(
     object_type: Literal["key", "team", "org"],
     search_tool_name: str,
     object_permissions: Optional[LiteLLM_ObjectPermissionTable],
-):
+) -> bool:
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific search tool.
 
@@ -3660,19 +3660,3 @@ async def search_tool_access_check(
             )
 
     return True
-
-
-def get_permitted_search_tool_names(
-    object_permissions: Optional[LiteLLM_ObjectPermissionTable],
-) -> Optional[List[str]]:
-    """
-    Returns the list of permitted search tool names for the given object permissions.
-
-    Returns:
-        None → no restriction (all tools accessible)
-        [] → no tools accessible
-        ["a", "b"] → only those tools accessible
-    """
-    if object_permissions is None:
-        return None
-    return object_permissions.search_tools
