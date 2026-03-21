@@ -416,7 +416,9 @@ async def _upsert_budget_and_membership(
     }
     membership_update_data: Dict[str, Any] = {}
     if _budget_id:
-        budget_connect = {"litellm_budget_table": {"connect": {"budget_id": _budget_id}}}
+        budget_connect = {
+            "litellm_budget_table": {"connect": {"budget_id": _budget_id}}
+        }
         membership_create_data.update(budget_connect)
         membership_update_data.update(budget_connect)
     if models is not None:

@@ -2532,7 +2532,12 @@ async def team_member_update(
     stored_models = data.models
     if stored_models is None:
         _tm_row = await prisma_client.db.litellm_teammembership.find_unique(
-            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+            where={
+                "user_id_team_id": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                }
+            }
         )
         if _tm_row is not None:
             stored_models = _tm_row.models or []
