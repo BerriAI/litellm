@@ -165,7 +165,7 @@ def get_llm_provider(  # noqa: PLR0915
         if (
             custom_llm_provider == "openrouter"
             and model.startswith("openrouter/")
-            and "/" not in model[len("openrouter/"):]
+            and "/" not in model[len("openrouter/") :]
         ):
             return model, custom_llm_provider, dynamic_api_key, api_base
 
