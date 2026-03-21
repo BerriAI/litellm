@@ -43,36 +43,6 @@ ToolParam = Any
 
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
-LITELLM_PROXY_AGENTS_URL = "litellm_proxy/agents"
-
-
-def _parse_a2a_response(data: Dict[str, Any]) -> str:
-    """Extract text content from an A2A JSON-RPC message/send response."""
-    if "error" in data:
-        err = data["error"]
-        return f"Agent error: {err.get('message', str(err))}"
-
-    result = data.get("result", {})
-
-    # A2A spec: result.artifacts[].parts[].text
-    for artifact in result.get("artifacts", []):
-        texts = [
-            p["text"]
-            for p in artifact.get("parts", [])
-            if p.get("type") == "text" and p.get("text")
-        ]
-        if texts:
-            return "\n".join(texts)
-
-    # Fallback: status.message.parts[].text
-    status = result.get("status", {})
-    if isinstance(status, dict):
-        msg = status.get("message") or {}
-        for p in msg.get("parts", []):
-            if p.get("type") == "text" and p.get("text"):
-                return p["text"]
-
-    return str(result) if result else "Agent executed successfully"
 
 # Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
 # (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
@@ -150,153 +120,6 @@ class LiteLLM_Proxy_MCP_Handler:
         return mcp_tools_with_litellm_proxy, other_tools
 
     @staticmethod
-    def _parse_agent_tools(
-        tools: Optional[Iterable[ToolParam]],
-    ) -> Tuple[List[ToolParam], List[Any]]:
-        """
-        Separate a2a_agent registry tools from other tools.
-
-        Returns:
-            Tuple of (agent_tool_configs, other_tools)
-            agent_tool_configs: tools with type="a2a_agent" pointing at litellm_proxy/agents
-        """
-        agent_tool_configs: List[ToolParam] = []
-        other_tools: List[Any] = []
-
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == "a2a_agent":
-                    server_url = tool.get("server_url", "")
-                    if isinstance(server_url, str) and LITELLM_PROXY_AGENTS_URL in server_url:
-                        agent_tool_configs.append(tool)
-                    else:
-                        other_tools.append(tool)
-                else:
-                    other_tools.append(tool)
-
-        return agent_tool_configs, other_tools
-
-    @staticmethod
-    async def _wrap_agents_as_function_tools(
-        user_api_key_auth: Any,
-    ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, str]]]:
-        """
-        Read all registered agents and expose each as an OpenAI function tool.
-
-        Returns:
-            (function_tools, agent_tool_map)
-            agent_tool_map: {sanitized_func_name: {"url": str, "agent_name": str}}
-        """
-        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-
-        agents = global_agent_registry.get_agent_list()
-        function_tools: List[Dict[str, Any]] = []
-        agent_tool_map: Dict[str, Dict[str, str]] = {}
-
-        for agent in agents:
-            card = agent.agent_card_params or {}
-            agent_url = card.get("url", "")
-            agent_name = card.get("name") or agent.agent_name
-            description = card.get("description") or f"A2A agent: {agent_name}"
-
-            # Enrich description with up to 3 skill descriptions
-            skills = card.get("skills") or []
-            skill_descs = [
-                s.get("description", "")
-                for s in skills[:3]
-                if isinstance(s, dict) and s.get("description")
-            ]
-            if skill_descs:
-                description += " Skills: " + "; ".join(skill_descs)
-
-            # Sanitize to a valid OpenAI function name (^[a-zA-Z0-9_-]{1,64}$)
-            func_name = re.sub(r"[^a-zA-Z0-9_-]", "_", agent_name)[:64] or f"agent_{agent.agent_id[:8]}"
-
-            function_tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": func_name,
-                        "description": description,
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "message": {
-                                    "type": "string",
-                                    "description": "The message or task to send to this agent",
-                                }
-                            },
-                            "required": ["message"],
-                            "additionalProperties": False,
-                        },
-                    },
-                }
-            )
-            agent_tool_map[func_name] = {"url": agent_url, "agent_name": agent_name}
-
-        verbose_logger.debug(
-            "Wrapped %d registered agents as function tools: %s",
-            len(function_tools),
-            list(agent_tool_map.keys()),
-        )
-        return function_tools, agent_tool_map
-
-    @staticmethod
-    async def _execute_a2a_tool_call(
-        agent_url: str,
-        agent_name: str,
-        message: str,
-        tool_call_id: str,
-        tool_name: str,
-        litellm_trace_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Send a message to an A2A agent via JSON-RPC and return the result."""
-        import uuid
-
-        import httpx
-
-        request_id = str(uuid.uuid4())
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"type": "text", "text": message}],
-                }
-            },
-        }
-
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if litellm_trace_id:
-            headers["x-litellm-trace-id"] = litellm_trace_id
-
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(agent_url, json=payload, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-
-            result_text = _parse_a2a_response(data)
-            verbose_logger.debug(
-                "A2A agent '%s' returned: %s", agent_name, result_text[:200]
-            )
-            return {
-                "tool_call_id": tool_call_id,
-                "result": result_text,
-                "name": tool_name,
-            }
-        except Exception as e:
-            verbose_logger.exception("Error calling A2A agent '%s': %s", agent_name, e)
-            return {
-                "tool_call_id": tool_call_id,
-                "result": f"Error calling agent {agent_name}: {str(e)}",
-                "name": tool_name,
-            }
-
-    @staticmethod
     async def _get_mcp_tools_from_manager(
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
@@ -338,7 +161,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     # "litellm_proxy/mcp/github" → specific server "github"
                     # "litellm_proxy/mcp" → no server name suffix → fetch all (leave mcp_servers=None)
-                    server_name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):]
+                    server_name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) :]
                     if server_name:
                         if mcp_servers is None:
                             mcp_servers = []
@@ -732,11 +555,14 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.agent_endpoints.registry_orchestrator import (
+            RegistryOrchestrator,
+        )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        rules_obj = Rules()
         tool_results = []
         tool_call_id: Optional[str] = None
-        rules_obj = Rules()
         for tool_call in tool_calls:
             logging_request_data: Dict[str, Any] = {}
             tool_name: Optional[str] = None
@@ -759,7 +585,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if agent_tool_map and tool_name in agent_tool_map:
                     agent_info = agent_tool_map[tool_name]
                     message = parsed_arguments.get("message") or str(parsed_arguments)
-                    result = await LiteLLM_Proxy_MCP_Handler._execute_a2a_tool_call(
+                    result = await RegistryOrchestrator.execute_a2a_tool_call(
                         agent_url=agent_info["url"],
                         agent_name=agent_info["agent_name"],
                         message=message,
@@ -769,9 +595,6 @@ class LiteLLM_Proxy_MCP_Handler:
                     )
                     tool_results.append(result)
                     continue
-
-                # Import here to avoid circular import
-                from litellm.proxy.proxy_server import proxy_logging_obj
 
                 server_name = tool_server_map[tool_name]
 
@@ -883,14 +706,14 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call[
-                            "mcp_server_cost_info"
-                        ] = cost_info
+                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                            cost_info
+                        )
 
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 

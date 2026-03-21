@@ -117,9 +117,7 @@ async def test_registry_orchestration_nonstreaming(monkeypatch):
 
             if name == "add":
                 executed.append({"type": "mcp", "tool": "add"})
-                results.append(
-                    {"tool_call_id": call_id, "result": "12", "name": "add"}
-                )
+                results.append({"tool_call_id": call_id, "result": "12", "name": "add"})
             elif name in agent_tool_map or name == "FX_Converter":
                 executed.append({"type": "a2a", "tool": name})
                 results.append(
@@ -215,9 +213,9 @@ async def test_registry_orchestration_nonstreaming(monkeypatch):
         else {}
     )
     # Both MCP list and agent tools should appear in provider metadata
-    assert "mcp_list_tools" in mcp_metadata, (
-        f"Expected mcp_list_tools in provider_specific_fields, got: {list(mcp_metadata.keys())}"
-    )
+    assert (
+        "mcp_list_tools" in mcp_metadata
+    ), f"Expected mcp_list_tools in provider_specific_fields, got: {list(mcp_metadata.keys())}"
 
 
 # ---------------------------------------------------------------------------
@@ -240,9 +238,7 @@ async def test_bare_mcp_url_expands_to_all_servers(monkeypatch):
         return [MATH_MCP_TOOL], {MATH_MCP_TOOL.name: "math_server"}
 
     async def fake_execute(**kwargs):
-        return [
-            {"tool_call_id": "tc-1", "result": "8", "name": "add"}
-        ]
+        return [{"tool_call_id": "tc-1", "result": "8", "name": "add"}]
 
     monkeypatch.setattr(
         LiteLLM_Proxy_MCP_Handler,
@@ -288,9 +284,9 @@ async def test_bare_mcp_url_expands_to_all_servers(monkeypatch):
     # The tool config passed into _process_mcp_tools must include the bare URL
     assert captured.get("tools"), "spy_process was never called"
     bare_url_tools = [
-        t for t in captured["tools"]
-        if isinstance(t, dict)
-        and t.get("server_url") == "litellm_proxy/mcp"
+        t
+        for t in captured["tools"]
+        if isinstance(t, dict) and t.get("server_url") == "litellm_proxy/mcp"
     ]
     assert bare_url_tools, (
         "Expected a tool entry with server_url='litellm_proxy/mcp' "
@@ -316,10 +312,12 @@ async def test_agents_wrapped_as_function_tools(monkeypatch):
     global_agent_registry.agent_list = [CURRENCY_AGENT]
 
     try:
-        function_tools, agent_tool_map = (
-            await LiteLLM_Proxy_MCP_Handler._wrap_agents_as_function_tools(
-                user_api_key_auth=None
-            )
+        from litellm.proxy.agent_endpoints.registry_orchestrator import (
+            RegistryOrchestrator,
+        )
+
+        function_tools, agent_tool_map = await RegistryOrchestrator.resolve_agent_tools(
+            user_api_key_auth=None
         )
     finally:
         global_agent_registry.agent_list = original_agents
@@ -331,14 +329,15 @@ async def test_agents_wrapped_as_function_tools(monkeypatch):
 
     # Name must be a valid OpenAI function name (alphanumeric + _ + -)
     import re
-    assert re.match(r"^[a-zA-Z0-9_-]{1,64}$", fn["name"]), (
-        f"Function name '{fn['name']}' is not a valid OpenAI function name"
-    )
+
+    assert re.match(
+        r"^[a-zA-Z0-9_-]{1,64}$", fn["name"]
+    ), f"Function name '{fn['name']}' is not a valid OpenAI function name"
 
     # Description should be enriched with skill description
-    assert "Convert a numeric amount" in fn["description"], (
-        f"Skill description missing from function description: {fn['description']}"
-    )
+    assert (
+        "Convert a numeric amount" in fn["description"]
+    ), f"Skill description missing from function description: {fn['description']}"
 
     # Parameters schema must include 'message' field
     params = fn["parameters"]
@@ -358,7 +357,7 @@ async def test_agents_wrapped_as_function_tools(monkeypatch):
 
 def test_parse_a2a_response_artifacts():
     """Extracts text from A2A result.artifacts[].parts[]."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import _parse_a2a_response
+    from litellm.proxy.agent_endpoints.registry_orchestrator import _parse_a2a_response
 
     data = {
         "jsonrpc": "2.0",
@@ -381,7 +380,7 @@ def test_parse_a2a_response_artifacts():
 
 def test_parse_a2a_response_status_message():
     """Falls back to result.status.message.parts[] when no artifacts."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import _parse_a2a_response
+    from litellm.proxy.agent_endpoints.registry_orchestrator import _parse_a2a_response
 
     data = {
         "jsonrpc": "2.0",
@@ -401,7 +400,7 @@ def test_parse_a2a_response_status_message():
 
 def test_parse_a2a_response_error():
     """Error responses surface the error message."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import _parse_a2a_response
+    from litellm.proxy.agent_endpoints.registry_orchestrator import _parse_a2a_response
 
     data = {
         "jsonrpc": "2.0",
@@ -442,9 +441,7 @@ async def test_registry_orchestration_streaming(monkeypatch):
             call_id = tc.get("id") or "tc-s"
             if name == "add":
                 executed.append({"type": "mcp", "tool": "add"})
-                results.append(
-                    {"tool_call_id": call_id, "result": "12", "name": "add"}
-                )
+                results.append({"tool_call_id": call_id, "result": "12", "name": "add"})
             elif name in agent_tool_map or name == "FX_Converter":
                 executed.append({"type": "a2a", "tool": name})
                 results.append(
@@ -560,9 +557,9 @@ async def test_registry_orchestration_streaming(monkeypatch):
         final_text = response.choices[0].message.content or ""
 
     assert chunks, "No streaming chunks received"
-    assert "12 USD = 9.48 GBP" in final_text, (
-        f"Expected final text to contain FX result. Got: {final_text!r}"
-    )
+    assert (
+        "12 USD = 9.48 GBP" in final_text
+    ), f"Expected final text to contain FX result. Got: {final_text!r}"
 
     # Both MCP and A2A calls must have fired during the stream loop
     assert any(e["type"] == "mcp" for e in executed), "MCP tool not executed in stream"
@@ -631,11 +628,13 @@ async def test_semantic_filter_reduces_tools(monkeypatch):
         "extract_mcp_headers_from_request",
         staticmethod(_no_mcp_headers),
     )
-    # Patch the module-level _apply_semantic_filter used inside acompletion_with_mcp
+    # Patch RegistryOrchestrator.apply_semantic_filter (moved from module-level)
+    from litellm.proxy.agent_endpoints.registry_orchestrator import RegistryOrchestrator
+
     monkeypatch.setattr(
-        chat_completions_handler,
-        "_apply_semantic_filter",
-        fake_semantic_filter,
+        RegistryOrchestrator,
+        "apply_semantic_filter",
+        staticmethod(fake_semantic_filter),
     )
 
     response = await litellm.acompletion(
@@ -671,6 +670,6 @@ async def test_semantic_filter_reduces_tools(monkeypatch):
     listed = mcp_metadata.get("mcp_list_tools", [])
     tool_names = [t.get("function", {}).get("name") for t in listed]
     assert "add" in tool_names, f"Expected 'add' in mcp_list_tools, got: {tool_names}"
-    assert "multiply" not in tool_names, (
-        f"Expected 'multiply' to be filtered out, got: {tool_names}"
-    )
+    assert (
+        "multiply" not in tool_names
+    ), f"Expected 'multiply' to be filtered out, got: {tool_names}"
