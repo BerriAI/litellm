@@ -95,6 +95,7 @@ class CustomGuardrail(CustomLogger):
         end_session_after_n_fails: Optional[int] = None,
         on_violation: Optional[str] = None,
         realtime_violation_message: Optional[str] = None,
+        guardrail_handles_tool_calls: bool = False,
         **kwargs,
     ):
         """
@@ -110,6 +111,8 @@ class CustomGuardrail(CustomLogger):
             end_session_after_n_fails: For /v1/realtime sessions, end the session after this many violations
             on_violation: For /v1/realtime sessions, 'warn' or 'end_session'
             realtime_violation_message: Message the bot speaks aloud when a /v1/realtime guardrail fires
+            guardrail_handles_tool_calls: If True, this guardrail receives tool calls and processes
+                tool-call-only messages/responses. Required for guardrail_deleted support.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -123,6 +126,7 @@ class CustomGuardrail(CustomLogger):
         self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
         self.on_violation: Optional[str] = on_violation
         self.realtime_violation_message: Optional[str] = realtime_violation_message
+        self.guardrail_handles_tool_calls: bool = guardrail_handles_tool_calls
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

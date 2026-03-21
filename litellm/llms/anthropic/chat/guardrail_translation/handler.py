@@ -284,39 +284,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         ] = []  # (content_idx, None) for each text
         tool_call_task_mappings: List[int] = []  # content_idx for each tool call
 
-        # Handle both dict and object responses
-        response_content: List[Any] = []
-        if isinstance(response, dict):
-            response_content = response.get("content", []) or []
-        elif hasattr(response, "content"):
-            content = getattr(response, "content", None)
-            response_content = content or []
-        else:
-            response_content = []
-
+        response_content = self._get_response_content(response) or []
         if not response_content:
             return response
 
         # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
-            # Handle both dict and Pydantic object content blocks
-            block_dict: Dict[str, Any] = {}
-            if isinstance(content_block, dict):
-                block_type = content_block.get("type")
-                block_dict = cast(Dict[str, Any], content_block)
-            elif hasattr(content_block, "type"):
-                block_type = getattr(content_block, "type", None)
-                # Convert Pydantic object to dict for processing
-                if hasattr(content_block, "model_dump"):
-                    block_dict = content_block.model_dump()
-                else:
-                    block_dict = {
-                        "type": block_type,
-                        "text": getattr(content_block, "text", None),
-                    }
-            else:
+            block_dict = self._content_block_to_dict(content_block)
+            if block_dict is None:
                 continue
 
+            block_type = block_dict.get("type")
             if block_type in ["text", "tool_use"]:
                 prev_tool_call_count = len(tool_calls_to_check)
                 self._extract_output_text_and_images(
@@ -331,8 +309,19 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for _ in range(len(tool_calls_to_check) - prev_tool_call_count):
                     tool_call_task_mappings.append(content_idx)
 
+        # Gate tool calls behind the guardrail_handles_tool_calls flag
+        handles_tool_calls = guardrail_to_apply.guardrail_handles_tool_calls
+        effective_tool_calls = tool_calls_to_check if handles_tool_calls else []
+        if tool_calls_to_check and not handles_tool_calls:
+            verbose_proxy_logger.debug(
+                "Anthropic Messages: Skipping %d tool call(s) — "
+                "guardrail_handles_tool_calls is False for '%s'",
+                len(tool_calls_to_check),
+                guardrail_to_apply.guardrail_name,
+            )
+
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or effective_tool_calls:
             # Create a request_data dict with response info and user API key metadata
             request_data: dict = {"response": response}
 
@@ -346,8 +335,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
+            if effective_tool_calls:
+                inputs["tool_calls"] = effective_tool_calls
             # Include model information from the response if available
             response_model = None
             if isinstance(response, dict):
@@ -379,11 +368,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             # Note: `is not None` (not `or`) so an empty list from the guardrail
             # correctly signals "all tool calls deleted" rather than falling back.
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
-            if tool_calls_to_check:
+            if effective_tool_calls:
                 resolved = (
                     guardrailed_tool_calls
                     if guardrailed_tool_calls is not None
-                    else tool_calls_to_check
+                    else effective_tool_calls
                 )
                 self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,
@@ -679,6 +668,31 @@ class AnthropicMessagesHandler(BaseTranslation):
                 tool_calls_to_check = []
             tool_calls_to_check.append(tool_call)
 
+    @staticmethod
+    def _content_block_to_dict(content_block: Any) -> Optional[Dict[str, Any]]:
+        """Convert a content block (dict or Pydantic object) to a dict, or None."""
+        if isinstance(content_block, dict):
+            return cast(Dict[str, Any], content_block)
+        elif hasattr(content_block, "type"):
+            if hasattr(content_block, "model_dump"):
+                return content_block.model_dump()
+            return {
+                "type": getattr(content_block, "type", None),
+                "text": getattr(content_block, "text", None),
+            }
+        return None
+
+    @staticmethod
+    def _get_response_content(
+        response: "AnthropicMessagesResponse",
+    ) -> Optional[List[Any]]:
+        """Extract the content list from a dict or Pydantic response, or None if unavailable."""
+        if isinstance(response, dict):
+            return response.get("content", []) or []
+        elif hasattr(response, "content"):
+            return getattr(response, "content", None) or []
+        return None
+
     async def _apply_guardrail_responses_to_output(
         self,
         response: "AnthropicMessagesResponse",
@@ -693,12 +707,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         allows guardrails to inject replacement text into tool-call-only
         responses that originally had no text.
         """
-        # Get response content once
-        if isinstance(response, dict):
-            response_content: List[Any] = response.get("content", []) or []
-        elif hasattr(response, "content"):
-            response_content = getattr(response, "content", None) or []
-        else:
+        response_content = self._get_response_content(response)
+        if response_content is None:
             return
 
         # Apply mapped texts back to their original locations
@@ -728,6 +738,60 @@ class AnthropicMessagesHandler(BaseTranslation):
             for extra_text in responses[len(task_mappings) :]:
                 response_content.append({"type": "text", "text": extra_text})
 
+    @staticmethod
+    def _apply_tool_call_to_content_block(
+        content_block: Any,
+        guardrailed_tool_call: Any,
+    ) -> None:
+        """Update a single content block's input/name from a guardrailed tool call."""
+        func = None
+        if (
+            isinstance(guardrailed_tool_call, dict)
+            and "function" in guardrailed_tool_call
+        ):
+            func = guardrailed_tool_call["function"]
+        elif hasattr(guardrailed_tool_call, "function"):
+            func = getattr(guardrailed_tool_call, "function", None)
+
+        if func is None:
+            return
+
+        new_arguments = (
+            func.get("arguments")
+            if isinstance(func, dict)
+            else getattr(func, "arguments", None)
+        )
+        new_name = (
+            func.get("name") if isinstance(func, dict) else getattr(func, "name", None)
+        )
+
+        if isinstance(content_block, dict):
+            if new_arguments is not None:
+                try:
+                    content_block["input"] = (
+                        json.loads(new_arguments)
+                        if isinstance(new_arguments, str)
+                        else new_arguments
+                    )
+                except json.JSONDecodeError:
+                    content_block["input"] = new_arguments
+            if new_name is not None:
+                content_block["name"] = new_name
+        else:
+            if new_arguments is not None:
+                try:
+                    parsed = (
+                        json.loads(new_arguments)
+                        if isinstance(new_arguments, str)
+                        else new_arguments
+                    )
+                except json.JSONDecodeError:
+                    parsed = new_arguments
+                if hasattr(content_block, "input"):
+                    content_block.input = parsed
+            if new_name is not None and hasattr(content_block, "name"):
+                content_block.name = new_name
+
     def _apply_guardrail_responses_to_output_tool_calls(
         self,
         response: "AnthropicMessagesResponse",
@@ -741,16 +805,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         1. Modify pass: update tool_use content blocks with modified arguments/name
         2. Delete pass: remove content blocks marked with guardrail_deleted
         """
-        # Get response content
-        response_content: List[Any] = []
-        if isinstance(response, dict):
-            response_content = response.get("content", []) or []
-        elif hasattr(response, "content"):
-            content = getattr(response, "content", None)
-            response_content = content or []
-        else:
-            return
-
+        response_content = self._get_response_content(response)
         if not response_content:
             return
 
@@ -775,62 +830,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 indices_to_delete.append(content_idx)
                 continue
 
-            if content_idx >= len(response_content):
-                continue
-
-            content_block = response_content[content_idx]
-
-            # Extract arguments and name from guardrailed tool call
-            func = None
-            if (
-                isinstance(guardrailed_tool_call, dict)
-                and "function" in guardrailed_tool_call
-            ):
-                func = guardrailed_tool_call["function"]
-            elif hasattr(guardrailed_tool_call, "function"):
-                func = getattr(guardrailed_tool_call, "function", None)
-
-            if func is None:
-                continue
-
-            new_arguments = (
-                func.get("arguments")
-                if isinstance(func, dict)
-                else getattr(func, "arguments", None)
-            )
-            new_name = (
-                func.get("name")
-                if isinstance(func, dict)
-                else getattr(func, "name", None)
-            )
-
-            # Update the content block (dict or Pydantic object)
-            if isinstance(content_block, dict):
-                if new_arguments is not None:
-                    try:
-                        content_block["input"] = (
-                            json.loads(new_arguments)
-                            if isinstance(new_arguments, str)
-                            else new_arguments
-                        )
-                    except json.JSONDecodeError:
-                        content_block["input"] = new_arguments
-                if new_name is not None:
-                    content_block["name"] = new_name
-            else:
-                if new_arguments is not None:
-                    try:
-                        parsed = (
-                            json.loads(new_arguments)
-                            if isinstance(new_arguments, str)
-                            else new_arguments
-                        )
-                    except json.JSONDecodeError:
-                        parsed = new_arguments
-                    if hasattr(content_block, "input"):
-                        content_block.input = parsed
-                if new_name is not None and hasattr(content_block, "name"):
-                    content_block.name = new_name
+            if content_idx < len(response_content):
+                self._apply_tool_call_to_content_block(
+                    response_content[content_idx], guardrailed_tool_call
+                )
 
         # Pass 2: Delete marked content blocks
         if indices_to_delete:

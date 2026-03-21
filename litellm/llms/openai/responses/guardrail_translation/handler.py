@@ -410,8 +410,19 @@ class OpenAIResponsesHandler(BaseTranslation):
             for _ in range(len(tool_calls_to_check) - prev_tool_call_count):
                 tool_call_task_mappings.append(output_idx)
 
+        # Gate tool calls behind the guardrail_handles_tool_calls flag
+        handles_tool_calls = guardrail_to_apply.guardrail_handles_tool_calls
+        effective_tool_calls = tool_calls_to_check if handles_tool_calls else []
+        if tool_calls_to_check and not handles_tool_calls:
+            verbose_proxy_logger.debug(
+                "OpenAI Responses: Skipping %d tool call(s) — "
+                "guardrail_handles_tool_calls is False for '%s'",
+                len(tool_calls_to_check),
+                guardrail_to_apply.guardrail_name,
+            )
+
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or effective_tool_calls:
             # Create a request_data dict with response info and user API key metadata
             request_data: dict = {"response": response}
 
@@ -425,8 +436,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
+            if effective_tool_calls:
+                inputs["tool_calls"] = effective_tool_calls
             # Include model information from the response if available
             response_model = None
             if isinstance(response, dict):
@@ -458,11 +469,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             # Note: `is not None` (not `or`) so an empty list from the guardrail
             # correctly signals "all tool calls deleted" rather than falling back.
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
-            if tool_calls_to_check:
+            if effective_tool_calls:
                 resolved = (
                     guardrailed_tool_calls
                     if guardrailed_tool_calls is not None
-                    else tool_calls_to_check
+                    else effective_tool_calls
                 )
                 self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,

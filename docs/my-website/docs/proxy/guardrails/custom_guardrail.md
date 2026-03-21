@@ -407,7 +407,26 @@ curl -i  -X POST http://localhost:4000/v1/chat/completions \
 
 ## Handling Tool Calls
 
-When the LLM request or response contains tool calls, they are passed to `apply_guardrail` via `inputs["tool_calls"]` as a list of dicts. You can:
+By default, guardrails only process messages and responses that contain text. To also receive tool calls, set `guardrail_handles_tool_calls: true` in your guardrail config:
+
+```yaml
+guardrails:
+  - guardrail_name: my_tool_filter
+    litellm_params:
+      guardrail: custom_guardrail.ToolFilterGuardrail
+      mode: post_call
+      guardrail_handles_tool_calls: true
+```
+
+Or in Python:
+
+```python
+class ToolFilterGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(guardrail_handles_tool_calls=True, **kwargs)
+```
+
+When enabled, tool calls are passed to `apply_guardrail` via `inputs["tool_calls"]` as a list of dicts. You can:
 
 - **Modify** a tool call by changing its fields (e.g. redact arguments)
 - **Block** the entire request by raising an exception

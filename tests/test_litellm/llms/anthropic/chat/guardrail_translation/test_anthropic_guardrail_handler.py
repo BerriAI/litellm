@@ -298,7 +298,10 @@ class MockToolCallDeletionGuardrail(CustomGuardrail):
     """Mock guardrail that marks specific tool calls for deletion via guardrail_deleted flag."""
 
     def __init__(self, guardrail_name: str, indices_to_delete: Optional[List[int]] = None):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            guardrail_handles_tool_calls=True,
+        )
         self.indices_to_delete = indices_to_delete or []
 
     async def apply_guardrail(
@@ -500,7 +503,10 @@ class MockMixedModifyDeleteGuardrail(CustomGuardrail):
         names_to_delete: List[str],
         names_to_modify: Optional[List[str]] = None,
     ):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            guardrail_handles_tool_calls=True,
+        )
         self.names_to_delete = names_to_delete
         self.names_to_modify = names_to_modify or []
 
@@ -576,7 +582,10 @@ class MockDeletionWithReplacementGuardrail(CustomGuardrail):
     """Mock guardrail that deletes all tool calls and adds replacement text."""
 
     def __init__(self, guardrail_name: str, replacement_text: str):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            guardrail_handles_tool_calls=True,
+        )
         self.replacement_text = replacement_text
 
     async def apply_guardrail(

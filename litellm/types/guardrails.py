@@ -603,6 +603,16 @@ class BaseLitellmParams(
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    guardrail_handles_tool_calls: Optional[bool] = Field(
+        default=False,
+        description=(
+            "When True, this guardrail will receive tool calls in inputs and "
+            "responses that contain only tool calls (no text). When False "
+            "(default), tool-call-only messages/responses skip this guardrail. "
+            "Enable this to use guardrail_deleted or to inspect tool call arguments."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,

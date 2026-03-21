@@ -35,7 +35,7 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing that transforms text and tool calls"""
 
     def __init__(self, guardrail_name: str = "test"):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(guardrail_name=guardrail_name, guardrail_handles_tool_calls=True)
         self.last_inputs = None
         self.last_request_data = None
         self.tool_calls_modified = False
@@ -890,7 +890,7 @@ class MockDeletingGuardrail(CustomGuardrail):
         names_to_modify: Optional[List[str]] = None,
         guardrail_name: str = "test-deleter",
     ):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(guardrail_name=guardrail_name, guardrail_handles_tool_calls=True)
         self.names_to_delete = names_to_delete
         self.names_to_modify = names_to_modify or []
 
@@ -1303,7 +1303,7 @@ class MockDeletionWithReplacementGuardrail(CustomGuardrail):
     """Mock guardrail that deletes all tool calls and adds replacement text."""
 
     def __init__(self, guardrail_name: str, replacement_text: str):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(guardrail_name=guardrail_name, guardrail_handles_tool_calls=True)
         self.replacement_text = replacement_text
 
     async def apply_guardrail(
@@ -1460,6 +1460,149 @@ class TestGuardrailReplacementText:
         # Tool calls deleted, text preserved with replacement appended
         assert response.choices[0].message.tool_calls is None
         assert response.choices[0].message.content == "Let me help.\nTool removed."
+
+
+class TestGuardrailHandlesToolCallsFlag:
+    """Test that guardrail_handles_tool_calls=False (default) skips tool-call-only responses."""
+
+    @pytest.mark.asyncio
+    async def test_default_flag_skips_tool_only_output(self):
+        """Default guardrail (flag=False) should not process tool-call-only responses."""
+        handler = OpenAIChatCompletionsHandler()
+
+        class DefaultGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="default")
+                self.was_called = False
+
+            async def apply_guardrail(
+                self, inputs, request_data, input_type, logging_obj=None
+            ):
+                self.was_called = True
+                return inputs
+
+        guardrail = DefaultGuardrail()
+        assert guardrail.guardrail_handles_tool_calls is False
+
+        response = ModelResponse(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(name="my_tool", arguments="{}"),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Guardrail should NOT have been called
+        assert guardrail.was_called is False
+        # Response should be unchanged
+        assert response.choices[0].message.tool_calls is not None
+        assert len(response.choices[0].message.tool_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_flag_true_processes_tool_only_output(self):
+        """Guardrail with flag=True should process tool-call-only responses."""
+        handler = OpenAIChatCompletionsHandler()
+
+        class OptInGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="opt-in",
+                    guardrail_handles_tool_calls=True,
+                )
+                self.was_called = False
+
+            async def apply_guardrail(
+                self, inputs, request_data, input_type, logging_obj=None
+            ):
+                self.was_called = True
+                return inputs
+
+        guardrail = OptInGuardrail()
+
+        response = ModelResponse(
+            id="chatcmpl-2",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(name="my_tool", arguments="{}"),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Guardrail SHOULD have been called
+        assert guardrail.was_called is True
+
+    @pytest.mark.asyncio
+    async def test_default_flag_still_processes_text_responses(self):
+        """Default guardrail (flag=False) should still process responses with text."""
+        handler = OpenAIChatCompletionsHandler()
+
+        class DefaultGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(guardrail_name="default")
+                self.was_called = False
+
+            async def apply_guardrail(
+                self, inputs, request_data, input_type, logging_obj=None
+            ):
+                self.was_called = True
+                return inputs
+
+        guardrail = DefaultGuardrail()
+
+        response = ModelResponse(
+            id="chatcmpl-3",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        # Text-only response should still be processed
+        assert guardrail.was_called is True
+
 
 if __name__ == "__main__":
     # Run the tests

@@ -82,13 +82,24 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
             )
 
+        # Gate tool calls behind the guardrail_handles_tool_calls flag
+        handles_tool_calls = guardrail_to_apply.guardrail_handles_tool_calls
+        effective_tool_calls = tool_calls_to_check if handles_tool_calls else []
+        if tool_calls_to_check and not handles_tool_calls:
+            verbose_proxy_logger.debug(
+                "OpenAI Chat: Skipping %d input tool call(s) — "
+                "guardrail_handles_tool_calls is False for '%s'",
+                len(tool_calls_to_check),
+                guardrail_to_apply.guardrail_name,
+            )
+
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or effective_tool_calls:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            if effective_tool_calls:
+                inputs["tool_calls"] = effective_tool_calls  # type: ignore
             if messages:
                 inputs[
                     "structured_messages"
@@ -127,11 +138,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Use guardrailed results if returned, otherwise fall back to originals.
             # Note: `is not None` (not `or`) so an empty list from the guardrail
             # correctly signals "all tool calls deleted" rather than falling back.
-            if tool_calls_to_check:
+            if effective_tool_calls:
                 resolved_tool_calls = (
                     guardrailed_tool_calls
                     if guardrailed_tool_calls is not None
-                    else tool_calls_to_check
+                    else effective_tool_calls
                 )
                 await self._apply_guardrail_responses_to_input_tool_calls(
                     messages=messages,
@@ -219,7 +230,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize how text responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
+        for task_idx in range(min(len(responses), len(task_mappings))):
+            guardrail_response = responses[task_idx]
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(Optional[int], mapping[1])
@@ -327,8 +339,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
             )
 
+        # Gate tool calls behind the guardrail_handles_tool_calls flag
+        handles_tool_calls = guardrail_to_apply.guardrail_handles_tool_calls
+        effective_tool_calls = tool_calls_to_check if handles_tool_calls else []
+        if tool_calls_to_check and not handles_tool_calls:
+            verbose_proxy_logger.debug(
+                "OpenAI Chat: Skipping %d output tool call(s) — "
+                "guardrail_handles_tool_calls is False for '%s'",
+                len(tool_calls_to_check),
+                guardrail_to_apply.guardrail_name,
+            )
+
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or effective_tool_calls:
             # Create a request_data dict with response info and user API key metadata
             request_data: dict = {"response": response}
 
@@ -342,8 +365,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            if effective_tool_calls:
+                inputs["tool_calls"] = effective_tool_calls  # type: ignore
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
@@ -370,11 +393,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Note: `is not None` (not `or`) so an empty list from the guardrail
             # correctly signals "all tool calls deleted" rather than falling back.
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
-            if tool_calls_to_check:
+            if effective_tool_calls:
                 resolved_tool_calls = (
                     guardrailed_tool_calls
                     if guardrailed_tool_calls is not None
-                    else tool_calls_to_check
+                    else effective_tool_calls
                 )
                 await self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,

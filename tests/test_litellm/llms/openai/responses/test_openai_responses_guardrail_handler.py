@@ -627,14 +627,13 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         )
 
     @pytest.mark.asyncio
-    async def test_process_output_response_with_tool_calls(self):
-        """Test processing output response containing function tool calls"""
+    async def test_process_output_response_with_tool_calls_skipped_by_default(self):
+        """Tool-call-only response skipped when guardrail_handles_tool_calls is False (default)"""
         handler = OpenAIResponsesHandler()
         guardrail = MockGuardrail(guardrail_name="test")
 
-        # Create a full response matching user's provided structure
         response = ResponsesAPIResponse(
-            id="resp_zlasw86v56zobnneYprKIagz33tpQeh7arqL9mrI1oec47HNQLGz0VL0PpM9z67EADHExs7UjtyGqpoBKcM9oR6icMGx826UsXnlvu3ZvIyrVA1CaMgeaMo9H5DdQMhvmXtriqXpikuyYbIsko97x8GvtBIoSCcovM9s5KCwJ4eWSjfr51d6-GwLIMkCNbQI6AN11uYyIKrIfCt_9j7FZdBnRHhZ0_zE7E1LYWQPm9G9_nPmTyh9FXNLUZ9Uib1SejrCetPargnpQeBibaXqPoj_pXFKvgc-_-znG5IWEsM8WH9Pjbm6uWEwpUiCxt8yfjQGEADqaluLAts1mnzQVEhCtZbU67QG3ebSG-rXtBw511f2pJPzZ8kI4hPISmZL8Co3LmIrdpmzzb02sQRoH3v4HCwzVGXgtRwRYkdpffebYElQWzvYDhqIHFHKNavfF8mC5AVPvPRA5h1Pf3utTf26",
+            id="resp_123",
             created_at=1764901066,
             model="gpt-4.1-mini-2025-04-14",
             object="response",
@@ -651,12 +650,11 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             ],
         )
 
-        # Response should be blocked since MockGuardrail blocks responses
-        with pytest.raises(HTTPException) as exc_info:
-            await handler.process_output_response(response, guardrail)
-
-        assert exc_info.value.status_code == 400
-        assert "Response blocked by guardrail" in str(exc_info.value.detail)
+        # Default guardrail does not handle tool calls, so tool-call-only
+        # response should pass through unchanged
+        result = await handler.process_output_response(response, guardrail)
+        assert len(result.output) == 1
+        assert result.output[0].name == "get_current_weather"
 
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""
@@ -837,7 +835,10 @@ class MockToolCallDeletionGuardrail(CustomGuardrail):
     """Mock guardrail that marks specific tool calls for deletion via guardrail_deleted flag."""
 
     def __init__(self, guardrail_name: str, indices_to_delete: Optional[List[int]] = None):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            guardrail_handles_tool_calls=True,
+        )
         self.indices_to_delete = indices_to_delete or []
 
     async def apply_guardrail(
@@ -1021,7 +1022,10 @@ class MockDeletionWithReplacementGuardrail(CustomGuardrail):
     """Mock guardrail that deletes all tool calls and adds replacement text."""
 
     def __init__(self, guardrail_name: str, replacement_text: str):
-        super().__init__(guardrail_name=guardrail_name)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            guardrail_handles_tool_calls=True,
+        )
         self.replacement_text = replacement_text
 
     async def apply_guardrail(
