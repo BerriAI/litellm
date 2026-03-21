@@ -12,6 +12,67 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 router = APIRouter()
 
 
+async def _get_allowed_search_tool_names(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[List[str]]:
+    """
+    Compute the intersection of key-level and team-level search tool permissions.
+
+    Returns:
+        None  → no restriction (all tools accessible)
+        list  → only those tool names are accessible (may be empty = none)
+    """
+    from litellm.proxy.auth.auth_checks import get_object_permission
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return None
+
+    key_allowed: Optional[List[str]] = None
+    team_allowed: Optional[List[str]] = None
+
+    # Key-level permissions (via cached helper)
+    if user_api_key_dict.object_permission_id is not None:
+        key_perm = await get_object_permission(
+            object_permission_id=user_api_key_dict.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if key_perm is not None:
+            key_allowed = key_perm.search_tools  # None means no restriction
+
+    # Team-level permissions (via cached helper)
+    team_perm_id = getattr(user_api_key_dict, "team_object_permission_id", None)
+    if team_perm_id is not None:
+        team_perm = await get_object_permission(
+            object_permission_id=team_perm_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_perm is not None:
+            team_allowed = team_perm.search_tools  # None means no restriction
+
+    # Combine: both None → None (no restriction)
+    # One set → use that set
+    # Both set → intersection
+    if key_allowed is None and team_allowed is None:
+        return None
+    if key_allowed is None:
+        return team_allowed
+    if team_allowed is None:
+        return key_allowed
+    # Both are set - return the intersection
+    return list(set(key_allowed) & set(team_allowed))
+
+
 @router.post(
     "/v1/search/{search_tool_name}",
     dependencies=[Depends(user_api_key_auth)],
@@ -163,6 +224,24 @@ async def search(
                     data["metadata"] = {}
                 data["metadata"]["model_group"] = search_tool_name_value
 
+    # Access control check for search tools
+    resolved_search_tool_name = data.get("search_tool_name")
+    if resolved_search_tool_name:
+        from litellm.proxy.auth.auth_checks import search_tool_access_check
+
+        await search_tool_access_check(
+            search_tool_name=resolved_search_tool_name,
+            valid_token=user_api_key_dict,
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "search_tool_name is required. Provide it in the URL path "
+                "(/v1/search/{search_tool_name}) or in the request body."
+            },
+        )
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -257,6 +336,15 @@ async def list_search_tools(
                         tool_info["description"] = description
 
                 search_tools_list.append(tool_info)
+
+        # Filter search tools based on user's permissions
+        allowed_names = await _get_allowed_search_tool_names(user_api_key_dict)
+        if allowed_names is not None:
+            search_tools_list = [
+                tool
+                for tool in search_tools_list
+                if tool.get("search_tool_name") in allowed_names
+            ]
 
         return {"object": "list", "data": search_tools_list}
     except Exception as e:
