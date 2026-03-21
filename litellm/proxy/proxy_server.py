@@ -2475,7 +2475,7 @@ class ProxyConfig:
             included_config = self._load_yaml_file(file_path)
             # Simply update/extend the main config with included config
             for key, value in included_config.items():
-                if isinstance(value, list) and key in config:
+                if isinstance(value, list) and isinstance(config.get(key), list):
                     config[key].extend(value)
                 else:
                     config[key] = value

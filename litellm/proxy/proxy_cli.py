@@ -146,7 +146,9 @@ def _process_config_includes(config: dict, base_dir: str) -> dict:
             )
 
         for key, value in included_config.items():
-            if isinstance(value, list) and key in config:
+            # Mirror ProxyConfig include behavior while avoiding list.extend() on
+            # non-list existing values from the main config.
+            if isinstance(value, list) and isinstance(config.get(key), list):
                 config[key].extend(value)
             else:
                 config[key] = value
@@ -173,6 +175,15 @@ def _resolve_os_environ_refs(config: dict) -> dict:
 def _load_general_settings_for_early_cors(
     config_file_path: Optional[str],
 ) -> dict:
+    """
+    Load only the CORS-relevant general_settings before importing proxy_server.
+
+    CORSMiddleware is configured from module-level values at import time, so the
+    startup path needs these settings in env vars before the first proxy_server
+    import. This early pass supports literal values, include files, and
+    os.environ/ references. Secret-manager-backed values are only available
+    later in startup and therefore cannot affect the initial middleware config.
+    """
     config: Optional[dict] = None
 
     if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -801,6 +812,8 @@ def run_server(  # noqa: PLR0915
         return
 
     if config is not None or os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        # CORS is captured when proxy_server is first imported, so load the
+        # relevant general_settings before importing the app module.
         early_general_settings = _load_general_settings_for_early_cors(config)
         _apply_cors_settings_from_general_settings(early_general_settings)
 
@@ -950,7 +963,6 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
-            _apply_cors_settings_from_general_settings(general_settings)
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None

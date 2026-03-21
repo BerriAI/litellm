@@ -139,6 +139,73 @@ def test_apply_cors_settings_invalid_credentials_type_raises_click_exception():
         )
 
 
+def test_process_config_includes_replaces_non_list_existing_value(tmp_path):
+    from litellm.proxy.proxy_cli import _process_config_includes
+
+    included_config_path = tmp_path / "extra.yaml"
+    included_config_path.write_text(
+        "\n".join(
+            [
+                "model_list:",
+                "  - model_name: gpt-4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = {
+        "include": [included_config_path.name],
+        "model_list": "some-string",
+    }
+
+    processed = _process_config_includes(config, str(tmp_path))
+
+    assert processed == {"model_list": [{"model_name": "gpt-4"}]}
+
+
+def test_load_general_settings_for_early_cors_handles_include_and_env_refs(
+    monkeypatch, tmp_path
+):
+    from litellm.proxy.proxy_cli import _load_general_settings_for_early_cors
+
+    monkeypatch.setenv("CORS_ORIGIN", "https://env.example.com")
+
+    base_config_path = tmp_path / "config.yaml"
+    included_config_path = tmp_path / "cors.yaml"
+    base_config_path.write_text(
+        "\n".join(
+            [
+                "include:",
+                f"  - {included_config_path.name}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    included_config_path.write_text(
+        "\n".join(
+            [
+                "general_settings:",
+                "  cors_allow_origins: os.environ/CORS_ORIGIN",
+                "  cors_allow_credentials: false",
+                "  cors_allow_methods:",
+                "    - GET",
+                "  cors_allow_headers:",
+                "    - Authorization",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    general_settings = _load_general_settings_for_early_cors(str(base_config_path))
+
+    assert general_settings == {
+        "cors_allow_origins": "https://env.example.com",
+        "cors_allow_credentials": False,
+        "cors_allow_methods": ["GET"],
+        "cors_allow_headers": ["Authorization"],
+    }
+
+
 def test_run_server_applies_config_cors_before_proxy_server_import(tmp_path):
     from litellm.proxy.proxy_cli import run_server
 
@@ -179,6 +246,61 @@ def test_run_server_applies_config_cors_before_proxy_server_import(tmp_path):
     assert proxy_server.cors_allow_origins == ["https://cli.example.com"]
     assert proxy_server.cors_allow_credentials is False
     assert proxy_server.cors_allow_methods == ["GET", "POST"]
+    assert proxy_server.cors_allow_headers == ["Authorization"]
+
+
+def test_run_server_applies_included_config_cors_before_proxy_server_import(tmp_path):
+    from litellm.proxy.proxy_cli import run_server
+
+    config_path = tmp_path / "config.yaml"
+    included_config_path = tmp_path / "extra.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "include:",
+                f"  - {included_config_path.name}",
+                'model_list: "some-string"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    included_config_path.write_text(
+        "\n".join(
+            [
+                "model_list:",
+                "  - model_name: gpt-4",
+                "general_settings:",
+                "  cors_allow_origins:",
+                "    - https://include.example.com",
+                "  cors_allow_credentials: false",
+                "  cors_allow_methods:",
+                "    - GET",
+                "  cors_allow_headers:",
+                "    - Authorization",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for module_name in CORS_MODULES:
+        sys.modules.pop(module_name, None)
+
+    result = CliRunner().invoke(
+        run_server,
+        [
+            "--config",
+            str(config_path),
+            "--skip_server_startup",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    assert proxy_server.cors_allow_origins == ["https://include.example.com"]
+    assert proxy_server.cors_allow_credentials is False
+    assert proxy_server.cors_allow_methods == ["GET"]
     assert proxy_server.cors_allow_headers == ["Authorization"]
 
 
