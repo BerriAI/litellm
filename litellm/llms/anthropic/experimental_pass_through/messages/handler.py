@@ -32,15 +32,37 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
+# Providers that are allowed to opt-in to the Responses API path via per-request params.
+_RESPONSES_API_OPT_IN_ALLOWED_PROVIDERS = frozenset({"openai", "azure"})
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+
+def _should_route_to_responses_api(
+    custom_llm_provider: Optional[str],
+    litellm_params: Optional[Union[dict, GenericLiteLLMParams]] = None,
+) -> bool:
     """Return True when the provider should use the Responses API path.
 
-    Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
-    opt out and route OpenAI/Azure requests through chat/completions instead.
+    Routing behavior:
+    1. Per-request opt-in: If ``use_chat_completions_url_for_anthropic_messages=False``
+       is passed in ``litellm_params``, the request is routed to the Responses API
+       (restricted to allowed providers: openai, azure).
+    2. Global opt-out: If ``litellm.use_chat_completions_url_for_anthropic_messages = True``,
+       the request is routed to chat/completions (overrides default provider routing).
+    3. Default: Route to Responses API if the provider is in ``_RESPONSES_API_PROVIDERS``.
     """
+    if litellm_params is not None:
+        # GenericLiteLLMParams and dict both support .get()
+        _use_chat_completions_url = litellm_params.get(
+            "use_chat_completions_url_for_anthropic_messages"
+        )
+        if _use_chat_completions_url is False:
+            # Per-request opt-in to Responses API
+            return custom_llm_provider in _RESPONSES_API_OPT_IN_ALLOWED_PROVIDERS
+
     if litellm.use_chat_completions_url_for_anthropic_messages:
+        # Global opt-out from Responses API
         return False
+
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
@@ -322,7 +344,9 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(
+            custom_llm_provider, litellm_params=_shared_kwargs
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )

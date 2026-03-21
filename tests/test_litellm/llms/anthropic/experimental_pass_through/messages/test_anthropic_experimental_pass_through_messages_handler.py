@@ -31,8 +31,9 @@ def test_anthropic_experimental_pass_through_messages_handler():
                 model="openai/claude-3-5-sonnet-20240620",
                 api_key="test-api-key",
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            if not mock_responses.called:
+                raise
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
 
@@ -56,8 +57,9 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
                 api_base="test-api-base",
                 custom_key="custom_value",
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            if not mock_completion.called:
+                raise
         mock_completion.assert_called_once()
         assert mock_completion.call_args.kwargs["api_key"] == "test-api-key"
         assert mock_completion.call_args.kwargs["api_base"] == "test-api-base"
@@ -81,8 +83,9 @@ def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provide
                 custom_llm_provider="my-custom-llm",
                 api_key="test-api-key",
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            if not mock_completion.called:
+                raise
 
         # Assert that litellm.completion was called when using a custom LLM provider
         mock_completion.assert_called_once()
@@ -125,24 +128,30 @@ async def test_bedrock_converse_budget_tokens_preserved():
                 max_tokens=1024,
                 messages=[{"role": "user", "content": "What is 2+2?"}],
                 model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
-                thinking={
-                    "budget_tokens": 1024,
-                    "type": "enabled"
-                },
+                thinking={"budget_tokens": 1024, "type": "enabled"},
             )
         except Exception:
-            pass  # Expected due to response format conversion
+            if not mock_acompletion.called:
+                raise
 
         mock_acompletion.assert_called_once()
 
         call_kwargs = mock_acompletion.call_args.kwargs
-        print("acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str))
+        print(
+            "acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str)
+        )
 
         # Verify thinking parameter is passed through with budget_tokens preserved
         thinking_param = call_kwargs.get("thinking")
-        assert thinking_param is not None, "thinking parameter should be passed to acompletion"
-        assert thinking_param.get("type") == "enabled", "thinking.type should be 'enabled'"
-        assert thinking_param.get("budget_tokens") == 1024, f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
+        assert (
+            thinking_param is not None
+        ), "thinking parameter should be passed to acompletion"
+        assert (
+            thinking_param.get("type") == "enabled"
+        ), "thinking.type should be 'enabled'"
+        assert (
+            thinking_param.get("budget_tokens") == 1024
+        ), f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
 
 
 def test_openai_model_with_thinking_converts_to_reasoning():
@@ -164,20 +173,20 @@ def test_openai_model_with_thinking_converts_to_reasoning():
                 messages=[{"role": "user", "content": "What is 2+2?"}],
                 model="openai/gpt-5.2",
                 api_key="test-api-key",
-                thinking={
-                    "type": "enabled",
-                    "budget_tokens": 1024
-                },
+                thinking={"type": "enabled", "budget_tokens": 1024},
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            if not mock_responses.called:
+                raise
 
         mock_responses.assert_called_once()
 
         call_kwargs = mock_responses.call_args.kwargs
 
         # Verify reasoning is set (converted from thinking)
-        assert "reasoning" in call_kwargs, "reasoning should be passed to litellm.responses"
+        assert (
+            "reasoning" in call_kwargs
+        ), "reasoning should be passed to litellm.responses"
 
         # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
         expected_reasoning = {"effort": "minimal", "summary": "detailed"}
@@ -187,7 +196,9 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         )
 
         # Verify thinking is NOT passed directly to the Responses API
-        assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
+        assert (
+            "thinking" not in call_kwargs
+        ), "thinking should NOT be passed directly to litellm.responses"
 
 
 class TestThinkingParameterTransformation:
@@ -198,13 +209,13 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 5000}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
         )
-        
+
         assert result == {"thinking": thinking}
         assert result["thinking"]["budget_tokens"] == 5000
 
@@ -213,12 +224,37 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 1024}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        
+
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
+
+
+def test_anthropic_experimental_pass_through_messages_handler_azure_opt_in_responses_api():
+    """
+    Test that an Azure model can opt-in to the Responses API path.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch("litellm.responses", return_value="test-response") as mock_responses:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="azure/gpt-5.3-codex",
+                api_key="test-api-key",
+                use_chat_completions_url_for_anthropic_messages=False,
+            )
+        except Exception:
+            if not mock_responses.called:
+                raise
+        mock_responses.assert_called_once()
+        assert mock_responses.call_args.kwargs["model"] == "gpt-5.3-codex"
+        assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
