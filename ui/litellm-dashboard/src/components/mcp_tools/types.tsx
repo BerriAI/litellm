@@ -190,6 +190,7 @@ export interface MCPServer {
   created_by: string;
   updated_at: string;
   updated_by: string;
+  team_id?: string | null;
   extra_headers?: string[] | null;
   static_headers?: Record<string, string> | null;
   status?: "healthy" | "unhealthy" | "unknown";
