@@ -366,6 +366,13 @@ async def validate_key_mcp_servers_against_team(
             )
 
 
+def _invalidate_team_cache(team_id: str) -> None:
+    """Invalidate the cached team object so subsequent reads see updated data."""
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    user_api_key_cache.delete_cache(key="team_id:{}".format(team_id))
+
+
 async def add_mcp_server_to_team(
     prisma_client: PrismaClient, team_id: str, server_id: str
 ) -> None:
@@ -421,6 +428,9 @@ async def add_mcp_server_to_team(
                 data={"object_permission_id": object_permission_id},
             )
 
+    # Invalidate team cache so the updated mcp_servers list is visible immediately
+    _invalidate_team_cache(team_id)
+
 
 async def remove_mcp_server_from_team(
     prisma_client: PrismaClient, team_id: str, server_id: str
@@ -452,3 +462,6 @@ async def remove_mcp_server_from_team(
                 where={"object_permission_id": team.object_permission_id},
                 data={"mcp_servers": updated_servers},
             )
+
+    # Invalidate team cache so the updated mcp_servers list is visible immediately
+    _invalidate_team_cache(team_id)

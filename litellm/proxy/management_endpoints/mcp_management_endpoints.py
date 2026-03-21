@@ -1854,7 +1854,7 @@ if MCP_AVAILABLE:
         description="Allows updating mcp servers in the db",
         dependencies=[Depends(user_api_key_auth)],
         response_model=LiteLLM_MCPServerTable,
-        status_code=status.HTTP_200_OK,
+        status_code=status.HTTP_202_ACCEPTED,
     )
     @management_endpoint_wrapper
     async def edit_mcp_server(

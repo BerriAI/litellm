@@ -1625,16 +1625,23 @@ class Member(MemberBase):
     @field_validator("extra_permissions", mode="before")
     @classmethod
     def validate_permission_format(cls, v):
-        """Validate that all permission strings follow the resource:action format."""
+        """Validate that all permission strings are known valid permissions."""
         if v is None:
             return v
         if not isinstance(v, list):
             raise ValueError("extra_permissions must be a list of strings")
+        from litellm.proxy.auth.permissions import VALID_PERMISSIONS
+
         for perm in v:
             if not isinstance(perm, str) or ":" not in perm:
                 raise ValueError(
                     f"Invalid permission format: '{perm}'. "
                     "Must follow 'resource:action' format (e.g. 'mcp:create')."
+                )
+            if perm not in VALID_PERMISSIONS:
+                raise ValueError(
+                    f"Unknown permission: '{perm}'. "
+                    f"Valid permissions: {sorted(VALID_PERMISSIONS)}"
                 )
         return v
 
