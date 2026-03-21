@@ -16,6 +16,7 @@ interface TeamMemberTabProps {
   setSelectedEditMember: (member: Member) => void;
   setIsEditMemberModalVisible: (visible: boolean) => void;
   setIsAddMemberModalVisible: (visible: boolean) => void;
+  onPermissions?: (member: Member) => void;
 }
 
 export default function TeamMemberTab({
@@ -25,6 +26,7 @@ export default function TeamMemberTab({
   setSelectedEditMember,
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
+  onPermissions,
 }: TeamMemberTabProps) {
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
@@ -144,6 +146,7 @@ export default function TeamMemberTab({
       }}
       onDelete={handleMemberDelete}
       onAddMember={() => setIsAddMemberModalVisible(true)}
+      onPermissions={onPermissions}
       roleColumnTitle="Team Role"
       roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
       extraColumns={extraColumns}
