@@ -46,6 +46,7 @@ from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     get_org_object,
     get_project_object,
+    get_team_membership,
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
@@ -642,19 +643,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         litellm.team_model_overrides_enabled
         or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
     ) and team_table is not None:
-        # Read member models from LiteLLM_TeamMembership table (authoritative source),
-        # NOT from members_with_roles JSON blob which can be stale after /team/member_update.
-        # Note: This is a management endpoint (/key/generate), not the hot auth path.
-        # The hot path (/chat/completions) uses the SQL view join with zero extra queries.
+        # Read member models from LiteLLM_TeamMembership via the standard cached helper
+        # (NOT from members_with_roles JSON blob which can be stale after /team/member_update).
         member_models: List[str] = []
         if data.user_id and prisma_client is not None:
-            _membership = await prisma_client.db.litellm_teammembership.find_unique(
-                where={
-                    "user_id_team_id": {
-                        "user_id": data.user_id,
-                        "team_id": team_table.team_id,
-                    }
-                }
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            _membership = await get_team_membership(
+                user_id=data.user_id,
+                team_id=team_table.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
             if _membership is not None:
                 member_models = _membership.models or []

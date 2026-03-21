@@ -2530,17 +2530,19 @@ async def team_member_update(  # noqa: PLR0915
 
     ### update team member role
     # Resolve the effective models for this member (from the authoritative
-    # LiteLLM_TeamMembership table) so we can: (a) keep the members_with_roles
-    # JSON in sync, and (b) return the actual stored state in the response.
+    # LiteLLM_TeamMembership table via cached helper) so we can: (a) keep the
+    # members_with_roles JSON in sync, and (b) return the actual stored state
+    # in the response.
     stored_models = data.models
     if stored_models is None:
-        _tm_row = await prisma_client.db.litellm_teammembership.find_unique(
-            where={
-                "user_id_team_id": {
-                    "user_id": received_user_id,
-                    "team_id": data.team_id,
-                }
-            }
+        from litellm.proxy.auth.auth_checks import get_team_membership
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _tm_row = await get_team_membership(
+            user_id=received_user_id,
+            team_id=data.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
         )
         stored_models = (_tm_row.models or []) if _tm_row is not None else []
 
