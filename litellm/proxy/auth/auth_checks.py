@@ -2700,7 +2700,8 @@ def compute_effective_models(
     - If cap empties the list (all stale), falls back to team_pool (NOT [] which = allow-all).
     - team_pool=[] means "allow all" — cap is skipped.
     """
-    effective = list(set(team_defaults + member_models))
+    # dict.fromkeys preserves insertion order while deduplicating
+    effective = list(dict.fromkeys(team_defaults + member_models))
 
     if not effective:
         return team_pool

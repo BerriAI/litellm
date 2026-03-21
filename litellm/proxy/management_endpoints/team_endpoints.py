@@ -2528,6 +2528,13 @@ async def team_member_update(  # noqa: PLR0915
             models=data.models,
         )
 
+    # Invalidate the get_team_membership cache so subsequent key-gen calls
+    # see the updated models immediately (not stale cached values).
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
+    user_api_key_cache.delete_cache(key=_cache_key)
+
     ### update team member role
     # Resolve the effective models for this member (from the authoritative
     # LiteLLM_TeamMembership table via cached helper) so we can: (a) keep the
