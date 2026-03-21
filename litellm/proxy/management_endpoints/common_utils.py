@@ -380,18 +380,18 @@ async def _upsert_budget_and_membership(
         and rpm_limit is None
         and models is None
     ):
-        # Only budget/rate-limit fields are being cleared — disconnect the budget
-        # but do NOT touch models (models=None means "not specified", not "clear").
-        # This prevents a role-only /team/member_update from wiping model overrides.
+        # Nothing to change — only disconnect budget if one was actually linked.
+        # Do NOT touch models (models=None means "not specified", not "clear").
         # Use upsert (not update) because members added without budget/models
         # may not have a LiteLLM_TeamMembership row yet.
-        await tx.litellm_teammembership.upsert(
-            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={
-                "create": {"user_id": user_id, "team_id": team_id},
-                "update": {"litellm_budget_table": {"disconnect": True}},
-            },
-        )
+        if existing_budget_id is not None:
+            await tx.litellm_teammembership.upsert(
+                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+                data={
+                    "create": {"user_id": user_id, "team_id": team_id},
+                    "update": {"litellm_budget_table": {"disconnect": True}},
+                },
+            )
         return
 
     _budget_id = existing_budget_id
