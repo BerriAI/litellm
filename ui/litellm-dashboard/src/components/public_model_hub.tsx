@@ -1376,7 +1376,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group}</code>,
                           you can use any string (
                           <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">
-                            {selectedModel.model_group.replace("*", "my-custom-value")}
+                            {selectedModel.model_group.replace(/\*/g, "my-custom-value")}
                           </code>
                           ) that matches this pattern.
                         </Text>

@@ -23,6 +23,7 @@ import {
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { setObfuscated, getObfuscated } from "@/utils/storageUtils";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -79,21 +80,11 @@ const genChallenge = async (verifier: string) => {
 };
 
 const setStorage = (key: string, value: string) => {
-  try {
-    // Use sessionStorage only — do not write to localStorage.
-    // The flow state may contain the LiteLLM access token; writing it to
-    // localStorage would persist it across browser sessions and make it
-    // readable by any injected script (XSS).
-    window.sessionStorage.setItem(key, value);
-  } catch (_) {}
+  setObfuscated(key, value);
 };
 
 const getStorage = (key: string): string | null => {
-  try {
-    return window.sessionStorage.getItem(key);
-  } catch (_) {
-    return null;
-  }
+  return getObfuscated(key);
 };
 
 const clearStorage = (...keys: string[]) => {
