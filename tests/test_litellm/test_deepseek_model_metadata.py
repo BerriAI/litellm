@@ -53,33 +53,33 @@ class TestDeepSeekModelCostEntries:
     capability flags as their bare-name counterparts in the JSON files."""
 
     def test_deepseek_chat_supports_response_schema_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-chat", {})
         assert entry.get("supports_response_schema") is True
 
     def test_deepseek_reasoner_supports_response_schema_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-reasoner", {})
         assert entry.get("supports_response_schema") is True
 
     def test_deepseek_chat_supports_system_messages_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-chat", {})
         assert entry.get("supports_system_messages") is True
 
     def test_deepseek_reasoner_supports_system_messages_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-reasoner", {})
         assert entry.get("supports_system_messages") is True
 
     def test_deepseek_chat_max_input_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         bare = data.get("deepseek-chat", {})
         prefixed = data.get("deepseek/deepseek-chat", {})
         assert prefixed.get("max_input_tokens") == bare.get("max_input_tokens")
 
     def test_deepseek_reasoner_max_output_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+        data = _load_model_cost_json()
         bare = data.get("deepseek-reasoner", {})
         prefixed = data.get("deepseek/deepseek-reasoner", {})
         assert prefixed.get("max_output_tokens") == bare.get("max_output_tokens")
