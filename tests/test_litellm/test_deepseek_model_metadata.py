@@ -29,7 +29,7 @@ from litellm.utils import (
 # ---------------------------------------------------------------------------
 
 
-def _load_backup_json() -> dict:
+def _load_model_cost_json() -> dict:
     """Load the model cost JSON directly from disk."""
     # Try project root first (development)
     root_path = os.path.join(
