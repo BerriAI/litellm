@@ -28,15 +28,6 @@ export interface PolicyVersionsData {
   total_count: number;
 }
 
-// ── Fetch function ──────────────────────────────────────────────────────────
-
-const fetchPolicyVersions = async (
-  accessToken: string,
-  policyName: string
-): Promise<PolicyVersionsResponse> => {
-  return await listPolicyVersions(accessToken, policyName);
-};
-
 // ── Hook ────────────────────────────────────────────────────────────────────
 
 export interface UsePolicyVersionsOptions {
@@ -56,7 +47,8 @@ export const usePolicyVersions = ({
 
   return useQuery<PolicyVersionsResponse, Error, PolicyVersionsData>({
     queryKey: policyVersionKeys.detail(policyName ?? DISABLED_POLICY_KEY),
-    queryFn: async () => await fetchPolicyVersions(accessToken!, policyName!),
+    queryFn: async () =>
+      await listPolicyVersions(accessToken!, policyName!) as PolicyVersionsResponse,
     enabled: isEnabled,
     select: (data) => ({
       ...data,
@@ -87,6 +79,7 @@ export const useCreatePolicyVersion = (policyName: string | null | undefined) =>
       }
     },
     onError: (error) => {
+      if (error.message === "Missing access token or policy name") return;
       NotificationsManager.fromBackend(
         "Failed to create version: " + error.message
       );
@@ -124,6 +117,7 @@ export const useUpdatePolicyVersionStatus = (
       }
     },
     onError: (error, variables) => {
+      if (error.message === "Missing access token or policy name") return;
       const action =
         variables.status === "published" ? "publish" : "promote to production";
       NotificationsManager.fromBackend(

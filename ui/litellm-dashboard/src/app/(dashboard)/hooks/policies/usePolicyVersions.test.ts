@@ -36,35 +36,41 @@ vi.mock("../useAuthorized", () => ({
   default: () => mockUseAuthorized(),
 }));
 
-// ── Setup ───────────────────────────────────────────────────────────────────
+// ── Shared test helpers ──────────────────────────────────────────────────────
 
-describe("usePolicyVersions", () => {
-  let queryClient: QueryClient;
+function createTestEnv() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
 
-  beforeEach(() => {
-    queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
+  vi.clearAllMocks();
 
-    vi.clearAllMocks();
-
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "test-access-token",
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-    });
+  mockUseAuthorized.mockReturnValue({
+    accessToken: "test-access-token",
+    userRole: "Admin",
+    userId: "test-user-id",
+    token: "test-token",
+    userEmail: "test@example.com",
+    premiumUser: false,
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-  // ── Query tests ─────────────────────────────────────────────────────────
+  return { queryClient, wrapper };
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe("usePolicyVersions", () => {
+  let env: ReturnType<typeof createTestEnv>;
+
+  beforeEach(() => {
+    env = createTestEnv();
+  });
 
   it("fetches versions when policyName is provided", async () => {
     const mockResponse = {
@@ -79,7 +85,7 @@ describe("usePolicyVersions", () => {
 
     const { result } = renderHook(
       () => usePolicyVersions({ policyName: "my-policy" }),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -92,7 +98,7 @@ describe("usePolicyVersions", () => {
   it("does not fetch when policyName is null", () => {
     const { result } = renderHook(
       () => usePolicyVersions({ policyName: null }),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     expect(result.current.fetchStatus).toBe("idle");
@@ -104,7 +110,7 @@ describe("usePolicyVersions", () => {
   it("does not fetch when enabled is false", () => {
     const { result } = renderHook(
       () => usePolicyVersions({ policyName: "my-policy", enabled: false }),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     expect(result.current.fetchStatus).toBe("idle");
@@ -122,7 +128,7 @@ describe("usePolicyVersions", () => {
 
     const { result } = renderHook(
       () => usePolicyVersions({ policyName: "my-policy" }),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -131,30 +137,11 @@ describe("usePolicyVersions", () => {
 });
 
 describe("useCreatePolicyVersion", () => {
-  let queryClient: QueryClient;
+  let env: ReturnType<typeof createTestEnv>;
 
   beforeEach(() => {
-    queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-
-    vi.clearAllMocks();
-
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "test-access-token",
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-    });
+    env = createTestEnv();
   });
-
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("calls createPolicyVersion and shows success notification", async () => {
     const newPolicy = { policy_id: "v3", policy_name: "my-policy", version_number: 3 };
@@ -162,7 +149,7 @@ describe("useCreatePolicyVersion", () => {
 
     const { result } = renderHook(
       () => useCreatePolicyVersion("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     const returned = await result.current.mutateAsync();
@@ -174,11 +161,11 @@ describe("useCreatePolicyVersion", () => {
 
   it("invalidates the versions cache on success", async () => {
     mockCreatePolicyVersion.mockResolvedValue({ policy_id: "v3" });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const invalidateSpy = vi.spyOn(env.queryClient, "invalidateQueries");
 
     const { result } = renderHook(
       () => useCreatePolicyVersion("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await result.current.mutateAsync();
@@ -193,7 +180,7 @@ describe("useCreatePolicyVersion", () => {
 
     const { result } = renderHook(
       () => useCreatePolicyVersion("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await expect(result.current.mutateAsync()).rejects.toThrow("Server error");
@@ -202,43 +189,25 @@ describe("useCreatePolicyVersion", () => {
     );
   });
 
-  it("throws when policyName is null", async () => {
+  it("does not show user-facing notification when policyName is null", async () => {
     const { result } = renderHook(
       () => useCreatePolicyVersion(null),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await expect(result.current.mutateAsync()).rejects.toThrow(
       "Missing access token or policy name"
     );
+    expect(NotificationsManager.fromBackend).not.toHaveBeenCalled();
   });
 });
 
 describe("useUpdatePolicyVersionStatus", () => {
-  let queryClient: QueryClient;
+  let env: ReturnType<typeof createTestEnv>;
 
   beforeEach(() => {
-    queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-
-    vi.clearAllMocks();
-
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "test-access-token",
-      userRole: "Admin",
-      userId: "test-user-id",
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-    });
+    env = createTestEnv();
   });
-
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("publishes a version and shows success notification", async () => {
     const updatedPolicy = { policy_id: "v2", version_status: "published" };
@@ -246,7 +215,7 @@ describe("useUpdatePolicyVersionStatus", () => {
 
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     const returned = await result.current.mutateAsync({
@@ -267,11 +236,11 @@ describe("useUpdatePolicyVersionStatus", () => {
 
   it("invalidates the versions cache on success", async () => {
     mockUpdatePolicyVersionStatus.mockResolvedValue({ policy_id: "v2" });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const invalidateSpy = vi.spyOn(env.queryClient, "invalidateQueries");
 
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await result.current.mutateAsync({ policyId: "v2", status: "published" });
@@ -287,7 +256,7 @@ describe("useUpdatePolicyVersionStatus", () => {
 
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await result.current.mutateAsync({
@@ -310,7 +279,7 @@ describe("useUpdatePolicyVersionStatus", () => {
 
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await expect(
@@ -326,7 +295,7 @@ describe("useUpdatePolicyVersionStatus", () => {
 
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus("my-policy"),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await expect(
@@ -337,14 +306,15 @@ describe("useUpdatePolicyVersionStatus", () => {
     );
   });
 
-  it("throws when policyName is null", async () => {
+  it("does not show user-facing notification when policyName is null", async () => {
     const { result } = renderHook(
       () => useUpdatePolicyVersionStatus(null),
-      { wrapper }
+      { wrapper: env.wrapper }
     );
 
     await expect(
       result.current.mutateAsync({ policyId: "v2", status: "published" })
     ).rejects.toThrow("Missing access token or policy name");
+    expect(NotificationsManager.fromBackend).not.toHaveBeenCalled();
   });
 });
