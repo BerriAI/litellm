@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Select, Typography, message, Spin } from "antd";
+import { Select, Typography, Spin } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";
@@ -1385,17 +1386,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
   const handleSave = async () => {
     if (!policyName.trim()) {
-      message.error("Please enter a policy name");
+      MessageManager.error("Please enter a policy name");
       return;
     }
     if (!accessToken) {
-      message.error("No access token available");
+      MessageManager.error("No access token available");
       return;
     }
 
     const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
     if (emptySteps.length > 0) {
-      message.error("Please select a guardrail for all steps");
+      MessageManager.error("Please select a guardrail for all steps");
       return;
     }
 
