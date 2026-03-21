@@ -117,7 +117,7 @@ Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to ch
 `-m` will remain gpt-3.5
 
 ```shell
-./fasteval -b human-eval-plus -t openai -m gpt-3.5-turbo
+./fasteval -b human-eval-plus -t openai -m gpt-4o
 ```
 
 ## FLASK - Fine-grained Language Model Evaluation 

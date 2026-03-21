@@ -10,11 +10,11 @@ response = openai.Completion.create(
 ```
 
 ## Using LiteLLM in the Text Completion format
-### With gpt-3.5-turbo
+### With gpt-4o
 ```python
 from litellm import text_completion
 response = text_completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     prompt='Write a tagline for a traditional bavarian tavern',
     temperature=0,
     max_tokens=100)

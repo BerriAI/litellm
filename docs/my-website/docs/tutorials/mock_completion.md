@@ -8,7 +8,7 @@ Pass `mock_response` to `litellm.completion` and litellm will directly return th
 ```python
 from litellm import completion 
 
-model = "gpt-3.5-turbo"
+model = "gpt-4o"
 messages = [{"role":"user", "content":"Why is LiteLLM amazing?"}]
 
 completion(model=model, messages=messages, mock_response="It's simple to use and easy to get started")
@@ -23,7 +23,7 @@ import pytest
 def test_completion_openai():
     try:
         response = completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role":"user", "content":"Why is LiteLLM amazing?"}],
             mock_response="LiteLLM is awesome"
         )

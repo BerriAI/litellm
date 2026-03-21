@@ -39,7 +39,7 @@ os.environ["AI21_API_KEY"] = "ai21 key" ## REPLACE THIS
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 
 # cohere call
 response = completion("command-nightly", messages)
@@ -130,7 +130,7 @@ Run this curl command to test it:
 curl -X POST localhost:4000/chat/completions \
 -H 'Content-Type: application/json' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [{
     "content": "Hello, how are you?",
     "role": "user"

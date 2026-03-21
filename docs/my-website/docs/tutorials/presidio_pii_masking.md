@@ -113,9 +113,9 @@ Create a `config.yaml` file:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -170,7 +170,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "user",
@@ -207,7 +207,7 @@ My name is <PERSON>, my email is <EMAIL_ADDRESS>, and my credit card is <CREDIT_
       "finish_reason": "stop"
     }
   ],
-  "model": "gpt-3.5-turbo"
+  "model": "gpt-4o"
 }
 ```
 
@@ -221,7 +221,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "user",
@@ -241,7 +241,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "user",
@@ -281,7 +281,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "My SSN is 123-45-6789"}
     ],
@@ -354,7 +354,7 @@ curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "Mi tarjeta de crédito es 4111-1111-1111-1111"}
     ],
@@ -558,7 +558,7 @@ from litellm import completion
 def test_pii_masking_credit_card():
     """Test that credit cards are properly masked"""
     response = completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{
             "role": "user",
             "content": "My card is 4111-1111-1111-1111"
@@ -576,7 +576,7 @@ def test_pii_masking_credit_card():
 def test_pii_masking_allows_normal_text():
     """Test that normal text passes through"""
     response = completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{
             "role": "user",
             "content": "What is the weather today?"

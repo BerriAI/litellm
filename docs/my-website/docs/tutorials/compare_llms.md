@@ -33,7 +33,7 @@ Supported LLMs: https://docs.litellm.ai/docs/providers
 
 ```python
 # Define the list of models to benchmark
-models = ['gpt-3.5-turbo', 'claude-2']
+models = ['gpt-4o', 'claude-2']
 
 # Enter LLM API keys
 os.environ['OPENAI_API_KEY'] = ""
@@ -60,7 +60,7 @@ Benchmark Results for 'When will BerriAI IPO?':
 +-----------------+----------------------------------------------------------------------------------+---------------------------+------------+
 | Model           | Response                                                                         | Response Time (seconds)   | Cost ($)   |
 +=================+==================================================================================+===========================+============+
-| gpt-3.5-turbo   | As an AI language model, I cannot provide up-to-date information or predict      | 1.55 seconds              | $0.000122  |
+| gpt-4o   | As an AI language model, I cannot provide up-to-date information or predict      | 1.55 seconds              | $0.000122  |
 |                 | future events. It is best to consult a reliable financial source or contact      |                           |            |
 |                 | BerriAI directly for information regarding their IPO plans.                      |                           |            |
 +-----------------+----------------------------------------------------------------------------------+---------------------------+------------+
@@ -109,7 +109,7 @@ os.environ["OPENAI_API_KEY"] = "openai key"
 os.environ["COHERE_API_KEY"] = "cohere key"
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 # cohere call
 response = completion("command-nightly", messages)
 ```
@@ -151,7 +151,7 @@ os.environ['ANTHROPIC_API_KEY'] = ""
 # using https://api.together.xyz/playground for llama2
 # try any supported LLM here: https://docs.litellm.ai/docs/providers
 
-models = ['togethercomputer/llama-2-70b-chat', 'gpt-3.5-turbo', 'claude-instant-1.2']
+models = ['togethercomputer/llama-2-70b-chat', 'gpt-4o', 'claude-instant-1.2']
 data = []
 
 for question in questions: # group by question
@@ -227,7 +227,7 @@ for question, group_data in grouped_by_question:
     </tr>
     <tr>
       <th>1</th>
-      <td>gpt-3.5-turbo</td>
+      <td>gpt-4o</td>
       <td>what is litellm?</td>
       <td>litellm is a light package that provides a simplified interface for making API calls to various language models and APIs. It abstracts away the complexities of handling network requests, authentication, and response parsing, making it easier for developers to integrate powerful language models into their applications.\n\nWith litellm, you can quickly make API calls to models like OpenAI's GPT-3.5 Turbo, Azure's Text Analytics, Cohere's Command API, Anthropic's API, and Huggingface's models. It also supports additional functionality like conversational AI, summarization, translation, and more.\n\nBy using litellm, you can focus on your application logic without getting tangled in the details of API integration, allowing you to quickly build intelligent and conversational applications.</td>
       <td>8.324332</td>
@@ -276,7 +276,7 @@ os.environ['TOGETHERAI_API_KEY'] = ""
 os.environ['OPENAI_API_KEY'] = ""
 os.environ['ANTHROPIC_API_KEY'] = ""
 
-models = ['togethercomputer/llama-2-70b-chat', 'gpt-3.5-turbo', 'claude-instant-1.2'] # enter llms to benchmark
+models = ['togethercomputer/llama-2-70b-chat', 'gpt-4o', 'claude-instant-1.2'] # enter llms to benchmark
 data_2 = []
 
 for question in questions: # group by question
@@ -354,7 +354,7 @@ for question, group_data in grouped_by_question:
     </tr>
     <tr>
       <th>4</th>
-      <td>gpt-3.5-turbo</td>
+      <td>gpt-4o</td>
       <td>User input: Hi, I'm [your name] and I'm excited about using LiteLLM to simplify working with different LLM providers. Before finding LiteLLM, I faced challenges working with multiple LLMs. With LiteLLM's unified API and automatic translation, I believe it will help me achieve my goals of [state your goals]. I look forward to being part of this community and learning how to build impactful applications with LLMs. Let me know if you need any further clarification or details.</td>
       <td>7.385472</td>
       <td>0.000525</td>

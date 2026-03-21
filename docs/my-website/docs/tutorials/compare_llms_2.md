@@ -6,7 +6,7 @@ import Image from '@theme/IdealImage';
 <div class="cell markdown" id="L-W4C3SgClxl">
 
 LiteLLM allows you to use any LLM as a drop in replacement for
-`gpt-3.5-turbo`
+`gpt-4o`
 
 This notebook walks through how you can compare GPT-4 vs Claude-2 on a
 given test set using litellm
@@ -65,7 +65,7 @@ os.environ['ANTHROPIC_API_KEY'] = ""
 
 <div class="cell markdown" id="Ktn25dfKEJF1">
 
-## Calling gpt-3.5-turbo and claude-2 on the same questions
+## Calling gpt-4o and claude-2 on the same questions
 
 ## LiteLLM `completion()` allows you to call all LLMs in the same format
 
@@ -76,7 +76,7 @@ os.environ['ANTHROPIC_API_KEY'] = ""
 ``` python
 results = [] # for storing results
 
-models = ['gpt-3.5-turbo', 'claude-2'] # define what models you're testing, see: https://docs.litellm.ai/docs/providers
+models = ['gpt-4o', 'claude-2'] # define what models you're testing, see: https://docs.litellm.ai/docs/providers
 for question in questions:
     row = [question]
     for model in models:

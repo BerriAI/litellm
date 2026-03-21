@@ -24,7 +24,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-4o", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 print("Openai Response\n")
@@ -56,7 +56,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-4o", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -93,7 +93,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = acompletion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-4o", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -132,7 +132,7 @@ os.environ["AZURE_API_KEY"] = "YOUR_AZURE_API_KEY"
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Create threads for making the completions
-thread1 = threading.Thread(target=make_completion, args=("gpt-3.5-turbo", messages))
+thread1 = threading.Thread(target=make_completion, args=("gpt-4o", messages))
 thread2 = threading.Thread(target=make_completion, args=("azure/your-azure-deployment", messages))
 
 # Start both threads
