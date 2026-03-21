@@ -104,9 +104,8 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
         self.fail_on_error = fail_on_error
         self.skip_output_for_private_model = skip_output_for_private_model
 
-        self.private_model_name = (
-            private_model_name
-            or os.environ.get("OPENGUARDRAILS_PRIVATE_MODEL", DEFAULT_PRIVATE_MODEL_NAME)
+        self.private_model_name = private_model_name or os.environ.get(
+            "OPENGUARDRAILS_PRIVATE_MODEL", DEFAULT_PRIVATE_MODEL_NAME
         )
 
         if "supported_event_hooks" not in kwargs:
@@ -133,9 +132,7 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    async def _call_og_api(
-        self, path: str, payload: dict
-    ) -> Optional[dict]:
+    async def _call_og_api(self, path: str, payload: dict) -> Optional[dict]:
         """Call an OpenGuardrails gateway API endpoint."""
         url = f"{self.api_base}{path}"
         try:
@@ -415,9 +412,7 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
         try:
             body_json = json.loads(body) if isinstance(body, str) else body
             content = (
-                body_json.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
+                body_json.get("choices", [{}])[0].get("message", {}).get("content", "")
             )
             return content if content else fallback
         except (json.JSONDecodeError, IndexError, KeyError):
@@ -447,9 +442,7 @@ class OpenGuardrailsGuardrail(CustomGuardrail):
             pass
 
     @staticmethod
-    def _restore_response_content(
-        response, restore_mapping: Dict[str, str]
-    ):
+    def _restore_response_content(response, restore_mapping: Dict[str, str]):
         """Replace placeholders in response content using restore_mapping."""
         try:
             content = response.choices[0].message.content
