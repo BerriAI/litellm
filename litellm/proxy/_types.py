@@ -1104,6 +1104,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
+    team_id: Optional[str] = Field(
+        default=None,
+        description="Team ID to scope this MCP server to. Required for non-proxy-admin users. "
+        "When provided, the server is auto-assigned to the team's ObjectPermissionTable.",
+    )
     transport: MCPTransportType = MCPTransport.sse
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
@@ -1610,6 +1615,10 @@ class Member(MemberBase):
         "user",
     ] = Field(
         description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
+    )
+    extra_permissions: Optional[List[str]] = Field(
+        default=None,
+        description="Granular permissions granted to this member (e.g. 'mcp:create', 'mcp:delete'). Used for per-member permission grants.",
     )
 
 
@@ -3728,6 +3737,10 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
+    extra_permissions: Optional[List[str]] = Field(
+        default=None,
+        description="Granular permissions to grant to this team member (e.g. ['mcp:create', 'mcp:delete']). Replaces any existing extra_permissions.",
+    )
     tpm_limit: Optional[int] = Field(
         default=None, description="Tokens per minute limit for this team member"
     )

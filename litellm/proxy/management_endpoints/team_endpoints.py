@@ -2444,6 +2444,7 @@ async def team_member_update(
                         user_id=member.user_id,
                         role=data.role,
                         user_email=data.user_email or member.user_email,
+                        extra_permissions=member.extra_permissions,
                     )
                 )
             else:
@@ -2457,6 +2458,44 @@ async def team_member_update(
             data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
         )
 
+    ### update team member extra_permissions
+    if data.extra_permissions is not None:
+        from litellm.proxy.auth.permissions import VALID_PERMISSIONS
+
+        invalid_perms = set(data.extra_permissions) - VALID_PERMISSIONS
+        if invalid_perms:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid permission strings: {sorted(invalid_perms)}. "
+                    f"Valid permissions: {sorted(VALID_PERMISSIONS)}"
+                },
+            )
+
+        team_members_updated: List[Member] = []
+        for member in team_table.members_with_roles:
+            if member.user_id == received_user_id:
+                team_members_updated.append(
+                    Member(
+                        user_id=member.user_id,
+                        role=member.role,
+                        user_email=member.user_email,
+                        extra_permissions=data.extra_permissions,
+                    )
+                )
+            else:
+                team_members_updated.append(member)
+
+        team_table.members_with_roles = team_members_updated
+
+        _db_team_members_perms: List[dict] = [
+            m.model_dump() for m in team_members_updated
+        ]
+        await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_team_members_perms)},  # type: ignore
+        )
+
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
         user_id=received_user_id,
@@ -2465,6 +2504,24 @@ async def team_member_update(
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
     )
+
+
+@router.get(
+    "/team/available_permissions",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_available_permissions(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List all valid permission strings that can be granted to team members.
+
+    Used by the UI to populate permission dropdowns when editing team member permissions.
+    """
+    from litellm.proxy.auth.permissions import get_available_permissions
+
+    return get_available_permissions()
 
 
 def _create_results_from_response(

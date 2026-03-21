@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
@@ -37,6 +38,57 @@ def _is_user_team_admin(
             member.user_id is not None and member.user_id == user_api_key_dict.user_id
         ) and member.role == "admin":
             return True
+
+    return False
+
+
+def _find_member_in_team(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> Optional[Member]:
+    """Find and return the Member object for the given user in the team, or None."""
+    if not user_api_key_dict.user_id:
+        return None
+    for member in team_obj.members_with_roles:
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+            return member
+    return None
+
+
+def check_member_permission(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_obj: LiteLLM_TeamTable,
+    required_permission: str,
+) -> bool:
+    """
+    Check if a user has a specific permission for a team.
+
+    Resolution order:
+    1. Proxy admin → True
+    2. Team admin → True
+    3. Member with required_permission in extra_permissions → True
+    4. Otherwise → False
+
+    This is the minimal permission check for the first phase of granular RBAC.
+    When the full RBAC engine ships, this function will be replaced by
+    check_permission() in permissions.py with role resolution, org intersection,
+    and denied_permissions support.
+    """
+    # 1. Proxy admin
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return True
+
+    # Find member in team
+    member = _find_member_in_team(user_api_key_dict, team_obj)
+    if member is None:
+        return False
+
+    # 2. Team admin
+    if member.role == "admin":
+        return True
+
+    # 3. Check extra_permissions
+    if member.extra_permissions and required_permission in member.extra_permissions:
+        return True
 
     return False
 
