@@ -83,19 +83,47 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" \
-  || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
+LITELLM_BIN=""
+SCRIPTS_DIR=""
+PIP_ERR="/tmp/litellm_pip_err.$$"
+trap 'rm -f "$PIP_ERR"' EXIT
 
-# ── find the litellm binary installed by pip for this Python ───────────────
-# sysconfig.get_path('scripts') is where pip puts console scripts — reliable
-# even when the Python lives in a libexec/ symlink tree (e.g. Homebrew).
-SCRIPTS_DIR="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
-LITELLM_BIN="${SCRIPTS_DIR}/litellm"
-
-if [ ! -x "$LITELLM_BIN" ]; then
-  # Fall back to user-base bin (pip install --user)
-  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
-  LITELLM_BIN="${USER_BIN}/litellm"
+if "$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" 2>"$PIP_ERR"; then
+  # pip succeeded — find litellm in Python's script dir
+  SCRIPTS_DIR="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+  LITELLM_BIN="${SCRIPTS_DIR}/litellm"
+  if [ ! -x "$LITELLM_BIN" ]; then
+    USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
+    LITELLM_BIN="${USER_BIN}/litellm"
+    SCRIPTS_DIR="${USER_BIN}"
+  fi
+else
+  # pip failed — check for PEP 668 externally-managed-environment
+  if grep -qi "externally-managed\|EXTERNALLY-MANAGED" "$PIP_ERR" 2>/dev/null; then
+    info "Detected externally-managed Python (PEP 668). Using isolated install…"
+    if command -v pipx >/dev/null 2>&1; then
+      info "Installing via pipx…"
+      if pipx install "${LITELLM_PACKAGE}"; then
+        PIPX_BIN="${PIPX_BIN_DIR:-${HOME}/.local/bin}"
+        LITELLM_BIN="${PIPX_BIN}/litellm"
+        SCRIPTS_DIR="${PIPX_BIN}"
+      fi
+    fi
+    if [ -z "$LITELLM_BIN" ] || [ ! -x "$LITELLM_BIN" ]; then
+      # pipx not available or failed — create venv in ~/.litellm/venv
+      LITELLM_VENV="${LITELLM_VENV:-${HOME}/.litellm/venv}"
+      info "Creating virtual environment at $LITELLM_VENV…"
+      mkdir -p "$(dirname "$LITELLM_VENV")"
+      "$PYTHON_BIN" -m venv "$LITELLM_VENV"
+      "$LITELLM_VENV/bin/pip" install --upgrade --quiet "${LITELLM_PACKAGE}"
+      LITELLM_BIN="${LITELLM_VENV}/bin/litellm"
+      SCRIPTS_DIR="${LITELLM_VENV}/bin"
+    fi
+  fi
+  if [ -z "$LITELLM_BIN" ] || [ ! -x "$LITELLM_BIN" ]; then
+    cat "$PIP_ERR" >&2
+    die "pip install failed. On macOS with Homebrew Python, try: brew install pipx && pipx install '${LITELLM_PACKAGE}'"
+  fi
 fi
 
 if [ ! -x "$LITELLM_BIN" ]; then
