@@ -310,6 +310,86 @@ describe("DefaultUserSettings", () => {
     // Should still be in edit mode (Save Changes button visible)
     expect(screen.getByText("Save Changes")).toBeInTheDocument();
   });
+
+  it("should keep modal open when API save fails", async () => {
+    const settingsWithTeams = {
+      ...mockSettings,
+      values: {
+        ...mockSettings.values,
+        teams: [
+          { team_id: "team-alpha", max_budget_in_team: 50, user_role: "user" },
+        ],
+      },
+    };
+    mockGetInternalUserSettings.mockResolvedValue(settingsWithTeams);
+    mockUpdateInternalUserSettings.mockRejectedValue(new Error("Server error"));
+
+    render(<DefaultUserSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+    });
+
+    // Enter edit mode, remove team, click Save → modal opens
+    act(() => {
+      fireEvent.click(screen.getByText("Edit Settings"));
+    });
+    act(() => {
+      fireEvent.click(screen.getAllByText("Remove")[0]);
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Save Changes"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Review Changes")).toBeInTheDocument();
+    });
+
+    // Click Confirm — API will reject
+    await act(async () => {
+      fireEvent.click(screen.getByText("Confirm Changes"));
+    });
+
+    // Modal should still be open (not cleared on failure)
+    await waitFor(() => {
+      expect(screen.getByText("Review Changes")).toBeInTheDocument();
+      expect(screen.getByText("Confirm Changes")).toBeInTheDocument();
+    });
+  });
+
+  it("should reflect API response values after successful save", async () => {
+    mockGetInternalUserSettings.mockResolvedValue(mockSettings);
+    // API returns different max_budget than what was sent
+    mockUpdateInternalUserSettings.mockResolvedValue({
+      settings: {
+        ...mockSettings.values,
+        max_budget: 2000,
+      },
+    });
+
+    render(<DefaultUserSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText("Edit Settings"));
+    });
+
+    const saveButton = screen.getByText("Save Changes");
+    act(() => {
+      fireEvent.click(saveButton);
+    });
+
+    await waitFor(() => {
+      expect(mockUpdateInternalUserSettings).toHaveBeenCalled();
+    });
+
+    // Should exit edit mode and show the API response value
+    expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+    expect(screen.getByText("2000")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

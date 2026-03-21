@@ -167,18 +167,20 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     fetchSSOSettings();
   }, [accessToken]);
 
-  /** Perform the actual API save with the given processed values. */
-  const executeSave = async (processedValues: DefaultUserSettingsValues) => {
-    if (!accessToken) return;
+  /** Perform the actual API save. Returns true on success, false on failure. */
+  const executeSave = async (processedValues: DefaultUserSettingsValues): Promise<boolean> => {
+    if (!accessToken) return false;
 
     setSaving(true);
     try {
       const updatedSettings = await updateInternalUserSettings(accessToken, processedValues);
       setSettings({ ...settings, values: updatedSettings.settings });
       setIsEditing(false);
+      return true;
     } catch (error) {
       console.error("Error updating SSO settings:", error);
       NotificationManager.fromBackend("Failed to update settings: " + error);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -209,13 +211,15 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     await executeSave(processedValues);
   };
 
-  /** Called when user confirms changes in the modal. */
+  /** Called when user confirms changes in the modal. Only clears modal on success. */
   const handleConfirmSave = async () => {
     if (!pendingProcessedValues) return;
-    await executeSave(pendingProcessedValues);
-    setShowConfirmModal(false);
-    setPendingChanges([]);
-    setPendingProcessedValues(null);
+    const success = await executeSave(pendingProcessedValues);
+    if (success) {
+      setShowConfirmModal(false);
+      setPendingChanges([]);
+      setPendingProcessedValues(null);
+    }
   };
 
   const handleTextInputChange = (key: keyof DefaultUserSettingsValues, value: DefaultUserSettingsValues[typeof key]) => {
