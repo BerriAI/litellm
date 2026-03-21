@@ -412,3 +412,25 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
             },
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_change_preserves_models(mock_tx, fake_user):
+    """Updating budget with models=None should NOT touch existing models."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-bp",
+        user_id="user-bp",
+        max_budget=100.0,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        # models=None (default) — should not appear in upsert data
+    )
+
+    call_args = mock_tx.litellm_teammembership.upsert.call_args
+    create_data = call_args.kwargs["data"]["create"]
+    update_data = call_args.kwargs["data"]["update"]
+
+    # models should NOT be in create or update data when models=None
+    assert "models" not in create_data, "models=None should not appear in create"
+    assert "models" not in update_data, "models=None should not appear in update"

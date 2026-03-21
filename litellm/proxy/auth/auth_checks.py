@@ -410,7 +410,8 @@ async def common_checks(  # noqa: PLR0915
     # 2. If team can call model
     if _model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
-            if not await can_team_access_model(
+            # can_team_access_model returns Literal[True] or raises ProxyException
+            await can_team_access_model(
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
@@ -418,14 +419,7 @@ async def common_checks(  # noqa: PLR0915
                 if valid_token
                 else None,
                 valid_token=valid_token,
-            ):
-                effective_models = get_effective_team_models(team_object, valid_token)
-                raise ProxyException(
-                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {effective_models}",
-                    type=ProxyErrorTypes.team_model_access_denied,
-                    param="model",
-                    code=status.HTTP_401_UNAUTHORIZED,
-                )
+            )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
     if valid_token is not None and valid_token.agent_id:
@@ -2744,12 +2738,12 @@ def get_effective_team_models(
     team_defaults: List[str] = []
     if team_object and team_object.default_models is not None:
         team_defaults = team_object.default_models
-    elif valid_token and valid_token.team_default_models:
+    elif valid_token and valid_token.team_default_models is not None:
         team_defaults = valid_token.team_default_models
 
     # Get from member specific overrides
     member_models: List[str] = []
-    if valid_token and valid_token.team_member_models:
+    if valid_token and valid_token.team_member_models is not None:
         member_models = valid_token.team_member_models
 
     team_pool = team_object.models if team_object else []

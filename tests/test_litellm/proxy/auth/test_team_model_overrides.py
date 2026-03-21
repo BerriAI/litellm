@@ -76,6 +76,14 @@ class TestGetEffectiveTeamModels:
         result = get_effective_team_models(team)
         assert result == ["m1", "m2"]
 
+    def test_unrestricted_team_with_defaults(self):
+        """team.models=[] (allow all) + default_models set → members restricted to defaults.
+        This is by design: admin wants unrestricted team pool but limited member defaults."""
+        team = LiteLLM_TeamTable(team_id="t1", models=[], default_models=["gpt-4"])
+        result = get_effective_team_models(team)
+        # Cap is skipped (team_pool=[]), so defaults pass through
+        assert result == ["gpt-4"]
+
     def test_neither_configured_empty_team_models_allows_all(self):
         """12. empty default_models + empty member models + team.models=[] → allow all."""
         team = LiteLLM_TeamTable(team_id="t1", models=[])

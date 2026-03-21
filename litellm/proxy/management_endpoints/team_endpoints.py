@@ -813,7 +813,10 @@ async def new_team(  # noqa: PLR0915
                         },
                     )
 
-        # Validate default_models is a subset of team models (prevent privilege escalation)
+        # Validate default_models is a subset of team models (prevent privilege escalation).
+        # When data.models is empty/[] (unrestricted team), skip validation — by design,
+        # team.models=[] means "allow all" so any default_models is a valid subset.
+        # At runtime, compute_effective_models caps effective set by team.models.
         if data.default_models and data.models:
             disallowed = set(data.default_models) - set(data.models)
             if disallowed:
@@ -2539,8 +2542,7 @@ async def team_member_update(  # noqa: PLR0915
                 }
             }
         )
-        if _tm_row is not None:
-            stored_models = _tm_row.models or []
+        stored_models = (_tm_row.models or []) if _tm_row is not None else []
 
     if data.role is not None or data.models is not None:
         team_members: List[Member] = []
