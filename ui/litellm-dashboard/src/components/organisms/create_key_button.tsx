@@ -2,6 +2,7 @@
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -165,8 +166,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
+  const tagOptions = tagsData
+    ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name }))
+    : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -175,7 +180,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
-  const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [hasPrefilled, setHasPrefilled] = useState(false);
   const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
@@ -1340,9 +1344,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      placeholder="Enter tags"
+                      placeholder="Select or enter tags"
                       tokenSeparators={[","]}
-                      options={predefinedTags}
+                      options={tagOptions}
                     />
                   </Form.Item>
                   <Accordion className="mt-4 mb-4">
