@@ -7,6 +7,7 @@ import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import CommandPalette from "@/components/common_components/CommandPalette";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -45,6 +46,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   const toggleSidebar = () => setSidebarCollapsed((v) => !v);
 
+  const handleCommandPaletteSelect = (key: any) => {
+    router.push(withBase(`/?page=api-keys`));
+  };
+
   return (
     <ThemeProvider accessToken={""}>
       <div className="flex flex-col min-h-screen">
@@ -69,6 +74,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           </div>
           <main className="flex-1">{children}</main>
         </div>
+        <CommandPalette onSelectKey={handleCommandPaletteSelect} />
       </div>
     </ThemeProvider>
   );

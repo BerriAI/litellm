@@ -25,9 +25,10 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Tooltip, Typography } from "antd";
-import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
+import { InfoCircleOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button as AntButton, Input, Popover, Skeleton, Tooltip, Typography } from "antd";
+import React, { useCallback, useEffect, useDeferredValue, useMemo, useState } from "react";
+import debounce from "lodash/debounce";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
@@ -56,6 +57,8 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   const { data: fetchedOrganizations } = useOrganizations();
   const resolvedOrganizations = fetchedOrganizations ?? organizations ?? [];
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
       return [
@@ -77,6 +80,30 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     pageSize: 50,
   });
 
+  const debouncedSetSearch = useMemo(
+    () =>
+      debounce((value: string) => {
+        setDebouncedSearchQuery(value);
+        setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+      }, 300),
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      debouncedSetSearch.cancel();
+    };
+  }, [debouncedSetSearch]);
+
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      setSearchQuery(value);
+      debouncedSetSearch(value);
+    },
+    [debouncedSetSearch],
+  );
+
   // Extract sort parameters from sorting state
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -91,6 +118,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
+    selectedKeyAlias: debouncedSearchQuery || undefined,
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
@@ -684,13 +712,28 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="w-full mb-6">
-            <FilterComponent
-              options={filterOptions}
-              onApplyFilters={handleFilterChange}
-              initialValues={filters}
-              onResetFilters={handleFilterReset}
-            />
+          <div className="w-full mb-4">
+            <div className="flex items-center gap-3 mb-4">
+              <Input
+                prefix={<SearchOutlined className="text-gray-400" />}
+                placeholder="Search keys by alias..."
+                value={searchQuery}
+                onChange={handleSearchChange}
+                allowClear
+                className="max-w-sm"
+                suffix={
+                  <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium text-gray-400 bg-gray-100 rounded border border-gray-200">
+                    ⌘K
+                  </kbd>
+                }
+              />
+              <FilterComponent
+                options={filterOptions}
+                onApplyFilters={handleFilterChange}
+                initialValues={filters}
+                onResetFilters={handleFilterReset}
+              />
+            </div>
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
