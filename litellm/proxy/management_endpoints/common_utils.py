@@ -369,8 +369,10 @@ async def _upsert_budget_and_membership(
         rpm_limit: Requests per minute limit for the team member
         models: Specific models this member can access within the team.
 
-    If max_budget, tpm_limit, rpm_limit, and models are all None, the user's budget and overrides are removed from the team membership.
+    If max_budget, tpm_limit, rpm_limit, and models are all None, the budget is disconnected
+    (but existing model overrides are preserved — models=None means "not specified").
     If any of these values exist, a budget is updated or created and linked to the team membership, and models are updated.
+    To explicitly clear model overrides, pass models=[].
     """
     if (
         max_budget is None
@@ -378,10 +380,12 @@ async def _upsert_budget_and_membership(
         and rpm_limit is None
         and models is None
     ):
-        # disconnect the budget and clear models since all limits are None
+        # Only budget/rate-limit fields are being cleared — disconnect the budget
+        # but do NOT touch models (models=None means "not specified", not "clear").
+        # This prevents a role-only /team/member_update from wiping model overrides.
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}, "models": []},
+            data={"litellm_budget_table": {"disconnect": True}},
         )
         return
 

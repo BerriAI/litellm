@@ -657,11 +657,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             )
             if _membership is not None:
                 member_models = _membership.models or []
-        team_default_models = (
-            getattr(team_table, "default_models", [])
-            if team_table and getattr(team_table, "default_models", None)
-            else []
-        )
+        team_default_models = getattr(team_table, "default_models", None) or []
         effective_models = list(set(team_default_models + member_models))
 
         if effective_models:

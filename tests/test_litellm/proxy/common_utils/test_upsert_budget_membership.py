@@ -54,6 +54,8 @@ async def test_upsert_disconnect(mock_tx, fake_user):
         user_api_key_dict=fake_user,
     )
 
+    # models=None means "not specified" — should NOT be included in the update
+    # to avoid wiping existing model overrides on a role-only or budget-only update
     mock_tx.litellm_teammembership.update.assert_awaited_once_with(
         where={"user_id_team_id": {"user_id": "user-1", "team_id": "team-1"}},
         data={"litellm_budget_table": {"disconnect": True}},

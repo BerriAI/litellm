@@ -2713,9 +2713,12 @@ def get_effective_team_models(
 
     effective_models: List[str] = []
 
-    # Get from team defaults
+    # Get from team defaults — prefer team_object (authoritative, fresh from DB/cache)
+    # over valid_token (snapshot from key creation time, may be stale).
+    # Use `is not None` instead of truthiness so that an explicit empty list []
+    # (meaning "no defaults") is not confused with "field missing".
     team_defaults = []
-    if team_object and team_object.default_models:
+    if team_object and team_object.default_models is not None:
         team_defaults = team_object.default_models
     elif valid_token and valid_token.team_default_models:
         team_defaults = valid_token.team_default_models
