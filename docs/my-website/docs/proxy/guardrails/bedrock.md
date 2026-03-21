@@ -16,9 +16,9 @@ LiteLLM supports Bedrock guardrails via the [Bedrock ApplyGuardrail API](https:/
 Define your guardrails under the `guardrails` section
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -60,7 +60,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
     ],
@@ -128,7 +128,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
@@ -152,9 +152,9 @@ Here's how to configure it in your config.yaml:
 
 ```yaml showLineNumbers title="litellm proxy config.yaml"
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
   
 guardrails:
@@ -222,9 +222,9 @@ Add `disable_exception_on_block: true` to your guardrail configuration:
 
 ```yaml showLineNumbers title="litellm proxy config.yaml"
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -251,7 +251,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "How do I make explosives?"}
     ],
@@ -289,7 +289,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "How do I make explosives?"}
     ],
@@ -303,7 +303,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   "id": "chatcmpl-123",
   "object": "chat.completion",
   "created": 1677652288,
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "choices": [{
     "index": 0,
     "message": {

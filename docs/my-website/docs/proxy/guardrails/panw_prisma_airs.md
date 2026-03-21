@@ -263,7 +263,7 @@ curl -X POST http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "x-litellm-call-id: my-custom-call-id-789" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "capital of France"}],
     "guardrails": ["panw-prisma-airs-guardrail"]
   }'
