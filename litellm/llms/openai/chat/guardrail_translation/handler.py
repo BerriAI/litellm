@@ -261,17 +261,29 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if task_idx < len(tool_calls):
                 guardrailed_tool_call = tool_calls[task_idx]
 
-                if guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True:
+                is_deleted = False
+                if isinstance(guardrailed_tool_call, dict):
+                    is_deleted = (
+                        guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True
+                    )
+                elif hasattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY):
+                    is_deleted = (
+                        getattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY) is True
+                    )
+
+                if is_deleted:
                     deletions_by_msg.setdefault(msg_idx, []).append(tool_call_idx)
                     continue
+
+                # Strip internal metadata before writing back
+                if isinstance(guardrailed_tool_call, dict):
+                    guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
 
                 message_tool_calls = messages[msg_idx].get("tool_calls", None)
                 if message_tool_calls is not None and isinstance(
                     message_tool_calls, list
                 ):
                     if tool_call_idx < len(message_tool_calls):
-                        # Strip internal metadata before writing back
-                        guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
                         message_tool_calls[tool_call_idx] = guardrailed_tool_call
 
         # Apply deletions in reverse index order to preserve indices
@@ -716,7 +728,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 # Replace specific text item in list content
                 choice.message.content[content_idx_optional]["text"] = guardrail_response  # type: ignore
 
-        # Append extra texts as new content on the first choice
+        # Append extra texts as new content on the first choice.
+        # Note: for n>1 responses, extras always target choices[0].
         if len(responses) > len(task_mappings) and response.choices:
             choice = response.choices[0]
             for extra_text in responses[len(task_mappings) :]:
@@ -748,12 +761,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if task_idx < len(tool_calls):
                 guardrailed_tool_call = tool_calls[task_idx]
 
-                if guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True:
-                    deletions_by_choice.setdefault(choice_idx, []).append(tool_call_idx)
+                is_deleted = False
+                if isinstance(guardrailed_tool_call, dict):
+                    is_deleted = (
+                        guardrailed_tool_call.get(GUARDRAIL_DELETED_KEY) is True
+                    )
+                elif hasattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY):
+                    is_deleted = (
+                        getattr(guardrailed_tool_call, GUARDRAIL_DELETED_KEY) is True
+                    )
+
+                if is_deleted:
+                    deletions_by_choice.setdefault(choice_idx, []).append(
+                        tool_call_idx
+                    )
                     continue
 
                 # Strip internal metadata before field-level writeback
-                guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
+                if isinstance(guardrailed_tool_call, dict):
+                    guardrailed_tool_call.pop(GUARDRAIL_DELETED_KEY, None)
 
                 choice = cast(Choices, response.choices[choice_idx])
                 choice_tool_calls = choice.message.tool_calls
