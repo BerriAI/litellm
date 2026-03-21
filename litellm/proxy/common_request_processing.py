@@ -30,6 +30,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -45,7 +46,6 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
-from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ServerToolUse
@@ -902,6 +902,7 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
         is_streaming_request: Optional[bool] = False,
         contents: Optional[list] = None,  # Add contents parameter
+        skip_pre_call_logic: bool = False,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -911,22 +912,30 @@ class ProxyBaseLLMRequestProcessing:
         )
         self._debug_log_request_payload()
 
-        self.data, logging_obj = await self.common_processing_pre_call_logic(
-            request=request,
-            general_settings=general_settings,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            model=model,
-            route_type=route_type,
-            llm_router=llm_router,
-        )
+        if skip_pre_call_logic:
+            logging_obj = self.data.get("litellm_logging_obj")
+            if logging_obj is None:
+                raise ValueError(
+                    "skip_pre_call_logic=True requires litellm_logging_obj to be set in data. "
+                    "Ensure common_processing_pre_call_logic was called before using this parameter."
+                )
+        else:
+            self.data, logging_obj = await self.common_processing_pre_call_logic(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=model,
+                route_type=route_type,
+                llm_router=llm_router,
+            )
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
@@ -1082,7 +1091,7 @@ class ProxyBaseLLMRequestProcessing:
                             cache_hit=cache_hit,
                         )
 
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[attr-defined]
+                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -1095,15 +1104,15 @@ class ProxyBaseLLMRequestProcessing:
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
                         return StreamingResponse(
-                            content=generator,
+                            content=generator,  # type: ignore[arg-type]
                             status_code=status.HTTP_200_OK,
                             headers=custom_headers,
                         )
                     else:
                         # Traditional HTTP response with aiter_bytes
                         return StreamingResponse(
-                            content=response.aiter_bytes(),
-                            status_code=response.status_code,
+                            content=response.aiter_bytes(),  # type: ignore[union-attr]
+                            status_code=response.status_code,  # type: ignore[union-attr]
                             headers=custom_headers,
                         )
                 elif route_type == "anthropic_messages":
@@ -1144,9 +1153,11 @@ class ProxyBaseLLMRequestProcessing:
             # Clear the closure so guardrails run inline as before — this
             # preserves blocking behavior and avoids double invocation.
             if getattr(logging_obj, "_on_deferred_stream_complete", None):
-                logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
             response = await proxy_logging_obj.post_call_success_hook(
-                data=self.data, user_api_key_dict=user_api_key_dict, response=response
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,  # type: ignore[arg-type]
             )
         except Exception:
             _exception_raised = True
@@ -1159,7 +1170,7 @@ class ProxyBaseLLMRequestProcessing:
             # returns before the deferred block), so _enqueue_fn is None — no-op.
             _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
             if _enqueue_fn is not None:
-                logging_obj._enqueue_deferred_logging = None  # type: ignore[attr-defined]
+                logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
                 try:
                     _enqueue_fn()
                 except Exception as e:
@@ -1180,7 +1191,7 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj, "_on_deferred_stream_complete", None
                 )
                 if _deferred_fn is not None:
-                    logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
                     try:
                         asyncio.create_task(
                             logging_obj.async_success_handler(
@@ -1350,18 +1361,16 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _has_post_call_guardrails() -> bool:
         """
-        Check if any registered callback is a post-call guardrail.
-
-        Uses the global litellm.callbacks list rather than per-request
-        should_run_guardrail() — intentionally conservative so that the
-        check is simple and stateless.  The deferral path produces
-        identical logging output, just fires it slightly later, so
-        false-positives are harmless.
+        True when a guardrail explicitly registers post_call. event_hook=None
+        matches all hooks in should_run_guardrail but must not defer async logging
+        on non-streaming /chat/completions (no post_call_success_hook flush path).
         """
         for cb in litellm.callbacks:
-            if isinstance(cb, CustomGuardrail) and cb._event_hook_is_event_type(
-                GuardrailEventHooks.post_call
-            ):
+            if not isinstance(cb, CustomGuardrail):
+                continue
+            if cb.event_hook is None:
+                continue
+            if cb._event_hook_is_event_type(GuardrailEventHooks.post_call):
                 return True
         return False
 
@@ -1395,8 +1404,8 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
                 _check_and_merge_model_level_guardrails,
-                unified_guardrail as _unified_guardrail,
             )
+            from litellm.proxy.utils import unified_guardrail as _unified_guardrail
 
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router

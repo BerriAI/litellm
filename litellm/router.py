@@ -301,6 +301,7 @@ class Router:
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
         deployment_affinity_ttl_seconds: int = 3600,
+        model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
         ignore_invalid_deployments: bool = False,
     ) -> None:
         """
@@ -641,6 +642,9 @@ class Router:
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
         ] = model_group_retry_policy
+        self.model_group_affinity_config: Optional[
+            Dict[str, List[str]]
+        ] = model_group_affinity_config
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -660,6 +664,26 @@ class Router:
 
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
+
+        # If model_group_affinity_config is set but no global affinity checks were
+        # enabled, we still need the DeploymentAffinityCheck callback (with global
+        # flags all False) so per-group config can activate affinity per model group.
+        if self.model_group_affinity_config and not any(
+            isinstance(cb, DeploymentAffinityCheck)
+            for cb in (self.optional_callbacks or [])
+        ):
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+            affinity_callback = DeploymentAffinityCheck(
+                cache=self.cache,
+                ttl_seconds=self.deployment_affinity_ttl_seconds,
+                enable_user_key_affinity=False,
+                enable_responses_api_affinity=False,
+                enable_session_id_affinity=False,
+                model_group_affinity_config=self.model_group_affinity_config,
+            )
+            self.optional_callbacks.append(affinity_callback)
+            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -1311,6 +1335,10 @@ class Router:
                 existing_affinity_callback.ttl_seconds = (
                     self.deployment_affinity_ttl_seconds
                 )
+                if self.model_group_affinity_config:
+                    existing_affinity_callback.model_group_affinity_config = (
+                        self.model_group_affinity_config
+                    )
             else:
                 affinity_callback = DeploymentAffinityCheck(
                     cache=self.cache,
@@ -1318,6 +1346,7 @@ class Router:
                     enable_user_key_affinity=enable_user_key_affinity,
                     enable_responses_api_affinity=enable_responses_api_affinity,
                     enable_session_id_affinity=enable_session_id_affinity,
+                    model_group_affinity_config=self.model_group_affinity_config,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
