@@ -79,27 +79,41 @@ if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
 fi
 
 # ── install ────────────────────────────────────────────────────────────────
+# Prefer pipx or venv to avoid PEP 668 "externally-managed-environment" on
+# Homebrew/ system Python.
 echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" \
-  || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
+LITELLM_BIN=""
 
-# ── find the litellm binary installed by pip for this Python ───────────────
-# sysconfig.get_path('scripts') is where pip puts console scripts — reliable
-# even when the Python lives in a libexec/ symlink tree (e.g. Homebrew).
-SCRIPTS_DIR="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
-LITELLM_BIN="${SCRIPTS_DIR}/litellm"
+# Strategy 1: pipx (best for CLI apps, per PEP 668)
+if command -v pipx >/dev/null 2>&1; then
+  info "Using pipx (isolated install)"
+  if pipx install --force "${LITELLM_PACKAGE}"; then
+    # pipx installs to ~/.local/bin by default
+    PIPX_BIN="${PIPX_BIN_DIR:-${HOME}/.local/bin}/litellm"
+    if [ -x "$PIPX_BIN" ]; then
+      LITELLM_BIN="$PIPX_BIN"
+    fi
+  fi
+fi
 
-if [ ! -x "$LITELLM_BIN" ]; then
-  # Fall back to user-base bin (pip install --user)
-  USER_BIN="$("$PYTHON_BIN" -c 'import site; print(site.getuserbase())')/bin"
-  LITELLM_BIN="${USER_BIN}/litellm"
+# Strategy 2: venv in ~/.litellm (avoids PEP 668 externally-managed-environment)
+if [ -z "$LITELLM_BIN" ]; then
+  LITELLM_VENV="${LITELLM_VENV:-${HOME}/.litellm/venv}"
+  info "Using isolated venv: $LITELLM_VENV"
+  mkdir -p "$(dirname "$LITELLM_VENV")"
+  "$PYTHON_BIN" -m venv "$LITELLM_VENV" \
+    || die "Failed to create venv. Try: $PYTHON_BIN -m venv $LITELLM_VENV"
+  "${LITELLM_VENV}/bin/pip" install -q --upgrade pip
+  "${LITELLM_VENV}/bin/pip" install --upgrade "${LITELLM_PACKAGE}" \
+    || die "pip install failed. Try manually: ${LITELLM_VENV}/bin/pip install '${LITELLM_PACKAGE}'"
+  LITELLM_BIN="${LITELLM_VENV}/bin/litellm"
 fi
 
 if [ ! -x "$LITELLM_BIN" ]; then
-  die "litellm binary not found after install. Try: $PYTHON_BIN -m pip install --user '${LITELLM_PACKAGE}'"
+  die "litellm binary not found. Try: pipx install '${LITELLM_PACKAGE}' or use a venv."
 fi
 
 # ── success banner ─────────────────────────────────────────────────────────
@@ -111,7 +125,8 @@ installed_ver="$("$LITELLM_BIN" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]
 
 # ── PATH hint ──────────────────────────────────────────────────────────────
 if ! command -v litellm >/dev/null 2>&1; then
-  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${SCRIPTS_DIR}\""
+  LITELLM_DIR="$(dirname "$LITELLM_BIN")"
+  info "Note: add litellm to your PATH:  export PATH=\"\$PATH:${LITELLM_DIR}\""
 fi
 
 # ── launch setup wizard ────────────────────────────────────────────────────
