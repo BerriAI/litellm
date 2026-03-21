@@ -39,7 +39,10 @@ def get_skills_mode() -> Literal["litellm", "passthrough"]:
     from litellm.proxy.proxy_server import general_settings
 
     # Check general_settings for skills_mode
-    skills_mode = general_settings.get("skills_mode", "passthrough")
+    skills_mode = general_settings.get("skills_mode")
+
+    if skills_mode is None:
+        return "passthrough"
 
     if skills_mode not in ("litellm", "passthrough"):
         verbose_proxy_logger.warning(

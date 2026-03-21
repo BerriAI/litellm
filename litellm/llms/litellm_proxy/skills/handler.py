@@ -78,6 +78,7 @@ class LiteLLMSkillsHandler:
             "display_title": data.display_title,
             "description": data.description,
             "instructions": data.instructions,
+            "source": "custom",
             "created_by": user_id,
             "updated_by": user_id,
         }
