@@ -317,6 +317,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "audio",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -1120,6 +1121,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
+            elif param == "include_server_side_tool_invocations" and value is True:
+                optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
@@ -1360,6 +1363,67 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if signature is not None:
                 signatures.append(signature)
         return signatures if signatures else None
+
+    @staticmethod
+    def _extract_server_side_tool_invocations(
+        parts: List[HttpxPartType],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Extract server-side tool invocations (toolCall/toolResponse) from parts.
+
+        These are returned by Gemini when context circulation is enabled
+        (includeServerSideToolInvocations=true). They represent tools executed
+        server-side (e.g. Google Search) and must be circulated back in
+        subsequent turns for multi-turn coherence.
+
+        Returns:
+            List of server-side invocation dicts if any found, None otherwise.
+        """
+        invocations: List[Dict[str, Any]] = []
+        # Index toolCalls by id so we can pair them with responses
+        tool_calls_by_id: Dict[str, Dict[str, Any]] = {}
+        tool_responses_by_id: Dict[str, Dict[str, Any]] = {}
+
+        for part in parts:
+            if "toolCall" in part:
+                tc = part["toolCall"]
+                entry: Dict[str, Any] = {
+                    "tool_type": tc.get("toolType"),
+                    "id": tc.get("id"),
+                    "args": tc.get("args"),
+                }
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                tool_calls_by_id[tc.get("id", "")] = entry
+
+            elif "toolResponse" in part:
+                tr = part["toolResponse"]
+                entry = {
+                    "id": tr.get("id"),
+                    "tool_type": tr.get("toolType"),
+                    "response": tr.get("response"),
+                }
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                tool_responses_by_id[tr.get("id", "")] = entry
+
+        # Merge calls with their responses
+        for call_id, call_entry in tool_calls_by_id.items():
+            merged = dict(call_entry)
+            resp = tool_responses_by_id.pop(call_id, None)
+            if resp is not None:
+                merged["response"] = resp.get("response")
+                # Keep response signature if call didn't have one
+                if "thought_signature" not in merged and "thought_signature" in resp:
+                    merged["thought_signature"] = resp["thought_signature"]
+            invocations.append(merged)
+
+        # Any orphan responses (shouldn't happen, but be safe)
+        for resp_id, resp_entry in tool_responses_by_id.items():
+            invocations.append(resp_entry)
+
+        return invocations if invocations else None
 
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -2042,6 +2106,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
         reasoning_content: Optional[str] = None
         thought_signatures: Optional[Any] = None
+        server_side_tool_invocations: Optional[List[Dict[str, Any]]] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -2088,6 +2153,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Extract thoughtSignatures from parts (can exist without thought: true)
                 thought_signatures = (
                     VertexGeminiConfig()._extract_thought_signatures_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
+                )
+
+                # Extract server-side tool invocations (context circulation)
+                server_side_tool_invocations = (
+                    VertexGeminiConfig._extract_server_side_tool_invocations(
                         parts=candidate["content"]["parts"]
                     )
                 )
@@ -2162,6 +2234,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if "provider_specific_fields" not in chat_completion_message:
                     chat_completion_message["provider_specific_fields"] = {}
                 chat_completion_message["provider_specific_fields"]["thought_signatures"] = thought_signatures  # type: ignore
+
+            # Store server-side tool invocations in provider_specific_fields
+            if server_side_tool_invocations is not None:
+                if "provider_specific_fields" not in chat_completion_message:
+                    chat_completion_message["provider_specific_fields"] = {}
+                chat_completion_message["provider_specific_fields"]["server_side_tool_invocations"] = server_side_tool_invocations  # type: ignore
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
