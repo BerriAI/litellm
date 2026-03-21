@@ -1826,3 +1826,144 @@ async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteratio
         pass  # expected clean termination
     except RuntimeError as e:
         pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
+
+
+# Azure streaming chunks that reproduce the issue from #24221:
+# When stream_options.include_usage=True, Azure sends an initial chunk with
+# prompt_filter_results and no choices. This caused strip_role_from_delta to
+# be skipped, so no chunk ever received role='assistant'.
+azure_chunks_with_prompt_filter = [
+    # Chunk 1: prompt_filter_results, no choices
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        usage=None,
+    ),
+    # Chunk 2: first content chunk with role='assistant'
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                ),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 3: content
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello"),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 4: finish_reason
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 5: final usage chunk, no choices
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_streaming_role_with_include_usage(sync_mode: bool):
+    """
+    Test for issue #24221: Azure streaming with stream_options.include_usage=True
+    should include role='assistant' in the first emitted chunk's delta.
+
+    Azure sends an initial chunk with no choices (prompt_filter_results).
+    When include_usage=True, this chunk is emitted rather than skipped.
+    The fix ensures strip_role_from_delta is called on that chunk so
+    role='assistant' appears in the stream.
+    """
+    completion_stream = ModelResponseListIterator(
+        model_responses=azure_chunks_with_prompt_filter
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="azure/gpt-4",
+        custom_llm_provider="azure",
+        logging_obj=Logging(
+            model="azure/gpt-4",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+        stream_options={"include_usage": True},
+    )
+
+    chunks = []
+    if sync_mode:
+        for chunk in response:
+            chunks.append(chunk)
+    else:
+        async for chunk in response:
+            chunks.append(chunk)
+
+    # At least one chunk must have role='assistant' in its delta
+    has_role = any(
+        hasattr(c, "choices")
+        and len(c.choices) > 0
+        and hasattr(c.choices[0], "delta")
+        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        for c in chunks
+    )
+    assert has_role, (
+        "No chunk contained role='assistant' in delta. "
+        "Chunk deltas: "
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
+    )

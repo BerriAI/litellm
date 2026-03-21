@@ -1556,7 +1556,7 @@ class CustomStreamWrapper:
                         self.stream_options is not None
                         and self.stream_options["include_usage"] is True
                     ):
-                        return model_response
+                        return self.strip_role_from_delta(model_response)
                     return
             ## CHECK FOR TOOL USE
 
