@@ -68,7 +68,7 @@ export const getInProductNudgesCall = async (accessToken: string) => {
 /**
  * Helper file for calls being made to proxy
  */
-import { message } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
@@ -613,7 +613,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     console.log("API Response:", data);
 
     // Close any existing messages before showing new ones
-    message.destroy();
+    MessageManager.destroy();
 
     // Sequential success messages
     NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
