@@ -772,9 +772,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
 
                 if is_deleted:
-                    deletions_by_choice.setdefault(choice_idx, []).append(
-                        tool_call_idx
-                    )
+                    deletions_by_choice.setdefault(choice_idx, []).append(tool_call_idx)
                     continue
 
                 # Strip internal metadata before field-level writeback
