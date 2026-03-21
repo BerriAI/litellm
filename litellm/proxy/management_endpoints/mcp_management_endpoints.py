@@ -1491,10 +1491,10 @@ if MCP_AVAILABLE:
 
     @router.delete(
         "/server/{server_id}",
-        description="Allows deleting mcp serves in the db",
+        description="Allows deleting mcp servers in the db",
         dependencies=[Depends(user_api_key_auth)],
         response_class=JSONResponse,
-        status_code=status.HTTP_202_ACCEPTED,
+        status_code=status.HTTP_204_NO_CONTENT,
     )
     @management_endpoint_wrapper
     async def remove_mcp_server(
@@ -1588,7 +1588,7 @@ if MCP_AVAILABLE:
         if litellm.store_audit_logs:
             pass
 
-        return Response(status_code=status.HTTP_202_ACCEPTED)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post(
         "/server/{server_id}/user-credential",
@@ -1848,10 +1848,10 @@ if MCP_AVAILABLE:
 
     @router.put(
         "/server",
-        description="Allows deleting mcp serves in the db",
+        description="Allows updating mcp servers in the db",
         dependencies=[Depends(user_api_key_auth)],
         response_model=LiteLLM_MCPServerTable,
-        status_code=status.HTTP_202_ACCEPTED,
+        status_code=status.HTTP_200_OK,
     )
     @management_endpoint_wrapper
     async def edit_mcp_server(
