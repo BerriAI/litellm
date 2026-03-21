@@ -42,7 +42,7 @@ litellm.success_callback = ["greenscale"]
 
 #openai call
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]
   metadata={
     "greenscale_project": "acme-project",
@@ -58,7 +58,7 @@ You can send any additional information to Greenscale by using the `metadata` fi
 ```python
 #openai call with additional metadata
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ],

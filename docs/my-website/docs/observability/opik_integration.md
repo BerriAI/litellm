@@ -48,7 +48,7 @@ litellm.callbacks = ["opik"]
 
 # openai call
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Why is tracking and evaluation of LLMs important?"}
     ]
@@ -70,7 +70,7 @@ litellm.callbacks = ["opik"]
 def streaming_function(input):
     messages = [{"role": "user", "content": input}]
     response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=messages,
         metadata = {
             "opik": {
@@ -92,9 +92,9 @@ chunks = list(response)
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo-testing
+  - model_name: gpt-4o-testing
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -118,7 +118,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo-testing",
+  "model": "gpt-4o-testing",
   "messages": [
     {
       "role": "user",
@@ -156,7 +156,7 @@ litellm.callbacks = ["opik"]
 
 messages = [{"role": "user", "content": input}]
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=messages,
     metadata = {
         "opik": {
@@ -177,7 +177,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",
@@ -210,7 +210,7 @@ curl --location --request POST 'http://0.0.0.0:4000/chat/completions' \
     --header 'opik_thread_id: your-thread-id' \
     --header 'opik_tags: ["streaming-test"]' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -244,7 +244,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-key-from-step-1' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",

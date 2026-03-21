@@ -66,7 +66,7 @@ litellm.failure_callback=["supabase"]
 
 # openai call
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-4o", 
   messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
   user="ishaan22" # identify users
 ) 
@@ -87,7 +87,7 @@ Pass `user` to `litellm.completion` to map your llm call to an end-user
 
 ```python
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-4o", 
   messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
   user="ishaan22" # identify users
 ) 

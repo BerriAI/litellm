@@ -23,9 +23,9 @@ We will use the `--config` to set `litellm.callbacks = ["azure_sentinel"]` this 
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["azure_sentinel"] # logs llm success + failure logs to Azure Sentinel
 ```
@@ -80,7 +80,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",

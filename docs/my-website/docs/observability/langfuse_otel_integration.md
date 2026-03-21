@@ -61,7 +61,7 @@ litellm.callbacks = ["langfuse_otel"]
 
 # Make LLM requests as usual
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
@@ -168,7 +168,7 @@ All metadata fields available in the vanilla Langfuse integration are now **full
 
 ```python
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}],
     metadata={
         "generation_name": "welcome-message",
