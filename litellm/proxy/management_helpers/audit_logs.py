@@ -101,9 +101,7 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                task = asyncio.create_task(
-                    resolved.async_log_audit_log_event(payload)
-                )
+                task = asyncio.create_task(resolved.async_log_audit_log_event(payload))
                 task.add_done_callback(_audit_log_task_done_callback)
         except Exception as e:
             verbose_proxy_logger.error(
