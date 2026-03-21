@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -45,7 +46,10 @@ def test_normalize_cors_value_string():
 def test_normalize_cors_value_single_string():
     from litellm.proxy.proxy_cli import _normalize_cors_value
 
-    assert _normalize_cors_value("https://a.com", "cors_allow_origins") == "https://a.com"
+    assert (
+        _normalize_cors_value("https://a.com", "cors_allow_origins")
+        == "https://a.com"
+    )
 
 
 def test_normalize_cors_value_list():
@@ -67,6 +71,56 @@ def test_normalize_cors_value_invalid_type_raises():
 
     with pytest.raises(ValueError, match="expected a string or list of strings"):
         _normalize_cors_value(123, "cors_allow_origins")
+
+
+def test_apply_cors_settings_preserves_existing_env(monkeypatch):
+    from litellm.proxy.proxy_cli import _apply_cors_settings_from_general_settings
+
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "https://env.example.com")
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "false")
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_METHODS", "PATCH")
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_HEADERS", "X-Env")
+
+    _apply_cors_settings_from_general_settings(
+        {
+            "cors_allow_origins": ["https://config.example.com"],
+            "cors_allow_credentials": True,
+            "cors_allow_methods": ["GET", "POST"],
+            "cors_allow_headers": ["Authorization"],
+        }
+    )
+
+    assert os.getenv("LITELLM_CORS_ALLOW_ORIGINS") == "https://env.example.com"
+    assert os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") == "false"
+    assert os.getenv("LITELLM_CORS_ALLOW_METHODS") == "PATCH"
+    assert os.getenv("LITELLM_CORS_ALLOW_HEADERS") == "X-Env"
+
+
+def test_apply_cors_settings_sets_env_when_unset(monkeypatch):
+    from litellm.proxy.proxy_cli import _apply_cors_settings_from_general_settings
+
+    _apply_cors_settings_from_general_settings(
+        {
+            "cors_allow_origins": ["https://config.example.com"],
+            "cors_allow_credentials": True,
+            "cors_allow_methods": ["GET", "POST"],
+            "cors_allow_headers": ["Authorization"],
+        }
+    )
+
+    assert os.getenv("LITELLM_CORS_ALLOW_ORIGINS") == "https://config.example.com"
+    assert os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") == "True"
+    assert os.getenv("LITELLM_CORS_ALLOW_METHODS") == "GET,POST"
+    assert os.getenv("LITELLM_CORS_ALLOW_HEADERS") == "Authorization"
+
+
+def test_apply_cors_settings_invalid_type_raises_click_exception():
+    from click import ClickException
+
+    from litellm.proxy.proxy_cli import _apply_cors_settings_from_general_settings
+
+    with pytest.raises(ClickException, match="Invalid CORS configuration"):
+        _apply_cors_settings_from_general_settings({"cors_allow_origins": 42})
 
 
 def test_cors_defaults_preserve_existing_proxy_behavior():
@@ -98,6 +152,16 @@ def test_cors_credentials_disabled_with_mixed_wildcard_origins(monkeypatch):
 
     assert proxy_server.cors_allow_credentials is False
     assert proxy_server.cors_allow_origins == ["*", "https://dashboard.example.com"]
+
+
+def test_path_wildcard_origin_does_not_trigger_credentials_guard(monkeypatch):
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_ORIGINS", "https://example.com/*")
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "true")
+
+    proxy_server = _reload_local_proxy_server()
+
+    assert proxy_server.cors_allow_credentials is True
+    assert proxy_server.cors_allow_origins == ["https://example.com/*"]
 
 
 def test_cors_credentials_enabled_with_explicit_origins(monkeypatch):

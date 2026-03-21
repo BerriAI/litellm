@@ -1150,6 +1150,15 @@ def _get_cors_allow_credentials(origins_were_configured: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes"}
 
 
+def _is_wildcard_cors_origin(origin: str) -> bool:
+    normalized_origin = origin.strip()
+    return (
+        normalized_origin == "*"
+        or normalized_origin.startswith("https://*.")
+        or normalized_origin.startswith("http://*.")
+    )
+
+
 # CORSMiddleware is constructed once at startup, so changing these settings
 # requires a full proxy restart to take effect.
 configured_cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS")
@@ -1176,7 +1185,7 @@ cors_allow_headers = (
 # Preserve the proxy's existing wildcard+credentials default only when CORS
 # origins are completely unconfigured. Setting credentials without origins
 # still triggers this guard because origins fall back to ["*"].
-has_wildcard_origin = any("*" in origin for origin in cors_allow_origins)
+has_wildcard_origin = any(_is_wildcard_cors_origin(origin) for origin in cors_allow_origins)
 should_validate_cors_credentials = (
     cors_origins_were_configured or cors_credentials_was_configured
 )

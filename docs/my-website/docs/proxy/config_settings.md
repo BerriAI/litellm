@@ -218,7 +218,7 @@ router_settings:
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | reject_clientside_metadata_tags | boolean | If true, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata. |
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
-| cors_allow_origins | Union[str, List[str]] | CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. Restart the proxy after changing any CORS setting. |
+| cors_allow_origins | Union[str, List[str]] | CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. Existing `LITELLM_CORS_*` env vars take precedence over config values. Restart the proxy after changing any CORS setting. |
 | cors_allow_credentials | boolean | Allow CORS credentials. Defaults to `false` when `cors_allow_origins` is explicitly configured and this setting is unset. Otherwise it preserves the proxy's existing default behavior. Wildcard origins or patterns disable credentials. |
 | cors_allow_methods | Union[str, List[str]] | CORS allowlist methods for the proxy. Defaults to `"*"` when unset. |
 | cors_allow_headers | Union[str, List[str]] | CORS allowlist headers for the proxy. Defaults to `"*"` when unset. |

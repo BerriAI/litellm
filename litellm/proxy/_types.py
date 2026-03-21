@@ -2238,7 +2238,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     cors_allow_origins: Optional[Union[str, List[str]]] = Field(
         None,
-        description='CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. Restart the proxy after changing any CORS setting.',
+        description='CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. Existing `LITELLM_CORS_*` env vars take precedence over config values. Restart the proxy after changing any CORS setting.',
     )
     cors_allow_credentials: Optional[bool] = Field(
         None,

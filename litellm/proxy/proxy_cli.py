@@ -82,6 +82,40 @@ def _normalize_cors_value(value: Any, setting_name: str) -> Optional[str]:
     )
 
 
+def _set_env_var_if_unset(env_key: str, value: Optional[str]) -> None:
+    # Respect explicit operator-provided env vars; config.yaml only fills gaps.
+    if value is not None and os.getenv(env_key) is None:
+        os.environ[env_key] = value
+
+
+def _apply_cors_settings_from_general_settings(general_settings: dict) -> None:
+    cors_allow_origins = general_settings.get("cors_allow_origins", None)
+    cors_allow_credentials = general_settings.get("cors_allow_credentials", None)
+    cors_allow_methods = general_settings.get("cors_allow_methods", None)
+    cors_allow_headers = general_settings.get("cors_allow_headers", None)
+
+    try:
+        normalized_origins = _normalize_cors_value(
+            cors_allow_origins, "cors_allow_origins"
+        )
+        normalized_methods = _normalize_cors_value(
+            cors_allow_methods, "cors_allow_methods"
+        )
+        normalized_headers = _normalize_cors_value(
+            cors_allow_headers, "cors_allow_headers"
+        )
+    except ValueError as e:
+        raise click.ClickException(f"Invalid CORS configuration: {e}") from e
+
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_ORIGINS", normalized_origins)
+    if cors_allow_credentials is not None:
+        _set_env_var_if_unset(
+            "LITELLM_CORS_ALLOW_CREDENTIALS", str(cors_allow_credentials)
+        )
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_METHODS", normalized_methods)
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_HEADERS", normalized_headers)
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
@@ -795,39 +829,7 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
-            cors_allow_origins = general_settings.get("cors_allow_origins", None)
-            cors_allow_credentials = general_settings.get(
-                "cors_allow_credentials", None
-            )
-            cors_allow_methods = general_settings.get("cors_allow_methods", None)
-            cors_allow_headers = general_settings.get("cors_allow_headers", None)
-
-            try:
-                normalized_origins = _normalize_cors_value(
-                    cors_allow_origins, "cors_allow_origins"
-                )
-                normalized_methods = _normalize_cors_value(
-                    cors_allow_methods, "cors_allow_methods"
-                )
-                normalized_headers = _normalize_cors_value(
-                    cors_allow_headers, "cors_allow_headers"
-                )
-            except ValueError as e:
-                raise click.ClickException(f"Invalid CORS configuration: {e}") from e
-
-            if normalized_origins is not None:
-                os.environ["LITELLM_CORS_ALLOW_ORIGINS"] = normalized_origins
-
-            if cors_allow_credentials is not None:
-                os.environ["LITELLM_CORS_ALLOW_CREDENTIALS"] = str(
-                    cors_allow_credentials
-                )
-
-            if normalized_methods is not None:
-                os.environ["LITELLM_CORS_ALLOW_METHODS"] = normalized_methods
-
-            if normalized_headers is not None:
-                os.environ["LITELLM_CORS_ALLOW_HEADERS"] = normalized_headers
+            _apply_cors_settings_from_general_settings(general_settings)
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
