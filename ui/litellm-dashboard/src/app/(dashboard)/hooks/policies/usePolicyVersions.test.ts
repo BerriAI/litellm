@@ -172,6 +172,22 @@ describe("useCreatePolicyVersion", () => {
     expect(NotificationsManager.success).toHaveBeenCalledWith("New draft version created");
   });
 
+  it("invalidates the versions cache on success", async () => {
+    mockCreatePolicyVersion.mockResolvedValue({ policy_id: "v3" });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(
+      () => useCreatePolicyVersion("my-policy"),
+      { wrapper }
+    );
+
+    await result.current.mutateAsync();
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["policyVersions", "detail", "my-policy"],
+    });
+  });
+
   it("shows error notification on failure", async () => {
     mockCreatePolicyVersion.mockRejectedValue(new Error("Server error"));
 
@@ -247,6 +263,22 @@ describe("useUpdatePolicyVersionStatus", () => {
     expect(NotificationsManager.success).toHaveBeenCalledWith(
       expect.stringContaining("Version published")
     );
+  });
+
+  it("invalidates the versions cache on success", async () => {
+    mockUpdatePolicyVersionStatus.mockResolvedValue({ policy_id: "v2" });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(
+      () => useUpdatePolicyVersionStatus("my-policy"),
+      { wrapper }
+    );
+
+    await result.current.mutateAsync({ policyId: "v2", status: "published" });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["policyVersions", "detail", "my-policy"],
+    });
   });
 
   it("promotes to production and shows success notification", async () => {

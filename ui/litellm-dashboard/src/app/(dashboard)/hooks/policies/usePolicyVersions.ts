@@ -21,6 +21,13 @@ export interface PolicyVersionsResponse {
   total_count: number;
 }
 
+/** Output type after `select` normalizes the response — versions is always defined. */
+export interface PolicyVersionsData {
+  policy_name: string;
+  versions: Policy[];
+  total_count: number;
+}
+
 // ── Fetch function ──────────────────────────────────────────────────────────
 
 const fetchPolicyVersions = async (
@@ -43,8 +50,8 @@ export const usePolicyVersions = ({
 }: UsePolicyVersionsOptions) => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<PolicyVersionsResponse>({
-    queryKey: policyVersionKeys.detail(policyName ?? ""),
+  return useQuery<PolicyVersionsResponse, Error, PolicyVersionsData>({
+    queryKey: policyVersionKeys.detail(policyName!),
     queryFn: async () => await fetchPolicyVersions(accessToken!, policyName!),
     enabled: Boolean(accessToken && policyName && enabled),
     select: (data) => ({

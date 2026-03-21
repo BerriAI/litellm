@@ -1310,7 +1310,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     policyName: editingPolicy?.policy_name,
     enabled: showVersionsSidebar,
   });
-  const versions = versionsData?.versions ?? [];
+  const versions = versionsData?.versions ?? []; // versionsData?.versions is Policy[] after select, fallback covers undefined data
 
   const createVersionMutation = useCreatePolicyVersion(editingPolicy?.policy_name);
   const updateStatusMutation = useUpdatePolicyVersionStatus(editingPolicy?.policy_name);
