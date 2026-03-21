@@ -2487,6 +2487,7 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        extra_permissions=data.extra_permissions,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
     )

@@ -1294,9 +1294,16 @@ if MCP_AVAILABLE:
 
         # Auto-assign server to team's ObjectPermissionTable if team-scoped
         if team_id and new_mcp_server.server_id:
-            await add_mcp_server_to_team(
-                prisma_client, team_id, new_mcp_server.server_id
-            )
+            try:
+                await add_mcp_server_to_team(
+                    prisma_client, team_id, new_mcp_server.server_id
+                )
+            except ValueError as e:
+                # Team not found — surface as 400 so caller knows
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": str(e)},
+                )
 
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1489,7 +1496,7 @@ if MCP_AVAILABLE:
         description="Allows deleting mcp servers in the db",
         dependencies=[Depends(user_api_key_auth)],
         response_class=JSONResponse,
-        status_code=status.HTTP_204_NO_CONTENT,
+        status_code=status.HTTP_202_ACCEPTED,
     )
     @management_endpoint_wrapper
     async def remove_mcp_server(
@@ -1572,13 +1579,19 @@ if MCP_AVAILABLE:
 
         # Remove server from team's ObjectPermissionTable
         if team_id:
-            await remove_mcp_server_from_team(prisma_client, team_id, server_id)
+            try:
+                await remove_mcp_server_from_team(prisma_client, team_id, server_id)
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Failed to remove server {server_id} from team {team_id} permissions: {e}. "
+                    "Server was deleted but team's ObjectPermissionTable may contain a stale entry."
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
             pass
 
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        return Response(status_code=status.HTTP_202_ACCEPTED)
 
     @router.post(
         "/server/{server_id}/user-credential",

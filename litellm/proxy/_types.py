@@ -3769,6 +3769,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+    extra_permissions: Optional[List[str]] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
