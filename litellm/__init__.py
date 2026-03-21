@@ -218,6 +218,7 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
 retry = True
+team_model_overrides_enabled = os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None

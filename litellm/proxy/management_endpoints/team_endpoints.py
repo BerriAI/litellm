@@ -813,6 +813,22 @@ async def new_team(  # noqa: PLR0915
                         },
                     )
 
+        # Validate default_models is a subset of team models (prevent privilege escalation).
+        # When data.models is empty/[] (unrestricted team), skip validation — by design,
+        # team.models=[] means "allow all" so any default_models is a valid subset.
+        # At runtime, compute_effective_models caps effective set by team.models.
+        if data.default_models and data.models:
+            disallowed = set(data.default_models) - set(data.models)
+            if disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"default_models must be a subset of team models. "
+                        f"Disallowed: {sorted(disallowed)}. "
+                        f"Team models: {sorted(data.models)}"
+                    },
+                )
+
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
         if total_teams and _license_check.is_team_count_over_limit(
@@ -1407,6 +1423,25 @@ async def update_team(  # noqa: PLR0915
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        # Validate default_models is a subset of team models (prevent privilege escalation)
+        if data.default_models:
+            team_models = (
+                data.models
+                if data.models is not None
+                else (existing_team_row.models or [])
+            )
+            if team_models:
+                disallowed = set(data.default_models) - set(team_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"default_models must be a subset of team models. "
+                            f"Disallowed: {sorted(disallowed)}. "
+                            f"Team models: {sorted(team_models)}"
+                        },
+                    )
+
         if data.soft_budget is not None:
             max_budget_to_check = (
                 data.max_budget
@@ -1493,6 +1528,23 @@ async def update_team(  # noqa: PLR0915
                 )
 
         updated_kv = data.json(exclude_unset=True)
+
+        # When team.models is being changed, prune existing default_models
+        # to prevent stale over-permissive defaults (privilege escalation).
+        # Must inject into updated_kv directly (not data) because
+        # data.json(exclude_unset=True) skips fields not set during __init__.
+        if "models" in updated_kv and "default_models" not in updated_kv:
+            existing_defaults = existing_team_row.default_models or []
+            if existing_defaults:
+                new_models = updated_kv["models"] or []
+                if not new_models:
+                    # team.models=[] means "allow all" — clear default_models
+                    # so get_effective_team_models falls back to [] (allow all)
+                    updated_kv["default_models"] = []
+                else:
+                    pruned = [m for m in existing_defaults if m in set(new_models)]
+                    if pruned != existing_defaults:
+                        updated_kv["default_models"] = pruned
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -1764,6 +1816,29 @@ async def _process_team_members(
         else None
     )
 
+    # Validate member model overrides are within team.models (prevent privilege escalation)
+    team_models = (
+        complete_team_data.models
+        if hasattr(complete_team_data, "models")
+        and isinstance(complete_team_data.models, list)
+        else []
+    )
+    members_to_validate = (
+        [data.member] if isinstance(data.member, Member) else data.member
+    )
+    for member in members_to_validate:
+        if member.models and team_models:
+            disallowed = set(member.models) - set(team_models)
+            if disallowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Member model overrides must be a subset of team models. "
+                        f"Disallowed: {sorted(disallowed)}. "
+                        f"Team models: {sorted(team_models)}"
+                    },
+                )
+
     if isinstance(data.member, Member):
         try:
             updated_user, updated_tm = await add_new_member(
@@ -1774,6 +1849,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                team_models=team_models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1798,6 +1874,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    team_models=team_models,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2331,7 +2408,7 @@ async def team_member_delete(
     response_model=TeamMemberUpdateResponse,
 )
 @management_endpoint_wrapper
-async def team_member_update(
+async def team_member_update(  # noqa: PLR0915
     data: TeamMemberUpdateRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2424,6 +2501,19 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    ### validate member model overrides are within team.models (when restricted)
+    if data.models and existing_team_row.models:
+        disallowed = set(data.models) - set(existing_team_row.models)
+        if disallowed:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Member model overrides must be a subset of team models. "
+                    f"Disallowed: {sorted(disallowed)}. "
+                    f"Team models: {sorted(existing_team_row.models)}"
+                },
+            )
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2435,18 +2525,37 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            models=data.models,
         )
 
     ### update team member role
-    if data.role is not None:
+    # Resolve the effective models for this member (from the authoritative
+    # LiteLLM_TeamMembership table) so we can: (a) keep the members_with_roles
+    # JSON in sync, and (b) return the actual stored state in the response.
+    stored_models = data.models
+    if stored_models is None:
+        _tm_row = await prisma_client.db.litellm_teammembership.find_unique(
+            where={
+                "user_id_team_id": {
+                    "user_id": received_user_id,
+                    "team_id": data.team_id,
+                }
+            }
+        )
+        stored_models = (_tm_row.models or []) if _tm_row is not None else []
+
+    if data.role is not None or data.models is not None:
         team_members: List[Member] = []
         for member in team_table.members_with_roles:
             if member.user_id == received_user_id:
                 team_members.append(
                     Member(
                         user_id=member.user_id,
-                        role=data.role,
+                        role=data.role or member.role,
                         user_email=data.user_email or member.user_email,
+                        models=stored_models,
+                        tpm_limit=data.tpm_limit if data.tpm_limit is not None else getattr(member, "tpm_limit", None),
+                        rpm_limit=data.rpm_limit if data.rpm_limit is not None else getattr(member, "rpm_limit", None),
                     )
                 )
             else:
@@ -2464,6 +2573,7 @@ async def team_member_update(
         team_id=data.team_id,
         user_id=received_user_id,
         user_email=data.user_email,
+        models=stored_models,
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,

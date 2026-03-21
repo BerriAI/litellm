@@ -54,13 +54,109 @@ async def test_upsert_disconnect(mock_tx, fake_user):
         user_api_key_dict=fake_user,
     )
 
-    mock_tx.litellm_teammembership.update.assert_awaited_once_with(
-        where={"user_id_team_id": {"user_id": "user-1", "team_id": "team-1"}},
-        data={"litellm_budget_table": {"disconnect": True}},
-    )
+    # All None + no existing budget → early return, no DB calls at all
+    mock_tx.litellm_teammembership.upsert.assert_not_called()
+    mock_tx.litellm_teammembership.update.assert_not_called()
     mock_tx.litellm_budgettable.update.assert_not_called()
     mock_tx.litellm_budgettable.create.assert_not_called()
-    mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_disconnect_with_existing_budget(mock_tx, fake_user):
+    """When all params are None but a budget was linked, disconnect it."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        max_budget=None,
+        existing_budget_id="budget-existing",
+        user_api_key_dict=fake_user,
+    )
+
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-1", "team_id": "team-1"}},
+        data={
+            "create": {"user_id": "user-1", "team_id": "team-1"},
+            "update": {"litellm_budget_table": {"disconnect": True}},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_models_only_no_budget(mock_tx, fake_user):
+    """Setting models with no budget params → upsert with models only."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-m",
+        user_id="user-m",
+        max_budget=None,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        models=["gpt-4"],
+    )
+
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-m", "team_id": "team-m"}},
+        data={
+            "create": {"user_id": "user-m", "team_id": "team-m", "models": ["gpt-4"]},
+            "update": {"models": ["gpt-4"]},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_models_empty_list_clears(mock_tx, fake_user):
+    """Setting models=[] explicitly clears overrides."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-c",
+        user_id="user-c",
+        max_budget=None,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        models=[],
+    )
+
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-c", "team_id": "team-c"}},
+        data={
+            "create": {"user_id": "user-c", "team_id": "team-c", "models": []},
+            "update": {"models": []},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_models_plus_budget(mock_tx, fake_user):
+    """Setting models alongside a budget → both written in same upsert."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-mb",
+        user_id="user-mb",
+        max_budget=50.0,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        models=["gpt-4o"],
+    )
+
+    new_budget_id = mock_tx.litellm_budgettable.create.return_value.budget_id
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "user-mb", "team_id": "team-mb"}},
+        data={
+            "create": {
+                "user_id": "user-mb",
+                "team_id": "team-mb",
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+                "models": ["gpt-4o"],
+            },
+            "update": {
+                "litellm_budget_table": {"connect": {"budget_id": new_budget_id}},
+                "models": ["gpt-4o"],
+            },
+        },
+    )
 
 
 # TEST: existing budget id, creates new budget (current behavior)
@@ -316,3 +412,25 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
             },
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_change_preserves_models(mock_tx, fake_user):
+    """Updating budget with models=None should NOT touch existing models."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-bp",
+        user_id="user-bp",
+        max_budget=100.0,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        # models=None (default) — should not appear in upsert data
+    )
+
+    call_args = mock_tx.litellm_teammembership.upsert.call_args
+    create_data = call_args.kwargs["data"]["create"]
+    update_data = call_args.kwargs["data"]["update"]
+
+    # models should NOT be in create or update data when models=None
+    assert "models" not in create_data, "models=None should not appear in create"
+    assert "models" not in update_data, "models=None should not appear in update"
