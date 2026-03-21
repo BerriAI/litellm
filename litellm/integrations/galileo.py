@@ -79,11 +79,14 @@ class GalileoObserve(CustomLogger):
         elif response_obj is not None and isinstance(
             response_obj, litellm.ModelResponse
         ):
-            output = response_obj["choices"][0]["message"].json()
+            choices = response_obj.get("choices")
+            if choices:
+                output = choices[0]["message"].json()
         elif response_obj is not None and isinstance(
             response_obj, litellm.TextCompletionResponse
         ):
-            output = response_obj.choices[0].text
+            if response_obj.choices:
+                output = response_obj.choices[0].text
         elif response_obj is not None and isinstance(
             response_obj, litellm.ImageResponse
         ):
