@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -413,6 +412,57 @@ async def test_mcp_read_resource_success():
     assert result is read_result
 
 
+def test_normalize_resource_contents_passes_metadata():
+    """Test that _normalize_resource_contents preserves meta from ResourceContents (MCP 1.26.0+)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    meta = {"version": "1.0", "source": "test"}
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hello world",
+            mimeType="text/plain",
+            meta=meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "hello world"
+    assert result[0].mime_type == "text/plain"
+    assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_without_metadata():
+    """Test that _normalize_resource_contents works when meta is absent (backward compat)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hello",
+            mimeType="text/plain",
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "hello"
+    assert result[0].meta is None
+
+
 @pytest.mark.asyncio
 async def test_mcp_read_resource_multiple_servers_error():
     try:
@@ -707,8 +757,6 @@ async def test_concurrent_initialize_session_managers():
     """Test that concurrent calls to initialize_session_managers don't cause race conditions."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
-            _INITIALIZATION_LOCK,
-            _SESSION_MANAGERS_INITIALIZED,
             initialize_session_managers,
         )
     except ImportError:
@@ -1426,7 +1474,6 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         )
         from litellm.proxy._types import (
             LiteLLM_ObjectPermissionTable,
-            LiteLLM_TeamTable,
             UserAPIKeyAuth,
         )
     except ImportError:

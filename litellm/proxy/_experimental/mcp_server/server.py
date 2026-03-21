@@ -169,6 +169,32 @@ if MCP_AVAILABLE:
         mcp_info: Optional[MCPInfo] = None
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def _normalize_resource_contents(contents: list) -> List[ReadResourceContents]:
+        """Normalize ResourceContents to ReadResourceContents, preserving meta (MCP 1.26.0+)."""
+        normalized: List[ReadResourceContents] = []
+        for content in contents:
+            meta = getattr(content, "meta", None)
+            if meta is None and hasattr(content, "model_dump"):
+                d = content.model_dump()
+                meta = d.get("meta") or d.get("_meta")
+            if isinstance(content, TextResourceContents):
+                normalized.append(
+                    ReadResourceContents(
+                        content=content.text,
+                        mime_type=content.mimeType,
+                        meta=meta,
+                    )
+                )
+            elif isinstance(content, BlobResourceContents):
+                normalized.append(
+                    ReadResourceContents(
+                        content=content.blob,
+                        mime_type=None,
+                        meta=meta,
+                    )
+                )
+        return normalized
+
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
@@ -623,26 +649,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
         )
 
-        normalized_contents: List[ReadResourceContents] = []
-        for content in read_resource_result.contents:
-            if isinstance(content, TextResourceContents):
-                text_content: TextResourceContents = content
-                normalized_contents.append(
-                    ReadResourceContents(
-                        content=text_content.text,
-                        mime_type=text_content.mimeType,
-                    )
-                )
-            elif isinstance(content, BlobResourceContents):
-                blob_content: BlobResourceContents = content
-                normalized_contents.append(
-                    ReadResourceContents(
-                        content=blob_content.blob,
-                        mime_type=None,
-                    )
-                )
-
-        return normalized_contents
+        return _normalize_resource_contents(read_resource_result.contents)
 
     ########################################################
     ############ End of MCP Server Routes ##################

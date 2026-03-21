@@ -33,24 +33,17 @@ commands:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest-mock==3.12.0"
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.22.0"
-            pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
-            pip install "requests-mock>=1.12.1"
-            pip install "responses==0.25.7"
-            pip install "pytest-xdist==3.6.1"
-            pip install "pytest-timeout==2.2.0"
-            pip install "semantic_router==0.1.10"
-            pip install "fastapi-offline==1.7.3"
-            pip install "a2a"
+            python -m pip install --upgrade pip uv
+            # Use uv for the heavy requirements.txt (10-100x faster than pip)
+            uv pip install --system -r requirements.txt
+            # Use pip for test deps (small set, avoids uv strict-resolution
+            # conflicts with transitive dep pins like openai<2 and pydantic>=2.11.5)
+            pip install "pytest-mock==3.12.0" "pytest==7.3.1" "pytest-retry==1.6.3" \
+              "pytest-asyncio==0.21.1" "respx==0.22.0" "hypercorn==0.17.3" \
+              "pydantic==2.11.0" "mcp==1.26.0" "requests-mock>=1.12.1" \
+              "responses==0.25.7" "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" \
+              "pytest-cov==5.0.0" "semantic_router==0.1.10" "fastapi-offline==1.7.3" \
+              "a2a" "parameterized>=0.9.0"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -1367,7 +1360,8 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
+            pip install "mcp==1.26.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1874,7 +1868,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
+            pip install "mcp==1.26.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -2234,7 +2228,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.25.0"
+            pip install "mcp==1.26.0"
       - run:
           name: Run tests
           command: |
