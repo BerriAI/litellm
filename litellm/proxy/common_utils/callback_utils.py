@@ -46,21 +46,26 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
-                # Instantiate the callback class (e.g., OpenTelemetry) instead
-                # of just adding the string. This ensures open_telemetry_logger
-                # and similar globals are set at startup, not deferred to
-                # add_deployment() which may fail silently when
-                # store_model_in_db is true.
-                from litellm.utils import (
-                    _add_custom_logger_callback_to_specific_event,
-                )
+                # Eagerly instantiate the callback class (e.g. OpenTelemetry)
+                # so that proxy-level globals like open_telemetry_logger are
+                # set at startup. Without this, store_model_in_db=true causes
+                # the async model-loading path to skip callback instantiation
+                # entirely, leaving the logger as None.
+                try:
+                    from litellm.utils import (
+                        _add_custom_logger_callback_to_specific_event,
+                    )
 
-                _add_custom_logger_callback_to_specific_event(
-                    callback, "success"
-                )
-                _add_custom_logger_callback_to_specific_event(
-                    callback, "failure"
-                )
+                    _add_custom_logger_callback_to_specific_event(callback, "success")
+                    _add_custom_logger_callback_to_specific_event(callback, "failure")
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"Failed to initialize callback '{callback}' at startup: {e}. "
+                        "Check that the required environment variables are set."
+                    )
+                    # Still add the string so it can be retried later during
+                    # request processing (preserves pre-existing behaviour).
+                    imported_list.append(callback)
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,
