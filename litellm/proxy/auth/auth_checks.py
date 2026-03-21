@@ -2733,6 +2733,14 @@ def get_effective_team_models(
     if not effective_models:
         return team_object.models if team_object else []
 
+    # Cap effective models at team.models (the allowed pool).
+    # This prevents stale member overrides from granting access to models
+    # that the team no longer has (e.g., after team.models was narrowed).
+    # team.models=[] means "allow all", so skip the cap in that case.
+    team_pool = team_object.models if team_object else []
+    if team_pool:
+        effective_models = [m for m in effective_models if m in set(team_pool)]
+
     return effective_models
 
 

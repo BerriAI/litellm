@@ -49,21 +49,23 @@ class TestGetEffectiveTeamModels:
     def test_defaults_only(self):
         """1. User with defaults only → can access default models."""
         team = LiteLLM_TeamTable(
-            team_id="t1", models=["m1", "m2"], default_models=["d1", "d2"]
+            team_id="t1", models=["m1", "m2", "d1", "d2"], default_models=["d1", "d2"]
         )
         result = get_effective_team_models(team)
         assert set(result) == {"d1", "d2"}
 
     def test_defaults_plus_overrides(self):
         """2. User with defaults + overrides → union of both."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
+        )
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"d1", "mo1"}
 
     def test_overrides_only_no_defaults(self):
         """3. User with overrides only (no defaults) → can access override models."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"])
+        team = LiteLLM_TeamTable(team_id="t1", models=["m1", "mo1", "mo2"])
         token = UserAPIKeyAuth(team_member_models=["mo1", "mo2"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"mo1", "mo2"}
@@ -82,7 +84,9 @@ class TestGetEffectiveTeamModels:
 
     def test_cross_user_isolation(self):
         """9. User A overrides don't affect User B."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "mo_a", "mo_b"], default_models=["d1"]
+        )
         token_a = UserAPIKeyAuth(team_member_models=["mo_a"])
         token_b = UserAPIKeyAuth(team_member_models=["mo_b"])
         result_a = get_effective_team_models(team, token_a)
@@ -102,7 +106,9 @@ class TestGetEffectiveTeamModels:
 
     def test_deduplication(self):
         """Overlapping models are deduplicated."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["shared"])
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "shared", "extra"], default_models=["shared"]
+        )
         token = UserAPIKeyAuth(team_member_models=["shared", "extra"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"shared", "extra"}
@@ -127,7 +133,7 @@ class TestCanTeamAccessModelWithOverrides:
     async def test_defaults_only_allowed(self):
         """1. User with defaults only → can access default models."""
         team = LiteLLM_TeamTable(
-            team_id="t1", models=["m1", "m2"], default_models=["d1"]
+            team_id="t1", models=["m1", "m2", "d1"], default_models=["d1"]
         )
         assert await can_team_access_model(
             model="d1", team_object=team, llm_router=None
@@ -137,7 +143,7 @@ class TestCanTeamAccessModelWithOverrides:
     async def test_defaults_only_denied(self):
         """1. User with defaults only → cannot access other team models."""
         team = LiteLLM_TeamTable(
-            team_id="t1", models=["m1", "m2"], default_models=["d1"]
+            team_id="t1", models=["m1", "m2", "d1"], default_models=["d1"]
         )
         with pytest.raises(Exception):
             await can_team_access_model(model="m1", team_object=team, llm_router=None)
@@ -145,7 +151,9 @@ class TestCanTeamAccessModelWithOverrides:
     @pytest.mark.asyncio
     async def test_defaults_plus_overrides_allowed(self):
         """2. User with defaults + overrides → can access union."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
+        )
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         assert await can_team_access_model(
             model="d1", team_object=team, llm_router=None, valid_token=token
@@ -158,7 +166,7 @@ class TestCanTeamAccessModelWithOverrides:
     async def test_defaults_plus_overrides_denied(self):
         """2. User with overrides → cannot access models outside union."""
         team = LiteLLM_TeamTable(
-            team_id="t1", models=["m1", "m2"], default_models=["d1"]
+            team_id="t1", models=["m1", "m2", "d1", "mo1"], default_models=["d1"]
         )
         token = UserAPIKeyAuth(team_member_models=["mo1"])
         with pytest.raises(Exception):
@@ -169,7 +177,9 @@ class TestCanTeamAccessModelWithOverrides:
     @pytest.mark.asyncio
     async def test_revocation_after_override_removal(self):
         """7. Remove override → model access denied."""
-        team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
+        )
         # With override
         token_with = UserAPIKeyAuth(team_member_models=["mo1"])
         assert await can_team_access_model(
@@ -183,6 +193,20 @@ class TestCanTeamAccessModelWithOverrides:
                 team_object=team,
                 llm_router=None,
                 valid_token=token_without,
+            )
+
+    @pytest.mark.asyncio
+    async def test_stale_override_capped_by_team_models(self):
+        """Stale member override for model removed from team.models → denied."""
+        team = LiteLLM_TeamTable(
+            team_id="t1", models=["m1"], default_models=["m1"]
+        )
+        # Member has stale override for "m2" which is no longer in team.models
+        token = UserAPIKeyAuth(team_member_models=["m2"])
+        # effective = union(["m1"], ["m2"]) capped by team.models=["m1"] → ["m1"]
+        with pytest.raises(Exception):
+            await can_team_access_model(
+                model="m2", team_object=team, llm_router=None, valid_token=token
             )
 
     @pytest.mark.asyncio

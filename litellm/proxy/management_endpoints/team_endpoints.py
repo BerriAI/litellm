@@ -2552,6 +2552,8 @@ async def team_member_update(  # noqa: PLR0915
                         role=data.role or member.role,
                         user_email=data.user_email or member.user_email,
                         models=stored_models,
+                        tpm_limit=data.tpm_limit if data.tpm_limit is not None else getattr(member, "tpm_limit", None),
+                        rpm_limit=data.rpm_limit if data.rpm_limit is not None else getattr(member, "rpm_limit", None),
                     )
                 )
             else:
