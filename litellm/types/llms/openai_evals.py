@@ -311,10 +311,12 @@ class ResultCounts(BaseModel):
 class PerTestingCriteriaResult(BaseModel):
     """Results for a specific testing criteria"""
 
-    testing_criteria_index: int
+    model_config = {"extra": "allow"}
+
+    testing_criteria_index: Optional[int] = None
     """Index of the testing criteria"""
 
-    result_counts: ResultCounts
+    result_counts: Optional[ResultCounts] = None
     """Result counts for this criteria"""
 
     average_score: Optional[float] = None
