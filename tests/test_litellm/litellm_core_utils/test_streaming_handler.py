@@ -1679,3 +1679,52 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
     )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
+
+
+def test_model_dump_fallback_handles_pydantic_serializer_bug(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for #18801: MockValSer TypeError in streaming responses.
+
+    Pydantic 2.11+ has a bug where MockValSer sentinel is not converted to
+    SchemaSerializer in certain scenarios. The fix catches TypeError and falls
+    back to __dict__ extraction.
+    """
+    # Create a chunk with usage that will be stripped
+    chunk_with_usage = ModelResponseStream(
+        id="test-chunk",
+        created=1742056047,
+        model="sap-ai-core/test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="test content", role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Mock model_dump to raise TypeError (simulating MockValSer bug)
+    original_model_dump = chunk_with_usage.model_dump
+
+    def mock_model_dump(*args, **kwargs):
+        raise TypeError("'MockValSer' object cannot be converted to 'SchemaSerializer'")
+
+    chunk_with_usage.model_dump = mock_model_dump
+
+    # The code should gracefully fall back to __dict__ and not crash
+    initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
+
+    # Process the chunk through return_processed_chunk_logic which calls model_dump
+    result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": "test content"},
+        response_obj={"original_chunk": chunk_with_usage},
+        model_response=chunk_with_usage,
+    )
+
+    # Should not raise TypeError and should successfully process the chunk
+    assert result is not None
+    assert result.choices[0].delta.content == "test content"
