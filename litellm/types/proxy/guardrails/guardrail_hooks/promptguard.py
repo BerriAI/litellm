@@ -22,6 +22,15 @@ class PromptGuardConfigModel(GuardrailConfigModel):
             "Falls back to PROMPTGUARD_API_BASE env var."
         ),
     )
+    block_on_error: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether to block the request when the "
+            "PromptGuard API is unreachable. "
+            "Defaults to true (fail-closed). "
+            "Set to false for fail-open behaviour."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

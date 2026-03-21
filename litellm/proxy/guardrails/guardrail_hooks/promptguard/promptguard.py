@@ -1,13 +1,20 @@
 """
 PromptGuard guardrail integration for LiteLLM.
 
-Calls the PromptGuard Guard API to scan messages for prompt injection,
-PII, topic violations, and entity blocklist matches before and after
-LLM calls.
+Calls the PromptGuard Guard API to scan messages for prompt
+injection, PII, topic violations, and entity blocklist matches
+before and after LLM calls.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Optional,
+    Type,
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -19,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -42,6 +50,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         self,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        block_on_error: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
         self.api_key = api_key or os.environ.get(
@@ -59,9 +68,26 @@ class PromptGuardGuardrail(CustomGuardrail):
             api_base or os.environ.get("PROMPTGUARD_API_BASE") or _DEFAULT_API_BASE
         ).rstrip("/")
 
+        if block_on_error is None:
+            env = os.environ.get("PROMPTGUARD_BLOCK_ON_ERROR", "true")
+            self.block_on_error = env.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        else:
+            self.block_on_error = block_on_error
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
+
+        if "supported_event_hooks" not in kwargs:
+            kwargs["supported_event_hooks"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+            ]
+
         super().__init__(**kwargs)
 
     @staticmethod
@@ -81,6 +107,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         texts = inputs.get("texts", [])
+        images = inputs.get("images", [])
         structured_messages = inputs.get("structured_messages", [])
         model = inputs.get("model")
 
@@ -99,33 +126,39 @@ class PromptGuardGuardrail(CustomGuardrail):
         }
         if model:
             payload["model"] = model
-
-        headers = {
-            "X-API-Key": self.api_key,
-            "Content-Type": "application/json",
-        }
+        if images:
+            payload["images"] = images
 
         endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
 
         verbose_proxy_logger.debug(
-            "PromptGuard guardrail: calling %s direction=%s messages=%d",
+            "PromptGuard: %s direction=%s msgs=%d imgs=%d",
             endpoint,
             direction,
             len(messages),
+            len(images),
         )
 
-        response = await self.async_handler.post(
-            url=endpoint,
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-        result = response.json()
+        try:
+            response = await self.async_handler.post(
+                url=endpoint,
+                headers={
+                    "X-API-Key": self.api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+        except Exception as exc:
+            verbose_proxy_logger.error("PromptGuard API error: %s", str(exc))
+            if self.block_on_error:
+                raise
+            return inputs
 
         verbose_proxy_logger.debug(
-            "PromptGuard guardrail: decision=%s confidence=%s threat_type=%s",
+            "PromptGuard: decision=%s threat=%s",
             result.get("decision"),
-            result.get("confidence"),
             result.get("threat_type"),
         )
 
@@ -138,23 +171,23 @@ class PromptGuardGuardrail(CustomGuardrail):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=(
-                    f"Blocked by PromptGuard: {threat_type} "
-                    f"(confidence={confidence}, event_id={event_id})"
+                    f"Blocked by PromptGuard: "
+                    f"{threat_type} "
+                    f"(confidence={confidence}, "
+                    f"event_id={event_id})"
                 ),
             )
 
         if decision == "redact":
-            redacted_messages = result.get(
-                "redacted_messages",
-            )
-            if redacted_messages:
+            redacted = result.get("redacted_messages")
+            if redacted:
                 if structured_messages:
-                    inputs["structured_messages"] = redacted_messages
-                redacted_texts = self._extract_texts_from_messages(
-                    redacted_messages,
+                    inputs["structured_messages"] = redacted
+                extracted = self._extract_texts_from_messages(
+                    redacted,
                 )
-                if redacted_texts:
-                    inputs["texts"] = redacted_texts
+                if extracted:
+                    inputs["texts"] = extracted
 
         return inputs
 

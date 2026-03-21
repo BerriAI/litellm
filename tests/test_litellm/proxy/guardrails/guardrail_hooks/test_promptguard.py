@@ -20,7 +20,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -111,6 +110,37 @@ class TestPromptGuardConfiguration:
         with patch.dict(os.environ, cleaned, clear=True):
             with pytest.raises(PromptGuardMissingCredentials):
                 PromptGuardGuardrail(api_key=None)
+
+    def test_block_on_error_defaults_true(self):
+        guardrail = PromptGuardGuardrail(api_key="pg_live_abc_123")
+        assert guardrail.block_on_error is True
+
+    def test_block_on_error_explicit_false(self):
+        guardrail = PromptGuardGuardrail(
+            api_key="pg_live_abc_123",
+            block_on_error=False,
+        )
+        assert guardrail.block_on_error is False
+
+    def test_block_on_error_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PROMPTGUARD_API_KEY": "pg_live_env_key",
+                "PROMPTGUARD_BLOCK_ON_ERROR": "false",
+            },
+        ):
+            guardrail = PromptGuardGuardrail()
+            assert guardrail.block_on_error is False
+
+    def test_supported_event_hooks_set(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = PromptGuardGuardrail(api_key="pg_live_abc_123")
+        hooks = guardrail.supported_event_hooks
+        assert hooks is not None
+        assert GuardrailEventHooks.pre_call in hooks
+        assert GuardrailEventHooks.post_call in hooks
 
 
 # ---------------------------------------------------------------------------
@@ -522,6 +552,41 @@ class TestPromptGuardRequestPayload:
             payload = mock_post.call_args.kwargs["json"]
             assert "model" not in payload
 
+    @pytest.mark.asyncio
+    async def test_images_passed_through_in_payload(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        resp = _make_response({"decision": "allow"})
+        with patch.object(
+            promptguard_guardrail.async_handler, "post", return_value=resp
+        ) as mock_post:
+            await promptguard_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Describe this image"],
+                    "images": ["data:image/png;base64,abc123"],
+                },
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            payload = mock_post.call_args.kwargs["json"]
+            assert payload["images"] == ["data:image/png;base64,abc123"]
+
+    @pytest.mark.asyncio
+    async def test_images_omitted_when_empty(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        resp = _make_response({"decision": "allow"})
+        with patch.object(
+            promptguard_guardrail.async_handler, "post", return_value=resp
+        ) as mock_post:
+            await promptguard_guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            payload = mock_post.call_args.kwargs["json"]
+            assert "images" not in payload
+
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -530,9 +595,10 @@ class TestPromptGuardRequestPayload:
 
 class TestPromptGuardErrorHandling:
     @pytest.mark.asyncio
-    async def test_http_error_propagates(
+    async def test_http_error_propagates_block_on_error(
         self, promptguard_guardrail, mock_request_data
     ):
+        """Default block_on_error=True re-raises HTTP errors."""
         mock_request = httpx.Request("POST", "https://api.test.promptguard.co")
         mock_resp = httpx.Response(status_code=500, request=mock_request)
         with patch.object(
@@ -552,9 +618,10 @@ class TestPromptGuardErrorHandling:
                 )
 
     @pytest.mark.asyncio
-    async def test_connection_error_propagates(
+    async def test_connection_error_propagates_block_on_error(
         self, promptguard_guardrail, mock_request_data
     ):
+        """Default block_on_error=True re-raises connection errors."""
         with patch.object(
             promptguard_guardrail.async_handler,
             "post",
@@ -566,6 +633,58 @@ class TestPromptGuardErrorHandling:
                     request_data=mock_request_data,
                     input_type="request",
                 )
+
+    @pytest.mark.asyncio
+    async def test_fail_open_returns_inputs_on_http_error(self, mock_request_data):
+        """block_on_error=False lets the request through on API error."""
+        guardrail = PromptGuardGuardrail(
+            api_key="pg_live_test1234_abcdef",
+            api_base="https://api.test.promptguard.co",
+            block_on_error=False,
+            guardrail_name="test-failopen",
+            event_hook="pre_call",
+        )
+        mock_request = httpx.Request("POST", "https://api.test.promptguard.co")
+        mock_resp = httpx.Response(status_code=500, request=mock_request)
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.HTTPStatusError(
+                "Internal Server Error",
+                request=mock_request,
+                response=mock_resp,
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["texts"] == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_fail_open_returns_inputs_on_connection_error(
+        self, mock_request_data
+    ):
+        """block_on_error=False lets the request through on connection error."""
+        guardrail = PromptGuardGuardrail(
+            api_key="pg_live_test1234_abcdef",
+            api_base="https://api.test.promptguard.co",
+            block_on_error=False,
+            guardrail_name="test-failopen",
+            event_hook="pre_call",
+        )
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["texts"] == ["test"]
 
     @pytest.mark.asyncio
     async def test_unknown_decision_treated_as_allow(
@@ -611,6 +730,7 @@ class TestPromptGuardConfigModel:
         model = PromptGuardConfigModel()
         assert model.api_key is None
         assert model.api_base is None
+        assert model.block_on_error is None
 
     def test_get_config_model_from_guardrail(self):
         guardrail = PromptGuardGuardrail(api_key="pg_live_test_123")
