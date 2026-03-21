@@ -540,6 +540,39 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
 
+                ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
+                _psf = assistant_msg.get("provider_specific_fields")
+                if isinstance(_psf, dict):
+                    _ss_invocations = _psf.get("server_side_tool_invocations")
+                    if isinstance(_ss_invocations, list):
+                        for invocation in _ss_invocations:
+                            # Re-inject toolCall part
+                            tc_part: Dict[str, Any] = {
+                                "toolCall": {
+                                    "toolType": invocation.get("tool_type"),
+                                    "id": invocation.get("id"),
+                                    "args": invocation.get("args"),
+                                }
+                            }
+                            if "thought_signature" in invocation:
+                                tc_part["thoughtSignature"] = invocation["thought_signature"]
+                            assistant_content.append(tc_part)  # type: ignore
+
+                            # Re-inject toolResponse part if response is present
+                            if "response" in invocation:
+                                tr_dict: Dict[str, Any] = {
+                                    "id": invocation.get("id"),
+                                    "response": invocation.get("response"),
+                                }
+                                if invocation.get("tool_type"):
+                                    tr_dict["toolType"] = invocation["tool_type"]
+                                tr_part: Dict[str, Any] = {
+                                    "toolResponse": tr_dict
+                                }
+                                if "thought_signature" in invocation:
+                                    tr_part["thoughtSignature"] = invocation["thought_signature"]
+                                assistant_content.append(tr_part)  # type: ignore
+
                 msg_i += 1
 
             if assistant_content:
@@ -666,6 +699,9 @@ def _transform_request_body(  # noqa: PLR0915
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+        include_server_side_tool_invocations: bool = optional_params.pop(
+            "include_server_side_tool_invocations", False
+        )
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
@@ -715,6 +751,10 @@ def _transform_request_body(  # noqa: PLR0915
             data["tools"] = tools
         if tool_choice is not None:
             data["toolConfig"] = tool_choice
+        if include_server_side_tool_invocations:
+            if "toolConfig" not in data:
+                data["toolConfig"] = {}
+            data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
