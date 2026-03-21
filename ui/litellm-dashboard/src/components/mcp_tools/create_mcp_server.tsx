@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer, registerMCPServer } from "../networking";
+import { createMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -30,6 +30,7 @@ interface CreateMCPServerProps {
   availableAccessGroups: string[];
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
+  teamId?: string | null;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
@@ -54,6 +55,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   availableAccessGroups,
   prefillData,
   onBackToDiscovery,
+  teamId,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
@@ -385,18 +387,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         payload.credentials = credentialsPayload;
       }
 
+      // Include team_id for non-admin users
+      if (!isAdmin && teamId) {
+        payload.team_id = teamId;
+      }
+
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response = isAdmin
-          ? await createMCPServer(accessToken, payload)
-          : await registerMCPServer(accessToken, payload);
+        const response = await createMCPServer(accessToken, payload);
 
-        NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : "MCP Server submitted for admin review"
-        );
+        NotificationsManager.success("MCP Server created successfully");
         form.resetFields();
         setCostConfig({});
         clearTools();
@@ -408,9 +409,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
-      );
+      NotificationsManager.fromBackend(`Error creating MCP Server: ${reason}`);
     } finally {
       setIsLoading(false);
     }
@@ -514,7 +513,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             }}
           />
           <h2 className="text-xl font-semibold text-gray-900">
-            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+            Add New MCP Server
           </h2>
         </div>
       }
@@ -537,10 +536,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
-          {!isAdmin && (
-            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active.
-              {" "}Note: the request must be made with a team-scoped API key.
+          {!isAdmin && !teamId && (
+            <div className="rounded-md bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm text-yellow-800">
+              Select a team from the filter to create an MCP server for your team.
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">

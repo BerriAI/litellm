@@ -296,6 +296,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setPrefillData(null);
           setDiscoveryVisible(true);
         }}
+        teamId={selectedTeam !== "all" && selectedTeam !== "personal" ? selectedTeam : null}
       />
       <div className="flex items-center justify-between">
         <div>
@@ -310,23 +311,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
         <div className="flex items-center gap-2">
-          {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-              + Add New MCP Server
-            </Button>
-          )}
-          {!isAdminRole(userRole) && (
-            <Button
-              className="flex-shrink-0"
-              onClick={() => {
-                setPrefillData(null);
-                setModalVisible(true);
-              }}
-              variant="secondary"
-            >
-              + Submit MCP Server
-            </Button>
-          )}
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
         </div>
       </div>
       <MCPDiscovery

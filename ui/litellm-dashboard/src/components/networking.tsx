@@ -3695,6 +3695,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  extra_permissions?: string[] | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -3833,6 +3834,9 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
+    }
+    if (formValues.extra_permissions !== undefined) {
+      requestBody.extra_permissions = formValues.extra_permissions;
     }
 
     console.log("Final request body:", requestBody);
@@ -6509,6 +6513,41 @@ export const fetchMCPClientIp = async (accessToken: string): Promise<string | nu
     return data.ip || null;
   } catch {
     return null;
+  }
+};
+
+export interface AvailablePermission {
+  value: string;
+  label: string;
+  resource: string;
+}
+
+export const fetchAvailableTeamMemberPermissions = async (accessToken: string): Promise<AvailablePermission[]> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/available_permissions`
+      : `/team/available_permissions`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data || [];
+  } catch (error) {
+    console.error("Failed to fetch available permissions:", error);
+    throw error;
   }
 };
 

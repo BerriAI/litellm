@@ -1,5 +1,5 @@
 import { Member } from "@/components/networking";
-import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
+import { CrownOutlined, InfoCircleOutlined, SafetyCertificateOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
 import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React from "react";
@@ -13,6 +13,7 @@ export interface MemberTableProps {
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onAddMember?: () => void;
+  onPermissions?: (member: Member) => void;
   roleColumnTitle?: string;
   roleTooltip?: string;
   extraColumns?: ColumnsType<Member>;
@@ -26,6 +27,7 @@ export default function MemberTable({
   onEdit,
   onDelete,
   onAddMember,
+  onPermissions,
   roleColumnTitle = "Role",
   roleTooltip,
   extraColumns = [],
@@ -83,6 +85,17 @@ export default function MemberTable({
       render: (_: unknown, record: Member) =>
         canEdit ? (
           <Space>
+            {onPermissions && (
+              <Tooltip title="Permissions">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SafetyCertificateOutlined />}
+                  onClick={() => onPermissions(record)}
+                  data-testid="permissions-member"
+                />
+              </Tooltip>
+            )}
             <TableIconActionButton
               variant="Edit"
               tooltipText="Edit member"
