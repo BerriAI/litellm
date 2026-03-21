@@ -316,6 +316,7 @@ const sidebars = {
               items: [
                 "mcp",
                 "mcp_usage",
+                "mcp_chat_completions_orchestration",
                 "mcp_openapi",
                 "mcp_oauth",
                 "mcp_aws_sigv4",
