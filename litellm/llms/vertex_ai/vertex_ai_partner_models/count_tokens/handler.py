@@ -105,11 +105,13 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        
+
         # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get("vertex_count_tokens_location")
+        vertex_count_tokens_location = litellm_params.get(
+            "vertex_count_tokens_location"
+        )
         vertex_location_raw = self.get_vertex_ai_location(litellm_params)
-        
+
         # Determine final location with precedence:
         # 1. vertex_count_tokens_location (if provided)
         # 2. vertex_location (if provided)
