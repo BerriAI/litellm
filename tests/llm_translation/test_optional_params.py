@@ -117,12 +117,23 @@ def test_supports_system_message_none_content():
     """
     messages = [
         {"role": "system", "content": "Be helpful."},
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
     ]
 
     new_messages = map_system_message_pt(messages=messages)
 
     assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "assistant"
     # content should start with system text, not contain literal "None"
     assert "None" not in new_messages[0]["content"]
     assert "Be helpful." in new_messages[0]["content"]

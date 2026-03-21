@@ -94,7 +94,7 @@ def _get_content_as_str(content: Union[str, list, None]) -> str:
         return content
     if isinstance(content, list):
         return convert_content_list_to_str({"role": "user", "content": content})
-    return str(content)
+    return ""
 
 
 def map_system_message_pt(messages: list) -> list:
@@ -122,9 +122,7 @@ def map_system_message_pt(messages: list) -> list:
                     # Copy to avoid mutating the caller's original dict
                     next_m = messages[i + 1] = {**next_m}
                     next_text = _get_content_as_str(next_m["content"])
-                    next_m["content"] = " ".join(
-                        filter(None, [system_text, next_text])
-                    )
+                    next_m["content"] = " ".join(filter(None, [system_text, next_text]))
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": system_text}
@@ -1410,10 +1408,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1557,9 +1555,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                         file_data = (
                             file_content.get("file_data", "")
                             if isinstance(file_content, dict)
-                            else file_content
-                            if isinstance(file_content, str)
-                            else ""
+                            else file_content if isinstance(file_content, str) else ""
                         )
 
                     if file_data:
@@ -2063,9 +2059,9 @@ def _sanitize_empty_text_content(
         if isinstance(content, str):
             if not content or not content.strip():
                 message = cast(AllMessageValues, dict(message))  # Make a copy
-                message[
-                    "content"
-                ] = "[System: Empty message content sanitised to satisfy protocol]"
+                message["content"] = (
+                    "[System: Empty message content sanitised to satisfy protocol]"
+                )
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
                 )
@@ -2405,9 +2401,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[
-                                    str, dict[str, Any]
-                                ] = image_url_value
+                                image_url_input: Union[str, dict[str, Any]] = (
+                                    image_url_value
+                                )
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2434,9 +2430,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2474,9 +2470,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2609,9 +2605,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         original_content_element=dict(assistant_content_block),
                     )
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
                     text_element = _anthropic_text_content_element
 
                 # Interleave: each thinking block precedes its server tool group.
@@ -2771,9 +2767,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     assistant_content.append(_anthropic_text_content_element)
 
@@ -5215,9 +5211,7 @@ def default_response_schema_prompt(response_schema: dict) -> str:
     prompt_str = """Use this JSON schema: 
     ```json 
     {}
-    ```""".format(
-        response_schema
-    )
+    ```""".format(response_schema)
     return prompt_str
 
 
