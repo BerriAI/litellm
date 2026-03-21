@@ -857,7 +857,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
-    search_tools: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = ["*"]  # ["*"] = all access, [] = no access
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
@@ -1211,6 +1211,11 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    team_id: Optional[str] = Field(
+        default=None,
+        description="Team ID that owns this MCP server. Only proxy admins can change ownership. "
+        "Set to null to make the server global.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1246,6 +1251,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    team_id: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list)
@@ -1878,7 +1884,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """
 
     vector_stores: Optional[List[str]] = []
-    search_tools: Optional[List[str]] = None  # NULL = all access, [] = no access
+    search_tools: Optional[List[str]] = ["*"]  # ["*"] = all access, [] = no access
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
 
