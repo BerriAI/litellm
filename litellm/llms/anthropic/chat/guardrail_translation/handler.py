@@ -231,7 +231,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Override this method to customize how responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
+        for task_idx in range(min(len(responses), len(task_mappings))):
+            guardrail_response = responses[task_idx]
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(Optional[int], mapping[1])

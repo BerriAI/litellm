@@ -294,6 +294,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if not message_tool_calls:
                     messages[msg_idx].pop("tool_calls", None)
+                    # Ensure message remains valid for the API
+                    if messages[msg_idx].get("content") is None:
+                        messages[msg_idx]["content"] = ""
 
     async def process_output_response(
         self,
@@ -732,10 +735,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Note: for n>1 responses, extras always target choices[0].
         if len(responses) > len(task_mappings) and response.choices:
             choice = response.choices[0]
-            for extra_text in responses[len(task_mappings) :]:
-                if choice.message.content is None:
-                    choice.message.content = extra_text
-                elif isinstance(choice.message.content, str):
+            extra_texts = responses[len(task_mappings) :]
+            if choice.message.content is None:
+                # Set the first extra as the content, then append the rest
+                choice.message.content = extra_texts[0]
+                extra_texts = extra_texts[1:]
+            for extra_text in extra_texts:
+                if isinstance(choice.message.content, str):
                     choice.message.content += "\n" + extra_text
                 elif isinstance(choice.message.content, list):
                     choice.message.content.append({"type": "text", "text": extra_text})
