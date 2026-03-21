@@ -36,7 +36,33 @@ import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyT
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
+import { serverRootPath } from "./networking";
 const { Sider } = Layout;
+
+/**
+ * Pages migrated to path-based routing under (dashboard)/.
+ * Key = legacy page id, Value = route segment.
+ * Keep in sync with MIGRATED_PAGES in (dashboard)/layout.tsx and
+ * LEGACY_REDIRECTS in app/page.tsx.
+ */
+const MIGRATED_PAGES: Record<string, string> = {
+  "api-reference": "api-reference",
+};
+
+/** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
+function migratedHref(routeSegment: string): string {
+  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const trimmed = raw.replace(/^\/+|\/+$/g, "");
+  let base = trimmed ? `/${trimmed}/` : "/";
+
+  if (serverRootPath && serverRootPath !== "/") {
+    const cleanRoot = serverRootPath.replace(/\/+$/, "");
+    const cleanBase = base.replace(/^\/+/, "");
+    base = `${cleanRoot}/${cleanBase}`;
+  }
+
+  return `${base}${routeSegment}`;
+}
 
 // Define the props type
 interface SidebarProps {
@@ -379,6 +405,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   // Navigate to page helper
   const navigateToPage = (page: string) => {
+    // For migrated pages, just call setPage — the parent layout handles routing
+    if (MIGRATED_PAGES[page]) {
+      setPage(page);
+      return;
+    }
     const newSearchParams = new URLSearchParams(window.location.search);
     newSearchParams.set("page", page);
     window.history.pushState(null, "", `?${newSearchParams.toString()}`);
@@ -405,9 +436,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         </a>
       );
     }
-    const params = new URLSearchParams(window.location.search);
-    params.set("page", page);
-    const href = `?${params.toString()}`;
+    // For migrated pages, generate a path-based href for right-click "Open in new tab"
+    const migratedRoute = MIGRATED_PAGES[page];
+    const href = migratedRoute
+      ? migratedHref(migratedRoute)
+      : (() => { const params = new URLSearchParams(window.location.search); params.set("page", page); return `?${params.toString()}`; })();
     return (
       <a
         href={href}
