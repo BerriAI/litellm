@@ -17,7 +17,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         akto_api_key=getattr(litellm_params, "akto_api_key", None),
         akto_account_id=getattr(litellm_params, "akto_account_id", None),
         akto_vxlan_id=getattr(litellm_params, "akto_vxlan_id", None),
-        unreachable_fallback=getattr(litellm_params, "unreachable_fallback", "fail_closed"),
+        unreachable_fallback=getattr(
+            litellm_params, "unreachable_fallback", "fail_closed"
+        ),
         guardrail_timeout=getattr(litellm_params, "guardrail_timeout", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
