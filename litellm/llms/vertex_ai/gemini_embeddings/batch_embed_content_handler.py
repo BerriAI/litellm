@@ -214,6 +214,15 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            input_list = [input] if isinstance(input, str) else input
+            has_file_refs = any(
+                _is_file_reference(e) for e in input_list if isinstance(e, str)
+            )
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
             resolved_files = {}
             if api_key and _is_multimodal_input(input):
                 resolved_files = self._resolve_file_references(
@@ -310,6 +319,15 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            input_list = [input] if isinstance(input, str) else input
+            has_file_refs = any(
+                _is_file_reference(e) for e in input_list if isinstance(e, str)
+            )
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
             resolved_files = {}
             if api_key and _is_multimodal_input(input):
                 resolved_files = await self._async_resolve_file_references(
