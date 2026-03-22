@@ -724,6 +724,8 @@ def generic_cost_per_token(  # noqa: PLR0915
         # present (character_count, video_length_seconds, or image_count), since
         # the gap may represent tokens already billed through those dimensions
         # and converting them to text_tokens would cause double-billing.
+        unaccounted_tokens = usage.prompt_tokens - accounted_tokens
+        prompt_tokens_details["text_tokens"] += unaccounted_tokens
 
     (
         prompt_base_cost,
