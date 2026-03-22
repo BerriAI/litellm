@@ -37,6 +37,24 @@ else:
     Span = Any
 
 
+def _is_rate_limit_error(
+    exception_status: Union[str, int],
+) -> bool:
+    """
+    Check if an exception status code indicates a rate limit error (HTTP 429).
+
+    Some OpenAI-like providers registered via providers.json have their HTTP
+    429 responses incorrectly mapped to APIConnectionError by the catch-all
+    exception handler in exception_mapping_utils.py. This helper checks the
+    actual HTTP status code so the cooldown handler can still detect these.
+    """
+    try:
+        status = int(exception_status) if isinstance(exception_status, str) and exception_status else exception_status
+        return status == 429
+    except (ValueError, TypeError):
+        return False
+
+
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,
     model_id: str,
@@ -60,6 +78,13 @@ def _is_cooldown_required(
         ):  # don't cooldown on litellm api connection errors errors
             for ignored_string in ignored_strings:
                 if ignored_string in exception_str:
+                    # Don't skip cooldown when the APIConnectionError wraps
+                    # a rate limit (429). Some providers (e.g. those registered
+                    # via providers.json) have their 429 errors mapped to
+                    # APIConnectionError instead of RateLimitError because they
+                    # fall through to the catch-all exception handler.
+                    if _is_rate_limit_error(exception_status):
+                        return True
                     return False
 
         if isinstance(exception_status, str):
