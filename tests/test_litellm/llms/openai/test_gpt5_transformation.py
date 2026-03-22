@@ -1114,3 +1114,48 @@ def test_responses_gpt5_chat_allow_temperature(
         drop_params=False,
     )
     assert params["temperature"] == 0.3
+
+
+def test_responses_gpt51_allow_temperature_no_reasoning(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.1 supports reasoning_effort='none'; no reasoning defaults to 'none',
+    so temperature should be allowed."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+        ),
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.5
+
+
+def test_responses_gpt51_drop_temperature_with_high_effort(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.1 with reasoning.effort='high' should drop temperature!=1."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+            reasoning={"effort": "high"},
+        ),
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt54_allow_temperature_effort_none(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.4 with explicit reasoning.effort='none' should allow temperature."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.7,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.7
