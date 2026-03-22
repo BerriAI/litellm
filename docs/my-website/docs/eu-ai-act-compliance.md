@@ -141,19 +141,22 @@ Note: Article 50 applies to chatbots and systems interacting directly with natur
 
 ## Article 14: Human oversight
 
-LiteLLM's guardrails feature provides a foundation for human oversight:
+Article 14 requires that high-risk AI systems be designed so that natural persons can effectively oversee them — including the ability to understand, monitor, interpret, and intervene in the system's operation. LiteLLM's guardrails provide **automated technical safeguards** that support human oversight, but they are not a substitute for it:
 
-| Guardrails Feature | Article 14 Mapping |
-|-------------------|-------------------|
-| Content moderation | Pre-response filtering for harmful content |
-| Rate limiting | Prevents runaway AI usage |
-| Budget controls | Cost caps per user/team/organization |
-| Model access controls | Restricts which models specific users can access |
+| Guardrails Feature | What It Does | Oversight Role |
+|-------------------|-------------|----------------|
+| Content moderation | Pre-response filtering for harmful content | **Automated safeguard** — reduces the volume of outputs requiring human review, but does not replace human judgment on edge cases |
+| Rate limiting | Prevents runaway AI usage | **Automated safeguard** — bounds system behavior, supports the human overseer's ability to maintain control |
+| Budget controls | Cost caps per user/team/organization | **Automated safeguard** — prevents uncontrolled resource consumption |
+| Model access controls | Restricts which models specific users can access | **Automated safeguard** — enforces organizational policy on model usage |
 
-What you need to add:
-- Escalation procedures when guardrails trigger
-- Human review pipeline for high-stakes decisions
-- Override mechanism to halt AI responses
+These automated controls are necessary building blocks, but Article 14 compliance requires **human oversight procedures** on top of them:
+- **Escalation procedures** — define what happens when a guardrail triggers (who is notified, what action is taken)
+- **Human review pipeline** — for high-stakes decisions, route AI outputs to a qualified person before they take effect
+- **Override mechanism** — a human must be able to halt AI responses or override the system's output
+- **Competence requirements** — the human overseer must understand the system's capabilities, limitations, and the context of its outputs
+
+The distinction matters: automated safeguards reduce risk, but Article 14 requires a natural person who can exercise judgment and intervene. Configure guardrails as the first line of defense, then build human oversight procedures around them.
 
 ## GDPR considerations
 
@@ -161,7 +164,7 @@ LiteLLM processes user prompts. If those prompts contain personal data:
 
 1. **Legal basis** (Article 6): Document why you're processing this data
 2. **Data Processing Agreements** (Article 28): Required for each LLM provider you route to
-3. **Cross-border transfers**: US-based providers (OpenAI, Anthropic) require Standard Contractual Clauses or equivalent safeguards
+3. **Cross-border transfers**: Providers based outside the EEA — including US-based providers (OpenAI, Anthropic), and any other non-EEA providers you route to — require Standard Contractual Clauses (SCCs) or equivalent safeguards under Chapter V of the GDPR. Review each provider's transfer mechanism individually.
 4. **Data minimization**: Log what you need for compliance, not everything
 
 Consider maintaining a GDPR Article 30 Record of Processing Activities that documents each LLM provider relationship, the data categories processed, and the legal basis for processing.
