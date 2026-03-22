@@ -238,29 +238,7 @@ def transform_openai_input_gemini_embed_content(
     for element in input_list:
         if not isinstance(element, str):
             raise ValueError(f"Unsupported input type: {type(element)}")
-
-        if element.startswith("data:") and ";base64," in element:
-            mime_type, base64_data = _parse_data_url(element)
-            blob: BlobType = {"mime_type": mime_type, "data": base64_data}
-            parts.append(PartType(inline_data=blob))
-        elif _is_gcs_url(element):
-            mime_type = _infer_mime_type_from_gcs_url(element)
-            file_data: FileDataType = {
-                "mime_type": mime_type,
-                "file_uri": element,
-            }
-            parts.append(PartType(file_data=file_data))
-        elif _is_file_reference(element):
-            if element not in resolved_files:
-                raise ValueError(f"File reference {element} not resolved")
-            file_info = resolved_files[element]
-            file_data_ref: FileDataType = {
-                "mime_type": file_info["mime_type"],
-                "file_uri": file_info["uri"],
-            }
-            parts.append(PartType(file_data=file_data_ref))
-        else:
-            parts.append(PartType(text=element))
+        parts.append(_build_part_for_input(element, resolved_files=resolved_files))
 
     request_body: dict = {
         "content": ContentType(parts=parts),
