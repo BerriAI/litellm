@@ -591,3 +591,287 @@ class TestMessagesAPIProcessing:
             "_litellm_code_execution_enabled"
         )
         assert "_skill_files" in result.get("litellm_metadata", {})
+
+
+class TestPreCallProviderRouting:
+    """
+    Tests that the pre-call hook routes to the correct strategy based on provider.
+
+    Non-native providers (OpenAI, Azure, Bedrock, etc.):
+    - Skill content injected into system prompt
+    - No skill tools added
+    - container removed
+
+    Native providers (Anthropic, azure_ai, databricks):
+    - Skill converted to Anthropic-style tool
+    - Skill content injected into system prompt
+    - Code execution tool added (if skill has files)
+    - container removed
+    """
+
+    @pytest.mark.asyncio
+    async def test_openai_gets_system_prompt_only(self):
+        """OpenAI should get system prompt injection, no tools from skill."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="openai",
+            ):
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_test1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                # System prompt should be injected
+                system_msgs = [
+                    m for m in result["messages"] if m.get("role") == "system"
+                ]
+                assert len(system_msgs) == 1
+                assert "Test Skill" in system_msgs[0]["content"]
+
+                # No tools should be added for OpenAI
+                assert "tools" not in result
+
+                # container should be removed
+                assert "container" not in result
+
+    @pytest.mark.asyncio
+    async def test_azure_gets_system_prompt_only(self):
+        """Azure should get system prompt injection, no tools from skill."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="azure",
+            ):
+                data = {
+                    "model": "azure/gpt-4o",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_test1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                system_msgs = [
+                    m for m in result["messages"] if m.get("role") == "system"
+                ]
+                assert len(system_msgs) == 1
+                assert "tools" not in result
+                assert "container" not in result
+
+    @pytest.mark.asyncio
+    async def test_bedrock_gets_system_prompt_only(self):
+        """Bedrock should get system prompt injection, no tools from skill."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="bedrock",
+            ):
+                data = {
+                    "model": "bedrock/anthropic.claude-v2",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_test1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                system_msgs = [
+                    m for m in result["messages"] if m.get("role") == "system"
+                ]
+                assert len(system_msgs) == 1
+                assert "tools" not in result
+                assert "container" not in result
+
+    @pytest.mark.asyncio
+    async def test_anthropic_gets_tools_and_system_prompt(self):
+        """Anthropic should get tool conversion + system prompt injection."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="anthropic",
+            ):
+                data = {
+                    "model": "claude-sonnet-4-20250514",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_test1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                # Tools should be added (skill tool)
+                assert "tools" in result
+                assert len(result["tools"]) >= 1
+
+                # container should be removed
+                assert "container" not in result
+
+    @pytest.mark.asyncio
+    async def test_openai_preserves_existing_system_message(self):
+        """OpenAI skill injection should append to existing system message."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="openai",
+            ):
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": "Hello"},
+                    ],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_test1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                system_msg = result["messages"][0]
+                assert system_msg["role"] == "system"
+                # Original content preserved
+                assert system_msg["content"].startswith("You are a helpful assistant.")
+                # Skill content appended
+                assert "Test Skill" in system_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_openai_no_tools_even_with_code_files(self):
+        """OpenAI should NOT get tools even if skill has Python files."""
+        hook = SkillsInjectionHook()
+        skill = _make_skill_with_code()
+
+        with patch.object(
+            hook, "_fetch_skill_from_db", new_callable=AsyncMock, return_value=skill
+        ):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="openai",
+            ):
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [{"skill_id": "litellm_skill_code1"}]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                # System prompt should have skill content
+                system_msgs = [
+                    m for m in result["messages"] if m.get("role") == "system"
+                ]
+                assert len(system_msgs) == 1
+
+                # No tools — OpenAI just gets the prompt
+                assert "tools" not in result
+
+    @pytest.mark.asyncio
+    async def test_multiple_skills_openai(self):
+        """Multiple skills should all be injected into system prompt for OpenAI."""
+        hook = SkillsInjectionHook()
+        skill1 = _make_skill(
+            skill_id="litellm_skill_a",
+            display_title="Skill Alpha",
+            instructions="Alpha instructions.",
+        )
+        skill2 = _make_skill(
+            skill_id="litellm_skill_b",
+            display_title="Skill Beta",
+            instructions="Beta instructions.",
+        )
+
+        async def _fetch(skill_id):
+            return {"litellm_skill_a": skill1, "litellm_skill_b": skill2}.get(skill_id)
+
+        with patch.object(hook, "_fetch_skill_from_db", side_effect=_fetch):
+            with patch(
+                "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+                return_value="openai",
+            ):
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "container": {
+                        "skills": [
+                            {"skill_id": "litellm_skill_a"},
+                            {"skill_id": "litellm_skill_b"},
+                        ]
+                    },
+                }
+
+                result = await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+                system_content = result["messages"][0]["content"]
+                assert "Skill Alpha" in system_content
+                assert "Skill Beta" in system_content
+                assert "tools" not in result

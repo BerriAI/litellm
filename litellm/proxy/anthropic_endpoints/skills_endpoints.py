@@ -9,7 +9,8 @@ Supports two modes controlled by litellm_settings.skills_mode:
 from typing import Literal, Optional
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.datastructures import UploadFile
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import NewSkillRequest, UserAPIKeyAuth
@@ -68,9 +69,10 @@ async def _handle_litellm_create_skill(
     display_title_override = form_data.get("display_title")
 
     # Get files from form data
-    files_data = form_data.get("files[]", [])
+    # get_form_data strips [] suffix, so "files[]" becomes "files"
+    files_data = form_data.get("files", [])
     if not files_data:
-        files_data = form_data.get("files", [])
+        files_data = form_data.get("files[]", [])
 
     if not files_data:
         raise HTTPException(

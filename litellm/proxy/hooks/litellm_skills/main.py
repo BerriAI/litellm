@@ -119,16 +119,34 @@ class SkillsInjectionHook(CustomLogger):
                 # Native Anthropic skill - pass through
                 anthropic_skills.append(skill)
 
-        # Check if using messages API spec (anthropic_messages call type)
-        # Messages API always uses Anthropic-style tool format
-        use_anthropic_format = call_type == "anthropic_messages"
-
         if len(litellm_skills) > 0:
-            data = self._process_for_messages_api(
-                data=data,
-                litellm_skills=litellm_skills,
-                use_anthropic_format=use_anthropic_format,
+            # Determine provider to pick the right strategy
+            from litellm.llms.litellm_proxy.skills.skill_applicator import (
+                SkillApplicator,
+                get_provider_from_model,
             )
+
+            model = data.get("model", "")
+            provider = get_provider_from_model(model)
+            applicator = SkillApplicator()
+
+            if applicator.supports_native_skills(provider):
+                # Native skills path: convert to tools + system prompt
+                use_anthropic_format = call_type == "anthropic_messages"
+                data = self._process_for_messages_api(
+                    data=data,
+                    litellm_skills=litellm_skills,
+                    use_anthropic_format=use_anthropic_format,
+                )
+            else:
+                # Non-native path: inject into system prompt only
+                data = await applicator.apply_skills(
+                    data=data,
+                    skills=litellm_skills,
+                    provider=provider,
+                )
+                # Remove container (not supported by underlying providers)
+                data.pop("container", None)
 
         return data
 
