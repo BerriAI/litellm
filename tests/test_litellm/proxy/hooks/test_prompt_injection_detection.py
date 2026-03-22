@@ -3,10 +3,11 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 
 
 @pytest.mark.asyncio
@@ -73,6 +74,26 @@ def test_inherits_from_custom_guardrail():
     assert isinstance(detector, CustomGuardrail)
 
 
+def test_guardrail_dispatch_is_reachable():
+    """
+    Verify the guardrail dispatcher will actually invoke
+    _OPTIONAL_PromptInjectionDetection for pre_call events.
+
+    isinstance(detector, CustomGuardrail) is necessary but not sufficient;
+    should_run_guardrail must also return True for the dispatcher to call
+    async_moderation_hook / async_pre_call_hook.
+    """
+    detector = _OPTIONAL_PromptInjectionDetection()
+    # default_on=True + no event_hook filter → should run on pre_call
+    assert detector.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.pre_call
+    ) is True
+    # Also verify during_call is reachable (the original bug report)
+    assert detector.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.during_call
+    ) is True
+
+
 @pytest.mark.asyncio
 async def test_heuristics_check_does_not_block_event_loop():
     """
@@ -81,6 +102,8 @@ async def test_heuristics_check_does_not_block_event_loop():
     The heuristics similarity check is CPU-bound. Verify that
     async_pre_call_hook offloads it via asyncio.to_thread so
     the event loop stays responsive (prevents K8s pod restarts).
+
+    This test exercises the `else` branch (prompt_injection_params is None).
     """
     import asyncio
     from unittest.mock import patch
@@ -104,7 +127,10 @@ async def test_heuristics_check_does_not_block_event_loop():
             called_via_to_thread = True
         return await original_to_thread(func, *args, **kwargs)
 
-    with patch("asyncio.to_thread", side_effect=tracking_to_thread):
+    with patch(
+        "litellm.proxy.hooks.prompt_injection_detection.asyncio.to_thread",
+        side_effect=tracking_to_thread,
+    ):
         result = await detector.async_pre_call_hook(
             user_api_key_dict=user_key,
             cache=cache,
@@ -115,4 +141,51 @@ async def test_heuristics_check_does_not_block_event_loop():
     assert result == data
     assert called_via_to_thread is True, (
         "check_user_input_similarity should be called via asyncio.to_thread"
+    )
+
+
+@pytest.mark.asyncio
+async def test_heuristics_check_true_branch_does_not_block_event_loop():
+    """
+    Same as test_heuristics_check_does_not_block_event_loop but exercises
+    the explicit `heuristics_check=True` branch (line 178 of the
+    production code) rather than the `else` fallback.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    params = LiteLLMPromptInjectionParams(heuristics_check=True)
+    detector = _OPTIONAL_PromptInjectionDetection(prompt_injection_params=params)
+    user_key = UserAPIKeyAuth(api_key="sk-test")
+    cache = DualCache()
+    data = {
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "Tell me a fun fact about space."}
+        ],
+    }
+
+    called_via_to_thread = False
+    original_to_thread = asyncio.to_thread
+
+    async def tracking_to_thread(func, *args, **kwargs):
+        nonlocal called_via_to_thread
+        if func.__name__ == "check_user_input_similarity":
+            called_via_to_thread = True
+        return await original_to_thread(func, *args, **kwargs)
+
+    with patch(
+        "litellm.proxy.hooks.prompt_injection_detection.asyncio.to_thread",
+        side_effect=tracking_to_thread,
+    ):
+        result = await detector.async_pre_call_hook(
+            user_api_key_dict=user_key,
+            cache=cache,
+            data=data,
+            call_type="acompletion",
+        )
+
+    assert result == data
+    assert called_via_to_thread is True, (
+        "heuristics_check=True branch should use asyncio.to_thread"
     )
