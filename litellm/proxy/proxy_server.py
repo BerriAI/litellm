@@ -480,11 +480,11 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
-from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -639,9 +639,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1524,9 +1524,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional[
-    "ClientSession"
-] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1534,13 +1534,13 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[
-    str
-] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[str] = (
+    []
+)  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1900,9 +1900,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2023,11 +2023,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -3321,7 +3319,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-        )  # type:ignore
+        )  # type: ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
@@ -4978,10 +4976,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -5363,9 +5361,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -5702,9 +5700,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -12299,9 +12297,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
@@ -13507,13 +13505,88 @@ app.include_router(access_group_router)
 ########################################################
 
 
+# Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
+# Must be declared BEFORE /{mcp_server_name}/mcp to avoid being swallowed by the catchall.
+@app.api_route(
+    "/toolset/{toolset_name}/mcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def toolset_mcp_route(toolset_name: str, request: Request):
+    """
+    Namespace a toolset as its own MCP endpoint.
+
+    Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
+    the toolset, regardless of what other permissions the API key has.
+    Any valid API key can discover and call the toolset's tools here.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+        from litellm.proxy._experimental.mcp_server.toolset_db import (
+            get_mcp_toolset_by_name,
+        )
+
+        if prisma_client is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        toolset = await get_mcp_toolset_by_name(prisma_client, toolset_name)
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+
+        # Inject the resolved toolset_id as a header so handle_streamable_http_mcp
+        # can apply toolset-scoped permissions regardless of the key's own permissions.
+        scope = dict(request.scope)
+        scope["headers"] = list(scope.get("headers", [])) + [
+            (b"x-mcp-toolset-id", toolset.toolset_id.encode()),
+        ]
+        scope["path"] = "/mcp"
+
+        response_status = 200
+        response_headers: list = []
+        response_body = b""
+
+        async def custom_send(message):
+            nonlocal response_status, response_headers, response_body
+            if message["type"] == "http.response.start":
+                response_status = message["status"]
+                response_headers = message.get("headers", [])
+            elif message["type"] == "http.response.body":
+                response_body += message.get("body", b"")
+
+        await handle_streamable_http_mcp(
+            scope, receive=request.receive, send=custom_send
+        )
+
+        from starlette.responses import Response
+
+        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+        return Response(
+            content=response_body,
+            status_code=response_status,
+            headers=headers_dict,
+            media_type=headers_dict.get("content-type", "application/json"),
+        )
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling toolset MCP route for {toolset_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 # Dynamic MCP server routes - handle /{mcp_server_name}/mcp
 @app.api_route(
     "/{mcp_server_name}/mcp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
-    """Handle dynamic MCP server routes like /github_mcp/mcp"""
+    """Handle dynamic MCP server routes like /github_mcp/mcp and toolset routes like /devtooling-prod/mcp"""
     try:
         # Validate that the MCP server exists
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -13527,6 +13600,48 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             mcp_server_name, client_ip=client_ip
         )
         if mcp_server is None:
+            # Check if this is a toolset name — toolsets are accessible at /{name}/mcp
+            # the same way individual servers are, no separate /toolset/ prefix needed.
+            if prisma_client is not None:
+                from litellm.proxy._experimental.mcp_server.server import (
+                    handle_streamable_http_mcp,
+                )
+                from litellm.proxy._experimental.mcp_server.toolset_db import (
+                    get_mcp_toolset_by_name,
+                )
+
+                toolset = await get_mcp_toolset_by_name(prisma_client, mcp_server_name)
+                if toolset is not None:
+                    scope = dict(request.scope)
+                    scope["headers"] = list(scope.get("headers", [])) + [
+                        (b"x-mcp-toolset-id", toolset.toolset_id.encode()),
+                    ]
+                    scope["path"] = "/mcp"
+                    response_status = 200
+                    response_headers: list = []
+                    response_body = b""
+
+                    async def toolset_send(message):
+                        nonlocal response_status, response_headers, response_body
+                        if message["type"] == "http.response.start":
+                            response_status = message["status"]
+                            response_headers = message.get("headers", [])
+                        elif message["type"] == "http.response.body":
+                            response_body += message.get("body", b"")
+
+                    await handle_streamable_http_mcp(
+                        scope, receive=request.receive, send=toolset_send
+                    )
+                    from starlette.responses import Response
+
+                    headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+                    return Response(
+                        content=response_body,
+                        status_code=response_status,
+                        headers=headers_dict,
+                        media_type=headers_dict.get("content-type", "application/json"),
+                    )
+
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
             )
