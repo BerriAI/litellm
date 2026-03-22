@@ -15,8 +15,8 @@ interface UseKeyboardNavigationProps {
  * Handles J/K for next/previous and Escape for close.
  *
  * Keyboard shortcuts:
- * - J: Navigate to previous log (up)
- * - K: Navigate to next log (down)
+ * - J: Navigate to next log (down / older, following vim conventions)
+ * - K: Navigate to previous log (up / newer, following vim conventions)
  * - Escape: Close drawer
  */
 export function useKeyboardNavigation({
@@ -41,11 +41,11 @@ export function useKeyboardNavigation({
           break;
         case KEY_J_LOWER:
         case KEY_J_UPPER:
-          selectPreviousLog();
+          selectNextLog();
           break;
         case KEY_K_LOWER:
         case KEY_K_UPPER:
-          selectNextLog();
+          selectPreviousLog();
           break;
       }
     };
