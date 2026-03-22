@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
+import yaml
 from dotenv import load_dotenv
 
 import litellm
@@ -56,6 +57,200 @@ def append_query_params(url: Optional[str], params: dict) -> str:
     encoded_query = urlparse.urlencode(parsed_query, doseq=True)
     modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
     return modified_url  # type: ignore
+
+
+def _normalize_cors_value(value: Any, setting_name: str) -> Optional[str]:
+    """
+    Normalize a CORS config value to a comma-separated string.
+
+    Accepts either a string or a list of strings. Returns None if the
+    incoming value is None. Raises ValueError for any other type or for
+    lists containing non-string elements.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return ",".join([item.strip() for item in value.split(",") if item.strip()])
+    if isinstance(value, list):
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(
+                f"Invalid CORS setting for '{setting_name}': expected a list of strings."
+            )
+        return ",".join([item.strip() for item in value if item.strip()])
+    raise ValueError(
+        f"Invalid CORS setting for '{setting_name}': expected a string or list of strings, "
+        f"got {type(value).__name__}."
+    )
+
+
+def _set_env_var_if_unset(env_key: str, value: Optional[str]) -> None:
+    # Respect explicit operator-provided env vars; config.yaml only fills gaps.
+    if value is not None and os.getenv(env_key) is None:
+        os.environ[env_key] = value
+
+
+def _apply_cors_settings_from_general_settings(general_settings: dict) -> None:
+    cors_allow_origins = general_settings.get("cors_allow_origins", None)
+    cors_allow_credentials = general_settings.get("cors_allow_credentials", None)
+    cors_allow_methods = general_settings.get("cors_allow_methods", None)
+    cors_allow_headers = general_settings.get("cors_allow_headers", None)
+
+    try:
+        normalized_origins = _normalize_cors_value(
+            cors_allow_origins, "cors_allow_origins"
+        )
+        normalized_credentials = None
+        if cors_allow_credentials is not None:
+            if not isinstance(cors_allow_credentials, bool):
+                raise ValueError(
+                    "Invalid CORS setting for 'cors_allow_credentials': expected "
+                    f"a boolean, got {type(cors_allow_credentials).__name__}."
+                )
+            normalized_credentials = str(cors_allow_credentials).lower()
+        normalized_methods = _normalize_cors_value(
+            cors_allow_methods, "cors_allow_methods"
+        )
+        normalized_headers = _normalize_cors_value(
+            cors_allow_headers, "cors_allow_headers"
+        )
+    except ValueError as e:
+        raise click.ClickException(f"Invalid CORS configuration: {e}") from e
+
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_ORIGINS", normalized_origins)
+    if normalized_credentials is not None:
+        _set_env_var_if_unset(
+            "LITELLM_CORS_ALLOW_CREDENTIALS",
+            normalized_credentials,
+        )
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_METHODS", normalized_methods)
+    _set_env_var_if_unset("LITELLM_CORS_ALLOW_HEADERS", normalized_headers)
+
+
+def _process_config_includes(config: dict, base_dir: str) -> dict:
+    if "include" not in config:
+        return config
+    if not isinstance(config["include"], list):
+        raise click.ClickException("Invalid config file: 'include' must be a list.")
+
+    for include_file in config["include"]:
+        file_path = os.path.join(base_dir, include_file)
+        if not os.path.exists(file_path):
+            raise click.ClickException(f"Included config file not found: {file_path}")
+
+        with open(file_path, "r", encoding="utf-8") as file:
+            included_config = yaml.safe_load(file) or {}
+
+        if not isinstance(included_config, dict):
+            raise click.ClickException(
+                f"Invalid included config file {file_path}: expected a top-level mapping."
+            )
+
+        for key, value in included_config.items():
+            # Mirror ProxyConfig include behavior while avoiding list.extend() on
+            # non-list existing values from the main config.
+            if isinstance(value, list) and isinstance(config.get(key), list):
+                config[key].extend(value)
+            else:
+                config[key] = value
+
+    del config["include"]
+    return config
+
+
+def _resolve_os_environ_refs(config: dict) -> dict:
+    for key, value in config.items():
+        if isinstance(value, dict):
+            config[key] = _resolve_os_environ_refs(value)
+        elif isinstance(value, list):
+            resolved_list = []
+            for item in value:
+                if isinstance(item, dict):
+                    resolved_list.append(_resolve_os_environ_refs(item))
+                elif isinstance(item, str) and item.startswith("os.environ/"):
+                    from litellm import get_secret_str
+
+                    resolved_list.append(get_secret_str(item, default_value=None))
+                else:
+                    resolved_list.append(item)
+            config[key] = resolved_list
+        elif isinstance(value, str) and value.startswith("os.environ/"):
+            from litellm import get_secret_str
+
+            config[key] = get_secret_str(value, default_value=None)
+    return config
+
+
+def _load_general_settings_for_early_cors(
+    config_file_path: Optional[str],
+) -> dict:
+    """
+    Load only the CORS-relevant general_settings before importing proxy_server.
+
+    CORSMiddleware is configured from module-level values at import time, so the
+    startup path needs these settings in env vars before the first proxy_server
+    import. This early pass supports literal values, os.environ/ references,
+    and local file-path include files. Secret-manager-backed values and include
+    directives inside S3/GCS configs are only resolved later in startup and
+    therefore cannot affect the initial middleware config.
+    """
+    config: Optional[dict] = None
+
+    if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        import asyncio
+
+        from litellm.proxy.common_utils.load_config_utils import (
+            get_config_file_contents_from_gcs,
+            get_file_contents_from_s3,
+        )
+
+        bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
+        object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+        bucket_type = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
+
+        if bucket_type == "gcs":
+            config = asyncio.run(
+                get_config_file_contents_from_gcs(
+                    bucket_name=bucket_name, object_key=object_key
+                )
+            )
+        else:
+            config = get_file_contents_from_s3(
+                bucket_name=bucket_name, object_key=object_key
+            )
+        if config is None:
+            raise click.ClickException("Unable to load config from given source.")
+    elif config_file_path is not None:
+        if not os.path.exists(config_file_path):
+            raise click.ClickException(f"Config file not found: {config_file_path}")
+
+        with open(config_file_path, "r", encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file)
+
+        if config is None:
+            raise click.ClickException("Config cannot be None or empty.")
+
+        if not isinstance(config, dict):
+            raise click.ClickException(
+                "Invalid config file: expected a top-level mapping."
+            )
+
+        config = _process_config_includes(
+            config=config,
+            base_dir=os.path.dirname(os.path.abspath(config_file_path)),
+        )
+    else:
+        return {}
+
+    if not isinstance(config, dict):
+        raise click.ClickException("Invalid config file: expected a top-level mapping.")
+
+    general_settings = config.get("general_settings", {}) or {}
+    if not isinstance(general_settings, dict):
+        raise click.ClickException(
+            "Invalid config file: 'general_settings' must be a mapping."
+        )
+
+    return _resolve_os_environ_refs(general_settings)
 
 
 class ProxyInitializationHelpers:
@@ -624,6 +819,12 @@ def run_server(  # noqa: PLR0915
 
         run_setup_wizard()
         return
+
+    if config is not None or os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        # CORS is captured when proxy_server is first imported, so load the
+        # relevant general_settings before importing the app module.
+        early_general_settings = _load_general_settings_for_early_cors(config)
+        _apply_cors_settings_from_general_settings(early_general_settings)
 
     args = locals()
     if local:

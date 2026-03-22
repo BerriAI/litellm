@@ -1130,7 +1130,96 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+
+
+def _get_cors_allow_list(env_key: str) -> Optional[List[str]]:
+    raw_value = os.getenv(env_key)
+    if raw_value is None:
+        return None
+    if raw_value.strip() == "":
+        return []
+    return [value.strip() for value in raw_value.split(",") if value.strip()]
+
+
+def _get_cors_allow_credentials(origins_were_configured: bool) -> bool:
+    raw_value = os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
+    if raw_value is None:
+        return not origins_were_configured
+    if raw_value.strip() == "":
+        return False
+    return raw_value.strip().lower() in {"1", "true", "yes"}
+
+
+def _is_wildcard_cors_origin(origin: str) -> bool:
+    normalized_origin = origin.strip()
+    return (
+        normalized_origin == "*"
+        or normalized_origin.startswith("https://*")
+        or normalized_origin.startswith("http://*")
+    )
+
+
+# CORSMiddleware is constructed once at startup, so changing these settings
+# requires a full proxy restart to take effect.
+configured_cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS")
+configured_cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS")
+configured_cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS")
+cors_credentials_was_configured = (
+    os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS", "").strip() != ""
+)
+cors_origins_were_configured = configured_cors_allow_origins is not None
+
+cors_allow_origins = (
+    ["*"] if configured_cors_allow_origins is None else configured_cors_allow_origins
+)
+if cors_origins_were_configured and len(cors_allow_origins) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_origins resolved to an empty list. "
+        "All cross-origin requests will be rejected. "
+        "Set cors_allow_origins to explicit origins or remove the setting to "
+        "restore the default wildcard behavior."
+    )
+cors_allow_credentials = _get_cors_allow_credentials(
+    origins_were_configured=cors_origins_were_configured
+)
+cors_allow_methods = (
+    ["*"] if configured_cors_allow_methods is None else configured_cors_allow_methods
+)
+if configured_cors_allow_methods is not None and len(cors_allow_methods) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_methods resolved to an empty list. "
+        "All CORS preflight requests will be rejected. "
+        "Set cors_allow_methods to explicit methods or remove the setting to "
+        "restore the default wildcard behavior."
+    )
+cors_allow_headers = (
+    ["*"] if configured_cors_allow_headers is None else configured_cors_allow_headers
+)
+if configured_cors_allow_headers is not None and len(cors_allow_headers) == 0:
+    verbose_proxy_logger.warning(
+        "CORS config: cors_allow_headers resolved to an empty list. "
+        "All CORS preflight requests will be rejected. "
+        "Set cors_allow_headers to explicit headers or remove the setting to "
+        "restore the default wildcard behavior."
+    )
+
+# Preserve the proxy's existing wildcard+credentials default only when CORS
+# origins are completely unconfigured. Setting credentials without origins
+# still triggers this guard because origins fall back to ["*"].
+has_wildcard_origin = any(
+    _is_wildcard_cors_origin(origin) for origin in cors_allow_origins
+)
+should_validate_cors_credentials = (
+    cors_origins_were_configured or cors_credentials_was_configured
+)
+if should_validate_cors_credentials and has_wildcard_origin and cors_allow_credentials:
+    verbose_proxy_logger.warning(
+        "CORS config rejects allow_credentials with wildcard origins or patterns "
+        "(including subdomain wildcards such as 'https://*.example.com'). "
+        "Set general_settings.cors_allow_origins to fully-qualified explicit origins "
+        "to enable credentials."
+    )
+    cors_allow_credentials = False
 
 
 # get current directory
@@ -1456,10 +1545,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
+    allow_methods=cors_allow_methods,
+    allow_headers=cors_allow_headers,
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
@@ -2386,7 +2475,7 @@ class ProxyConfig:
             included_config = self._load_yaml_file(file_path)
             # Simply update/extend the main config with included config
             for key, value in included_config.items():
-                if isinstance(value, list) and key in config:
+                if isinstance(value, list) and isinstance(config.get(key), list):
                     config[key].extend(value)
                 else:
                     config[key] = value
@@ -2464,11 +2553,19 @@ class ProxyConfig:
                     config=value, depth=depth + 1, max_depth=max_depth
                 )
             elif isinstance(value, list):
+                resolved_list = []
                 for item in value:
                     if isinstance(item, dict):
-                        item = self._check_for_os_environ_vars(
-                            config=item, depth=depth + 1, max_depth=max_depth
+                        resolved_list.append(
+                            self._check_for_os_environ_vars(
+                                config=item, depth=depth + 1, max_depth=max_depth
+                            )
                         )
+                    elif isinstance(item, str) and item.startswith("os.environ/"):
+                        resolved_list.append(get_secret(item))
+                    else:
+                        resolved_list.append(item)
+                config[key] = resolved_list
             # if the value is a string and starts with "os.environ/" - then it's an environment variable
             elif isinstance(value, str) and value.startswith("os.environ/"):
                 config[key] = get_secret(value)

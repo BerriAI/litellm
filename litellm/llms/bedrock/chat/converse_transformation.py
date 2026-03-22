@@ -1446,6 +1446,16 @@ class AmazonConverseConfig(BaseConfig):
             original_tools, model, headers, additional_request_params
         )
 
+        # Append cachePoint to tools if cache_control_injection_points has tool_config
+        cache_injection_points = additional_request_params.pop(
+            "cache_control_injection_points", None
+        )
+        if cache_injection_points and len(bedrock_tools) > 0:
+            for point in cache_injection_points:
+                if point.get("location") == "tool_config":
+                    bedrock_tools.append({"cachePoint": {"type": "default"}})
+                    break
+
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
