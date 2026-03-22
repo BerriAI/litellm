@@ -194,6 +194,7 @@ def generate_feedback_box():
     print()  # noqa
 
 
+import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -13500,6 +13501,70 @@ app.include_router(agent_endpoints_router)
 app.include_router(compliance_router)
 app.include_router(a2a_router)
 app.include_router(access_group_router)
+
+
+async def _stream_mcp_asgi_response(
+    handle_fn, scope: dict, receive
+) -> "StreamingResponse":
+    """
+    Call an ASGI MCP handler and return a StreamingResponse so SSE/streaming works.
+
+    asyncio.create_task copies the current context, so any ContextVar set before
+    this call (e.g. _mcp_active_toolset_id) is visible inside the handler task.
+    """
+    from starlette.responses import StreamingResponse
+
+    headers_ready: asyncio.Future = asyncio.get_event_loop().create_future()
+    body_queue: asyncio.Queue = asyncio.Queue()
+
+    async def bridging_send(message):
+        if message["type"] == "http.response.start":
+            if not headers_ready.done():
+                headers_ready.set_result(
+                    (message.get("status", 200), message.get("headers", []))
+                )
+        elif message["type"] == "http.response.body":
+            chunk = message.get("body", b"")
+            if chunk:
+                await body_queue.put(chunk)
+            if not message.get("more_body", False):
+                await body_queue.put(None)  # EOF sentinel
+
+    handler_task = asyncio.create_task(handle_fn(scope, receive, bridging_send))
+
+    try:
+        status, raw_headers = await asyncio.wait_for(
+            asyncio.shield(headers_ready), timeout=30.0
+        )
+    except asyncio.TimeoutError:
+        handler_task.cancel()
+        raise HTTPException(
+            status_code=504, detail="MCP handler did not respond in time"
+        )
+
+    headers_dict = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
+
+    async def body_iter():
+        try:
+            while True:
+                chunk = await body_queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            if not handler_task.done():
+                handler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await handler_task
+
+    return StreamingResponse(
+        body_iter(),
+        status_code=status,
+        headers=headers_dict,
+        media_type=headers_dict.get("content-type"),
+    )
+
+
 ########################################################
 # MCP Server
 ########################################################
@@ -13537,39 +13602,20 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
                 detail=f"Toolset '{toolset_name}' not found",
             )
 
-        # Inject the resolved toolset_id as a header so handle_streamable_http_mcp
-        # can apply toolset-scoped permissions regardless of the key's own permissions.
         scope = dict(request.scope)
-        scope["headers"] = list(scope.get("headers", [])) + [
-            (b"x-mcp-toolset-id", toolset.toolset_id.encode()),
-        ]
         scope["path"] = "/mcp"
 
-        response_status = 200
-        response_headers: list = []
-        response_body = b""
-
-        async def custom_send(message):
-            nonlocal response_status, response_headers, response_body
-            if message["type"] == "http.response.start":
-                response_status = message["status"]
-                response_headers = message.get("headers", [])
-            elif message["type"] == "http.response.body":
-                response_body += message.get("body", b"")
-
-        await handle_streamable_http_mcp(
-            scope, receive=request.receive, send=custom_send
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_active_toolset_id,
         )
 
-        from starlette.responses import Response
-
-        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-        return Response(
-            content=response_body,
-            status_code=response_status,
-            headers=headers_dict,
-            media_type=headers_dict.get("content-type", "application/json"),
-        )
+        token = _mcp_active_toolset_id.set(toolset.toolset_id)
+        try:
+            return await _stream_mcp_asgi_response(
+                handle_streamable_http_mcp, scope, request.receive
+            )
+        finally:
+            _mcp_active_toolset_id.reset(token)
 
     except HTTPException as e:
         raise e
@@ -13613,34 +13659,19 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 toolset = await get_mcp_toolset_by_name(prisma_client, mcp_server_name)
                 if toolset is not None:
                     scope = dict(request.scope)
-                    scope["headers"] = list(scope.get("headers", [])) + [
-                        (b"x-mcp-toolset-id", toolset.toolset_id.encode()),
-                    ]
                     scope["path"] = "/mcp"
-                    response_status = 200
-                    response_headers: list = []
-                    response_body = b""
 
-                    async def toolset_send(message):
-                        nonlocal response_status, response_headers, response_body
-                        if message["type"] == "http.response.start":
-                            response_status = message["status"]
-                            response_headers = message.get("headers", [])
-                        elif message["type"] == "http.response.body":
-                            response_body += message.get("body", b"")
-
-                    await handle_streamable_http_mcp(
-                        scope, receive=request.receive, send=toolset_send
+                    from litellm.proxy._experimental.mcp_server.server import (
+                        _mcp_active_toolset_id,
                     )
-                    from starlette.responses import Response
 
-                    headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-                    return Response(
-                        content=response_body,
-                        status_code=response_status,
-                        headers=headers_dict,
-                        media_type=headers_dict.get("content-type", "application/json"),
-                    )
+                    token = _mcp_active_toolset_id.set(toolset.toolset_id)
+                    try:
+                        return await _stream_mcp_asgi_response(
+                            handle_streamable_http_mcp, scope, request.receive
+                        )
+                    finally:
+                        _mcp_active_toolset_id.reset(token)
 
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
