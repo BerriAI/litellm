@@ -269,6 +269,11 @@ def transform_openai_input_gemini_embed_content(
     parts: List[PartType] = []
 
     for element in input_list:
+        if isinstance(element, list):
+            raise ValueError(
+                "Nested (combined) embeddings are not supported on the embedContent path. "
+                "Use the batchEmbedContents path or pass a flat list instead."
+            )
         if not isinstance(element, str):
             raise ValueError(f"Unsupported input type: {type(element)}")
         parts.append(_build_part_for_input(element, resolved_files=resolved_files))
