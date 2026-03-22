@@ -523,3 +523,41 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
     assert actual_value == float("inf"), (
         "remaining_user_budget_metric should be +Inf when user truly has no budget"
     )
+
+
+def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
+    """Verify all identity labels (key, team, org, user) are passed to litellm_requests_metric."""
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    prometheus_logger.litellm_requests_metric = MagicMock()
+    prometheus_logger.litellm_spend_metric = MagicMock()
+
+    prometheus_logger._increment_top_level_request_and_spend_metrics(
+        end_user_id=None,
+        user_api_key="hashed-key",
+        user_api_key_alias="my-key",
+        model="gpt-4",
+        user_api_team="team-abc",
+        user_api_team_alias="my-team",
+        user_id="user-1",
+        response_cost=0.001,
+        enum_values=UserAPIKeyLabelValues(
+            hashed_api_key="hashed-key",
+            api_key_alias="my-key",
+            model="gpt-4",
+            team="team-abc",
+            team_alias="my-team",
+            org_id="org-abc",
+            org_alias="my-org",
+            user="user-1",
+        ),
+    )
+
+    label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
+    assert label_kwargs["hashed_api_key"] == "hashed-key"
+    assert label_kwargs["api_key_alias"] == "my-key"
+    assert label_kwargs["team"] == "team-abc"
+    assert label_kwargs["team_alias"] == "my-team"
+    assert label_kwargs["org_id"] == "org-abc"
+    assert label_kwargs["org_alias"] == "my-org"
+    assert label_kwargs["user"] == "user-1"
