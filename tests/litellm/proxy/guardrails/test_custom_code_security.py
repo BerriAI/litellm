@@ -90,5 +90,46 @@ async def test_custom_code_guardrail_apply():
     assert result["texts"][0] == "test"
 
 
-# The RBAC endpoint tests are harder to write right here, but the core security
-# validations are fully covered by the simple tests above.
+# Phase 4.3: Test frame traversal patterns are blocked
+
+
+def test_validate_custom_code_cr_frame():
+    code = "async def apply_guardrail(i, r, t):\n    x = some_coro.cr_frame\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="coroutine frame access"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_gi_frame():
+    code = "def apply_guardrail(i, r, t):\n    x = gen.gi_frame\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="generator frame access"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_f_back():
+    code = "def apply_guardrail(i, r, t):\n    frame.f_back.f_globals\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="frame traversal via f_back"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_f_globals():
+    code = "def apply_guardrail(i, r, t):\n    x = frame.f_globals\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="frame globals access"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_currentframe():
+    code = "def apply_guardrail(i, r, t):\n    f = currentframe()\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="currentframe"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_getframe():
+    code = "def apply_guardrail(i, r, t):\n    f = _getframe(0)\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="_getframe"):
+        validate_custom_code(code)
+
+
+def test_validate_custom_code_co_consts():
+    code = "def apply_guardrail(i, r, t):\n    x = func.co_consts\n    return allow()"
+    with pytest.raises(CustomCodeValidationError, match="code object constants"):
+        validate_custom_code(code)

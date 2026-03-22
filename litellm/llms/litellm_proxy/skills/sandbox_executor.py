@@ -97,6 +97,12 @@ class SkillsSandboxExecutor:
                     for path, content in skill_files.items():
                         # Create the file in temp directory
                         local_path = os.path.join(tmpdir, path)
+                        # Ensure resolved path stays within tmpdir (prevent path traversal)
+                        real_path = os.path.realpath(local_path)
+                        if not real_path.startswith(os.path.realpath(tmpdir)):
+                            raise ValueError(
+                                f"Path traversal detected in skill file: {path}"
+                            )
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         with open(local_path, "wb") as f:
                             f.write(content)

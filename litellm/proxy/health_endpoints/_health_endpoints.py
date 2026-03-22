@@ -1494,7 +1494,13 @@ async def test_model_connection(
     Returns:
         dict: A dictionary containing the health check result with either success information or error details.
     """
-    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to test model connections",
+        )
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )

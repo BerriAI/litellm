@@ -234,3 +234,66 @@ def test_unsupported_oidc_provider():
 
     with pytest.raises(ValueError, match="Unsupported OIDC provider"):
         get_secret(secret_name)
+
+
+# Security tests: OIDC file path validation
+
+
+def test_oidc_file_blocks_etc_passwd():
+    """Ensure oidc/file/ cannot read sensitive system files."""
+    secret_name = "oidc/file//etc/passwd"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_blocks_etc_shadow():
+    """Ensure oidc/file/ blocks /etc/shadow."""
+    secret_name = "oidc/file//etc/shadow"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_blocks_root():
+    """Ensure oidc/file/ cannot read from /root/."""
+    secret_name = "oidc/file//root/.ssh/id_rsa"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_blocks_proc():
+    """Ensure oidc/file/ cannot read /proc."""
+    secret_name = "oidc/file//proc/self/environ"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_valid_path_still_works(tmp_path):
+    """Ensure legitimate OIDC file reads still work."""
+    token_file = tmp_path / "oidc_token.txt"
+    token_file.write_text("valid_token_123")
+
+    secret_name = f"oidc/file/{token_file}"
+    result = get_secret(secret_name)
+    assert result == "valid_token_123"
+
+
+def test_oidc_env_path_blocks_sensitive_files(mock_env):
+    """Ensure oidc/env_path/ validates the resolved file path."""
+    mock_env["EVIL_PATH"] = "/etc/passwd"
+    secret_name = "oidc/env_path/EVIL_PATH"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_blocks_sys():
+    """Ensure oidc/file/ cannot read from /sys/."""
+    secret_name = "oidc/file//sys/kernel/version"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
+
+
+def test_oidc_file_blocks_dev():
+    """Ensure oidc/file/ cannot read from /dev/."""
+    secret_name = "oidc/file//dev/null"
+    with pytest.raises(ValueError, match="OIDC file path not allowed"):
+        get_secret(secret_name)
