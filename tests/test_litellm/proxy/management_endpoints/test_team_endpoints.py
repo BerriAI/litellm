@@ -2724,6 +2724,7 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
     """
     from fastapi import Request
 
+    import litellm
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
@@ -2741,6 +2742,8 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
     )
 
     dummy_request = MagicMock(spec=Request)
+    litellm.default_team_params = None
+    litellm.default_team_settings = None
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.proxy_server._license_check"
