@@ -290,6 +290,20 @@ class AnthropicPassthroughLoggingHandler:
 
                 except (StopIteration, StopAsyncIteration):
                     break
+                except Exception as e:
+                    # Some models (e.g. anthropic/deepseek-reasoner) may emit SSE
+                    # events with non-standard JSON or extra fields that the
+                    # Anthropic chunk parser cannot handle.  Silently skip
+                    # individual malformed events so that valid events in the same
+                    # stream are still logged rather than dropping the entire
+                    # logging call with an unhandled JSONDecodeError.
+                    verbose_proxy_logger.debug(
+                        "Skipping unparseable Anthropic SSE event during passthrough "
+                        "logging. Error: %s. Event (truncated): %.200s",
+                        str(e),
+                        event_str,
+                    )
+                    continue
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,
