@@ -170,3 +170,26 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_pydantic_model_with_serialization_error():
+    """Test that safe_dumps gracefully handles pydantic models that fail standard serialization.
+
+    This covers the case where model_dump() raises an error (e.g. MockValSer issue
+    with empty ChoiceLogprobs in streaming chunks).
+    """
+    from pydantic import BaseModel
+
+    class FailingModel(BaseModel):
+        value: int = 42
+
+        def model_dump(self, **kwargs):
+            if kwargs.get("mode") != "json":
+                raise Exception("Simulated serialization failure")
+            return {"value": self.value}
+
+    model = FailingModel()
+    # Should not raise - falls back to model_dump(mode="json") then str()
+    result = safe_dumps(model)
+    parsed = json.loads(result)
+    assert parsed["value"] == 42
