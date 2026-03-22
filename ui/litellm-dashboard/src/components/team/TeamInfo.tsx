@@ -102,6 +102,7 @@ export interface TeamData {
       mcp_servers: string[];
       mcp_access_groups?: string[];
       mcp_tool_permissions?: Record<string, string[]>;
+      mcp_toolsets?: string[];
       vector_stores: string[];
       agents?: string[];
       agent_access_groups?: string[];
@@ -511,9 +512,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       // Handle object_permission updates
-      const { servers, accessGroups } = values.mcp_servers_and_groups || {
+      const { servers, accessGroups, toolsets } = values.mcp_servers_and_groups || {
         servers: [],
         accessGroups: [],
+        toolsets: [],
       };
       const serverIds = new Set(servers || []);
       const mcpToolPermissions = Object.fromEntries(
@@ -529,6 +531,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       if (mcpToolPermissions) {
         updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
+      }
+      if (toolsets) {
+        updateData.object_permission.mcp_toolsets = toolsets;
       }
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
@@ -826,6 +831,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       mcp_servers_and_groups: {
                         servers: info.object_permission?.mcp_servers || [],
                         accessGroups: info.object_permission?.mcp_access_groups || [],
+                        toolsets: info.object_permission?.mcp_toolsets || [],
                       },
                       mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
                       agents_and_groups: {
