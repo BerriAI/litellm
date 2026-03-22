@@ -1219,7 +1219,7 @@ def test_unaccounted_pdf_tokens_fill_text_tokens():
         f"PDF tokens (992 unaccounted) are not being costed."
     )
  
- def test_no_prompt_details_all_prompt_tokens_costed():
+def test_no_prompt_details_all_prompt_tokens_costed():
     """
     Scenario: Provider returns no prompt_tokens_details at all (older API).
     All prompt_tokens should be costed as text_tokens by default.
@@ -1256,7 +1256,7 @@ def test_unaccounted_pdf_tokens_fill_text_tokens():
         f"Without prompt_tokens_details, all prompt_tokens should be text."
     )
  
- def test_fully_accounted_tokens_unchanged():
+def test_fully_accounted_tokens_unchanged():
     """
     Scenario: All prompt_tokens are fully accounted by detail fields.
     Provider reports:
