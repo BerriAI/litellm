@@ -28,7 +28,6 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
 )
 
-from litellm.cost_calculator import response_cost_calculator
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -40,18 +39,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
+
 from litellm.types.utils import CacheCreationTokenDetails, Usage
-
-
-@pytest.fixture(autouse=True, scope="module")
-def setup_local_model_cost():
-    """Use the local model cost map for all tests."""
-    original_model_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    yield
-    os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-    litellm.model_cost = original_model_cost
  
 def test_reasoning_tokens_no_price_set():
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
