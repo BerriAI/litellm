@@ -281,9 +281,14 @@ def preserve_upstream_non_openai_attributes(
             "Upgrading pydantic may resolve this. Error: %s", e
         )
         # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+        # Filter out underscore-prefixed private attributes to match model_dump() behavior
         obj_dict = {
-            **dict(original_chunk.__dict__),
-            **(getattr(original_chunk, '__pydantic_extra__', None) or {}),
+            k: v
+            for k, v in {
+                **dict(original_chunk.__dict__),
+                **(getattr(original_chunk, '__pydantic_extra__', None) or {}),
+            }.items()
+            if not k.startswith('_')
         }
     for key, value in obj_dict.items():
         if key not in expected_keys:
