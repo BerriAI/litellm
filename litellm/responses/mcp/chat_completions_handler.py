@@ -412,11 +412,8 @@ class MCPStreamWrapper(CustomStreamWrapper):
         import asyncio
 
         if self._sync_iterator is None:
-            try:
-                self._sync_loop = asyncio.get_event_loop()
-            except RuntimeError:
-                self._sync_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._sync_loop)
+            self._sync_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._sync_loop)
             self._sync_iterator = _SyncIteratorWrapper(
                 self._custom_iterator, self._sync_loop
             )

@@ -602,6 +602,12 @@ class LiteLLM_Proxy_MCP_Handler:
                         "input": [{"role": "tool", "content": message}],
                         "call_type": CallTypes.call_mcp_tool.value,
                         "litellm_call_id": litellm_call_id or str(uuid.uuid4()),
+                        "proxy_server_request": {
+                            "url": agent_info["url"],
+                            "method": "POST",
+                            "headers": {},
+                            "body": {"message": message},
+                        },
                     }
                     if litellm_trace_id:
                         logging_request_data["litellm_trace_id"] = litellm_trace_id
@@ -627,7 +633,18 @@ class LiteLLM_Proxy_MCP_Handler:
                             _log_err,
                         )
 
+                    standard_logging_a2a_tool_call: StandardLoggingMCPToolCall = {
+                        "name": tool_name,
+                        "arguments": parsed_arguments,
+                        "namespaced_tool_name": tool_name,
+                        "mcp_server_name": agent_info["agent_name"],
+                    }
                     if litellm_logging_obj:
+                        litellm_logging_obj.model_call_details[
+                            "mcp_tool_call_metadata"
+                        ] = standard_logging_a2a_tool_call
+                        litellm_logging_obj.model = f"A2A: {tool_name}"
+                        litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
                         try:
                             litellm_logging_obj.pre_call(input=[message], api_key="")
                         except Exception:
@@ -647,8 +664,22 @@ class LiteLLM_Proxy_MCP_Handler:
                             litellm_logging_obj.post_call(
                                 original_response=result.get("result", "")
                             )
+                            end_time = datetime.now()
+                            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                                kwargs=litellm_logging_obj.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                            await litellm_logging_obj.async_success_handler(
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
                         except Exception:
-                            pass
+                            verbose_logger.exception(
+                                "Failed to log A2A tool call success for %s", tool_name
+                            )
 
                     tool_results.append(result)
                     continue
