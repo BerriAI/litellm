@@ -1,6 +1,7 @@
 """
 LiteLLM MCP Server Routes
 """
+
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
@@ -1455,6 +1456,43 @@ if MCP_AVAILABLE:
 
         return filtered_tools
 
+    async def _merge_toolset_permissions(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[UserAPIKeyAuth]:
+        """
+        Resolve mcp_toolsets on the key's object_permission into tool-level permissions
+        and merge them (union) into object_permission.mcp_tool_permissions.
+
+        Returns the (possibly mutated copy of) user_api_key_auth.
+        """
+        if user_api_key_auth is None:
+            return None
+        op = user_api_key_auth.object_permission
+        if op is None:
+            return user_api_key_auth
+        toolset_ids = getattr(op, "mcp_toolsets", None) or []
+        if not toolset_ids:
+            return user_api_key_auth
+
+        toolset_perms = (
+            await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                toolset_ids=toolset_ids
+            )
+        )
+        if not toolset_perms:
+            return user_api_key_auth
+
+        # Merge toolset_perms into existing mcp_tool_permissions (union)
+        existing = dict(op.mcp_tool_permissions or {})
+        for server_id, tool_names in toolset_perms.items():
+            existing_tools = existing.get(server_id, [])
+            merged = list(set(existing_tools) | set(tool_names))
+            existing[server_id] = merged
+
+        # Build updated object_permission with merged tool permissions
+        updated_op = op.model_copy(update={"mcp_tool_permissions": existing})
+        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
@@ -1479,6 +1517,11 @@ if MCP_AVAILABLE:
         """
         if not MCP_AVAILABLE:
             return []
+
+        # Resolve toolset permissions and merge into the key's object_permission
+        # so that the existing filter_tools_by_key_team_permissions logic picks them up.
+        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
+
         # Get tools from managed MCP servers with error handling
         managed_tools = []
         try:
@@ -1822,9 +1865,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
@@ -1836,9 +1879,9 @@ if MCP_AVAILABLE:
                 mcp_server.mcp_info or {}
             ).get("mcp_server_cost_info")
             if litellm_logging_obj:
-                litellm_logging_obj.model_call_details[
-                    "mcp_tool_call_metadata"
-                ] = standard_logging_mcp_tool_call
+                litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                    standard_logging_mcp_tool_call
+                )
 
             # BYOK: retrieve the stored per-user credential.  A single DB call
             # both checks existence and fetches the value, avoiding a double query.
@@ -2358,6 +2401,43 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    async def _apply_toolset_scope(
+        user_api_key_auth: UserAPIKeyAuth,
+        toolset_id: str,
+    ) -> UserAPIKeyAuth:
+        """
+        Restrict a key's MCP permissions to a single toolset.
+
+        When a request arrives via /toolset/{name}/mcp we override the key's
+        object_permission so that only the toolset's tools are visible,
+        regardless of what the key's normal permissions are.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        tool_permissions = (
+            await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                toolset_ids=[toolset_id]
+            )
+        )
+        server_ids = list(tool_permissions.keys())
+        existing_op = user_api_key_auth.object_permission
+        if existing_op is not None:
+            updated_op = existing_op.model_copy(
+                update={
+                    "mcp_servers": server_ids,
+                    "mcp_tool_permissions": tool_permissions,
+                    "mcp_toolsets": [],
+                    "mcp_access_groups": [],
+                }
+            )
+        else:
+            updated_op = LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_servers=server_ids,
+                mcp_tool_permissions=tool_permissions,
+            )
+        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2401,6 +2481,21 @@ if MCP_AVAILABLE:
                         detail="Unauthorized",
                         headers={"www-authenticate": authorization_uri},
                     )
+
+            # If the request came via /toolset/{name}/mcp, scope the auth context
+            # to that toolset so the key only sees that toolset's tools.
+            toolset_id_header = next(
+                (
+                    v.decode()
+                    for k, v in scope.get("headers", [])
+                    if k == b"x-mcp-toolset-id"
+                ),
+                None,
+            )
+            if toolset_id_header and user_api_key_auth is not None:
+                user_api_key_auth = await _apply_toolset_scope(
+                    user_api_key_auth, toolset_id_header
+                )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers = MCPDebug.maybe_build_debug_headers(
@@ -2580,17 +2675,15 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-            Optional[str],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
