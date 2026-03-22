@@ -587,15 +587,52 @@ class LiteLLM_Proxy_MCP_Handler:
                     tool_arguments
                 )
 
-                # Route A2A agent tool calls directly — skip the MCP execution path
+                # Route A2A agent tool calls through the same logging path as MCP tools
                 if agent_tool_map and tool_name in agent_tool_map:
                     agent_info = agent_tool_map[tool_name]
                     message = parsed_arguments.get("message") or str(parsed_arguments)
-                    verbose_logger.debug(
-                        "Executing A2A agent tool call: tool=%s agent=%s",
-                        tool_name,
-                        agent_info["agent_name"],
-                    )
+                    start_time = datetime.now()
+                    logging_request_data = {
+                        "model": f"A2A: {tool_name}",
+                        "metadata": {
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool_name,
+                            "agent_name": agent_info["agent_name"],
+                        },
+                        "input": [{"role": "tool", "content": message}],
+                        "call_type": CallTypes.call_mcp_tool.value,
+                        "litellm_call_id": litellm_call_id or str(uuid.uuid4()),
+                    }
+                    if litellm_trace_id:
+                        logging_request_data["litellm_trace_id"] = litellm_trace_id
+                    if user_api_key_auth is not None:
+                        user_api_key = getattr(user_api_key_auth, "api_key", None)
+                        if user_api_key:
+                            logging_request_data["metadata"][
+                                "user_api_key"
+                            ] = user_api_key
+
+                    litellm_logging_obj = None
+                    try:
+                        litellm_logging_obj, _ = function_setup(
+                            original_function="call_mcp_tool",
+                            rules_obj=rules_obj,
+                            start_time=start_time,
+                            **logging_request_data,
+                        )
+                    except Exception as _log_err:
+                        verbose_logger.debug(
+                            "Failed to init logging for A2A tool call %s: %s",
+                            tool_name,
+                            _log_err,
+                        )
+
+                    if litellm_logging_obj:
+                        try:
+                            litellm_logging_obj.pre_call(input=[message], api_key="")
+                        except Exception:
+                            pass
+
                     result = await RegistryOrchestrator.execute_a2a_tool_call(
                         agent_url=agent_info["url"],
                         agent_name=agent_info["agent_name"],
@@ -604,11 +641,15 @@ class LiteLLM_Proxy_MCP_Handler:
                         tool_name=tool_name,
                         litellm_trace_id=litellm_trace_id,
                     )
-                    verbose_logger.debug(
-                        "A2A tool call complete: tool=%s result_len=%d",
-                        tool_name,
-                        len(str(result.get("result", ""))),
-                    )
+
+                    if litellm_logging_obj:
+                        try:
+                            litellm_logging_obj.post_call(
+                                original_response=result.get("result", "")
+                            )
+                        except Exception:
+                            pass
+
                     tool_results.append(result)
                     continue
 
