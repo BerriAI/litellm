@@ -61,7 +61,7 @@ class TestEmbeddingChunkingHelpers:
     def test_chunk_text_large_input(self):
         """Test that large inputs are properly chunked."""
         # Create text that's ~1100 tokens (4000 chars)
-        text = "word " * 800  # 4000 chars = 1100 tokens (with 1.1 safety margin) 
+        text = "word " * 800  # 4000 chars = 1100 tokens (with 1.1 safety margin)
         chunks = self.router._chunk_text(text, chunk_size=512)
 
         # Should create multiple chunks
@@ -466,23 +466,24 @@ class TestEmbeddingChunkingEdgeCases:
 
     def test_chunk_text_empty_string(self):
         """Test chunking behavior with empty string input."""
-        chunks = self.router._chunk_text("", chunk_size=512)
-        # Empty string should return empty list (no chunks)
-        assert chunks == []
+        with pytest.raises(ValueError) as exc_info:
+            self.router._chunk_text("", chunk_size=512)
+        assert "cannot be empty or whitespace-only" in str(exc_info.value)
 
     def test_chunk_text_whitespace_only(self):
         """Test chunking behavior with whitespace-only input."""
         # Single space
-        chunks = self.router._chunk_text("   ", chunk_size=512)
-        assert chunks == []  # Whitespace-only chunks are skipped
+        with pytest.raises(ValueError) as exc_info:
+            self.router._chunk_text("   ", chunk_size=512)
+        assert "cannot be empty or whitespace-only" in str(exc_info.value)
 
         # Newlines only
-        chunks = self.router._chunk_text("\n\n\n", chunk_size=512)
-        assert chunks == []
+        with pytest.raises(ValueError):
+            self.router._chunk_text("\n\n\n", chunk_size=512)
 
         # Mixed whitespace
-        chunks = self.router._chunk_text("  \n  \t  ", chunk_size=512)
-        assert chunks == []
+        with pytest.raises(ValueError):
+            self.router._chunk_text("  \n  \t  ", chunk_size=512)
 
     def test_chunk_text_no_spaces_long_string(self):
         """Test chunking text with no word boundaries (continuous characters).
@@ -502,9 +503,9 @@ class TestEmbeddingChunkingEdgeCases:
         # 512 tokens * 4 chars * 0.9 safety = 1843 chars max
         max_chunk_chars = int(512 * 4 * 0.9)
         for i, chunk in enumerate(chunks):
-            assert len(chunk) <= max_chunk_chars + 50, (
-                f"Chunk {i} too large: {len(chunk)} > {max_chunk_chars}"
-            )
+            assert (
+                len(chunk) <= max_chunk_chars + 50
+            ), f"Chunk {i} too large: {len(chunk)} > {max_chunk_chars}"
 
         # All content should be preserved
         assert "".join(chunks) == text
