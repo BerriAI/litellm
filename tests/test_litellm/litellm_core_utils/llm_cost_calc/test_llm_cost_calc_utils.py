@@ -140,258 +140,6 @@ def test_reasoning_tokens_gemini():
         10,
     )
 
-def test_inline_pdf_tokens_costed_when_text_tokens_less_than_prompt_tokens():
-    usage = Usage(
-        completion_tokens=100,
-        prompt_tokens=5200,
-        total_tokens=5300,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=None, cached_tokens=None, text_tokens=12, image_tokens=None
-        ),
-    )
-    response = ModelResponse(
-        usage= usage,
-        model = "gemini-2.0-flash-001",
-    )
-    cost =  response_cost_calculator(
-        response_object= response,
-        model = "gemini-2.0-flash-001",
-        custom_llm_provider = "vertex_ai",
-        call_type = "acompletion",
-        optional_params= {},
-    )
-
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-    input_cost_per_token = model_info["input_cost_per_token"]
-    output_cost_per_token = model_info["output_cost_per_token"]
-
-    expected_cost = (
-        5200* input_cost_per_token + 100 * output_cost_per_token
-    )
-
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost} (all 5200 prompt tokens costed), "
-        f"got cost={cost}. PDF tokens are likely not being costed."
-    )
-
-def test_inline_pdf_with_audio_tokens_both_costed_correctly(): 
-    """
-    Scenario: User sends a PDF inline + audio + text.
-    Provider reports:
-        - prompt_tokens = 6000
-        - text_tokens = 50 (text message)
-        - audio_tokens = 500
-        - Remaining 5450 are PDF tokens (unaccounted)
-    Expected: text at text rate, audio at audio rate, PDF gap at text rate.
-    """
- 
-    usage = Usage(
-        prompt_tokens=6000,
-        completion_tokens=80,
-        total_tokens=6080,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=50,
-            audio_tokens=500,
-            cached_tokens=0,
-            image_tokens=0,
-        ),
-    )
-    response = ModelResponse(
-        usage=usage,
-        model="gemini-2.0-flash-001",
-    )
- 
-    cost = response_cost_calculator(
-        response_object=response,
-        model="gemini-2.0-flash-001",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-    )
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-    input_cost_per_token = model_info["input_cost_per_token"]
-    input_cost_per_audio_token = model_info["input_cost_per_audio_token"]
-    output_cost_per_token = model_info["output_cost_per_token"]
-
-    # text_tokens should be 50 + 5450 (unaccounted PDF) = 5500 
-    expected_input_cost = (
-        5500 * input_cost_per_token  # text + unaccounted PDF tokens
-        + 500 * input_cost_per_audio_token  # audio tokens
-    )
-    expected_output_cost = 80 * output_cost_per_token
-    expected_cost = expected_input_cost + expected_output_cost
- 
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, got cost={cost}. "
-        f"Unaccounted PDF tokens alongside audio are not being costed."
-    )
-
-def test_no_prompt_tokens_details_all_tokens_costed_as_text():
-    """
-    Scenario: Provider returns no prompt_tokens_details at all.
-    Expected: All prompt_tokens should default to text_tokens and be costed.
-    """
-    usage = Usage(
-        prompt_tokens=3000,
-        completion_tokens=200,
-        total_tokens=3200,
-    )
-    response = ModelResponse(
-        usage=usage,
-        model="gemini-2.0-flash-001",
-    )
- 
-    cost = response_cost_calculator(
-        response_object=response,
-        model="gemini-2.0-flash-001",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-    )
- 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-    expected_cost = (
-        3000 * model_info["input_cost_per_token"]
-        + 200 * model_info["output_cost_per_token"]
-    )
- 
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, got cost={cost}. "
-        f"With no prompt_tokens_details, all tokens should be costed as text."
-    )
-
-def test_fully_accounted_tokens_no_change():
-    """
-    Scenario: All prompt tokens are fully accounted for in details.
-    Expected: No adjustment needed, cost calculated normally.
-    """
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=50,
-        total_tokens=1050,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=1000,
-            audio_tokens=0,
-            cached_tokens=0,
-            image_tokens=0,
-        ),
-    )
-
-    response = ModelResponse(
-        usage=usage,
-        model="gemini-2.0-flash-001",
-    )
- 
-    cost = response_cost_calculator(
-        response_object=response,
-        model="gemini-2.0-flash-001",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-    )
- 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-    expected_cost = (
-        1000 * model_info["input_cost_per_token"]
-        + 50 * model_info["output_cost_per_token"]
-    )
-
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, got cost={cost}. "
-        f"Fully accounted tokens should not be adjusted."
-    )
- 
-def test_double_counting_still_handled():
-    """
-    Provider reports:
-        - prompt_tokens = 500
-        - text_tokens = 500 (includes cached)
-        - cached_tokens = 200
-    Expected: text_tokens recalculated to 300 (500 - 200).
-    """
-
-    usage = Usage(
-        prompt_tokens=500,
-        completion_tokens=50,
-        total_tokens=550,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=500,
-            audio_tokens=0,
-            cached_tokens=200,
-            image_tokens=0,
-        ),
-    )
-
-    response = ModelResponse(
-        usage=usage,
-        model="gemini-2.0-flash-001",
-    )
- 
-    cost = response_cost_calculator(
-        response_object=response,
-        model="gemini-2.0-flash-001",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-    )
- 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-    cache_read_cost = model_info.get("cache_read_input_token_cost", 0) or 0
-
-    # text_tokens should be recalculated to 300 (500 - 200 cache_hit)
-    expected_cost = (
-        300 * model_info["input_cost_per_token"]  # non-cached text
-        + 200 * cache_read_cost  # cached tokens
-        + 50 * model_info["output_cost_per_token"]
-    )
- 
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, got cost={cost}. "
-        f"Double-counting fix should still work."
-    )
- 
-def test_large_pdf_small_text_message():
-    """
-    Scenario: A large PDF (~50 pages) with a tiny instruction.
-    This is the most common real-world case.
-    """
-    usage = Usage(
-        prompt_tokens=52000,
-        completion_tokens=500,
-        total_tokens=52500,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=8,  # "Summarize this document"
-            audio_tokens=0,
-            cached_tokens=0,
-            image_tokens=0,
-        ),
-    )
-
-    response = ModelResponse(
-        usage=usage,
-        model="gemini-2.0-flash-001",
-    )
- 
-    cost = response_cost_calculator(
-        response_object=response,
-        model="gemini-2.0-flash-001",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-    )
- 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-
-    # All 52000 prompt tokens must be costed
-    expected_cost = (
-        52000 * model_info["input_cost_per_token"]
-        + 500 * model_info["output_cost_per_token"]
-    )
- 
-    assert cost == pytest.approx(expected_cost), (
-        f"Expected cost={expected_cost}, got cost={cost}. "
-        f"Large PDF content tokens (51992 unaccounted) are not being costed."
-    )
  
 def test_reasoning_tokens_gemini_3_1_flash_lite():
     """Test cost calculation for gemini-3.1-flash-lite-preview with reasoning tokens"""
@@ -1433,3 +1181,432 @@ def test_image_count_prevents_text_tokens_fallback():
         f"got {prompt_cost}. text_tokens fallback may be double-charging."
     )
     assert completion_cost == 0.0
+
+
+ 
+def test_inline_pdf_tokens_costed_when_text_tokens_less_than_prompt_tokens():
+        """
+        Scenario: User sends a PDF inline + a short text message.
+        Provider reports:
+          - prompt_tokens = 5200 (total: text + PDF)
+          - prompt_tokens_details.text_tokens = 12 (only the text message)
+          - No other detail fields set
+        Expected: All 5200 tokens should be costed, not just 12.
+        """
+        usage = Usage(
+            prompt_tokens=5200,
+            completion_tokens=100,
+            total_tokens=5300,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=12,
+                audio_tokens=0,
+                cached_tokens=0,
+                image_tokens=0,
+            ),
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        input_cost_per_token = model_info["input_cost_per_token"]
+        output_cost_per_token = model_info["output_cost_per_token"]
+ 
+        # All 5200 prompt tokens should be costed (not just 12 text tokens)
+        expected_cost = (
+            5200 * input_cost_per_token + 100 * output_cost_per_token
+        )
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost} (all 5200 prompt tokens costed), "
+            f"got cost={cost}. PDF tokens are likely not being costed."
+        )
+ 
+def test_inline_pdf_with_audio_tokens_both_costed_correctly():
+        """
+        Scenario: User sends a PDF inline + audio + text.
+        Provider reports:
+          - prompt_tokens = 6000
+          - text_tokens = 50 (text message)
+          - audio_tokens = 500
+          - Remaining 5450 are PDF tokens (unaccounted)
+        Expected: text at text rate, audio at audio rate, PDF gap at text rate.
+        """
+        usage = Usage(
+            prompt_tokens=6000,
+            completion_tokens=80,
+            total_tokens=6080,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=50,
+                audio_tokens=500,
+                cached_tokens=0,
+                image_tokens=0,
+            ),
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        input_cost_per_token = model_info["input_cost_per_token"]
+        input_cost_per_audio_token = model_info["input_cost_per_audio_token"]
+        output_cost_per_token = model_info["output_cost_per_token"]
+ 
+        # text_tokens should be 50 + 5450 (unaccounted PDF) = 5500
+        expected_input_cost = (
+            5500 * input_cost_per_token  # text + unaccounted PDF tokens
+            + 500 * input_cost_per_audio_token  # audio tokens
+        )
+        expected_output_cost = 80 * output_cost_per_token
+        expected_cost = expected_input_cost + expected_output_cost
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost}, got cost={cost}. "
+            f"Unaccounted PDF tokens alongside audio are not being costed."
+        )
+ 
+def test_no_prompt_tokens_details_all_tokens_costed_as_text():
+        """
+        Scenario: Provider returns no prompt_tokens_details at all.
+        Expected: All prompt_tokens should default to text_tokens and be costed.
+        """
+        usage = Usage(
+            prompt_tokens=3000,
+            completion_tokens=200,
+            total_tokens=3200,
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        expected_cost = (
+            3000 * model_info["input_cost_per_token"]
+            + 200 * model_info["output_cost_per_token"]
+        )
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost}, got cost={cost}. "
+            f"With no prompt_tokens_details, all tokens should be costed as text."
+        )
+ 
+def test_fully_accounted_tokens_no_change():
+        """
+        Scenario: All prompt tokens are fully accounted for in details.
+        Expected: No adjustment needed, cost calculated normally.
+        """
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            total_tokens=1050,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=1000,
+                audio_tokens=0,
+                cached_tokens=0,
+                image_tokens=0,
+            ),
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        expected_cost = (
+            1000 * model_info["input_cost_per_token"]
+            + 50 * model_info["output_cost_per_token"]
+        )
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost}, got cost={cost}. "
+            f"Fully accounted tokens should not be adjusted."
+        )
+ 
+def test_double_counting_still_handled():
+        """
+        Scenario: xAI-style double counting where text_tokens includes cached_tokens.
+        Provider reports:
+          - prompt_tokens = 500
+          - text_tokens = 500 (includes cached)
+          - cached_tokens = 200
+        Expected: text_tokens recalculated to 300 (500 - 200).
+        """
+        usage = Usage(
+            prompt_tokens=500,
+            completion_tokens=50,
+            total_tokens=550,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=500,
+                audio_tokens=0,
+                cached_tokens=200,
+                image_tokens=0,
+            ),
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        cache_read_cost = model_info.get("cache_read_input_token_cost", 0) or 0
+ 
+        # text_tokens should be recalculated to 300 (500 - 200 cache_hit)
+        expected_cost = (
+            300 * model_info["input_cost_per_token"]  # non-cached text
+            + 200 * cache_read_cost  # cached tokens
+            + 50 * model_info["output_cost_per_token"]
+        )
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost}, got cost={cost}. "
+            f"Double-counting fix should still work."
+        )
+ 
+def test_large_pdf_small_text_message():
+        """
+        Scenario: A large PDF (~50 pages) with a tiny instruction.
+        This is the most common real-world case.
+        """
+        usage = Usage(
+            prompt_tokens=52000,
+            completion_tokens=500,
+            total_tokens=52500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=8,  # "Summarize this document"
+                audio_tokens=0,
+                cached_tokens=0,
+                image_tokens=0,
+            ),
+        )
+        response = ModelResponse(
+            usage=usage,
+            model="gemini-2.0-flash-001",
+        )
+ 
+        cost = response_cost_calculator(
+            response_object=response,
+            model="gemini-2.0-flash-001",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+            optional_params={},
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+ 
+        # All 52000 prompt tokens must be costed
+        expected_cost = (
+            52000 * model_info["input_cost_per_token"]
+            + 500 * model_info["output_cost_per_token"]
+        )
+ 
+        assert cost == pytest.approx(expected_cost), (
+            f"Expected cost={expected_cost}, got cost={cost}. "
+            f"Large PDF content tokens (51992 unaccounted) are not being costed."
+        )
+ 
+def test_image_count_billing_does_not_fill_prompt_token_gap():
+        """
+        Scenario: User sends an image URL alongside some text.
+        Provider reports:
+          - prompt_tokens = 10000 (text + image overhead tokens)
+          - text_tokens = 50 (just the text instruction)
+          - image_count = 1 (the image URL, billed via input_cost_per_image)
+        Expected: The gap (9950 tokens) must NOT be added to text_tokens.
+        The provider already reflects image-URL tokens inside prompt_tokens
+        and charges them separately via input_cost_per_image. Gap-filling
+        would double-bill those tokens (once at text rate, once per-image).
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+ 
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=200,
+            total_tokens=10200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=50,
+                image_count=1,
+            ),
+        )
+ 
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="gemini-2.0-flash-001",
+            usage=usage,
+            custom_llm_provider="vertex_ai",
+        )
+ 
+        model_info = litellm.model_cost["gemini-2.0-flash-001"]
+        input_cost_per_token = model_info["input_cost_per_token"]
+        output_cost_per_token = model_info["output_cost_per_token"]
+        input_cost_per_image = model_info.get("input_cost_per_image", 0) or 0
+ 
+        # text_tokens should stay at 50 — no gap-fill when image_count is active
+        expected_prompt_cost = (
+            50 * input_cost_per_token     # only reported text tokens
+            + 1 * input_cost_per_image    # image billed via flat per-image cost
+        )
+        expected_completion_cost = 200 * output_cost_per_token
+ 
+        assert prompt_cost == pytest.approx(expected_prompt_cost), (
+            f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
+            f"Gap should not be filled when image_count billing is active."
+        )
+        assert completion_cost == pytest.approx(expected_completion_cost)
+ 
+def test_character_count_billing_does_not_fill_prompt_token_gap():
+        """
+        Regression: when character_count pricing is active, gaps between
+        accounted token details and prompt_tokens should NOT be converted to
+        text_tokens, otherwise character-based providers may be over-billed.
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+ 
+        usage = Usage(
+            prompt_tokens=200,
+            completion_tokens=20,
+            total_tokens=220,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                character_count=1000,
+                image_tokens=0,
+                audio_tokens=0,
+                cached_tokens=0,
+            ),
+        )
+ 
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="gemini-1.0-pro",
+            usage=usage,
+            custom_llm_provider="vertex_ai",
+        )
+ 
+        model_info = litellm.model_cost["gemini-1.0-pro"]
+        expected_prompt_cost = (
+            100 * model_info["input_cost_per_token"]
+            + 1000 * model_info["input_cost_per_character"]
+        )
+        expected_completion_cost = 20 * model_info["output_cost_per_token"]
+ 
+        assert prompt_cost == pytest.approx(expected_prompt_cost), (
+            f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
+            f"character_count-based requests should not fill token gaps as text."
+        )
+        assert completion_cost == pytest.approx(expected_completion_cost)
+ 
+def test_video_length_billing_does_not_fill_prompt_token_gap():
+        """
+        Regression: when video_length_seconds pricing is active, gaps between
+        accounted token details and prompt_tokens should NOT be converted to
+        text_tokens, otherwise video-based providers may be over-billed.
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+ 
+        usage = Usage(
+            prompt_tokens=150,
+            completion_tokens=10,
+            total_tokens=160,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=50,
+                video_length_seconds=12.0,
+                image_tokens=0,
+                audio_tokens=0,
+                cached_tokens=0,
+            ),
+        )
+ 
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="gemini-1.0-pro",
+            usage=usage,
+            custom_llm_provider="vertex_ai",
+        )
+ 
+        model_info = litellm.model_cost["gemini-1.0-pro"]
+        expected_prompt_cost = (
+            50 * model_info["input_cost_per_token"]
+            + 12.0 * model_info["input_cost_per_video_per_second"]
+        )
+        expected_completion_cost = 10 * model_info["output_cost_per_token"]
+ 
+        assert prompt_cost == pytest.approx(expected_prompt_cost), (
+            f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
+            f"video_length_seconds-based requests should not fill token gaps as text."
+        )
+        assert completion_cost == pytest.approx(expected_completion_cost)
+ 
+def test_negative_text_tokens_clamped_to_zero():
+        """
+        Scenario: Malformed provider response where cached_tokens > prompt_tokens.
+        Provider reports:
+          - prompt_tokens = 100
+          - text_tokens = 100 (includes cached → triggers double-counting)
+          - cached_tokens = 200
+        Expected: text_tokens should be clamped to 0, not go negative.
+        Prompt cost must remain non-negative.
+        """
+        from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+ 
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=10,
+            total_tokens=110,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                cached_tokens=200,
+            ),
+        )
+ 
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="gemini-2.0-flash-001",
+            usage=usage,
+            custom_llm_provider="vertex_ai",
+        )
+ 
+        # text_tokens = max(0, 100 - 200) = 0, so only cache_read cost applies
+        assert prompt_cost >= 0, (
+            f"Prompt cost must be non-negative, got {prompt_cost}. "
+            f"Negative text_tokens from double-counting fix is not clamped."
+        )
+        assert completion_cost >= 0
+ 
