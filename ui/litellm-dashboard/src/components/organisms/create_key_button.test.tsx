@@ -214,19 +214,30 @@ vi.mock("../common_components/PassThroughRoutesSelector", () => ({ default: () =
 vi.mock("../common_components/PremiumLoggingSettings", () => ({ default: () => null }));
 vi.mock("../common_components/RateLimitTypeFormItem", () => ({ default: () => null }));
 vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => null }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
 vi.mock("../common_components/team_dropdown", () => ({
-  default: ({ teams, onChange, disabled }: { teams?: any[]; onChange?: (v: string) => void; disabled?: boolean }) => (
+  default: ({ onChange, disabled }: { onChange?: (v: string) => void; disabled?: boolean }) => (
     <select
       data-testid="team-dropdown"
       disabled={disabled}
       onChange={(e) => onChange?.(e.target.value)}
     >
       <option value="">Select team</option>
-      {teams?.map((t: any) => (
-        <option key={t.team_id} value={t.team_id}>
-          {t.team_alias}
-        </option>
-      ))}
+      <option value="team-1">Team One</option>
+      <option value="team-2">Team Two</option>
     </select>
   ),
 }));

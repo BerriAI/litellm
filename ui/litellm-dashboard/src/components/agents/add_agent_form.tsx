@@ -723,10 +723,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           name="team_id"
           tooltip="Optionally assign this agent to a team. The agent and its key will belong to the selected team."
         >
-          <TeamDropdown
-            teams={teams}
-            loading={!teams}
-          />
+          <TeamDropdown />
         </Form.Item>
 
         <Divider className="my-4" />
