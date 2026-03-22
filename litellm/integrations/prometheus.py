@@ -922,6 +922,10 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
+        user_api_key_org_id = standard_logging_payload["metadata"]["user_api_key_org_id"]
+        user_api_key_org_alias = standard_logging_payload["metadata"][
+            "user_api_key_org_alias"
+        ]
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
@@ -955,6 +959,8 @@ class PrometheusLogger(CustomLogger):
             model_group=standard_logging_payload["model_group"],
             team=user_api_team,
             team_alias=user_api_team_alias,
+            org_id=user_api_key_org_id,
+            org_alias=user_api_key_org_alias,
             user=user_id,
             user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
