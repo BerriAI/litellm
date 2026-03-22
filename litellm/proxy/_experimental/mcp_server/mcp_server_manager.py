@@ -184,6 +184,8 @@ class MCPServerManager:
         """
 
         self._toolset_perm_cache: Dict[str, Tuple[Dict[str, List[str]], float]] = {}
+        # name → (toolset | None, cached_at)  — 60 s TTL
+        self._toolset_name_cache: Dict[str, Tuple[Optional[Any], float]] = {}
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -852,12 +854,44 @@ class MCPServerManager:
         """
         if toolset_id is None:
             self._toolset_perm_cache.clear()
+            self._toolset_name_cache.clear()
             return
         keys_to_remove = [
             k for k in self._toolset_perm_cache if toolset_id in k.split(",")
         ]
         for k in keys_to_remove:
             del self._toolset_perm_cache[k]
+        # Also evict any name cache entry that refers to this toolset_id
+        name_keys_to_remove = [
+            name
+            for name, (ts, _) in self._toolset_name_cache.items()
+            if ts is not None and getattr(ts, "toolset_id", None) == toolset_id
+        ]
+        for k in name_keys_to_remove:
+            del self._toolset_name_cache[k]
+
+    async def get_toolset_by_name_cached(
+        self,
+        prisma_client: Any,
+        toolset_name: str,
+    ) -> Optional[Any]:
+        """Return a toolset by name, using a 60 s in-memory TTL cache.
+
+        Avoids a DB hit on every MCP request routed through a named toolset.
+        """
+        cached_entry = self._toolset_name_cache.get(toolset_name)
+        if cached_entry is not None:
+            toolset, cached_at = cached_entry
+            if time.time() - cached_at < 60:
+                return toolset
+
+        from litellm.proxy._experimental.mcp_server.toolset_db import (
+            get_mcp_toolset_by_name,
+        )
+
+        toolset = await get_mcp_toolset_by_name(prisma_client, toolset_name)
+        self._toolset_name_cache[toolset_name] = (toolset, time.time())
+        return toolset
 
     def filter_server_ids_by_ip(
         self, server_ids: List[str], client_ip: Optional[str]
