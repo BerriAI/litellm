@@ -82,8 +82,14 @@ def test_aihubmix_mock_completion(stream):
         stream=stream,
     )
     if stream:
-        for chunk in response:
-            pass
+        chunks = list(response)
+        assert len(chunks) > 0
+        content = "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in chunks
+            if chunk.choices
+        )
+        assert "Hello from AIHubMix!" in content
     else:
         assert response is not None
         assert response.choices[0].message.content == "Hello from AIHubMix!"
