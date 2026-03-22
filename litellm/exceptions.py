@@ -917,10 +917,12 @@ class GuardrailRaisedException(Exception):
         guardrail_name: Optional[str] = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
+        status_code: int = 400,
     ):
         default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.message = default_message if should_wrap_with_default_message else message
+        self.status_code = status_code
         super().__init__(self.message)
 
 
