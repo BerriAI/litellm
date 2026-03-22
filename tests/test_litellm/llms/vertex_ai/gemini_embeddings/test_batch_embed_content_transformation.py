@@ -177,3 +177,19 @@ class TestProcessResponse:
         assert result.data[0]["index"] == 0
         assert result.data[1]["index"] == 1
         assert result.data[2]["index"] == 2
+
+    def test_multimodal_mixed_input(self):
+        """process_response works with mixed text + multimodal inputs."""
+        predictions: VertexAIBatchEmbeddingsResponseObject = {
+            "embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]
+        }
+        result = process_response(
+            input=["hello", IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2-preview",
+            _predictions=predictions,
+        )
+        assert len(result.data) == 2
+        assert result.data[0]["index"] == 0
+        assert result.data[1]["index"] == 1
+        assert result.usage.prompt_tokens >= 0
