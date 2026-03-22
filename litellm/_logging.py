@@ -195,6 +195,8 @@ class JsonFormatter(Formatter):
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
+            "component": record.name,
+            "logger": f"{record.filename}:{record.lineno}",
         }
 
         # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties
