@@ -87,6 +87,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         message=(
                             "gpt-5 models don't support temperature={}. "
                             "Only temperature=1 is supported. "
+                            "For models like gpt-5.1/5.4, temperature is supported "
+                            "when reasoning.effort='none' (or not specified). "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(temperature),
                         status_code=400,
