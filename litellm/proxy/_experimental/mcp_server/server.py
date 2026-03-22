@@ -9,6 +9,7 @@ import contextlib
 import time
 import traceback
 import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from typing import (
     Any,
@@ -55,6 +56,13 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
+
+# ContextVar holding the active toolset ID when a request arrives via
+# /toolset/{name}/mcp or /{name}/mcp (toolset fallback).  Set server-side
+# in proxy_server.py route handlers; never read from client-supplied headers.
+_mcp_active_toolset_id: ContextVar[Optional[str]] = ContextVar(
+    "_mcp_active_toolset_id", default=None
+)
 
 # Short-lived in-memory cache for BYOK credentials.
 # Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
@@ -2482,19 +2490,19 @@ if MCP_AVAILABLE:
                         headers={"www-authenticate": authorization_uri},
                     )
 
-            # If the request came via /toolset/{name}/mcp, scope the auth context
-            # to that toolset so the key only sees that toolset's tools.
-            toolset_id_header = next(
-                (
-                    v.decode()
-                    for k, v in scope.get("headers", [])
-                    if k == b"x-mcp-toolset-id"
-                ),
-                None,
-            )
-            if toolset_id_header and user_api_key_auth is not None:
+            # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
+            scope["headers"] = [
+                (k, v)
+                for k, v in scope.get("headers", [])
+                if k.lower() != b"x-mcp-toolset-id"
+            ]
+
+            # Apply toolset scope if set server-side via ContextVar (set by
+            # /toolset/{name}/mcp and /{name}/mcp route handlers in proxy_server.py).
+            active_toolset_id = _mcp_active_toolset_id.get()
+            if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(
-                    user_api_key_auth, toolset_id_header
+                    user_api_key_auth, active_toolset_id
                 )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
