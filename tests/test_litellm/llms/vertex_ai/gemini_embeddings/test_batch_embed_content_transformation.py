@@ -192,4 +192,4 @@ class TestProcessResponse:
         assert len(result.data) == 2
         assert result.data[0]["index"] == 0
         assert result.data[1]["index"] == 1
-        assert result.usage.prompt_tokens >= 0
+        assert result.usage.prompt_tokens == 0
