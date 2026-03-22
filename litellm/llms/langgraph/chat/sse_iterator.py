@@ -110,15 +110,147 @@ class LangGraphSSEStreamIterator:
         # Handle dict format (alternative response format)
         elif isinstance(data, dict):
             if "content" in data:
-                return self._create_content_chunk(data.get("content", ""))
+                self._has_received_messages = True
+                text, reasoning = self._extract_text_from_ai_content(
+                    data.get("content", "")
+                )
+                tools = self._normalize_tool_calls_for_delta(data.get("tool_calls"))
+                return self._create_delta_chunk(
+                    text,
+                    tool_calls=tools,
+                    reasoning_content=reasoning,
+                )
             elif "messages" in data:
                 messages = data.get("messages", [])
                 if messages:
                     last_msg = messages[-1]
-                    if isinstance(last_msg, dict) and last_msg.get("type") == "ai":
-                        return self._create_content_chunk(last_msg.get("content", ""))
+                    if isinstance(last_msg, dict) and last_msg.get("type") in (
+                        "ai",
+                        "AIMessageChunk",
+                    ):
+                        self._has_received_messages = True
+                        text, reasoning = self._extract_text_from_ai_content(
+                            last_msg.get("content", "")
+                        )
+                        tools = self._normalize_tool_calls_for_delta(
+                            last_msg.get("tool_calls")
+                        )
+                        return self._create_delta_chunk(
+                            text,
+                            tool_calls=tools,
+                            reasoning_content=reasoning,
+                        )
 
         return None
+
+    def _extract_text_from_ai_content(self, content):
+        """Flatten string or block-list AI content; return (text, reasoning_or_none)."""
+        if content is None:
+            return "", None
+        if isinstance(content, str):
+            return content, None
+        if isinstance(content, list):
+            text_parts = []
+            reasoning_parts = []
+            for block in content:
+                if isinstance(block, str):
+                    text_parts.append(block)
+                elif isinstance(block, dict):
+                    btype = block.get("type", "")
+                    if btype == "text" and "text" in block:
+                        text_parts.append(str(block["text"]))
+                    elif btype in ("reasoning", "thinking"):
+                        r = (
+                            block.get("reasoning")
+                            or block.get("text")
+                            or block.get("thinking")
+                        )
+                        if r is not None:
+                            reasoning_parts.append(str(r))
+                    elif "text" in block:
+                        text_parts.append(str(block["text"]))
+            reasoning = "".join(reasoning_parts) if reasoning_parts else None
+            return "".join(text_parts), reasoning
+        return str(content), None
+
+    def _normalize_tool_calls_for_delta(self, tool_calls):
+        """Map LangGraph / LangChain tool call dicts to OpenAI streaming delta shape."""
+        if not tool_calls or not isinstance(tool_calls, list):
+            return None
+        out = []
+        for idx, tc in enumerate(tool_calls):
+            if not isinstance(tc, dict):
+                continue
+            fn_obj = tc.get("function")
+            if isinstance(fn_obj, dict):
+                name = fn_obj.get("name", "")
+                args = fn_obj.get("arguments", "{}")
+                if isinstance(args, dict):
+                    args = json.dumps(args)
+                else:
+                    args = str(args)
+                out.append(
+                    {
+                        "id": tc.get("id"),
+                        "type": tc.get("type") or "function",
+                        "function": {"name": name, "arguments": args},
+                        "index": tc.get("index", idx),
+                    }
+                )
+                continue
+            name = tc.get("name")
+            if name is None and isinstance(fn_obj, str):
+                name = fn_obj
+            args = tc.get("args", tc.get("arguments", {}))
+            if isinstance(args, dict):
+                args = json.dumps(args)
+            elif args is None:
+                args = "{}"
+            else:
+                args = str(args)
+            if not name:
+                continue
+            out.append(
+                {
+                    "id": tc.get("id"),
+                    "type": "function",
+                    "function": {"name": name, "arguments": args},
+                    "index": tc.get("index", idx),
+                }
+            )
+        return out or None
+
+    def _create_delta_chunk(
+        self,
+        content: str,
+        tool_calls=None,
+        reasoning_content=None,
+    ) -> ModelResponseStream:
+        """Build a streaming chunk with optional content, tool_calls, and reasoning."""
+        delta_kwargs = {"role": "assistant"}
+        if content:
+            delta_kwargs["content"] = content
+        else:
+            delta_kwargs["content"] = None
+        if reasoning_content:
+            delta_kwargs["reasoning_content"] = reasoning_content
+        if tool_calls:
+            delta_kwargs["tool_calls"] = tool_calls
+
+        chunk = ModelResponseStream(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            created=0,
+            model=self.model,
+            object="chat.completion.chunk",
+        )
+        chunk.choices = [
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(**delta_kwargs),
+            )
+        ]
+        return chunk
 
     def _process_messages_event(self, payload) -> Optional[ModelResponseStream]:
         """
@@ -128,25 +260,30 @@ class LangGraphSSEStreamIterator:
         """
         if isinstance(payload, list):
             for item in payload:
+                msg = None
                 if isinstance(item, list) and len(item) >= 1:
                     msg = item[0]
-                    if isinstance(msg, dict):
-                        msg_type = msg.get("type", "")
-                        content = msg.get("content", "")
-
-                        # Only return AI messages with content
-                        if msg_type == "ai" and content:
-                            self._has_received_messages = True
-                            return self._create_content_chunk(content)
-                        elif msg_type == "AIMessageChunk" and content:
-                            self._has_received_messages = True
-                            return self._create_content_chunk(content)
                 elif isinstance(item, dict):
-                    msg_type = item.get("type", "")
-                    content = item.get("content", "")
-                    if msg_type in ("ai", "AIMessageChunk") and content:
-                        self._has_received_messages = True
-                        return self._create_content_chunk(content)
+                    msg = item
+
+                if not isinstance(msg, dict):
+                    continue
+
+                msg_type = msg.get("type", "")
+                if msg_type not in ("ai", "AIMessageChunk"):
+                    continue
+
+                self._has_received_messages = True
+                text, reasoning = self._extract_text_from_ai_content(msg.get("content"))
+                tools = self._normalize_tool_calls_for_delta(msg.get("tool_calls"))
+                if not text and reasoning is None and not tools:
+                    continue
+
+                return self._create_delta_chunk(
+                    text,
+                    tool_calls=tools,
+                    reasoning_content=reasoning,
+                )
 
         return None
 
@@ -164,22 +301,7 @@ class LangGraphSSEStreamIterator:
 
     def _create_content_chunk(self, text: str) -> ModelResponseStream:
         """Create a ModelResponseStream chunk with content."""
-        chunk = ModelResponseStream(
-            id=f"chatcmpl-{uuid.uuid4()}",
-            created=0,
-            model=self.model,
-            object="chat.completion.chunk",
-        )
-
-        chunk.choices = [
-            StreamingChoices(
-                finish_reason=None,
-                index=0,
-                delta=Delta(content=text, role="assistant"),
-            )
-        ]
-
-        return chunk
+        return self._create_delta_chunk(text)
 
     def _create_final_chunk(self) -> ModelResponseStream:
         """Create a final ModelResponseStream chunk with finish_reason."""

@@ -1,5 +1,6 @@
 """Tests for LangGraph SSE stream iterator."""
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -99,8 +100,6 @@ def test_standard_sse_metadata_before_messages_skipped():
 
 def test_full_stream_metadata_first_then_content():
     """End-to-end: metadata arrives first, then messages, then metadata ends stream."""
-    import json
-
     lines = [
         'data: ["metadata", {"run_id": "r1", "attempt": 1}]',
         'data: ["messages", [[{"type": "ai", "content": "hi"}, {}]]]',
@@ -116,3 +115,69 @@ def test_full_stream_metadata_first_then_content():
 
     second = next(it)
     assert second.choices[0].finish_reason == "stop"
+
+
+def test_tool_call_only_ai_message_sets_has_received_messages():
+    """Empty content with tool_calls must set _has_received_messages and emit tool deltas."""
+    it = _make_iterator()
+    it._parse_sse_line("event: messages")
+    msg = {
+        "type": "ai",
+        "content": "",
+        "tool_calls": [
+            {
+                "name": "get_weather",
+                "args": {"city": "Paris"},
+                "id": "call_1",
+                "type": "tool_call",
+            }
+        ],
+    }
+    chunk = it._parse_sse_line("data: " + json.dumps([[msg]]))
+    assert it._has_received_messages is True
+    assert chunk is not None
+    assert chunk.choices[0].delta.tool_calls is not None
+    assert chunk.choices[0].delta.tool_calls[0].function.name == "get_weather"
+
+
+def test_tool_calls_openai_shape_passed_through():
+    """AIMessageChunk with OpenAI-style tool_calls nested under function."""
+    it = _make_iterator()
+    it._parse_sse_line("event: messages")
+    msg = {
+        "type": "AIMessageChunk",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_x",
+                "type": "function",
+                "function": {"name": "foo", "arguments": '{"a": 1}'},
+            }
+        ],
+    }
+    chunk = it._parse_sse_line("data: " + json.dumps([[msg]]))
+    assert chunk is not None
+    assert chunk.choices[0].delta.tool_calls[0].function.name == "foo"
+    assert '"a"' in chunk.choices[0].delta.tool_calls[0].function.arguments
+
+
+def test_list_content_reasoning_and_text_blocks():
+    """List-shaped content yields text in delta.content and reasoning in reasoning_content."""
+    it = _make_iterator()
+    it._parse_sse_line("event: messages")
+    content = [
+        {"type": "reasoning", "reasoning": "step"},
+        {"type": "text", "text": "answer"},
+    ]
+    chunk = it._parse_sse_line(
+        "data: " + json.dumps([[{"type": "ai", "content": content}]])
+    )
+    assert chunk.choices[0].delta.content == "answer"
+    assert chunk.choices[0].delta.reasoning_content == "step"
+
+
+def test_dict_fallback_sets_has_received_messages():
+    """Top-level dict with content must flip _has_received_messages when emitting."""
+    it = _make_iterator()
+    it._process_data({"content": "z"}, event_type=None)
+    assert it._has_received_messages is True
