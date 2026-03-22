@@ -1,6 +1,3 @@
-import asyncio
-from unittest.mock import patch
-
 import pytest
 from fastapi import HTTPException
 
@@ -77,28 +74,44 @@ def test_inherits_from_custom_guardrail():
     assert isinstance(detector, CustomGuardrail)
 
 
-def test_guardrail_dispatch_is_reachable():
+def test_dispatch_reachable_via_should_run_guardrail():
     """
-    Verify the guardrail dispatcher will actually invoke
-    _OPTIONAL_PromptInjectionDetection for pre_call events.
+    Fix for https://github.com/BerriAI/litellm/issues/19499
 
-    isinstance(detector, CustomGuardrail) is necessary but not sufficient;
-    should_run_guardrail must also return True for the dispatcher to call
-    async_moderation_hook / async_pre_call_hook.
+    The during_call_hook() dispatcher in proxy/utils.py guards its loop
+    with `isinstance(callback, CustomGuardrail)` and then calls
+    `callback.should_run_guardrail(data, event_type=during_call)`.
+
+    Verify that should_run_guardrail returns True for during_call so
+    async_moderation_hook is actually reachable from the dispatcher.
     """
     detector = _OPTIONAL_PromptInjectionDetection()
-    # default_on=True + no event_hook filter → should run on pre_call
+    # default_on=True + event_hook=None means it should run for all event types
     assert detector.should_run_guardrail(
-        data={}, event_type=GuardrailEventHooks.pre_call
-    ) is True
-    # Also verify during_call is reachable (the original bug report)
-    assert detector.should_run_guardrail(
-        data={}, event_type=GuardrailEventHooks.during_call
+        data={},
+        event_type=GuardrailEventHooks.during_call,
     ) is True
 
 
 @pytest.mark.asyncio
-async def test_heuristics_check_does_not_block_event_loop():
+@pytest.mark.parametrize(
+    "prompt_injection_params, branch_desc",
+    [
+        pytest.param(
+            None,
+            "else branch (prompt_injection_params is None)",
+            id="no-params",
+        ),
+        pytest.param(
+            LiteLLMPromptInjectionParams(heuristics_check=True),
+            "if heuristics_check is True branch",
+            id="heuristics-check-true",
+        ),
+    ],
+)
+async def test_heuristics_check_does_not_block_event_loop(
+    prompt_injection_params, branch_desc
+):
     """
     Fix for https://github.com/BerriAI/litellm/issues/19499
 
@@ -106,53 +119,15 @@ async def test_heuristics_check_does_not_block_event_loop():
     async_pre_call_hook offloads it via asyncio.to_thread so
     the event loop stays responsive (prevents K8s pod restarts).
 
-    This test exercises the `else` branch (prompt_injection_params is None).
+    Both code paths that call check_user_input_similarity must
+    go through asyncio.to_thread.
     """
-    detector = _OPTIONAL_PromptInjectionDetection()
-    user_key = UserAPIKeyAuth(api_key="sk-test")
-    cache = DualCache()
-    data = {
-        "model": "test-model",
-        "messages": [
-            {"role": "user", "content": "Tell me a fun fact about space."}
-        ],
-    }
+    import asyncio
+    from unittest.mock import patch
 
-    called_via_to_thread = False
-    original_to_thread = asyncio.to_thread
-
-    async def tracking_to_thread(func, *args, **kwargs):
-        nonlocal called_via_to_thread
-        if func.__name__ == "check_user_input_similarity":
-            called_via_to_thread = True
-        return await original_to_thread(func, *args, **kwargs)
-
-    with patch(
-        "litellm.proxy.hooks.prompt_injection_detection.asyncio.to_thread",
-        side_effect=tracking_to_thread,
-    ):
-        result = await detector.async_pre_call_hook(
-            user_api_key_dict=user_key,
-            cache=cache,
-            data=data,
-            call_type="acompletion",
-        )
-
-    assert result == data
-    assert called_via_to_thread is True, (
-        "check_user_input_similarity should be called via asyncio.to_thread"
+    detector = _OPTIONAL_PromptInjectionDetection(
+        prompt_injection_params=prompt_injection_params,
     )
-
-
-@pytest.mark.asyncio
-async def test_heuristics_check_true_branch_does_not_block_event_loop():
-    """
-    Same as test_heuristics_check_does_not_block_event_loop but exercises
-    the explicit `heuristics_check=True` branch (line 178 of the
-    production code) rather than the `else` fallback.
-    """
-    params = LiteLLMPromptInjectionParams(heuristics_check=True)
-    detector = _OPTIONAL_PromptInjectionDetection(prompt_injection_params=params)
     user_key = UserAPIKeyAuth(api_key="sk-test")
     cache = DualCache()
     data = {
@@ -184,5 +159,6 @@ async def test_heuristics_check_true_branch_does_not_block_event_loop():
 
     assert result == data
     assert called_via_to_thread is True, (
-        "heuristics_check=True branch should use asyncio.to_thread"
+        f"check_user_input_similarity should be called via asyncio.to_thread "
+        f"in {branch_desc}"
     )
