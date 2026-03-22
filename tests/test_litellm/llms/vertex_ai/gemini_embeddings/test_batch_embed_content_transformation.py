@@ -44,6 +44,12 @@ class TestIsMultimodalInput:
     def test_mixed_text_and_image(self):
         assert _is_multimodal_input(["hello", IMAGE_DATA_URI]) is True
 
+    def test_nested_list_is_multimodal(self):
+        assert _is_multimodal_input([["text_a", "text_b"]]) is True
+
+    def test_nested_list_with_image_is_multimodal(self):
+        assert _is_multimodal_input([["a red shoe", IMAGE_DATA_URI]]) is True
+
 
 class TestBuildPartForInput:
     def test_text_input(self):
@@ -135,6 +141,33 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 3
 
+    def test_nested_input_combined_embedding(self):
+        """Nested list produces one request with multiple parts (combined embedding)."""
+        result = transform_openai_input_gemini_content(
+            input=[["a red shoe", IMAGE_DATA_URI]],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        assert len(result["requests"]) == 1
+        parts = result["requests"][0]["content"]["parts"]
+        assert len(parts) == 2
+        assert parts[0]["text"] == "a red shoe"
+        assert parts[1]["inline_data"] is not None
+
+    def test_mixed_nested_and_flat(self):
+        """Mixed nested + flat produces correct number of requests."""
+        result = transform_openai_input_gemini_content(
+            input=[["text", IMAGE_DATA_URI], "standalone"],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        assert len(result["requests"]) == 2
+        # First: combined (2 parts)
+        assert len(result["requests"][0]["content"]["parts"]) == 2
+        # Second: standalone (1 part)
+        assert len(result["requests"][1]["content"]["parts"]) == 1
+        assert result["requests"][1]["content"]["parts"][0]["text"] == "standalone"
+
 
 class TestTransformOpenaiInputGeminiEmbedContent:
     """Test transform_openai_input_gemini_embed_content (vertex_ai / embedContent path)."""
@@ -224,3 +257,33 @@ class TestProcessResponse:
         assert result.data[1]["index"] == 1
         # Should count tokens only for the text element, not the image
         assert result.usage.prompt_tokens > 0
+
+    def test_nested_input_token_counting(self):
+        """Nested list: only plain-text sub-elements should be counted."""
+        predictions: VertexAIBatchEmbeddingsResponseObject = {
+            "embeddings": [{"values": [0.1, 0.2]}]
+        }
+        result = process_response(
+            input=[["a red shoe", IMAGE_DATA_URI]],
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2-preview",
+            _predictions=predictions,
+        )
+        assert len(result.data) == 1
+        assert result.usage.prompt_tokens > 0
+
+    def test_nested_empty_list_raises(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            transform_openai_input_gemini_content(
+                input=[[]],
+                model="gemini-embedding-2-preview",
+                optional_params={},
+            )
+
+    def test_nested_non_string_element_raises(self):
+        with pytest.raises(ValueError, match="must be strings"):
+            transform_openai_input_gemini_content(
+                input=[[["doubly", "nested"]]],
+                model="gemini-embedding-2-preview",
+                optional_params={},
+            )
