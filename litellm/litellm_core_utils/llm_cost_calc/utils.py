@@ -689,7 +689,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     should_fill_unaccounted_tokens = (
         accounted_tokens < usage.prompt_tokens
         and not has_non_token_alternative_billing
-        and not (accounted_tokens == 0 and has_image_count_billing)
+        and not has_image_count_billing
     )
 
     if has_double_counting:
@@ -721,15 +721,10 @@ def generic_cost_per_token(  # noqa: PLR0915
         # in prompt_tokens by the provider but not broken out into any detail field.
         # Add the gap to text_tokens so they are costed at input_cost_per_token.
         #
-        # The guard above skips filling when non-token alternative pricing
-        # dimensions are present (character_count / video_length_seconds),
-        # since converting that gap to text_tokens can over-bill.
-        #
-        # For image_count pricing, we only skip when there is ZERO token-level
-        # accounting (e.g. Bedrock Nova image-only embeddings). Mixed requests
-        # (PDF + image_count) where text_tokens > 0 still get their gap filled.
-        unaccounted_tokens = usage.prompt_tokens - accounted_tokens
-        prompt_tokens_details["text_tokens"] += unaccounted_tokens
+        # The guard above skips filling when ANY alternative pricing dimension is
+        # present (character_count, video_length_seconds, or image_count), since
+        # the gap may represent tokens already billed through those dimensions
+        # and converting them to text_tokens would cause double-billing.
 
     (
         prompt_base_cost,
