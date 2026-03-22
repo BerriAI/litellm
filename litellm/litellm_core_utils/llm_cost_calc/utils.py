@@ -1,4 +1,3 @@
-# What is this?
 ## Helper utilities for cost_per_token()
 
 from typing import Literal, Optional, Tuple, TypedDict, cast
