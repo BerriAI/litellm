@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
@@ -32,6 +32,21 @@ from .batch_embed_content_transformation import (
 
 
 class GoogleBatchEmbeddings(VertexLLM):
+    @staticmethod
+    def _flatten_and_detect_file_refs(
+        input: EmbeddingInput,
+    ) -> Tuple[List[str], bool]:
+        """Flatten nested input lists and detect file references."""
+        input_list = [input] if isinstance(input, str) else input
+        flat_elements = [
+            e
+            for item in input_list
+            for e in (item if isinstance(item, list) else [item])
+            if isinstance(e, str)
+        ]
+        has_file_refs = any(_is_file_reference(e) for e in flat_elements)
+        return flat_elements, has_file_refs
+
     def _resolve_file_references(
         self,
         input: EmbeddingInput,
@@ -214,14 +229,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            input_list = [input] if isinstance(input, str) else input
-            flat_elements = [
-                e
-                for item in input_list
-                for e in (item if isinstance(item, list) else [item])
-                if isinstance(e, str)
-            ]
-            has_file_refs = any(_is_file_reference(e) for e in flat_elements)
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
@@ -323,14 +331,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            input_list = [input] if isinstance(input, str) else input
-            flat_elements = [
-                e
-                for item in input_list
-                for e in (item if isinstance(item, list) else [item])
-                if isinstance(e, str)
-            ]
-            has_file_refs = any(_is_file_reference(e) for e in flat_elements)
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
