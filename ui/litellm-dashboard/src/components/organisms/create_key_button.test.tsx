@@ -119,7 +119,7 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
-  const Select = ({ children, onChange, ...props }: { children?: any; onChange?: (value: string) => void }) =>
+  const Select = ({ children, onChange, options, ...props }: { children?: any; onChange?: (value: string) => void; options?: Array<{ value: string; label: string }> }) =>
     React.createElement(
       "select",
       {
@@ -127,6 +127,7 @@ vi.mock("antd", () => {
         onChange: (event: any) => onChange?.(event.target.value),
       },
       children,
+      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
 
   Select.Option = ({ children, ...props }: { children?: any }) =>
@@ -236,6 +237,16 @@ vi.mock("../shared/numerical_input", () => ({ default: () => null }));
 vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
+  useTags: vi.fn().mockReturnValue({
+    data: [
+      { name: "production", description: "Prod tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+      { name: "staging", description: "Staging tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+    ],
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
@@ -523,6 +534,21 @@ describe("CreateKey", () => {
       });
 
       expect(formStateRef.current["organization_id"]).toBe("org-1");
+    });
+  });
+
+  describe("tags dropdown", () => {
+    it("should populate tags dropdown with options from useTags hook", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("production")).toBeInTheDocument();
+        expect(screen.getByText("staging")).toBeInTheDocument();
+      });
     });
   });
 });
