@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.auth.auth_checks import get_allowed_search_tool_names
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
@@ -164,11 +165,7 @@ async def list_search_tools(
             )
 
         # Filter based on caller's key/team permissions
-        from litellm.proxy.search_endpoints.endpoints import (
-            _get_allowed_search_tool_names,
-        )
-
-        allowed_names = await _get_allowed_search_tool_names(user_api_key_dict)
+        allowed_names = await get_allowed_search_tool_names(user_api_key_dict)
         if allowed_names is not None:
             search_tool_configs = [
                 tool

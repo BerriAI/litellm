@@ -3597,6 +3597,10 @@ def _can_object_call_search_tools(
     if object_permissions.search_tools is None:
         return True
 
+    # Wildcard "*" = all tools accessible (migration default)
+    if "*" in object_permissions.search_tools:
+        return True
+
     # Empty list = no access (principle of least privilege)
     # Non-empty list = only listed tools are accessible
     if search_tool_name not in object_permissions.search_tools:
@@ -3675,3 +3679,72 @@ async def search_tool_access_check(
             )
 
     return True
+
+
+def _normalize_search_tools_wildcard(
+    search_tools: Optional[List[str]],
+) -> Optional[List[str]]:
+    """Treat ["*"] (the migration default) as None (no restriction)."""
+    if search_tools is not None and "*" in search_tools:
+        return None
+    return search_tools
+
+
+async def get_allowed_search_tool_names(
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> Optional[List[str]]:
+    """
+    Compute the intersection of key-level and team-level search tool permissions.
+
+    Returns:
+        None  → no restriction (all tools accessible)
+        list  → only those tool names are accessible (may be empty = none)
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return None
+
+    key_allowed: Optional[List[str]] = None
+    team_allowed: Optional[List[str]] = None
+
+    # Key-level permissions (via cached helper)
+    if user_api_key_dict.object_permission_id is not None:
+        key_perm = await get_object_permission(
+            object_permission_id=user_api_key_dict.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if key_perm is not None:
+            key_allowed = _normalize_search_tools_wildcard(key_perm.search_tools)
+
+    # Team-level permissions (via cached helper)
+    team_perm_id = getattr(user_api_key_dict, "team_object_permission_id", None)
+    if team_perm_id is not None:
+        team_perm = await get_object_permission(
+            object_permission_id=team_perm_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_perm is not None:
+            team_allowed = _normalize_search_tools_wildcard(team_perm.search_tools)
+
+    # Combine: both None → None (no restriction)
+    # One set → use that set
+    # Both set → intersection
+    if key_allowed is None and team_allowed is None:
+        return None
+    if key_allowed is None:
+        return team_allowed
+    if team_allowed is None:
+        return key_allowed
+    # Both are set - return the intersection
+    return list(set(key_allowed) & set(team_allowed))

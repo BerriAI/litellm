@@ -6,71 +6,11 @@ from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import get_allowed_search_tool_names
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router = APIRouter()
-
-
-async def _get_allowed_search_tool_names(
-    user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[List[str]]:
-    """
-    Compute the intersection of key-level and team-level search tool permissions.
-
-    Returns:
-        None  → no restriction (all tools accessible)
-        list  → only those tool names are accessible (may be empty = none)
-    """
-    from litellm.proxy.auth.auth_checks import get_object_permission
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        return None
-
-    key_allowed: Optional[List[str]] = None
-    team_allowed: Optional[List[str]] = None
-
-    # Key-level permissions (via cached helper)
-    if user_api_key_dict.object_permission_id is not None:
-        key_perm = await get_object_permission(
-            object_permission_id=user_api_key_dict.object_permission_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        if key_perm is not None:
-            key_allowed = key_perm.search_tools  # None means no restriction
-
-    # Team-level permissions (via cached helper)
-    team_perm_id = getattr(user_api_key_dict, "team_object_permission_id", None)
-    if team_perm_id is not None:
-        team_perm = await get_object_permission(
-            object_permission_id=team_perm_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        if team_perm is not None:
-            team_allowed = team_perm.search_tools  # None means no restriction
-
-    # Combine: both None → None (no restriction)
-    # One set → use that set
-    # Both set → intersection
-    if key_allowed is None and team_allowed is None:
-        return None
-    if key_allowed is None:
-        return team_allowed
-    if team_allowed is None:
-        return key_allowed
-    # Both are set - return the intersection
-    return list(set(key_allowed) & set(team_allowed))
 
 
 @router.post(
@@ -338,7 +278,7 @@ async def list_search_tools(
                 search_tools_list.append(tool_info)
 
         # Filter search tools based on user's permissions
-        allowed_names = await _get_allowed_search_tool_names(user_api_key_dict)
+        allowed_names = await get_allowed_search_tool_names(user_api_key_dict)
         if allowed_names is not None:
             search_tools_list = [
                 tool

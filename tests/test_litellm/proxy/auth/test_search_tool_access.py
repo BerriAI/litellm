@@ -22,6 +22,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _can_object_call_search_tools,
     _can_object_call_vector_stores,
+    _normalize_search_tools_wildcard,
+    get_allowed_search_tool_names,
     search_tool_access_check,
 )
 
@@ -123,6 +125,26 @@ class TestCanObjectCallSearchTools:
                 object_permissions=perm,
             )
         assert exc_info.value.type == ProxyErrorTypes.org_search_tool_access_denied
+
+    def test_should_allow_any_tool_when_wildcard_present(self):
+        """search_tools=["*"] (migration default) → allow any tool."""
+        perm = _make_object_permission(search_tools=["*"])
+        result = _can_object_call_search_tools(
+            object_type="key",
+            search_tool_name="any-tool",
+            object_permissions=perm,
+        )
+        assert result is True
+
+    def test_should_allow_any_tool_when_wildcard_mixed_with_names(self):
+        """search_tools=["*", "tool-a"] → wildcard dominates, allow any."""
+        perm = _make_object_permission(search_tools=["*", "tool-a"])
+        result = _can_object_call_search_tools(
+            object_type="key",
+            search_tool_name="tool-b",
+            object_permissions=perm,
+        )
+        assert result is True
 
     def test_should_allow_all_tools_in_allowed_list(self):
         """Multiple tools in allowed list all pass."""
@@ -384,3 +406,104 @@ class TestVectorStoreAccessNotBroken:
                 object_permissions=perm,
             )
         assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+# ===========================================================================
+# _normalize_search_tools_wildcard
+# ===========================================================================
+
+
+class TestNormalizeSearchToolsWildcard:
+    def test_none_stays_none(self):
+        assert _normalize_search_tools_wildcard(None) is None
+
+    def test_empty_list_stays_empty(self):
+        assert _normalize_search_tools_wildcard([]) == []
+
+    def test_explicit_names_unchanged(self):
+        assert _normalize_search_tools_wildcard(["a", "b"]) == ["a", "b"]
+
+    def test_wildcard_only_returns_none(self):
+        assert _normalize_search_tools_wildcard(["*"]) is None
+
+    def test_wildcard_mixed_returns_none(self):
+        assert _normalize_search_tools_wildcard(["*", "tool-a"]) is None
+
+
+# ===========================================================================
+# get_allowed_search_tool_names — wildcard handling
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_should_return_none_when_key_has_wildcard():
+    """Key with ["*"] → None (no restriction)."""
+    key_perm = MagicMock()
+    key_perm.search_tools = ["*"]
+
+    token = UserAPIKeyAuth(
+        object_permission_id="key-perm-id",
+        team_object_permission_id=None,
+    )
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(return_value=key_perm)):
+        result = await get_allowed_search_tool_names(token)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_should_intersect_wildcard_key_with_team_list():
+    """Key ["*"] + team ["tool-a"] → ["tool-a"]."""
+    key_perm = MagicMock()
+    key_perm.search_tools = ["*"]
+
+    team_perm = MagicMock()
+    team_perm.search_tools = ["tool-a"]
+
+    async def mock_get_perm(object_permission_id, **kwargs):
+        if object_permission_id == "key-perm-id":
+            return key_perm
+        elif object_permission_id == "team-perm-id":
+            return team_perm
+        return None
+
+    token = UserAPIKeyAuth(
+        object_permission_id="key-perm-id",
+        team_object_permission_id="team-perm-id",
+    )
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(side_effect=mock_get_perm)):
+        result = await get_allowed_search_tool_names(token)
+    assert result == ["tool-a"]
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_should_return_none_when_both_wildcard():
+    """Key ["*"] + team ["*"] → None (no restriction)."""
+    key_perm = MagicMock()
+    key_perm.search_tools = ["*"]
+
+    team_perm = MagicMock()
+    team_perm.search_tools = ["*"]
+
+    async def mock_get_perm(object_permission_id, **kwargs):
+        if object_permission_id == "key-perm-id":
+            return key_perm
+        elif object_permission_id == "team-perm-id":
+            return team_perm
+        return None
+
+    token = UserAPIKeyAuth(
+        object_permission_id="key-perm-id",
+        team_object_permission_id="team-perm-id",
+    )
+    with patch(f"{_PROXY_SERVER}.prisma_client", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.proxy_logging_obj", MagicMock()), \
+         patch(f"{_PROXY_SERVER}.user_api_key_cache", MagicMock()), \
+         patch(_GET_OBJ_PERM, AsyncMock(side_effect=mock_get_perm)):
+        result = await get_allowed_search_tool_names(token)
+    assert result is None
