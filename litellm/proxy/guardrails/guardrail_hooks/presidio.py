@@ -491,12 +491,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
                 new_text = redacted_text["text"]
+
                 # Both lists sorted right-to-left by start position. Presidio
                 # preserves positional order in both analyzer and anonymizer
                 # responses, so consuming _sorted_ar in order correctly pairs
                 # each item with its analyze_results entry.
                 def _ar_val(ar, key, default=None):
-                    return ar.get(key, default) if isinstance(ar, dict) else getattr(ar, key, default)
+                    return (
+                        ar.get(key, default)
+                        if isinstance(ar, dict)
+                        else getattr(ar, key, default)
+                    )
+
                 _sorted_ar = sorted(
                     analyze_results if isinstance(analyze_results, list) else [],
                     key=lambda x: -(_ar_val(x, "start") or 0),
@@ -532,14 +538,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         # correctly pairs each item with its analyze_results entry.
                         _orig_val = None
                         for _ar_i, _ar in enumerate(_sorted_ar):
-                            if _ar_i not in _ar_used and _ar_val(_ar, "entity_type") == item.get("entity_type"):
+                            if _ar_i not in _ar_used and _ar_val(
+                                _ar, "entity_type"
+                            ) == item.get("entity_type"):
                                 _s = _ar_val(_ar, "start")
                                 _e = _ar_val(_ar, "end")
                                 if _s is not None and _e is not None:
                                     _orig_val = text[_s:_e]
                                 _ar_used.add(_ar_i)
                                 break
-                        _token_value = _orig_val if _orig_val is not None else new_text[start:end]
+                        _token_value = (
+                            _orig_val if _orig_val is not None else new_text[start:end]
+                        )
                         # Store in request_data["metadata"]["pii_tokens"] for
                         # per-request thread safety (matches upstream convention).
                         # Do NOT write to self.pii_tokens — the guardrail instance
@@ -549,7 +559,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 request_data["metadata"] = {}
                             if "pii_tokens" not in request_data["metadata"]:
                                 request_data["metadata"]["pii_tokens"] = {}
-                            request_data["metadata"]["pii_tokens"][replacement] = _token_value
+                            request_data["metadata"]["pii_tokens"][
+                                replacement
+                            ] = _token_value
 
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
@@ -749,9 +761,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -852,9 +864,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -942,7 +954,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         # Prefer pii_tokens from request_data (stored by pre_call masking instance).
-        _pii_tokens = (data.get("metadata", {}).get("pii_tokens") if data else None) or self.pii_tokens
+        _pii_tokens = (
+            (data.get("metadata") or {}).get("pii_tokens") if data else None
+        ) or {}
 
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
@@ -959,7 +973,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # Anthropic native /v1/messages response
             for block in response.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    block["text"] = self._unmask_pii_text(block.get("text", ""), _pii_tokens)
+                    block["text"] = self._unmask_pii_text(
+                        block.get("text", ""), _pii_tokens
+                    )
         return response
 
     @staticmethod
@@ -983,9 +999,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Use word-boundary anchoring to avoid false positives in technical text
             stripped = token.strip("<>")
             if stripped:
-                _fb_pattern = r'(?<!\w)' + re.escape(stripped) + r'(?!\w)'
+                _fb_pattern = r"(?<!\w)" + re.escape(stripped) + r"(?!\w)"
                 if re.search(_fb_pattern, text):
-                    text = re.sub(_fb_pattern, original_text, text)
+                    text = re.sub(_fb_pattern, lambda m: original_text, text)
                     continue
 
             # FALLBACK 2: Handle truncated tokens (token cut off by max_tokens)
@@ -1018,9 +1034,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Handles content blocks with type == "text".
         """
         pii_tokens = (
-            (request_data.get("metadata", {}).get("pii_tokens") if request_data else None)
-            or self.pii_tokens
-        )
+            (request_data.get("metadata") or {}).get("pii_tokens")
+            if request_data
+            else None
+        ) or {}
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
                 "No pii_tokens in request_data for Anthropic response unmask"
@@ -1062,9 +1079,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Handles all choices and tool calls.
         """
         pii_tokens = (
-            (request_data.get("metadata", {}).get("pii_tokens") if request_data else None)
-            or self.pii_tokens
-        )
+            (request_data.get("metadata") or {}).get("pii_tokens")
+            if request_data
+            else None
+        ) or {}
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
                 "No pii_tokens found in request_data — nothing to unmask"
@@ -1296,7 +1314,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        pii_tokens = (request_data.get("metadata", {}).get("pii_tokens", {}) if request_data else {})
+        pii_tokens = (
+            (request_data.get("metadata") or {}).get("pii_tokens", {})
+            if request_data
+            else {}
+        )
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
                 "No pii_tokens in request_data for streaming unmask path"
@@ -1325,9 +1347,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # across SSE events. We keep a small carry buffer (MAX_CARRY chars) to
             # catch split tokens, then flush everything else immediately.
             MAX_CARRY = 80
-            sse_buf = b""       # accumulator for incomplete SSE event bytes
-            carry_text = ""     # pending text that might be a partial PII token
-            carry_lines: Optional[list] = None   # SSE event lines for carry_text
+            sse_buf = b""  # accumulator for incomplete SSE event bytes
+            carry_text = ""  # pending text that might be a partial PII token
+            carry_lines: Optional[list] = None  # SSE event lines for carry_text
             carry_data: Optional[dict] = None
             carry_data_idx: Optional[int] = None
 
@@ -1373,7 +1395,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if not is_text_delta:
                             # Flush any pending carry before non-text events
                             if carry_text and carry_lines is not None:
-                                unmasked_carry = self._unmask_pii_text(carry_text, pii_tokens)
+                                unmasked_carry = self._unmask_pii_text(
+                                    carry_text, pii_tokens
+                                )
                                 carry_data["delta"]["text"] = unmasked_carry
                                 carry_lines[carry_data_idx] = "data: " + _json.dumps(
                                     carry_data, ensure_ascii=False
@@ -1402,9 +1426,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             carry_data = data
                             carry_data_idx = data_idx
 
-                        data["delta"]["text"] = flush_text
-                        lines[data_idx] = "data: " + _json.dumps(data, ensure_ascii=False)
-                        yield (("\n".join(lines)) + "\n\n").encode("utf-8")
+                        # Only yield text_delta when there's actually text to send
+                        if flush_text:
+                            data["delta"]["text"] = flush_text
+                            lines[data_idx] = "data: " + _json.dumps(
+                                data, ensure_ascii=False
+                            )
+                            yield (("\n".join(lines)) + "\n\n").encode("utf-8")
 
                 # Flush remaining carry at end of stream
                 if carry_text and carry_lines is not None:
@@ -1495,8 +1523,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Unmask path only — applies when unified guardrail calls apply_guardrail()
         # with input_type="response". The apply_to_output masking path is handled
         # separately by async_post_call_*_hook, not by this method.
-        if input_type == "response" and self.output_parse_pii:
-            pii_tokens = (request_data.get("metadata", {}).get("pii_tokens", {}) if request_data else {})
+        if input_type == "response" and (
+            self.output_parse_pii or litellm.output_parse_pii
+        ):
+            pii_tokens = (
+                (request_data.get("metadata") or {}).get("pii_tokens", {})
+                if request_data
+                else {}
+            )
             if pii_tokens:
                 _texts = inputs.get("texts", [])
                 inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in _texts]

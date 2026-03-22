@@ -23,7 +23,6 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -161,6 +160,7 @@ async def test_apply_guardrail_strips_openai_keys(guardrail):
 @pytest.mark.asyncio
 async def test_apply_guardrail_stores_pii_tokens_via_check_pii(guardrail):
     """check_pii stores pii_tokens in request_data['metadata']['pii_tokens']."""
+
     # Mock check_pii to simulate anonymize_text storing a token
     async def _mock_check_pii(text, output_parse_pii, presidio_config, request_data):
         if "metadata" not in request_data:
@@ -333,3 +333,53 @@ async def test_streaming_sse_passthrough_no_pii_tokens(guardrail):
 
     decoded = collected.decode("utf-8")
     assert original_text in decoded
+
+
+# ---------------------------------------------------------------------------
+# metadata=None safety tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unmask_handles_metadata_none(guardrail):
+    """Unmask path must not crash when metadata is explicitly None."""
+    guardrail.pii_tokens = {}
+    response = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello world"}],
+        "model": "claude-sonnet-4-6",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    data = {"metadata": None}
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    result = await guardrail.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+        response=response,
+    )
+    assert result["content"][0]["text"] == "Hello world"
+
+
+# ---------------------------------------------------------------------------
+# Backslash in PII values tests
+# ---------------------------------------------------------------------------
+
+
+def test_unmask_pii_text_backslash_in_value():
+    """PII values with backslashes must not be corrupted by re.sub."""
+    pii_tokens = {"<PERSON_abc123>": r"C:\Users\John"}
+    # Exact match path (no regex involved)
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(
+        "Path is <PERSON_abc123>", pii_tokens
+    )
+    assert result == r"Path is C:\Users\John"
+
+    # FALLBACK 1 path (regex involved)
+    result = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(
+        "Path is PERSON_abc123", pii_tokens
+    )
+    assert result == r"Path is C:\Users\John"
