@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def setup_local_model_cost():
     """Use the local model cost map for all tests."""
     original_model_cost = litellm.model_cost
