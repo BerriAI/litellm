@@ -955,16 +955,6 @@ def responses_api_bridge_check(
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
 
-        # OpenAI gpt-5.4+ chat-completions calls with both tools + reasoning_effort
-        # must be bridged to Responses API.
-        if (
-            custom_llm_provider == "openai"
-            and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-            and tools
-            and reasoning_effort is not None
-        ):
-            model_info["mode"] = "responses"
-            model = model.replace("responses/", "")
     except Exception as e:
         verbose_logger.debug("Error getting model info: {}".format(e))
 
@@ -974,6 +964,19 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    # OpenAI/Azure gpt-5.4+ chat-completions calls with both tools + reasoning_effort
+    # must be bridged to Responses API.
+    if (
+        custom_llm_provider in ("openai", "azure")
+        and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+        and tools
+        and reasoning_effort is not None
+        and model_info.get("mode") != "responses"
+    ):
+        model_info["mode"] = "responses"
+        model = model.replace("responses/", "")
+
     return model_info, model
 
 
@@ -7528,8 +7531,13 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(annotation_chunks) > 0:
-            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
-            response["choices"][0]["message"]["annotations"] = annotations
+            # Merge annotations from ALL chunks — providers may spread
+            # them across multiple streaming chunks or send them only in
+            # the final chunk.
+            all_annotations: list = []
+            for ac in annotation_chunks:
+                all_annotations.extend(ac["choices"][0]["delta"]["annotations"])
+            response["choices"][0]["message"]["annotations"] = all_annotations
 
         audio_chunks = [
             chunk
