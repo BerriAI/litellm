@@ -3400,8 +3400,6 @@ async def _rotate_master_key(  # noqa: PLR0915
             )
             if new_model:
                 _dumped = new_model.model_dump(exclude_none=True)
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
                 new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
         async with prisma_client.db.tx() as tx:

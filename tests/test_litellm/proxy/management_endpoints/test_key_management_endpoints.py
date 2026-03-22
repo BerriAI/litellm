@@ -6487,15 +6487,15 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
         "updated_at should be excluded so Prisma @default(now()) applies"
     )
 
-    # Verify litellm_params and model_info are prisma.Json wrappers, NOT JSON strings
-    import prisma
-
-    assert isinstance(model_data["litellm_params"], prisma.Json), (
-        f"litellm_params should be prisma.Json for create_many(), got {type(model_data['litellm_params'])}"
+    # Verify litellm_params and model_info stay as plain dicts for create_many
+    assert isinstance(model_data["litellm_params"], dict), (
+        f"litellm_params should be a dict for create_many(), got {type(model_data['litellm_params'])}"
     )
-    assert isinstance(model_data["model_info"], prisma.Json), (
-        f"model_info should be prisma.Json for create_many(), got {type(model_data['model_info'])}"
+    assert isinstance(model_data["model_info"], dict), (
+        f"model_info should be a dict for create_many(), got {type(model_data['model_info'])}"
     )
+    assert "model" in model_data["litellm_params"]
+    assert model_data["model_info"]["id"] == "model-1"
 
     # Verify delete_many was called inside the transaction (before create_many)
     mock_tx.litellm_proxymodeltable.delete_many.assert_called_once()
