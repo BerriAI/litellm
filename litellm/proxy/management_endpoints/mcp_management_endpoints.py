@@ -2072,7 +2072,13 @@ if MCP_AVAILABLE:
         touched_by = (
             litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
-        return await create_mcp_toolset(prisma_client, payload, touched_by)
+        result = await create_mcp_toolset(prisma_client, payload, touched_by)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache()
+        return result
 
     @router.get(
         "/toolset",
@@ -2093,10 +2099,16 @@ if MCP_AVAILABLE:
                 return await list_mcp_toolsets(prisma_client)
 
         op = user_api_key_dict.object_permission
-        allowed_ids = (getattr(op, "mcp_toolsets", None) or []) if op else []
-        return await list_mcp_toolsets(
-            prisma_client, toolset_ids=allowed_ids if allowed_ids else None
-        )
+        # Distinguish None (field absent = no restriction) from [] (explicitly empty = zero allowed).
+        raw_toolsets = getattr(op, "mcp_toolsets", None) if op else None
+        # raw_toolsets is None  → field not set → no restriction, return all
+        # raw_toolsets is []    → explicitly empty → return nothing
+        # raw_toolsets is [ids] → return only those
+        if raw_toolsets is None:
+            return await list_mcp_toolsets(prisma_client)
+        if not raw_toolsets:
+            return []
+        return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
 
     @router.get(
         "/toolset/{toolset_id}",
@@ -2139,7 +2151,15 @@ if MCP_AVAILABLE:
         touched_by = (
             litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
-        return await update_mcp_toolset(prisma_client, payload, touched_by)
+        result = await update_mcp_toolset(prisma_client, payload, touched_by)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache(
+            getattr(payload, "toolset_id", None)
+        )
+        return result
 
     @router.delete(
         "/toolset/{toolset_id}",
@@ -2166,4 +2186,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Toolset '{toolset_id}' not found."},
             )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
         return Response(status_code=status.HTTP_202_ACCEPTED)

@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import json
 import re
+import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
@@ -181,6 +182,8 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+
+        self._toolset_perm_cache: Dict[str, Tuple[Dict[str, List[str]], float]] = {}
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -810,8 +813,7 @@ class MCPServerManager:
         Resolve a list of toolset IDs into a mcp_tool_permissions dict.
 
         Returns: {server_id: [tool_name, ...]} — the union of all tools across
-        the given toolsets. This is merged (union semantics) into the key's
-        existing mcp_tool_permissions before access-control filtering runs.
+        the given toolsets. Results are cached for 60 s to avoid per-request DB queries.
         """
         from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
         from litellm.proxy.proxy_server import prisma_client
@@ -819,23 +821,43 @@ class MCPServerManager:
         if not toolset_ids or prisma_client is None:
             return {}
 
+        cache_key = ",".join(sorted(toolset_ids))
+        cached_entry = self._toolset_perm_cache.get(cache_key)
+        if cached_entry is not None:
+            result, cached_at = cached_entry
+            if time.time() - cached_at < 60:
+                return result
+
         try:
             toolsets = await list_mcp_toolsets(prisma_client, toolset_ids=toolset_ids)
             tool_permissions: Dict[str, List[str]] = {}
             for toolset in toolsets:
                 for tool in toolset.tools:
-                    # Stored tool_names may include the server prefix (e.g.
-                    # "server_alias__tool_name"). filter_tools_by_key_team_permissions
-                    # compares against the unprefixed name, so strip it here.
                     raw_name = tool["tool_name"]
                     unprefixed, _ = split_server_prefix_from_name(raw_name)
                     tool_permissions.setdefault(tool["server_id"], [])
                     if unprefixed not in tool_permissions[tool["server_id"]]:
                         tool_permissions[tool["server_id"]].append(unprefixed)
+            self._toolset_perm_cache[cache_key] = (tool_permissions, time.time())
             return tool_permissions
         except Exception as e:
             verbose_logger.warning(f"Failed to resolve toolset permissions: {str(e)}")
             return {}
+
+    def invalidate_toolset_cache(self, toolset_id: Optional[str] = None) -> None:
+        """Evict cached toolset permission entries.
+
+        Called after create/update/delete of a toolset so stale data is not served.
+        Pass toolset_id to evict only entries containing that ID, or None to clear all.
+        """
+        if toolset_id is None:
+            self._toolset_perm_cache.clear()
+            return
+        keys_to_remove = [
+            k for k in self._toolset_perm_cache if toolset_id in k.split(",")
+        ]
+        for k in keys_to_remove:
+            del self._toolset_perm_cache[k]
 
     def filter_server_ids_by_ip(
         self, server_ids: List[str], client_ip: Optional[str]
