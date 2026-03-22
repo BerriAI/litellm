@@ -44,6 +44,12 @@ class TestIsMultimodalInput:
     def test_mixed_text_and_image(self):
         assert _is_multimodal_input(["hello", IMAGE_DATA_URI]) is True
 
+    def test_nested_list_is_multimodal(self):
+        assert _is_multimodal_input([["text_a", "text_b"]]) is True
+
+    def test_nested_list_with_image_is_multimodal(self):
+        assert _is_multimodal_input([["a red shoe", IMAGE_DATA_URI]]) is True
+
 
 class TestBuildPartForInput:
     def test_text_input(self):
