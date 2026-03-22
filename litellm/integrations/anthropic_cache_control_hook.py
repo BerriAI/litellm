@@ -98,8 +98,31 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         targetted_role = point.get("role", None)
 
-        # Case 1: Target by specific index
-        if targetted_index is not None:
+        # Case 1: Target by role + index (e.g., index=-1 among assistant messages)
+        if targetted_index is not None and targetted_role is not None:
+            role_indices = [
+                i
+                for i, msg in enumerate(messages)
+                if msg.get("role") == targetted_role
+            ]
+            if role_indices:
+                try:
+                    # Negative indices handled by Python's native list indexing (e.g., -1 = last)
+                    actual_idx = role_indices[targetted_index]
+                except IndexError:
+                    verbose_logger.warning(
+                        f"AnthropicCacheControlHook: Index {targetted_index} is out of bounds "
+                        f"for {len(role_indices)} messages with role '{targetted_role}'. "
+                        f"Skipping cache control injection for this point."
+                    )
+                else:
+                    messages[actual_idx] = (
+                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                            messages[actual_idx], control
+                        )
+                    )
+        # Case 2: Target by index only
+        elif targetted_index is not None:
             original_index = targetted_index
             # Handle negative indices (convert to positive)
             if targetted_index < 0:
@@ -116,7 +139,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                     f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
                     f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
                 )
-        # Case 2: Target by role
+        # Case 3: Target by role only
         elif targetted_role is not None:
             for msg in messages:
                 if msg.get("role") == targetted_role:
