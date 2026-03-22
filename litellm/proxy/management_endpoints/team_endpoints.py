@@ -2536,34 +2536,29 @@ async def team_member_update(  # noqa: PLR0915
             models=data.models,
         )
 
-    # Resolve the stored models for this member.
-    # If models were explicitly provided in the request, use that value directly
-    # (it was just written to the DB by _upsert_budget_and_membership).
-    # Only fetch from DB when models weren't provided (e.g., role-only update).
-    stored_models = data.models if data.models is not None else []
+    # Determine if any field changed that requires updating the members_with_roles JSON.
+    _any_field_changed = (
+        data.role is not None
+        or data.models is not None
+        or data.tpm_limit is not None
+        or data.rpm_limit is not None
+    )
+
+    # Invalidate membership cache so key-gen sees fresh data.
+    # Only fetch the full membership row when we need values not provided in the request.
+    from litellm.proxy.auth.auth_checks import get_team_membership
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
+    await user_api_key_cache.async_delete_cache(key=_cache_key)
+
     _tm_row = None
-    if data.models is None:
-        from litellm.proxy.auth.auth_checks import get_team_membership
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        # Invalidate stale cache entry before fetching fresh data
-        _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
-        await user_api_key_cache.async_delete_cache(key=_cache_key)
-
-        _tm_row = await get_team_membership(
-            user_id=received_user_id,
-            team_id=data.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
-        stored_models = (_tm_row.models or []) if _tm_row is not None else []
-    else:
-        # Models were explicitly changed — invalidate cache and fetch fresh membership
-        from litellm.proxy.auth.auth_checks import get_team_membership
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
-        await user_api_key_cache.async_delete_cache(key=_cache_key)
+    _needs_db_fetch = (
+        data.models is None  # need stored models for JSON/response
+        or data.tpm_limit is None  # need budget tpm for JSON
+        or data.rpm_limit is None  # need budget rpm for JSON
+    )
+    if _needs_db_fetch:
         _tm_row = await get_team_membership(
             user_id=received_user_id,
             team_id=data.team_id,
@@ -2571,13 +2566,23 @@ async def team_member_update(  # noqa: PLR0915
             user_api_key_cache=user_api_key_cache,
         )
 
-    # Resolve tpm/rpm: prefer request values, then budget table (authoritative),
-    # then existing JSON blob (may be stale for pre-deployment members).
-    _budget = _tm_row.litellm_budget_table if (_tm_row and hasattr(_tm_row, "litellm_budget_table") and _tm_row.litellm_budget_table) else None
-    resolved_tpm = data.tpm_limit if data.tpm_limit is not None else (getattr(_budget, "tpm_limit", None) if _budget else None)
-    resolved_rpm = data.rpm_limit if data.rpm_limit is not None else (getattr(_budget, "rpm_limit", None) if _budget else None)
+    # Resolve each field: prefer request value, then DB (authoritative), then default.
+    stored_models = data.models if data.models is not None else (
+        (_tm_row.models or []) if _tm_row is not None else []
+    )
+    _budget = (
+        _tm_row.litellm_budget_table
+        if (_tm_row and hasattr(_tm_row, "litellm_budget_table") and _tm_row.litellm_budget_table)
+        else None
+    )
+    resolved_tpm = data.tpm_limit if data.tpm_limit is not None else (
+        getattr(_budget, "tpm_limit", None) if _budget else None
+    )
+    resolved_rpm = data.rpm_limit if data.rpm_limit is not None else (
+        getattr(_budget, "rpm_limit", None) if _budget else None
+    )
 
-    if data.role is not None or data.models is not None:
+    if _any_field_changed:
         team_members: List[Member] = []
         for member in team_table.members_with_roles:
             if member.user_id == received_user_id:
