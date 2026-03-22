@@ -1707,6 +1707,9 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
         usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
 
+    # Add a provider-specific field to test __pydantic_extra__ preservation
+    chunk_with_usage.sap_extra_field = "sap-value"
+
     # Mock model_dump to raise TypeError (simulating MockValSer bug)
     original_model_dump = chunk_with_usage.model_dump
 
@@ -1729,6 +1732,9 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
         # Should not raise TypeError and should successfully process the chunk
         assert result is not None
         assert result.choices[0].delta.content == "test content"
+
+        # Verify that extra/provider attributes survive the fallback
+        assert getattr(result, "sap_extra_field", None) == "sap-value"
     finally:
         # Restore original method
         chunk_with_usage.model_dump = original_model_dump
