@@ -406,6 +406,21 @@ async def retrieve_batch(  # noqa: PLR0915
             verbose_proxy_logger=verbose_proxy_logger,
         )
 
+        # DB-restored terminal batches can miss hidden_params.model_id.
+        # Restore it from the unified batch ID so post hooks can re-unify
+        # output/error file IDs before responding.
+        if response is not None and unified_batch_id:
+            current_hidden_params = getattr(response, "_hidden_params", {}) or {}
+            if not isinstance(current_hidden_params, dict):
+                current_hidden_params = {}
+            if not current_hidden_params.get("model_id"):
+                model_id_from_batch = get_model_id_from_unified_batch_id(unified_batch_id)
+                if model_id_from_batch:
+                    response._hidden_params = {
+                        **current_hidden_params,
+                        "model_id": model_id_from_batch,
+                    }
+
         # If batch is in a terminal state, return immediately.
         # Include "complete" (DB-normalized form of "completed").
         if response is not None and response.status in [
