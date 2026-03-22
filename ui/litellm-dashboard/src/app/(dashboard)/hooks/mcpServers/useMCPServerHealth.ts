@@ -36,10 +36,18 @@ export const useMCPServerHealth = () => {
         { queryKey: mcpServerHealthKeys.lists() },
         (oldData) => {
           if (!oldData) return result;
-          return oldData.map((h) => {
-            const updated = result.find((r) => r.server_id === h.server_id);
-            return updated ?? h;
+          const existingIds = new Set(oldData.map((h) => h.server_id));
+          const updated = oldData.map((h) => {
+            const fresh = result.find((r) => r.server_id === h.server_id);
+            return fresh ?? h;
           });
+          // Append servers not already in the cached list
+          for (const r of result) {
+            if (!existingIds.has(r.server_id)) {
+              updated.push(r);
+            }
+          }
+          return updated;
         },
       );
     } finally {

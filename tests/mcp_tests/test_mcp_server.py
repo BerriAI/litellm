@@ -1474,6 +1474,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.byok_api_key_help_url = None
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
+    mock_mcp_server.team_id = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1530,6 +1531,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.byok_api_key_help_url = None
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
+    mock_mcp_server.team_id = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1587,6 +1589,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.byok_api_key_help_url = None
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
+    mock_mcp_server.team_id = None
 
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)

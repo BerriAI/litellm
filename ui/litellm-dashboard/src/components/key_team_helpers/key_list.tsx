@@ -15,6 +15,16 @@ export interface Team {
   keys: KeyResponse[];
   members_with_roles: Member[];
   spend: number;
+  object_permission?: {
+    object_permission_id?: string;
+    search_tools?: string[];
+    mcp_servers?: string[];
+    mcp_access_groups?: string[];
+    mcp_tool_permissions?: Record<string, string[]>;
+    vector_stores?: string[];
+    agents?: string[];
+    agent_access_groups?: string[];
+  };
 }
 
 export interface KeyResponse {
@@ -89,6 +99,7 @@ export interface KeyResponse {
     vector_stores: string[];
     agents?: string[];
     agent_access_groups?: string[];
+    search_tools?: string[];
   };
   access_group_ids?: string[];
   auto_rotate?: boolean;

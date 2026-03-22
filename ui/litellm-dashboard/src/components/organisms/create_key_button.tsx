@@ -9,7 +9,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Alert, Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -47,6 +47,7 @@ import {
 } from "../networking";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
+import SearchToolSelector from "../SearchTools/SearchToolSelector";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
 
@@ -503,6 +504,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         delete formValues.allowed_agents_and_groups;
       }
 
+      // Always send search_tools to ensure the permission record is created.
+      // Empty array = no access (least privilege for new keys).
+      if (!formValues.object_permission) {
+        formValues.object_permission = {};
+      }
+      formValues.object_permission.search_tools = formValues.allowed_search_tool_ids || [];
+      delete formValues.allowed_search_tool_ids;
+
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
@@ -810,19 +819,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown
-                teams={selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams}
                 disabled={selectedProjectId !== null}
-                loading={!teams}
-                onChange={(teamId) => {
-                  const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-                  setSelectedCreateKeyTeam(selectedTeam);
+                organizationId={selectedOrganizationId}
+                onTeamSelect={(team) => {
+                  setSelectedCreateKeyTeam(team);
                   setSelectedProjectId(null);
                   form.setFieldValue("project_id", undefined);
-                  // Auto-populate org from team for non-admin users
-                  if (selectedTeam?.organization_id) {
-                    setSelectedOrganizationId(selectedTeam.organization_id);
-                    form.setFieldValue("organization_id", selectedTeam.organization_id);
-                  } else if (!teamId) {
+                  if (team?.organization_id) {
+                    setSelectedOrganizationId(team.organization_id);
+                    form.setFieldValue("organization_id", team.organization_id);
+                  } else if (!team) {
                     setSelectedOrganizationId(null);
                     form.setFieldValue("organization_id", undefined);
                   }
@@ -1423,6 +1429,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           value={form.getFieldValue("allowed_agents_and_groups")}
                           accessToken={accessToken}
                           placeholder="Select agents or access groups (optional)"
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Search Tool Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Alert
+                        message="BREAKING CHANGE"
+                        description="New keys have no search tool access by default. Select specific tools to grant access."
+                        type="warning"
+                        showIcon
+                        className="mb-4"
+                      />
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Search Tools{" "}
+                            <Tooltip title="Select which search tools this key can access. New keys default to no access — explicitly grant access to specific search tools.">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_search_tool_ids"
+                      >
+                        <SearchToolSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_search_tool_ids", values)}
+                          value={form.getFieldValue("allowed_search_tool_ids")}
+                          accessToken={accessToken}
+                          placeholder="Select search tools (defaults to no access)"
+                          allowedSearchToolIds={selectedCreateKeyTeam ? (selectedCreateKeyTeam.object_permission?.search_tools ?? []) : undefined}
                         />
                       </Form.Item>
                     </AccordionBody>

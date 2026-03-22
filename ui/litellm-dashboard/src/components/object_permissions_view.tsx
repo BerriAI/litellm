@@ -3,6 +3,7 @@ import { Text } from "@tremor/react";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
+import SearchToolPermissions from "./permissions/SearchToolPermissions";
 
 interface ObjectPermission {
   object_permission_id: string;
@@ -12,6 +13,7 @@ interface ObjectPermission {
   vector_stores: string[];
   agents?: string[];
   agent_access_groups?: string[];
+  search_tools?: string[];
 }
 
 interface ObjectPermissionsViewProps {
@@ -33,19 +35,24 @@ export function ObjectPermissionsView({
   const mcpToolPermissions = objectPermission?.mcp_tool_permissions || {};
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
+  const searchTools = objectPermission?.search_tools || [];
 
   const content = (
-    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
+    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" : "space-y-4"}>
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
-      <MCPServerPermissions 
-        mcpServers={mcpServers} 
-        mcpAccessGroups={mcpAccessGroups} 
+      <MCPServerPermissions
+        mcpServers={mcpServers}
+        mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
-        accessToken={accessToken} 
+        accessToken={accessToken}
       />
       <AgentPermissions
         agents={agents}
         agentAccessGroups={agentAccessGroups}
+        accessToken={accessToken}
+      />
+      <SearchToolPermissions
+        searchTools={searchTools}
         accessToken={accessToken}
       />
     </div>
@@ -57,7 +64,7 @@ export function ObjectPermissionsView({
         <div className="flex items-center gap-2 mb-6">
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>
-            <Text className="text-xs text-gray-500">Access control for Vector Stores and MCP Servers</Text>
+            <Text className="text-xs text-gray-500">Access control for Vector Stores, MCP Servers, and Search Tools</Text>
           </div>
         </div>
         {content}

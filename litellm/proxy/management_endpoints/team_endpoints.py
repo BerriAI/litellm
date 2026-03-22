@@ -1001,7 +1001,7 @@ async def new_team(  # noqa: PLR0915
 
         team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
             data=complete_team_data_dict,
-            include={"litellm_model_table": True},  # type: ignore
+            include={"litellm_model_table": True, "object_permission": True},  # type: ignore
         )
 
         ## ADD TEAM ID TO USER TABLE ##
@@ -1550,7 +1550,7 @@ async def update_team(  # noqa: PLR0915
         ] = await prisma_client.db.litellm_teamtable.update(
             where={"team_id": data.team_id},
             data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+            include={"litellm_model_table": True, "object_permission": True},  # type: ignore
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2424,6 +2424,20 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    ### Validate extra_permissions BEFORE any DB writes
+    if data.extra_permissions is not None:
+        from litellm.proxy.auth.permissions import VALID_PERMISSIONS
+
+        invalid_perms = set(data.extra_permissions) - VALID_PERMISSIONS
+        if invalid_perms:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid permission strings: {sorted(invalid_perms)}. "
+                    f"Valid permissions: {sorted(VALID_PERMISSIONS)}"
+                },
+            )
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2437,37 +2451,67 @@ async def team_member_update(
             rpm_limit=data.rpm_limit,
         )
 
-    ### update team member role
-    if data.role is not None:
-        team_members: List[Member] = []
+    ### Apply role and extra_permissions updates in-memory, then do a single DB write
+    members_changed = data.role is not None or data.extra_permissions is not None
+    if members_changed:
+        updated_members: List[Member] = []
         for member in team_table.members_with_roles:
             if member.user_id == received_user_id:
-                team_members.append(
+                updated_members.append(
                     Member(
                         user_id=member.user_id,
-                        role=data.role,
+                        role=data.role if data.role is not None else member.role,
                         user_email=data.user_email or member.user_email,
+                        extra_permissions=(
+                            data.extra_permissions
+                            if data.extra_permissions is not None
+                            else member.extra_permissions
+                        ),
                     )
                 )
             else:
-                team_members.append(member)
+                updated_members.append(member)
 
-        team_table.members_with_roles = team_members
+        team_table.members_with_roles = updated_members
 
-        _db_team_members: List[dict] = [m.model_dump() for m in team_members]
+        _db_team_members: List[dict] = [m.model_dump() for m in updated_members]
         await prisma_client.db.litellm_teamtable.update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
         )
+
+        # Invalidate team cache so changes take effect immediately
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        user_api_key_cache.delete_cache(key="team_id:{}".format(data.team_id))
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        extra_permissions=data.extra_permissions,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
     )
+
+
+@router.get(
+    "/team/available_permissions",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_available_permissions(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List all valid permission strings that can be granted to team members.
+
+    Used by the UI to populate permission dropdowns when editing team member permissions.
+    """
+    from litellm.proxy.auth.permissions import get_available_permissions
+
+    return get_available_permissions()
 
 
 def _create_results_from_response(
@@ -3546,6 +3590,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include={"object_permission": True},
         )
         # Get total count for pagination
         total_count = await prisma_client.db.litellm_teamtable.count(
@@ -3624,7 +3669,7 @@ async def _authorize_and_filter_teams(
         # Org admin: query DB for teams in their orgs
         org_teams = await prisma_client.db.litellm_teamtable.find_many(
             where={"organization_id": {"in": allowed_org_ids}},
-            include={"litellm_model_table": True},
+            include={"litellm_model_table": True, "object_permission": True},
         )
         if not user_id:
             return list(org_teams)
@@ -3634,7 +3679,7 @@ async def _authorize_and_filter_teams(
         # Prisma doesn't support filtering JSON array fields, so we fetch by membership separately
         member_teams = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"not_in": list(seen_team_ids)}} if seen_team_ids else {},
-            include={"litellm_model_table": True},
+            include={"litellm_model_table": True, "object_permission": True},
         )
         for team in member_teams:
             if team.members_with_roles and any(
@@ -3645,7 +3690,7 @@ async def _authorize_and_filter_teams(
     elif user_id:
         # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
         response = await prisma_client.db.litellm_teamtable.find_many(
-            include={"litellm_model_table": True}
+            include={"litellm_model_table": True, "object_permission": True}
         )
         return [
             team
@@ -3657,7 +3702,7 @@ async def _authorize_and_filter_teams(
         # Proxy admin: all teams
         return list(
             await prisma_client.db.litellm_teamtable.find_many(
-                include={"litellm_model_table": True}
+                include={"litellm_model_table": True, "object_permission": True}
             )
         )
 

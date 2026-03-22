@@ -669,6 +669,7 @@ class MCPServerManager:
             available_on_public_internet=bool(
                 getattr(mcp_server, "available_on_public_internet", True)
             ),
+            team_id=getattr(mcp_server, "team_id", None),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(
@@ -2714,6 +2715,7 @@ class MCPServerManager:
             auth_type=server.auth_type,
             created_at=server.created_at,
             updated_at=server.updated_at,
+            team_id=server.team_id,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2805,6 +2807,7 @@ class MCPServerManager:
             auth_type=server.auth_type,
             created_at=server.created_at,
             updated_at=server.updated_at,
+            team_id=server.team_id,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],

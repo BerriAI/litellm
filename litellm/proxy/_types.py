@@ -372,6 +372,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search",
         "/search/{search_tool_name}",
         "/v1/search/{search_tool_name}",
+        "/search_tools/list",
+        "/search_tools/ui/available_providers",
+        "/search/tools",
+        "/v1/search/tools",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -655,6 +659,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
+        "/team/available_permissions",  # read-only permission metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
         "/prompt/list",
@@ -856,6 +861,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = ["*"]  # ["*"] = all access, [] = no access
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
@@ -1104,6 +1110,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
+    team_id: Optional[str] = Field(
+        default=None,
+        description="Team ID to scope this MCP server to. Required for non-proxy-admin users. "
+        "When provided, the server is auto-assigned to the team's ObjectPermissionTable.",
+    )
     transport: MCPTransportType = MCPTransport.sse
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
@@ -1204,6 +1215,11 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    team_id: Optional[str] = Field(
+        default=None,
+        description="Team ID that owns this MCP server. Only proxy admins can change ownership. "
+        "Set to null to make the server global.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1239,6 +1255,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    team_id: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list)
@@ -1611,6 +1628,33 @@ class Member(MemberBase):
     ] = Field(
         description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
     )
+    extra_permissions: Optional[List[str]] = Field(
+        default=None,
+        description="Granular permissions granted to this member (e.g. 'mcp:create', 'mcp:delete'). Used for per-member permission grants.",
+    )
+
+    @field_validator("extra_permissions", mode="before")
+    @classmethod
+    def validate_permission_format(cls, v):
+        """Validate that all permission strings are known valid permissions."""
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("extra_permissions must be a list of strings")
+        from litellm.proxy.auth.permissions import VALID_PERMISSIONS
+
+        for perm in v:
+            if not isinstance(perm, str) or ":" not in perm:
+                raise ValueError(
+                    f"Invalid permission format: '{perm}'. "
+                    "Must follow 'resource:action' format (e.g. 'mcp:create')."
+                )
+            if perm not in VALID_PERMISSIONS:
+                raise ValueError(
+                    f"Unknown permission: '{perm}'. "
+                    f"Valid permissions: {sorted(VALID_PERMISSIONS)}"
+                )
+        return v
 
 
 class OrgMember(MemberBase):
@@ -1844,6 +1888,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """
 
     vector_stores: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = ["*"]  # ["*"] = all access, [] = no access
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
 
@@ -3530,6 +3575,21 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    key_search_tool_access_denied = "key_search_tool_access_denied"
+    """
+    Key does not have access to the search tool
+    """
+
+    team_search_tool_access_denied = "team_search_tool_access_denied"
+    """
+    Team does not have access to the search tool
+    """
+
+    org_search_tool_access_denied = "org_search_tool_access_denied"
+    """
+    Organization does not have access to the search tool
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -3571,6 +3631,23 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+
+    @classmethod
+    def get_search_tool_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "org"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the search tool access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_search_tool_access_denied
+        elif object_type == "team":
+            return cls.team_search_tool_access_denied
+        elif object_type == "org":
+            return cls.org_search_tool_access_denied
+        raise ValueError(
+            f"Unknown object_type '{object_type}' for search tool access error"
+        )
 
 
 DB_CONNECTION_ERROR_TYPES = (
@@ -3729,6 +3806,10 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
+    extra_permissions: Optional[List[str]] = Field(
+        default=None,
+        description="Granular permissions to grant to this team member (e.g. ['mcp:create', 'mcp:delete']). Replaces any existing extra_permissions.",
+    )
     tpm_limit: Optional[int] = Field(
         default=None, description="Tokens per minute limit for this team member"
     )
@@ -3740,6 +3821,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+    extra_permissions: Optional[List[str]] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 

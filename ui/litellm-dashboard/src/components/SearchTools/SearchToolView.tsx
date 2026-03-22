@@ -4,7 +4,6 @@ import { Button, Card, Grid, Text, Title } from "@tremor/react";
 import { Button as AntdButton } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useState } from "react";
-import { SearchToolTester } from "./SearchToolTester";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
 interface SearchToolViewProps {
@@ -109,15 +108,6 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
         </Card>
       )}
 
-      {/* Search Tool Tester */}
-      <div className="mt-6">
-        {accessToken && (
-          <SearchToolTester
-            searchToolName={searchTool.search_tool_name}
-            accessToken={accessToken}
-          />
-        )}
-      </div>
     </div>
   );
 };

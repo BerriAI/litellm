@@ -2,13 +2,13 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 from datetime import datetime
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     ListSearchToolsResponse,
@@ -46,7 +46,9 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListSearchToolsResponse,
 )
-async def list_search_tools():
+async def list_search_tools(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List all search tools that are available in the database and config file.
 
@@ -128,7 +130,7 @@ async def list_search_tools():
                         search_tool_id=None,
                         search_tool_name=tool_name,
                         litellm_params=masked_litellm_params_dict,
-                        search_tool_info=search_tool.get("search_tool_info"),
+                        search_tool_info=cast(Optional[dict], search_tool.get("search_tool_info")),
                         created_at=None,
                         updated_at=None,
                         is_from_config=True,
@@ -141,8 +143,8 @@ async def list_search_tools():
             if tool.get("search_tool_name") not in db_tool_names
         ]
 
-        for search_tool in search_tools_from_db:
-            litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+        for db_tool in search_tools_from_db:
+            litellm_params_dict = dict(db_tool.get("litellm_params", {}))
             masked_litellm_params_dict = _get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
@@ -151,15 +153,28 @@ async def list_search_tools():
 
             search_tool_configs.append(
                 SearchToolInfoResponse(
-                    search_tool_id=search_tool.get("search_tool_id"),
-                    search_tool_name=search_tool.get("search_tool_name", ""),
+                    search_tool_id=cast(Optional[str], db_tool.get("search_tool_id")),
+                    search_tool_name=db_tool.get("search_tool_name", ""),
                     litellm_params=masked_litellm_params_dict,
-                    search_tool_info=search_tool.get("search_tool_info"),
-                    created_at=_convert_datetime_to_str(search_tool.get("created_at")),
-                    updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
+                    search_tool_info=cast(Optional[dict], db_tool.get("search_tool_info")),
+                    created_at=_convert_datetime_to_str(cast(Optional[Union[datetime, str]], db_tool.get("created_at"))),
+                    updated_at=_convert_datetime_to_str(cast(Optional[Union[datetime, str]], db_tool.get("updated_at"))),
                     is_from_config=False,
                 )
             )
+
+        # Filter based on caller's key/team permissions
+        from litellm.proxy.search_endpoints.endpoints import (
+            _get_allowed_search_tool_names,
+        )
+
+        allowed_names = await _get_allowed_search_tool_names(user_api_key_dict)
+        if allowed_names is not None:
+            search_tool_configs = [
+                tool
+                for tool in search_tool_configs
+                if tool.get("search_tool_name") in allowed_names
+            ]
 
         return ListSearchToolsResponse(search_tools=search_tool_configs)
     except Exception as e:

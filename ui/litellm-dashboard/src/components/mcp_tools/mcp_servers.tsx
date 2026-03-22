@@ -15,6 +15,7 @@ import MCPConnect from "./mcp_connect";
 import { mcpServerColumns } from "./mcp_server_columns";
 import { MCPServerView } from "./mcp_server_view";
 import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
@@ -26,7 +27,7 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const { data: mcpServers, isLoading: isLoadingServers, error: mcpServersError, refetch } = useMCPServers();
 
   // Fetch health status for all servers
   const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
@@ -63,6 +64,16 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
+  const { data: allTeams } = useTeams();
+  const teamAliasMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    if (allTeams) {
+      for (const t of allTeams) {
+        if (t.team_alias) map.set(t.team_id, t.team_alias);
+      }
+    }
+    return map;
+  }, [allTeams]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -171,8 +182,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        teamAliasMap,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, teamAliasMap],
   );
 
   function handleDelete(server_id: string) {
@@ -237,11 +249,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     refetch();
   }, [refetch]);
 
-  if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
-  }
-
   return (
     <div className="w-full h-full p-6">
       <Modal
@@ -284,7 +291,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </div>
       </Modal>
       <CreateMCPServer
-        userRole={userRole}
+        userRole={userRole ?? ""}
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
@@ -296,6 +303,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setPrefillData(null);
           setDiscoveryVisible(true);
         }}
+        teamId={selectedTeam !== "all" && selectedTeam !== "personal" ? selectedTeam : null}
       />
       <div className="flex items-center justify-between">
         <div>
@@ -310,23 +318,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
         <div className="flex items-center gap-2">
-          {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-              + Add New MCP Server
-            </Button>
-          )}
-          {!isAdminRole(userRole) && (
-            <Button
-              className="flex-shrink-0"
-              onClick={() => {
-                setPrefillData(null);
-                setModalVisible(true);
-              }}
-              variant="secondary"
-            >
-              + Submit MCP Server
-            </Button>
-          )}
+          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            + Add New MCP Server
+          </Button>
         </div>
       </div>
       <MCPDiscovery
@@ -351,7 +345,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole ?? "") && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
           </div>
         </TabList>
         <TabPanels>
@@ -361,7 +355,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 key={selectedServerId}
                 mcpServer={selectedServer}
                 onBack={handleBack}
-                isProxyAdmin={isAdminRole(userRole)}
+                isProxyAdmin={isAdminRole(userRole ?? "")}
                 isEditing={editServer}
                 accessToken={accessToken}
                 userID={userID}
@@ -412,16 +406,38 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                   </div>
                 </div>
                 <div className="w-full mt-6">
+                  {mcpServersError ? (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-8 text-center">
+                      <h3 className="text-lg font-semibold text-red-800 mb-2">Unable to load MCP servers</h3>
+                      <p className="text-sm text-red-700 mb-4">
+                        {mcpServersError.message?.includes("403")
+                          ? "You do not have permission to view MCP servers."
+                          : `Error: ${mcpServersError.message}`}
+                      </p>
+                      <div className="text-sm text-red-600 bg-red-100 rounded-md p-4 inline-block text-left">
+                        <p className="font-medium mb-2">To resolve this, ask your team admin or proxy admin to:</p>
+                        <ol className="list-decimal list-inside space-y-1">
+                          <li>Go to <span className="font-mono">Teams</span> and select your team</li>
+                          <li>Find your user in the team members list</li>
+                          <li>Add the <span className="font-mono bg-red-200 px-1 rounded">mcp:read</span> permission to your user</li>
+                        </ol>
+                      </div>
+                    </div>
+                  ) : (
                   <DataTable
                     data={filteredServers}
                     columns={columns}
                     renderSubComponent={() => <div></div>}
                     getRowCanExpand={() => false}
                     isLoading={isLoadingServers}
-                    noDataMessage="No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    noDataMessage={isInternalUser
+                      ? "No MCP servers available. Your team may not have any MCP servers assigned, or you may need the mcp:read permission. Contact your team admin."
+                      : "No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                    }
                     loadingMessage="Loading MCP servers..."
                     enableSorting={true}
                   />
+                  )}
                 </div>
               </div>
             )}
@@ -435,7 +451,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabPanel>
             <MCPNetworkSettings accessToken={accessToken} />
           </TabPanel>
-          {isAdminRole(userRole) && (
+          {isAdminRole(userRole ?? "") && (
             <TabPanel>
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabPanel>

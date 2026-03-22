@@ -8,6 +8,7 @@ export const searchToolColumns = (
   onEdit: (searchToolId: string) => void,
   onDelete: (searchToolId: string) => void,
   availableProviders: Array<{ provider_name: string; ui_friendly_name: string }>,
+  isAdmin: boolean = true,
 ): ColumnsType<SearchTool> => [
     {
       title: "Search Tool ID",
@@ -88,10 +89,10 @@ export const searchToolColumns = (
             <TableIconActionButton
               variant="Edit"
               tooltipText="Edit search tool"
-              disabled={isFromConfig}
-              disabledTooltipText="Config search tool cannot be edited on the dashboard. Please edit it from the config file."
+              disabled={isFromConfig || !isAdmin}
+              disabledTooltipText={!isAdmin ? "Only admins can edit search tools" : "Config search tool cannot be edited on the dashboard. Please edit it from the config file."}
               onClick={() => {
-                if (toolId && !isFromConfig) {
+                if (toolId && !isFromConfig && isAdmin) {
                   onEdit(toolId);
                 }
               }}
@@ -99,10 +100,10 @@ export const searchToolColumns = (
             <TableIconActionButton
               variant="Delete"
               tooltipText="Delete search tool"
-              disabled={isFromConfig}
-              disabledTooltipText="Config search tool cannot be deleted on the dashboard. Please delete it from the config file."
+              disabled={isFromConfig || !isAdmin}
+              disabledTooltipText={!isAdmin ? "Only admins can delete search tools" : "Config search tool cannot be deleted on the dashboard. Please delete it from the config file."}
               onClick={() => {
-                if (toolId && !isFromConfig) {
+                if (toolId && !isFromConfig && isAdmin) {
                   onDelete(toolId);
                 }
               }}

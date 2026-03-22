@@ -193,6 +193,15 @@ export default function KeyInfoView({
         delete formValues.agents_and_groups;
       }
 
+      // Handle search tool permissions
+      if (formValues.search_tools !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          search_tools: formValues.search_tools || [],
+        };
+        delete formValues.search_tools;
+      }
+
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);

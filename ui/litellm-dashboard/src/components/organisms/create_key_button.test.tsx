@@ -155,7 +155,11 @@ vi.mock("antd", () => {
   const Button = ({ children, htmlType, ...props }: { children?: any; htmlType?: string }) =>
     React.createElement("button", { ...props, type: htmlType ?? props.type }, children);
 
+  const Alert = ({ message, description, ...props }: any) =>
+    React.createElement("div", { role: "alert", ...props }, message, description);
+
   return {
+    Alert,
     Button,
     Form,
     Input,
@@ -173,6 +177,21 @@ vi.mock("antd", () => {
     Tooltip,
   };
 });
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
 
 vi.mock("../networking", () => ({
   keyCreateCall: mockKeyCreateCall,

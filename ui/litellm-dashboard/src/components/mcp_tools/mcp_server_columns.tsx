@@ -5,7 +5,7 @@ import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
-import { CheckOutlined } from "@ant-design/icons";
+import { CheckOutlined, InfoCircleOutlined } from "@ant-design/icons";
 
 const HealthStatusBadge: React.FC<{
   server: MCPServer;
@@ -92,10 +92,12 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  teamAliasMap?: Map<string, string>,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
     header: "Server ID",
+    size: 90,
     enableSorting: true,
     cell: ({ row }) => (
       <button
@@ -109,12 +111,13 @@ export const mcpServerColumns = (
   {
     accessorKey: "server_name",
     header: "Name",
+    size: 150,
     enableSorting: true,
     cell: ({ row }) => {
       const logoUrl = row.original.mcp_info?.logo_url;
       const name = row.original.server_name;
       return (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 truncate">
           {logoUrl ? (
             <img
               src={logoUrl}
@@ -123,31 +126,53 @@ export const mcpServerColumns = (
               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           ) : null}
-          <span>{name}</span>
+          <span className="truncate">{name}</span>
         </div>
       );
     },
   },
   {
-    accessorKey: "alias",
-    header: "Alias",
+    accessorKey: "team_id",
+    header: () => (
+      <span className="flex items-center gap-1">
+        Team (Owner)
+        <Tooltip title="Shows the team that owns this MCP server. You can only see servers owned by teams where you have the mcp:read permission.">
+          <InfoCircleOutlined className="text-gray-400 cursor-help" style={{ fontSize: 12 }} />
+        </Tooltip>
+      </span>
+    ),
+    size: 130,
     enableSorting: true,
+    cell: ({ row }) => {
+      const tid = row.original.team_id;
+      if (!tid) {
+        return <span className="text-xs text-gray-400 italic">Global</span>;
+      }
+      const alias = teamAliasMap?.get(tid);
+      return (
+        <Tooltip title={tid}>
+          <span className="text-sm truncate block">{alias || tid.slice(0, 8) + "..."}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     id: "url",
     header: "URL",
+    size: 180,
     cell: ({ row }) => {
       const url = row.original.url;
       if (!url) {
         return <span className="text-gray-400">—</span>;
       }
       const { maskedUrl } = getMaskedAndFullUrl(url);
-      return <span className="font-mono text-sm">{maskedUrl}</span>;
+      return <span className="font-mono text-sm truncate block">{maskedUrl}</span>;
     },
   },
   {
     accessorKey: "transport",
     header: "Transport",
+    size: 80,
     enableSorting: true,
     cell: ({ row }) => {
       const transport = row.original.transport || "http";
@@ -162,21 +187,9 @@ export const mcpServerColumns = (
     },
   },
   {
-    accessorKey: "auth_type",
-    header: "Auth Type",
-    enableSorting: true,
-    cell: ({ getValue }) => {
-      const authType = (getValue() as string) || "none";
-      return (
-        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
-          {authType}
-        </span>
-      );
-    },
-  },
-  {
     id: "health_status",
-    header: "Health Status",
+    header: "Health",
+    size: 80,
     cell: ({ row }) => (
       <HealthStatusBadge
         server={row.original}
@@ -189,6 +202,7 @@ export const mcpServerColumns = (
   {
     id: "mcp_access_groups",
     header: "Access Groups",
+    size: 130,
     cell: ({ row }) => {
       const groups = row.original.mcp_access_groups;
       if (Array.isArray(groups) && groups.length > 0) {
@@ -196,8 +210,8 @@ export const mcpServerColumns = (
           const joined = groups.join(", ");
           return (
             <Tooltip title={joined}>
-              <div className="flex items-center gap-1 max-w-[200px]">
-                <span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 truncate max-w-[140px]">
+              <div className="flex items-center gap-1">
+                <span className="inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 truncate max-w-[100px]">
                   {groups[0]}
                 </span>
                 {groups.length > 1 && (
@@ -213,7 +227,8 @@ export const mcpServerColumns = (
   },
   {
     id: "available_on_public_internet",
-    header: "Network Access",
+    header: "Network",
+    size: 80,
     cell: ({ row }) => {
       const isPublic = row.original.available_on_public_internet;
       return isPublic ? (
@@ -232,6 +247,7 @@ export const mcpServerColumns = (
   {
     header: "Created",
     accessorKey: "created_at",
+    size: 90,
     enableSorting: true,
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -246,24 +262,9 @@ export const mcpServerColumns = (
     },
   },
   {
-    header: "Updated",
-    accessorKey: "updated_at",
-    enableSorting: true,
-    sortingFn: "datetime",
-    cell: ({ row }) => {
-      const server = row.original;
-      if (!server.updated_at) return <span className="text-xs text-gray-400">—</span>;
-      const date = new Date(server.updated_at);
-      return (
-        <Tooltip title={date.toLocaleString()}>
-          <span className="text-xs text-gray-600">{date.toLocaleDateString()}</span>
-        </Tooltip>
-      );
-    },
-  },
-  {
     id: "byok_credential",
     header: "Credential",
+    size: 90,
     cell: ({ row }) => {
       const server = row.original;
       if (!server.is_byok) {
@@ -299,6 +300,7 @@ export const mcpServerColumns = (
   {
     id: "actions",
     header: "Actions",
+    size: 70,
     cell: ({ row }) => (
       <div className="flex items-center gap-1">
         <Tooltip title="Edit">

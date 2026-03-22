@@ -2,6 +2,8 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
+  AvailablePermission,
+  fetchAvailableTeamMemberPermissions,
   getGuardrailsList,
   getPoliciesList,
   getPolicyInfoWithGuardrails,
@@ -49,6 +51,7 @@ import {
   TEAM_INFO_TAB_KEYS,
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
+import MemberPermissionsDrawer from "./MemberPermissionsDrawer";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
@@ -184,6 +187,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [organization, setOrganization] = useState<Organization | null>(null);
+  const [availablePermissions, setAvailablePermissions] = useState<AvailablePermission[]>([]);
+  const [permissionsDrawerMember, setPermissionsDrawerMember] = useState<Member | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
 
@@ -219,6 +224,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   useEffect(() => {
     fetchTeamInfo();
   }, [teamId, accessToken]);
+
+  // Fetch available permissions for team member editing (only for users who can edit the team)
+  useEffect(() => {
+    if (!canEditTeam) return;
+    const fetchPermissions = async () => {
+      if (!accessToken) return;
+      try {
+        const permissions = await fetchAvailableTeamMemberPermissions(accessToken);
+        setAvailablePermissions(permissions);
+      } catch (error) {
+        console.error("Error fetching available permissions:", error);
+      }
+    };
+    fetchPermissions();
+  }, [accessToken, canEditTeam]);
 
   // Fetch organization data when team has organization_id
   useEffect(() => {
@@ -366,6 +386,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        extra_permissions: values.extra_permissions,
       };
       MessageManager.destroy(); // Remove all existing toasts
 
@@ -762,6 +783,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 setSelectedEditMember={setSelectedEditMember}
                 setIsEditMemberModalVisible={setIsEditMemberModalVisible}
                 setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+                onPermissions={(member) => setPermissionsDrawerMember(member)}
               />
             ),
           },
@@ -1334,6 +1356,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={handleDeleteCancel}
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
+      />
+
+      <MemberPermissionsDrawer
+        open={!!permissionsDrawerMember}
+        onClose={() => setPermissionsDrawerMember(null)}
+        member={permissionsDrawerMember}
+        availablePermissions={availablePermissions}
+        accessToken={accessToken}
+        teamId={teamId}
+        onUpdate={async () => {
+          if (!accessToken) return;
+          const updatedTeamData = await teamInfoCall(accessToken, teamId);
+          setTeamData(updatedTeamData);
+          onUpdate(updatedTeamData);
+        }}
       />
     </div>
   );

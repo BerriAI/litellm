@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer, registerMCPServer } from "../networking";
+import { createMCPServer } from "../networking";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -17,6 +17,8 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import TeamDropdown from "../common_components/team_dropdown";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -30,6 +32,7 @@ interface CreateMCPServerProps {
   availableAccessGroups: string[];
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
+  teamId?: string | null;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
@@ -54,6 +57,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   availableAccessGroups,
   prefillData,
   onBackToDiscovery,
+  teamId,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
@@ -73,6 +77,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | undefined>(teamId ?? undefined);
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
@@ -385,18 +391,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         payload.credentials = credentialsPayload;
       }
 
+      // Include team_id when a team is selected
+      if (selectedTeamId) {
+        payload.team_id = selectedTeamId;
+      }
+
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
-        const response = isAdmin
-          ? await createMCPServer(accessToken, payload)
-          : await registerMCPServer(accessToken, payload);
+        const response = await createMCPServer(accessToken, payload);
 
-        NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : "MCP Server submitted for admin review"
-        );
+        NotificationsManager.success("MCP Server created successfully");
         form.resetFields();
         setCostConfig({});
         clearTools();
@@ -408,9 +413,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
-      );
+      NotificationsManager.fromBackend(`Error creating MCP Server: ${reason}`);
     } finally {
       setIsLoading(false);
     }
@@ -480,6 +483,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
+  // Sync selectedTeamId when the parent teamId prop changes
+  React.useEffect(() => {
+    setSelectedTeamId(teamId ?? undefined);
+  }, [teamId]);
+
   // Clear formValues when modal closes to reset child components
   React.useEffect(() => {
     if (!isModalVisible) {
@@ -514,7 +522,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             }}
           />
           <h2 className="text-xl font-semibold text-gray-900">
-            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+            Add New MCP Server
           </h2>
         </div>
       }
@@ -537,12 +545,27 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           layout="vertical"
           className="space-y-6"
         >
-          {!isAdmin && (
-            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active.
-              {" "}Note: the request must be made with a team-scoped API key.
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Team
+                <Tooltip title="Assign this MCP server to a team. The server will be added to the team's permissions automatically.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+          >
+            <TeamDropdown
+              value={selectedTeamId}
+              onChange={(value) => setSelectedTeamId(value)}
+            />
+          </Form.Item>
+          {!isAdmin && !selectedTeamId ? (
+            <div className="rounded-md bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm text-yellow-800">
+              Select a team to create an MCP server for your team.
             </div>
-          )}
+          ) : (
+          <>
           <div className="grid grid-cols-1 gap-6">
             <Form.Item
               label={
@@ -994,12 +1017,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               disabled={false}
             />
           </div>
+          </>
+          )}
 
           <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
             <Button variant="secondary" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button variant="primary" loading={isLoading}>
+            <Button variant="primary" loading={isLoading} disabled={!isAdmin && !selectedTeamId}>
               {isLoading ? "Creating..." : "Add MCP Server"}
             </Button>
           </div>

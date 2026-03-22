@@ -46,6 +46,14 @@ vi.mock("./CreateSearchTools", () => {
   return { default: CreateSearchTools };
 });
 
+vi.mock("./SearchToolTestPlayground", () => {
+  const SearchToolTestPlayground = () => (
+    <div data-testid="search-tool-test-playground">Test Playground</div>
+  );
+  SearchToolTestPlayground.displayName = "SearchToolTestPlayground";
+  return { default: SearchToolTestPlayground };
+});
+
 vi.mock("../common_components/DeleteResourceModal", () => {
   const DeleteResourceModal = ({
     isOpen,
@@ -132,7 +140,7 @@ describe("SearchTools", () => {
   it("should render", async () => {
     render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
     await waitFor(() => {
-      expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /Search Tools/i })).toBeInTheDocument();
     });
   });
 
@@ -171,7 +179,7 @@ describe("SearchTools", () => {
   it("should show Add New Search Tool button when user is admin", async () => {
     render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /add new search tool/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add search tool/i })).toBeInTheDocument();
     });
   });
 
@@ -180,9 +188,9 @@ describe("SearchTools", () => {
 
     render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
     await waitFor(() => {
-      expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /Search Tools/i })).toBeInTheDocument();
     });
-    expect(screen.queryByRole("button", { name: /add new search tool/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add search tool/i })).not.toBeInTheDocument();
   });
 
   it("should open create modal when Add New Search Tool button is clicked", async () => {
@@ -190,10 +198,10 @@ describe("SearchTools", () => {
     render(<SearchTools {...defaultProps} />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /add new search tool/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add search tool/i })).toBeInTheDocument();
     });
 
-    const addButton = screen.getByRole("button", { name: /add new search tool/i });
+    const addButton = screen.getByRole("button", { name: /add search tool/i });
     await user.click(addButton);
 
     expect(screen.getByTestId("create-search-tool-modal")).toBeInTheDocument();

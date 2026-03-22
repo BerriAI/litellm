@@ -5,7 +5,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Alert, Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -25,6 +25,7 @@ import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
+import SearchToolSelector from "../SearchTools/SearchToolSelector";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface KeyEditViewProps {
@@ -186,6 +187,7 @@ export function KeyEditView({
       agents: keyData.object_permission?.agents || [],
       accessGroups: keyData.object_permission?.agent_access_groups || [],
     },
+    search_tools: keyData.object_permission?.search_tools || [],
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -214,6 +216,7 @@ export function KeyEditView({
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+      search_tools: keyData.object_permission?.search_tools || [],
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -611,6 +614,26 @@ export function KeyEditView({
           value={form.getFieldValue("agents_and_groups")}
           accessToken={accessToken || ""}
           placeholder="Select agents or access groups (optional)"
+        />
+      </Form.Item>
+
+      <Alert
+        message="BREAKING CHANGE"
+        description="New keys have no search tool access by default. Select specific tools to grant access."
+        type="warning"
+        showIcon
+        className="mb-4"
+      />
+      <Form.Item
+        label="Search Tools"
+        name="search_tools"
+      >
+        <SearchToolSelector
+          onChange={(values: string[]) => form.setFieldValue("search_tools", values)}
+          value={form.getFieldValue("search_tools")}
+          accessToken={accessToken || ""}
+          placeholder="Select search tools (defaults to no access)"
+          allowedSearchToolIds={team ? (team.object_permission?.search_tools ?? []) : undefined}
         />
       </Form.Item>
 

@@ -9,6 +9,28 @@ vi.mock("../networking", () => ({
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({
+    data: [
+      { team_id: "team-1", team_alias: "Team One" },
+      { team_id: "team-2", team_alias: "Team Two" },
+    ],
+    isLoading: false,
+  }),
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: () => ({
     startOAuthFlow: vi.fn(),
@@ -100,10 +122,12 @@ describe("CreateMCPServer", () => {
     expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
   });
 
-  it("should not render when user is not an admin", () => {
+  it("should render for internal users with team selection prompt", () => {
     render(<CreateMCPServer {...defaultProps} userRole="Internal User" />);
 
-    expect(screen.queryByText("Add New MCP Server")).not.toBeInTheDocument();
+    expect(screen.getByText("Add New MCP Server")).toBeInTheDocument();
+    // Internal users without a selected team see a prompt
+    expect(screen.getByText("Select a team to create an MCP server for your team.")).toBeInTheDocument();
   });
 
   it("should show transport type options", async () => {

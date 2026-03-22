@@ -16,6 +16,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import {
+  Alert,
   Button,
   Card,
   Flex,
@@ -59,6 +60,7 @@ import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import SearchToolSelector from "./SearchTools/SearchToolSelector";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface TeamProps {
@@ -563,6 +565,14 @@ const Teams: React.FC<TeamProps> = ({
           delete formValues.allowed_agents_and_groups;
         }
 
+        // Always send search_tools to ensure the permission record is created.
+        // Empty array = no access (least privilege for new teams).
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.search_tools = formValues.allowed_search_tool_ids || [];
+        delete formValues.allowed_search_tool_ids;
+
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
           formValues.model_aliases = modelAliases;
@@ -579,14 +589,12 @@ const Teams: React.FC<TeamProps> = ({
           }
         }
 
-        const response: any = await teamCreateCall(accessToken, formValues);
-        if (teams !== null) {
-          setTeams([...teams, response]);
-        } else {
-          setTeams([response]);
-        }
-        console.log(`response for team create call: ${response}`);
+        await teamCreateCall(accessToken, formValues);
         NotificationsManager.success("Team created");
+        await fetchTeamsV2({
+          page: currentPage,
+          size: pageSize,
+        });
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
@@ -1511,6 +1519,40 @@ const Teams: React.FC<TeamProps> = ({
                           value={form.getFieldValue("allowed_agents_and_groups")}
                           accessToken={accessToken || ""}
                           placeholder="Select agents or access groups (optional)"
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Search Tool Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Alert
+                        message="BREAKING CHANGE"
+                        description="New teams have no search tool access by default. Select specific tools to grant access."
+                        type="warning"
+                        showIcon
+                        className="mb-4"
+                      />
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Search Tools{" "}
+                            <Tooltip title="Select which search tools this team can access. New teams default to no access — explicitly grant access to specific search tools.">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_search_tool_ids"
+                        className="mt-4"
+                      >
+                        <SearchToolSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_search_tool_ids", values)}
+                          value={form.getFieldValue("allowed_search_tool_ids")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select search tools (defaults to no access)"
                         />
                       </Form.Item>
                     </AccordionBody>
