@@ -694,6 +694,7 @@ openai_compatible_endpoints: List = [
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
+    "aihubmix.com/v1",
     "https://integrate.api.nvidia.com/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
