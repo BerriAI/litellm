@@ -119,7 +119,10 @@ class ChunkProcessor:
         model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint = chunk.get("system_fingerprint", None)
 
-        role = chunk["choices"][0]["delta"]["role"]
+        first_chunk_with_choices = next(
+            (c for c in chunks if c.get("choices")), chunk
+        )
+        role = first_chunk_with_choices["choices"][0]["delta"]["role"]
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
