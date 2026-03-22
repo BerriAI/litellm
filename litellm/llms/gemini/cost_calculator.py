@@ -31,11 +31,17 @@ def cost_per_token(
 def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> float:
     """
     Calculates the cost per web search request for a given model, prompt tokens, and completion tokens.
+
+    Uses ``search_context_cost_per_query`` from ``model_info`` when available
+    (keyed by ``search_context_size_medium`` as the default tier).  Falls back
+    to the legacy $0.035 hardcode for models that haven't been updated yet.
     """
     from litellm.types.utils import PromptTokensDetailsWrapper
 
-    # cost per web search request
-    cost_per_web_search_request = 35e-3
+    # Resolve per-request cost from model_info, fallback to legacy default
+    _DEFAULT_COST = 35e-3
+    search_costs = model_info.get("search_context_cost_per_query") or {}
+    _cost = search_costs.get("search_context_size_medium", _DEFAULT_COST)
 
     number_of_web_search_requests = 0
     # Get number of web search requests
@@ -47,10 +53,8 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         and usage.prompt_tokens_details.web_search_requests is not None
     ):
         number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
-    else:
-        number_of_web_search_requests = 0
 
     # Calculate total cost
-    total_cost = cost_per_web_search_request * number_of_web_search_requests
+    total_cost = _cost * number_of_web_search_requests
 
     return total_cost
