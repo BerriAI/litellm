@@ -1870,9 +1870,14 @@ class CustomStreamWrapper:
                                 "Upgrading pydantic may resolve this. Error: %s", e
                             )
                             # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
                             obj_dict = {
-                                **dict(response.__dict__),
-                                **(getattr(response, '__pydantic_extra__', None) or {}),
+                                k: v
+                                for k, v in {
+                                    **dict(response.__dict__),
+                                    **(getattr(response, '__pydantic_extra__', None) or {}),
+                                }.items()
+                                if not k.startswith('_')
                             }
 
                         # Remove an attribute (e.g., 'attr2')
@@ -2072,9 +2077,14 @@ class CustomStreamWrapper:
                                 "Upgrading pydantic may resolve this. Error: %s", e
                             )
                             # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
                             obj_dict = {
-                                **dict(processed_chunk.__dict__),
-                                **(getattr(processed_chunk, '__pydantic_extra__', None) or {}),
+                                k: v
+                                for k, v in {
+                                    **dict(processed_chunk.__dict__),
+                                    **(getattr(processed_chunk, '__pydantic_extra__', None) or {}),
+                                }.items()
+                                if not k.startswith('_')
                             }
                         if "usage" in obj_dict:
                             del obj_dict["usage"]

@@ -1691,6 +1691,8 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     SchemaSerializer in certain scenarios. The fix catches TypeError and falls
     back to __dict__ extraction.
     """
+    from unittest.mock import patch
+
     # Create a chunk with usage that will be stripped
     chunk_with_usage = ModelResponseStream(
         id="test-chunk",
@@ -1710,15 +1712,12 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     # Add a provider-specific field to test __pydantic_extra__ preservation
     chunk_with_usage.sap_extra_field = "sap-value"
 
-    # Mock model_dump to raise TypeError (simulating MockValSer bug)
-    original_model_dump = chunk_with_usage.model_dump
-
-    def mock_model_dump(*args, **kwargs):
+    # Mock model_dump at class level to avoid polluting instance attributes
+    def mock_model_dump(self, *args, **kwargs):
         raise TypeError("'MockValSer' object cannot be converted to 'SchemaSerializer'")
 
-    chunk_with_usage.model_dump = mock_model_dump
-
-    try:
+    # Use class-level patching to avoid the mock appearing in __dict__ or __pydantic_extra__
+    with patch.object(type(chunk_with_usage), 'model_dump', mock_model_dump):
         # The code should gracefully fall back to __dict__ and not crash
         initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
 
@@ -1750,6 +1749,8 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
 
         # Now this assertion is meaningful: it verifies the attribute was actually COPIED
         assert getattr(result, "sap_extra_field", None) == "sap-value"
-    finally:
-        # Restore original method
-        chunk_with_usage.model_dump = original_model_dump
+
+    # Verify that result can still be serialized (model_dump method is not corrupted)
+    # This call is outside the patch context so it should work normally
+    result_dict = result.model_dump()
+    assert isinstance(result_dict, dict)
