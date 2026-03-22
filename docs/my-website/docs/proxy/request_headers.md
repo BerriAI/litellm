@@ -10,7 +10,7 @@ By default, LiteLLM does not forward client headers to LLM provider APIs. Howeve
 
 `x-litellm-timeout` Optional[float]: The timeout for the request in seconds.
 
-`x-litellm-stream-timeout` Optional[float]: The timeout for getting the first chunk of the response in seconds (only applies for streaming requests). [Demo Video](https://www.loom.com/share/8da67e4845ce431a98c901d4e45db0e5)
+`x-litellm-stream-timeout` Optional[float]: The timeout in seconds between streamed reads / chunks (only applies for streaming requests). If a stream pauses longer than this, LiteLLM times out. If not set, LiteLLM uses the normal request timeout. [Demo Video](https://www.loom.com/share/8da67e4845ce431a98c901d4e45db0e5)
 
 `x-litellm-enable-message-redaction`: Optional[bool]: Don't log the message content to logging integrations. Just track spend. [Learn More](./logging#redact-messages-response-content)
 
@@ -38,6 +38,5 @@ By default, LiteLLM does not forward client headers to LLM provider APIs. Howeve
 ## Custom Headers
 
 Custom headers starting with `x-` can be forwarded to LLM provider APIs when the model is configured in `forward_client_headers_to_llm_api`. [Learn more about header forwarding configuration](./forward_client_headers.md).
-
 
 
