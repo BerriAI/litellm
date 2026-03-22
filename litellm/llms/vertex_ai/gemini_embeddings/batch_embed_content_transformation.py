@@ -216,6 +216,13 @@ def transform_openai_input_gemini_content(
 
     for element in input_list:
         if isinstance(element, list):
+            if not element:
+                raise ValueError("Nested input list must not be empty")
+            for sub in element:
+                if not isinstance(sub, str):
+                    raise ValueError(
+                        f"Elements inside a nested input list must be strings, got {type(sub)}"
+                    )
             parts = [
                 _build_part_for_input(sub, resolved_files=resolved_files)
                 for sub in element

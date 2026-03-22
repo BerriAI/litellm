@@ -103,7 +103,7 @@ FileTypes = Union[
 ]
 
 
-EmbeddingInput = Union[str, List[str]]
+EmbeddingInput = Union[str, List[Union[str, List[str]]]]
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
