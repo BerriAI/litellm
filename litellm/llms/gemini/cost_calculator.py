@@ -28,19 +28,13 @@ def cost_per_token(
     )
 
 
-def _is_gemini_3_model(model_info: "ModelInfo") -> bool:
-    """Check if the model is a Gemini 3.x variant based on its key."""
-    key = model_info.get("key", "")
-    return "gemini-3" in key
-
-
 def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> float:
     """
     Calculates the cost of web search (grounding with Google Search).
 
-    Billing differs by model family:
-    - Gemini 3.x: charged per individual search query ($0.014 default).
-    - Gemini 2.x and older: charged per grounded prompt ($0.035 default),
+    Billing mode is determined by ``web_search_billing_unit`` in model_info:
+    - ``"per_query"``: charged per individual search query (Gemini 3.x).
+    - ``"per_prompt"`` (default): charged per grounded prompt (Gemini 2.x),
       regardless of how many queries were executed internally.
 
     Reads the per-request cost from ``search_context_cost_per_query`` in
@@ -63,8 +57,9 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     ):
         number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
 
-    # Gemini 2.x charges per grounded prompt (flat 1), not per query
-    if number_of_web_search_requests > 0 and not _is_gemini_3_model(model_info):
+    # per_prompt billing: clamp to 1 (flat fee per grounded API call)
+    billing_mode = model_info.get("web_search_billing_unit", "per_prompt")
+    if number_of_web_search_requests > 0 and billing_mode == "per_prompt":
         number_of_web_search_requests = 1
 
     return _cost * number_of_web_search_requests
