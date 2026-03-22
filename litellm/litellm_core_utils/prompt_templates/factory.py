@@ -4051,6 +4051,36 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _sort_bedrock_assistant_content_blocks(
+    blocks: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """
+    Sort assistant content blocks so that ``text`` blocks appear before
+    ``toolUse`` blocks.
+
+    Bedrock requires all ``text`` blocks to precede any ``toolUse`` blocks
+    within an assistant message.  When the Responses API converts
+    function_call items before message items, the resulting ``toolUse``
+    blocks can end up before ``text`` blocks, causing Bedrock to reject
+    the request with a 400 error because the ``toolUse`` → ``toolResult``
+    pairing is broken by the intervening ``text`` block.
+
+    Sort order (stable):
+      0 - reasoningContent
+      1 - text / image / document / video / other non-tool blocks
+      2 - toolUse
+    """
+
+    def _sort_key(block: BedrockContentBlock) -> int:
+        if "reasoningContent" in block:
+            return 0
+        if "toolUse" in block:
+            return 2
+        return 1
+
+    return sorted(blocks, key=_sort_key)
+
+
 def _insert_assistant_continue_message(
     messages: List[BedrockMessageBlock],
     assistant_continue_message: Optional[
@@ -4642,6 +4672,9 @@ class BedrockConverseMessagesProcessor:
             assistant_content = _deduplicate_bedrock_content_blocks(
                 assistant_content, "toolUse"
             )
+            assistant_content = _sort_bedrock_assistant_content_blocks(
+                assistant_content
+            )
 
             if assistant_content:
                 contents.append(
@@ -5006,6 +5039,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
         assistant_content = _deduplicate_bedrock_content_blocks(
             assistant_content, "toolUse"
+        )
+        assistant_content = _sort_bedrock_assistant_content_blocks(
+            assistant_content
         )
 
         if assistant_content:
