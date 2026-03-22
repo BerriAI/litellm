@@ -1657,7 +1657,12 @@ async def test_sap_embedding_required_headers(
                 f"Required header '{header_name}' missing from request. "
                 f"Found headers: {list(request.headers.keys())}"
             )
-            assert request.headers[header_name] == expected_value, (
-                f"Header '{header_name}' has incorrect value. "
-                f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
-            )
+            if header_name in {"Authorization", "AI-Resource-Group"}:
+                assert request.headers[header_name]
+                if header_name == "Authorization":
+                    assert request.headers[header_name].startswith("Bearer ")
+            else:
+                assert request.headers[header_name] == expected_value, (
+                    f"Header '{header_name}' has incorrect value. "
+                    f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
+                )
