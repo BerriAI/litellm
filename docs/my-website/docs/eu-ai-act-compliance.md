@@ -122,11 +122,15 @@ Connect to a persistent backend (Langfuse, Helicone, or your own database). Set 
 
 Article 13 requires providers of high-risk AI systems to supply deployers with sufficient information — instructions for use, accuracy metrics, known limitations — to operate the system appropriately. This is provider-to-deployer transparency.
 
-LiteLLM's contribution to Article 13:
-- **Model routing is logged** — deployers can see which model handled each request
-- **Cost attribution** — deployers know which features consume the most AI resources
-- **Fallback chains are visible** — when a primary model fails and a fallback serves the response, this is logged
-- **Provider documentation pass-through** — LiteLLM's docs link to each provider's model cards and usage policies
+Article 13 compliance requires the provider of the high-risk system to produce and maintain system-level documentation: intended purpose, accuracy and robustness metrics, known risks, and technical measures for monitoring. This is a documentation obligation, not a logging obligation.
+
+LiteLLM's observability features provide **supporting evidence** that can inform Article 13 documentation, but they do not satisfy Article 13 on their own:
+- **Model routing logs** — help compile which models are in use and how requests are distributed
+- **Cost attribution** — supports resource usage documentation
+- **Fallback chain visibility** — provides evidence of system behavior under failure conditions
+- **Provider documentation links** — LiteLLM links to upstream model cards, but these describe the LLM providers' models, not your high-risk AI system as a whole
+
+You must independently produce system documentation that covers how your specific deployment uses LiteLLM, its intended purpose, performance characteristics, and residual risks.
 
 ## Article 50: End-user transparency
 
@@ -134,8 +138,7 @@ Article 50 requires deployers to inform end users that they are interacting with
 
 What you need to add:
 - User-facing disclosure that AI is involved in generating responses
-- Documentation of which models are active and their known limitations
-- Information about how routing decisions are made (cost, latency, quality)
+- A mechanism for users to identify when an AI-generated response has been delivered (e.g., clear labeling in the UI)
 
 Note: Article 50 applies to chatbots and systems interacting directly with natural persons. It has a separate scope from the "high-risk" designation under Annex III — it applies even to limited-risk systems.
 
