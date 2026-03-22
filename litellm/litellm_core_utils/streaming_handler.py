@@ -1864,11 +1864,10 @@ class CustomStreamWrapper:
                         except TypeError as e:
                             if "MockValSer" not in str(e):
                                 raise
-                            # Fallback for Pydantic MockValSer bug (issue #18801)
-                            import logging
+                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
                             logging.getLogger("LiteLLM").warning(
-                                "Pydantic MockValSer bug detected (issue #18801); falling back to __dict__ extraction. "
-                                "Upgrade/downgrade pydantic if this persists. Error: %s", e
+                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
+                                "Upgrading pydantic may resolve this. Error: %s", e
                             )
                             # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
                             obj_dict = {
@@ -2067,11 +2066,10 @@ class CustomStreamWrapper:
                         except TypeError as e:
                             if "MockValSer" not in str(e):
                                 raise
-                            # Fallback for Pydantic MockValSer bug (issue #18801)
-                            import logging
+                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
                             logging.getLogger("LiteLLM").warning(
-                                "Pydantic MockValSer bug detected (issue #18801); falling back to __dict__ extraction. "
-                                "Upgrade/downgrade pydantic if this persists. Error: %s", e
+                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
+                                "Upgrading pydantic may resolve this. Error: %s", e
                             )
                             # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
                             obj_dict = {
