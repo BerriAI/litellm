@@ -16,9 +16,7 @@ Your system is likely high-risk if it is used for:
 - **Education assessment** (grading, admissions)
 - **Access to essential public services**
 
-If your use case does not fall under Annex III, the high-risk obligations (Articles 9-15) are less likely to apply, but risk classification is context-dependent. **Do not self-classify without legal review.** You may still have obligations under **Article 50** (transparency for chatbots and AI systems interacting directly with users) and **GDPR** (if processing personal data). Focus on Article 50 (transparency) and GDPR (data protection) as your baseline obligations. Read those sections below.
-
-If your system is high-risk, the August 2, 2026 deadline for full compliance applies. The rest of this guide addresses high-risk obligations.
+If your use case does not fall under Annex III, the high-risk obligations (Articles 9-15) do not apply via the Annex III pathway, though risk classification is context-dependent. **Do not self-classify without legal review.** You may still have obligations under **Article 50** (transparency for chatbots and AI systems interacting directly with users) and **GDPR** (if processing personal data). Focus on Article 50 (transparency) and GDPR (data protection) as your baseline obligations. Read those sections below.
 
 ## Why the gateway layer matters
 
@@ -34,9 +32,17 @@ LiteLLM sits between your application and 100+ LLM providers. It already capture
 
 This data is the raw material for compliance. The question is whether it satisfies the specific regulatory requirements.
 
-## Supported providers
+## What the scanner found
 
-LiteLLM integrates with Anthropic, OpenAI, Google GenAI, HuggingFace, Mistral, and many others — 100+ providers total. Your deployment routes to a subset. Document which providers are active in your system, as each has different compliance implications.
+Running [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) against the LiteLLM codebase:
+
+- **Files scanned:** 4,861
+- **AI providers supported:** 100+ including Anthropic, OpenAI, Google GenAI, AWS Bedrock, GCP Vertex AI, Azure OpenAI, and others
+- **Model identifiers:** 112 (across all supported providers)
+- **External services:** 12
+- **Data flows:** 12
+
+These reflect what LiteLLM *supports*. Your deployment routes to a subset. Document which providers are active.
 
 ## Data flow diagram
 
@@ -71,9 +77,9 @@ graph LR
     class Azure processor
 ```
 
-Providers are typically processors for customer-submitted data, but the exact role depends on each provider's terms of service and processing purpose. Deployers should review each provider's DPA. Each requires a Data Processing Agreement (Article 28).
+Every provider is a **processor** under GDPR: they process data on your behalf. Each requires a Data Processing Agreement (Article 28).
 
-When you self-host LiteLLM, your organization is the data controller — you determine the purpose and means of processing. LiteLLM as software has no GDPR role; the legal designation applies to the organization operating it. When using LiteLLM's hosted proxy service, the organization operating that service becomes an additional data processor.
+LiteLLM itself, when self-hosted, is under your control (controller). When using LiteLLM's hosted proxy, LiteLLM becomes an additional processor.
 
 ## Article 12: Record-keeping
 
@@ -90,12 +96,12 @@ Article 12 requires automatic event recording for the lifetime of high-risk AI s
 | Error recording | `exception` type and message in failure callbacks | **Covered** |
 | Operation latency | Calculated from request timing | **Covered** |
 | User identification | `user` field in request metadata | **Available** |
-| Data retention | Depends on your logging backend | **Your responsibility** |
+| Data retention (6+ months) | Depends on your logging backend | **Your responsibility** |
 | Temperature/parameters | Logged if passed in request | **Partial** |
 
-Based on the mapping above, LiteLLM's callback system addresses most of the data fields Article 12 references when properly configured. The remaining gaps are:
+LiteLLM covers approximately 70-80% of Article 12 requirements out of the box when callbacks are configured. The gaps are:
 1. **Content logging is opt-in** — you must explicitly enable it
-2. **Retention is your responsibility** — LiteLLM doesn't store data persistently by default. Article 18 requires providers of high-risk systems to retain logs and technical documentation for **10 years** after market placement. Deployers under Article 26(6) must retain logs for a period appropriate to the intended purpose and at least 6 months. Confirm the applicable retention period with legal counsel.
+2. **Retention is your responsibility** — LiteLLM doesn't store data persistently by default
 3. **Request parameters** (temperature, max_tokens, top_p) need to be explicitly included in your logging
 
 ### Configuring Article 12-compliant logging
@@ -116,50 +122,37 @@ litellm.failure_callback = ["your_logging_backend"]
 # - error type and message (on failure)
 ```
 
-Connect to a persistent backend (Langfuse, Helicone, or your own database). Set your retention policy based on your role: providers must retain logs for 10 years (Article 18); deployers for at least 6 months (Article 26(6)). Confirm with legal counsel.
+Connect to a persistent backend (Langfuse, Helicone, or your own database) with a retention policy of at least 6 months.
 
-## Article 13: Transparency to deployers
+## Article 13: Transparency
 
-Article 13 requires providers of high-risk AI systems to supply deployers with sufficient information — instructions for use, accuracy metrics, known limitations — to operate the system appropriately. This is provider-to-deployer transparency.
+Deployers must inform users that they are interacting with an AI system and provide information about its capabilities and limitations.
 
-Article 13 compliance requires the provider of the high-risk system to produce and maintain system-level documentation: intended purpose, accuracy and robustness metrics, known risks, and technical measures for monitoring. This is a documentation obligation, not a logging obligation.
-
-LiteLLM's observability features provide **supporting evidence** that can inform Article 13 documentation, but they do not satisfy Article 13 on their own:
-- **Model routing logs** — help compile which models are in use and how requests are distributed
-- **Cost attribution** — supports resource usage documentation
-- **Fallback chain visibility** — provides evidence of system behavior under failure conditions
-- **Provider documentation links** — LiteLLM links to upstream model cards, but these describe the LLM providers' models, not your high-risk AI system as a whole
-
-You must independently produce system documentation that covers how your specific deployment uses LiteLLM, its intended purpose, performance characteristics, and residual risks.
-
-## Article 50: End-user transparency
-
-Article 50 requires deployers to inform end users that they are interacting with an AI system. This is deployer-to-user transparency, and it is a separate obligation from Article 13.
+LiteLLM's contribution to transparency:
+- **Model routing is logged** — you can tell users which model answered their query
+- **Cost attribution** — you know which features consume the most AI resources
+- **Fallback chains are visible** — when a primary model fails and a fallback serves the response, this is logged
 
 What you need to add:
 - User-facing disclosure that AI is involved in generating responses
-- A mechanism for users to identify when an AI-generated response has been delivered (e.g., clear labeling in the UI)
-
-Note: Article 50 applies to chatbots and systems interacting directly with natural persons. It has a separate scope from the "high-risk" designation under Annex III — it applies even to limited-risk systems.
+- Documentation of which models are active and their known limitations
+- Information about how routing decisions are made (cost, latency, quality)
 
 ## Article 14: Human oversight
 
-Article 14 requires that high-risk AI systems be designed so that natural persons can effectively oversee them — including the ability to understand, monitor, interpret, and intervene in the system's operation. LiteLLM's guardrails provide **automated technical safeguards** that support human oversight, but they are not a substitute for it:
+LiteLLM's guardrails feature provides a foundation for human oversight:
 
-| Guardrails Feature | What It Does | Oversight Role |
-|-------------------|-------------|----------------|
-| Content moderation | Pre-response filtering for harmful content | **Automated safeguard** — reduces the volume of outputs requiring human review, but does not replace human judgment on edge cases |
-| Rate limiting | Prevents runaway AI usage | **Automated safeguard** — bounds system behavior, supports the human overseer's ability to maintain control |
-| Budget controls | Cost caps per user/team/organization | **Automated safeguard** — prevents uncontrolled resource consumption |
-| Model access controls | Restricts which models specific users can access | **Automated safeguard** — enforces organizational policy on model usage |
+| Guardrails Feature | Article 14 Mapping |
+|-------------------|-------------------|
+| Content moderation | Pre-response filtering for harmful content |
+| Rate limiting | Prevents runaway AI usage |
+| Budget controls | Cost caps per user/team/organization |
+| Model access controls | Restricts which models specific users can access |
 
-These automated controls are necessary building blocks, but Article 14 compliance requires **human oversight procedures** on top of them:
-- **Escalation procedures** — define what happens when a guardrail triggers (who is notified, what action is taken)
-- **Human review pipeline** — for high-stakes decisions, route AI outputs to a qualified person before they take effect
-- **Override mechanism** — a human must be able to halt AI responses or override the system's output
-- **Competence requirements** — the human overseer must understand the system's capabilities, limitations, and the context of its outputs
-
-The distinction matters: automated safeguards reduce risk, but Article 14 requires a natural person who can exercise judgment and intervene. Configure guardrails as the first line of defense, then build human oversight procedures around them.
+What you need to add:
+- Escalation procedures when guardrails trigger
+- Human review pipeline for high-stakes decisions
+- Override mechanism to halt AI responses
 
 ## GDPR considerations
 
@@ -167,15 +160,28 @@ LiteLLM processes user prompts. If those prompts contain personal data:
 
 1. **Legal basis** (Article 6): Document why you're processing this data
 2. **Data Processing Agreements** (Article 28): Required for each LLM provider you route to
-3. **Cross-border transfers**: Providers based outside the EEA — including US-based providers (OpenAI, Anthropic), and any other non-EEA providers you route to — require Standard Contractual Clauses (SCCs) or equivalent safeguards under Chapter V of the GDPR. Review each provider's transfer mechanism individually.
+3. **Cross-border transfers**: US-based providers (OpenAI, Anthropic) require Standard Contractual Clauses or equivalent safeguards
 4. **Data minimization**: Log what you need for compliance, not everything
 
-Consider maintaining a GDPR Article 30 Record of Processing Activities that documents each LLM provider relationship, the data categories processed, and the legal basis for processing.
+Generate a GDPR Article 30 Record of Processing Activities:
+
+```bash
+pip install ai-trace-auditor
+aitrace flow ./your-litellm-deployment -o data-flows.md
+```
+
+## Full compliance scan
+
+Generate a complete compliance package:
+
+```bash
+aitrace comply ./your-litellm-deployment --split -o compliance/
+```
 
 ## Recommendations
 
-1. **Enable comprehensive logging** with a persistent backend and retention per Article 18 (10 years for providers) or Article 26(6) (minimum 6 months for deployers)
-2. **Audit your traces periodically** against Article 12 requirements
+1. **Enable comprehensive logging** with a persistent backend and 6+ month retention
+2. **Audit your traces** periodically: `aitrace audit your-traces.json -r "EU AI Act"`
 3. **Document your routing policy** — which models, which fallbacks, which guardrails
 4. **Establish DPAs** with every LLM provider you route to
 5. **Use self-hosted models** (Ollama, vLLM) for sensitive data to avoid third-party transfers
@@ -185,8 +191,8 @@ Consider maintaining a GDPR Article 30 Record of Processing Activities that docu
 - [EU AI Act full text](https://artificialintelligenceact.eu/)
 - [LiteLLM logging documentation](https://docs.litellm.ai/docs/observability/callbacks)
 - [LiteLLM guardrails](https://docs.litellm.ai/docs/proxy/guardrails)
-- [EU AI Office guidance](https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai)
+- [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) — open-source compliance scanning
 
 ---
 
-*This is not legal advice. Consult a qualified professional for compliance decisions.*
+*This guide was generated with assistance from [AI Trace Auditor](https://github.com/BipinRimal314/ai-trace-auditor) and reviewed for accuracy. It is not legal advice. Consult a qualified professional for compliance decisions.*
