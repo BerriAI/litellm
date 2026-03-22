@@ -177,8 +177,9 @@ for i, item in enumerate(response.data):
 
 ## Performance Considerations
 
-- **Concurrent Processing**: Chunks are processed concurrently for better performance
+- **Concurrent Processing (async only)**: When using `aembedding()`, chunks are processed concurrently via `asyncio.gather` for better performance. The synchronous `embedding()` path processes chunks sequentially
 - **Token Estimation**: Uses fast character-based estimation (no tokenizer overhead)
+- **Batch Efficiency**: Short inputs that fit within `embedding_chunk_size` bypass the chunking path entirely and are sent as a single batched API call
 - **Memory**: Large inputs are processed in chunks, reducing peak memory usage
 
 ## When to Use This Feature
