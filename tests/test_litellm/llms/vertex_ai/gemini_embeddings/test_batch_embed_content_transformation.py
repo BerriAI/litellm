@@ -20,6 +20,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     _is_multimodal_input,
     process_response,
     transform_openai_input_gemini_content,
+    transform_openai_input_gemini_embed_content,
 )
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
@@ -140,6 +141,40 @@ class TestTransformOpenaiInputGeminiContent:
         assert len(result["requests"]) == 3
 
 
+class TestTransformOpenaiInputGeminiEmbedContent:
+    """Test transform_openai_input_gemini_embed_content (vertex_ai / embedContent path)."""
+
+    def test_text_and_image_combined(self):
+        result = transform_openai_input_gemini_embed_content(
+            input=["hello", IMAGE_DATA_URI],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        assert "content" in result
+        parts = result["content"]["parts"]
+        assert len(parts) == 2
+        assert parts[0]["text"] == "hello"
+        assert parts[1]["inline_data"] is not None
+
+    def test_gcs_url(self):
+        result = transform_openai_input_gemini_embed_content(
+            input=[GCS_URL],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        parts = result["content"]["parts"]
+        assert len(parts) == 1
+        assert parts[0]["file_data"]["file_uri"] == GCS_URL
+
+    def test_dimensions_mapped(self):
+        result = transform_openai_input_gemini_embed_content(
+            input="hello",
+            model="gemini-embedding-2-preview",
+            optional_params={"dimensions": 256},
+        )
+        assert result["outputDimensionality"] == 256
+
+
 class TestProcessResponse:
     """Test that process_response sets correct indices."""
 
@@ -192,4 +227,5 @@ class TestProcessResponse:
         assert len(result.data) == 2
         assert result.data[0]["index"] == 0
         assert result.data[1]["index"] == 1
-        assert result.usage.prompt_tokens == 0
+        # Should count tokens only for the text element, not the image
+        assert result.usage.prompt_tokens > 0
