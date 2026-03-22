@@ -383,3 +383,112 @@ def test_unmask_pii_text_backslash_in_value():
         "Path is PERSON_abc123", pii_tokens
     )
     assert result == r"Path is C:\Users\John"
+
+
+# ---------------------------------------------------------------------------
+# Assistant message skip tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def guardrail_with_skip():
+    """Presidio guardrail with skip_assistant_messages enabled."""
+    return _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        presidio_skip_assistant_messages=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_assistant_messages(guardrail_with_skip):
+    """With skip_assistant_messages=True, assistant messages are not scanned."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    check_pii_texts = []
+
+    async def _tracking(text, output_parse_pii, presidio_config, request_data):
+        check_pii_texts.append(text)
+        return text
+
+    guardrail_with_skip.check_pii = _tracking
+
+    data = {
+        "messages": [
+            {"role": "user", "content": "My name is Alice Smith"},
+            {"role": "assistant", "content": "Hello! I see your name."},
+            {"role": "user", "content": "My email is alice@example.com"},
+        ],
+        "call_type": "completion",
+    }
+
+    await guardrail_with_skip.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+        cache=MagicMock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert any("Alice Smith" in t for t in check_pii_texts)
+    assert any("alice@example.com" in t for t in check_pii_texts)
+    assert not any("Hello! I see" in t for t in check_pii_texts)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_assistant_when_disabled(guardrail):
+    """Default (skip=False): assistant messages ARE scanned."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    check_pii_texts = []
+
+    async def _tracking(text, output_parse_pii, presidio_config, request_data):
+        check_pii_texts.append(text)
+        return text
+
+    guardrail.check_pii = _tracking
+
+    data = {
+        "messages": [
+            {"role": "user", "content": "My name is Alice Smith"},
+            {"role": "assistant", "content": "Hello! I see your name."},
+        ],
+        "call_type": "completion",
+    }
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+        cache=MagicMock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert any("Hello! I see" in t for t in check_pii_texts)
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_skips_assistant_messages(guardrail_with_skip):
+    """async_logging_hook also skips assistant messages when enabled."""
+    check_pii_texts = []
+
+    async def _tracking(text, output_parse_pii, presidio_config, request_data):
+        check_pii_texts.append(text)
+        return text
+
+    guardrail_with_skip.check_pii = _tracking
+
+    kwargs = {
+        "messages": [
+            {"role": "user", "content": "My SSN is 123-45-6789"},
+            {"role": "assistant", "content": "I see your SSN."},
+        ],
+        "call_type": "completion",
+    }
+
+    await guardrail_with_skip.async_logging_hook(
+        kwargs=kwargs,
+        result="some result",
+        call_type="completion",
+    )
+
+    assert any("123-45-6789" in t for t in check_pii_texts)
+    assert not any("I see your SSN" in t for t in check_pii_texts)

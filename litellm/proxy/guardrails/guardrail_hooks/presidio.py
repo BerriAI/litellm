@@ -89,6 +89,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             Dict[Union[PiiEntityType, str], float]
         ] = None,
         presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = None,
+        presidio_skip_assistant_messages: Optional[bool] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -96,6 +97,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
         super().__init__(**kwargs)
         self.guardrail_provider = "presidio"
+        self.skip_assistant_messages: bool = presidio_skip_assistant_messages or False
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
@@ -766,6 +768,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
+                # When enabled, skip assistant messages — they are the model's
+                # own output and typically don't contain user PII.
+                if self.skip_assistant_messages and m.get("role") == "assistant":
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -874,6 +880,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_config = self.get_presidio_settings_from_request_data(kwargs)
 
             for msg_idx, m in enumerate(messages):
+                # When enabled, skip assistant messages — they are the model's
+                # own output and typically don't contain user PII.
+                if self.skip_assistant_messages and m.get("role") == "assistant":
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -1572,4 +1582,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if litellm_params.presidio_entities_deny_list:
             self.presidio_entities_deny_list = (
                 litellm_params.presidio_entities_deny_list
+            )
+        if litellm_params.presidio_skip_assistant_messages is not None:
+            self.skip_assistant_messages = (
+                litellm_params.presidio_skip_assistant_messages
             )
