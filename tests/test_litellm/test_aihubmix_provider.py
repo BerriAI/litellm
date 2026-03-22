@@ -2,11 +2,6 @@
 Unit tests for the AIHubMix provider registration and configuration.
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.abspath("../.."))
-
 import litellm
 from litellm.llms.aihubmix.chat.transformation import AIHubMixChatConfig
 from litellm.types.utils import LlmProviders
