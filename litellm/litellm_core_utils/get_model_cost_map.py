@@ -50,8 +50,13 @@ class GetModelCostMap:
                 .read_text(encoding="utf-8")
             )
             return content
-        except (FileNotFoundError, ModuleNotFoundError):
+        except FileNotFoundError:
             pass
+        except ModuleNotFoundError:
+            verbose_logger.warning(
+                "LiteLLM: Could not load model cost map from package resources. "
+                "Falling back to project root."
+            )
 
         current_dir = Path(__file__).parent.parent.parent
         model_cost_map_path = current_dir / "model_prices_and_context_window.json"
