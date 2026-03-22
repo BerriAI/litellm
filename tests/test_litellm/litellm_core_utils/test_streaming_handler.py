@@ -1715,16 +1715,20 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
 
     chunk_with_usage.model_dump = mock_model_dump
 
-    # The code should gracefully fall back to __dict__ and not crash
-    initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
+    try:
+        # The code should gracefully fall back to __dict__ and not crash
+        initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
 
-    # Process the chunk through return_processed_chunk_logic which calls model_dump
-    result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
-        completion_obj={"content": "test content"},
-        response_obj={"original_chunk": chunk_with_usage},
-        model_response=chunk_with_usage,
-    )
+        # Process the chunk through return_processed_chunk_logic which calls model_dump
+        result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+            completion_obj={"content": "test content"},
+            response_obj={"original_chunk": chunk_with_usage},
+            model_response=chunk_with_usage,
+        )
 
-    # Should not raise TypeError and should successfully process the chunk
-    assert result is not None
-    assert result.choices[0].delta.content == "test content"
+        # Should not raise TypeError and should successfully process the chunk
+        assert result is not None
+        assert result.choices[0].delta.content == "test content"
+    finally:
+        # Restore original method
+        chunk_with_usage.model_dump = original_model_dump

@@ -272,7 +272,9 @@ def preserve_upstream_non_openai_attributes(
     expected_keys = set(type(model_response).model_fields.keys()).union({"usage"})
     try:
         obj_dict = original_chunk.model_dump()
-    except TypeError:
+    except TypeError as e:
+        if "MockValSer" not in str(e):
+            raise
         # Fallback for Pydantic MockValSer bug (issue #18801)
         obj_dict = dict(original_chunk.__dict__) if hasattr(original_chunk, '__dict__') else {}
     for key, value in obj_dict.items():
