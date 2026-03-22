@@ -45,16 +45,17 @@ def _make_handler_and_call(optional_params: dict) -> dict:
 
     with patch.object(handler, "make_sync_openai_embedding_request", side_effect=fake_make_sync):
         with patch.object(handler, "_get_openai_client", return_value=MagicMock()):
-            handler.embedding(
-                model="test-model",
-                input=["test input"],
-                timeout=60.0,
-                logging_obj=mock_logging,
-                model_response=MagicMock(),
-                optional_params=optional_params,
-                api_key="test-key",
-                api_base="http://localhost:8099",
-            )
+            with patch("litellm.llms.openai.openai.convert_to_model_response_object", return_value=MagicMock()):
+                handler.embedding(
+                    model="test-model",
+                    input=["test input"],
+                    timeout=60.0,
+                    logging_obj=mock_logging,
+                    model_response=MagicMock(),
+                    optional_params=optional_params,
+                    api_key="test-key",
+                    api_base="http://localhost:8099",
+                )
 
     return captured_data
 
