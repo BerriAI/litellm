@@ -135,6 +135,33 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 3
 
+    def test_nested_input_combined_embedding(self):
+        """Nested list produces one request with multiple parts (combined embedding)."""
+        result = transform_openai_input_gemini_content(
+            input=[["a red shoe", IMAGE_DATA_URI]],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        assert len(result["requests"]) == 1
+        parts = result["requests"][0]["content"]["parts"]
+        assert len(parts) == 2
+        assert parts[0]["text"] == "a red shoe"
+        assert parts[1]["inline_data"] is not None
+
+    def test_mixed_nested_and_flat(self):
+        """Mixed nested + flat produces correct number of requests."""
+        result = transform_openai_input_gemini_content(
+            input=[["text", IMAGE_DATA_URI], "standalone"],
+            model="gemini-embedding-2-preview",
+            optional_params={},
+        )
+        assert len(result["requests"]) == 2
+        # First: combined (2 parts)
+        assert len(result["requests"][0]["content"]["parts"]) == 2
+        # Second: standalone (1 part)
+        assert len(result["requests"][1]["content"]["parts"]) == 1
+        assert result["requests"][1]["content"]["parts"][0]["text"] == "standalone"
+
 
 class TestTransformOpenaiInputGeminiEmbedContent:
     """Test transform_openai_input_gemini_embed_content (vertex_ai / embedContent path)."""
