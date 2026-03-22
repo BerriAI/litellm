@@ -1,9 +1,9 @@
 import { isAdminRole } from "@/utils/roles";
-import { LoadingOutlined } from "@ant-design/icons";
+import { teamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select, Spin, Table } from "antd";
-import React, { useState } from "react";
+import { Button, Form, Input, Modal, Select, Table, Tabs } from "antd";
+import React, { useMemo, useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -12,8 +12,10 @@ import {
   fetchSearchTools,
   updateSearchTool,
 } from "../networking";
+import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
 import CreateSearchTool from "./CreateSearchTools";
 import { searchToolColumns } from "./SearchToolColumn";
+import SearchToolTestPlayground from "./SearchToolTestPlayground";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
@@ -22,7 +24,6 @@ interface SearchToolsProps {
   userRole: string | null;
   userID: string | null;
 }
-
 
 const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
   const {
@@ -51,6 +52,45 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   }) as { data: { providers: AvailableSearchProvider[] }; isLoading: boolean };
 
   const availableProviders = providersResponse?.providers || [];
+
+  // For non-admin users, fetch their teams to scope search tools
+  const isAdmin = userRole ? isAdminRole(userRole) : false;
+  const { data: userTeamsResponse } = useQuery({
+    queryKey: ["userTeamsForSearchTools", userID],
+    queryFn: () => {
+      if (!accessToken || !userID) throw new Error("Missing auth");
+      return teamListCall(accessToken, 1, 100, { userID }) as Promise<TeamsResponse>;
+    },
+    enabled: !!accessToken && !!userID && !isAdmin,
+  });
+
+  // Compute allowed search tool IDs from user's teams
+  const scopedSearchTools = useMemo(() => {
+    if (!searchTools) return [];
+    if (isAdmin) return searchTools;
+    if (!userTeamsResponse?.teams) return [];
+
+    // Collect all search_tool IDs the user's teams grant access to
+    const allowedIds = new Set<string>();
+    let hasWildcard = false;
+    for (const team of userTeamsResponse.teams) {
+      const teamSearchTools = team.object_permission?.search_tools;
+      if (!teamSearchTools) continue;
+      if (teamSearchTools.includes("*")) {
+        hasWildcard = true;
+        break;
+      }
+      for (const id of teamSearchTools) {
+        allowedIds.add(id);
+      }
+    }
+
+    if (hasWildcard) return searchTools;
+    if (allowedIds.size === 0) return [];
+    return searchTools.filter(
+      (tool) => allowedIds.has(tool.search_tool_id || tool.search_tool_name),
+    );
+  }, [searchTools, isAdmin, userTeamsResponse]);
 
   // State
   const [toolIdToDelete, setToolToDelete] = useState<string | null>(null);
@@ -87,8 +127,9 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         },
         handleDelete,
         availableProviders,
+        isAdmin,
       ),
-    [availableProviders, searchTools, form],
+    [availableProviders, searchTools, form, isAdmin],
   );
 
   function handleDelete(toolId: string) {
@@ -176,7 +217,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         label="Search Provider"
         rules={[{ required: true, message: "Please select a search provider" }]}
       >
-        <Select placeholder="Select a search provider" loading={isLoadingProviders}>
+        <Select placeholder="Select a search provider" notFoundContent={isLoadingProviders ? "Loading providers..." : "No providers found"}>
           {availableProviders.map((provider) => (
             <Select.Option key={provider.provider_name} value={provider.provider_name}>
               {provider.ui_friendly_name}
@@ -196,7 +237,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   );
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
 
@@ -221,27 +261,68 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         accessToken={accessToken}
         availableProviders={availableProviders}
       />
+    ) : isLoadingTools ? (
+        <div className="flex justify-center items-center py-16">
+          <AntDLoadingSpinner size="large" />
+        </div>
     ) : (
-      <div className="w-full h-full">
-        <Spin spinning={isLoadingTools} indicator={<LoadingOutlined spin />} size="large">
-          <Table
-            bordered
-            dataSource={searchTools || []}
-            columns={columns}
-            rowKey={(record) => record.search_tool_id || record.search_tool_name}
-            pagination={false}
-            locale={{
-              emptyText: "No search tools configured",
-            }}
-            size="small"
-          />
-        </Spin>
-
-      </div>
+        <Table
+          bordered
+          dataSource={scopedSearchTools}
+          columns={columns}
+          rowKey={(record) => record.search_tool_id || record.search_tool_name}
+          pagination={false}
+          locale={{
+            emptyText: "No search tools configured",
+          }}
+          size="small"
+        />
     );
 
   return (
-    <div className="w-full h-full p-6">
+    <div className="w-full mx-4 h-[75vh]">
+      <div className="gap-2 p-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900"><SearchOutlined style={{ marginRight: 8 }} />Search Tools</h1>
+            <p className="text-sm text-gray-500 mt-1">Configure and manage your search providers</p>
+          </div>
+          {isAdminRole(userRole) && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreateModalVisible(true)}
+            >
+              Add Search Tool
+            </Button>
+          )}
+        </div>
+
+        <Tabs
+          defaultActiveKey="tools"
+          items={[
+            {
+              key: "tools",
+              label: "Search Tools",
+              children: <ToolsTab />,
+            },
+            {
+              key: "test",
+              label: "Test Search Tools",
+              children: (
+                <SearchToolTestPlayground
+                  searchTools={scopedSearchTools}
+                  availableProviders={availableProviders}
+                  isLoading={isLoadingTools}
+                  accessToken={accessToken}
+                />
+              ),
+            },
+          ]}
+        />
+      </div>
+
+      {/* Modals */}
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title="Delete Search Tool"
@@ -273,7 +354,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         setModalVisible={setCreateModalVisible}
       />
 
-      {/* Edit Modal */}
       <Modal
         title="Edit Search Tool"
         open={isEditModalVisible}
@@ -287,16 +367,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       >
         {renderEditForm()}
       </Modal>
-
-      <Title>Search Tools</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your search providers</Text>
-      {isAdminRole(userRole) && (
-        <Button className="mt-4 mb-4" onClick={() => setCreateModalVisible(true)}>
-          + Add New Search Tool
-        </Button>
-      )}
-
-      <ToolsTab />
     </div>
   );
 };

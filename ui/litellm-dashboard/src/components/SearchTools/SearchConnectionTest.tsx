@@ -27,31 +27,41 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
   } | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
+  // Run test only once on mount — parent controls remounting via `key` prop
   useEffect(() => {
+    let cancelled = false;
+
     const runTest = async () => {
       setIsLoading(true);
       try {
         const result = await testSearchToolConnection(accessToken, litellmParams);
+        if (cancelled) return;
         setTestResult(result);
         if (result.status === "success") {
           NotificationsManager.success("Connection test successful!");
         }
       } catch (error) {
+        if (cancelled) return;
         setTestResult({
           status: "error",
           message: error instanceof Error ? error.message : "Unknown error occurred",
           error_type: "NetworkError",
         });
       } finally {
-        setIsLoading(false);
-        if (onTestComplete) {
-          onTestComplete();
+        if (!cancelled) {
+          setIsLoading(false);
+          onTestComplete?.();
         }
       }
     };
 
     runTest();
-  }, [accessToken, litellmParams, onTestComplete]);
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getCleanErrorMessage = (errorMsg: string) => {
     if (!errorMsg) return "Unknown error";

@@ -1001,7 +1001,7 @@ async def new_team(  # noqa: PLR0915
 
         team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
             data=complete_team_data_dict,
-            include={"litellm_model_table": True},  # type: ignore
+            include={"litellm_model_table": True, "object_permission": True},  # type: ignore
         )
 
         ## ADD TEAM ID TO USER TABLE ##
@@ -1550,7 +1550,7 @@ async def update_team(  # noqa: PLR0915
         ] = await prisma_client.db.litellm_teamtable.update(
             where={"team_id": data.team_id},
             data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+            include={"litellm_model_table": True, "object_permission": True},  # type: ignore
         )
 
         if team_row is None or team_row.team_id is None:
@@ -3590,6 +3590,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include={"object_permission": True},
         )
         # Get total count for pagination
         total_count = await prisma_client.db.litellm_teamtable.count(
@@ -3668,7 +3669,7 @@ async def _authorize_and_filter_teams(
         # Org admin: query DB for teams in their orgs
         org_teams = await prisma_client.db.litellm_teamtable.find_many(
             where={"organization_id": {"in": allowed_org_ids}},
-            include={"litellm_model_table": True},
+            include={"litellm_model_table": True, "object_permission": True},
         )
         if not user_id:
             return list(org_teams)
@@ -3678,7 +3679,7 @@ async def _authorize_and_filter_teams(
         # Prisma doesn't support filtering JSON array fields, so we fetch by membership separately
         member_teams = await prisma_client.db.litellm_teamtable.find_many(
             where={"team_id": {"not_in": list(seen_team_ids)}} if seen_team_ids else {},
-            include={"litellm_model_table": True},
+            include={"litellm_model_table": True, "object_permission": True},
         )
         for team in member_teams:
             if team.members_with_roles and any(
@@ -3689,7 +3690,7 @@ async def _authorize_and_filter_teams(
     elif user_id:
         # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
         response = await prisma_client.db.litellm_teamtable.find_many(
-            include={"litellm_model_table": True}
+            include={"litellm_model_table": True, "object_permission": True}
         )
         return [
             team
@@ -3701,7 +3702,7 @@ async def _authorize_and_filter_teams(
         # Proxy admin: all teams
         return list(
             await prisma_client.db.litellm_teamtable.find_many(
-                include={"litellm_model_table": True}
+                include={"litellm_model_table": True, "object_permission": True}
             )
         )
 

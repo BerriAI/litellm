@@ -17,6 +17,18 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
     ],
     isLoading: false,
   }),
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({

@@ -81,6 +81,20 @@ vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
   }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Test Team", models: ["gpt-4"] },
+      ], total: 1, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
+
 const mockAuthorizedUser = (userRole: string, userId: string, premiumUser: boolean) => ({
   token: "test-token",
   accessToken: "test-access-token",
@@ -227,7 +241,7 @@ describe("AddModelForm", () => {
 
     const teamSelect = screen.getByRole("combobox");
     await userEvent.click(teamSelect);
-    await userEvent.click(screen.getByText("Test Team"));
+    await userEvent.click(screen.getByText(/Test Team/));
 
     await waitFor(() => {
       expect(screen.getByText("Provider")).toBeInTheDocument();
@@ -246,7 +260,7 @@ describe("AddModelForm", () => {
 
     const teamSelect = screen.getByRole("combobox");
     await userEvent.click(teamSelect);
-    await userEvent.click(screen.getByText("Test Team"));
+    await userEvent.click(screen.getByText(/Test Team/));
 
     await waitFor(() => {
       expect(screen.getByText("Provider")).toBeInTheDocument();

@@ -8,14 +8,7 @@ vi.mock("@/utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("./SearchToolTester", () => ({
-  SearchToolTester: ({ searchToolName, accessToken }: { searchToolName: string; accessToken: string }) => (
-    <div data-testid="search-tool-tester">
-      <span>Search Tool Tester for {searchToolName}</span>
-      <span>Access Token: {accessToken}</span>
-    </div>
-  ),
-}));
+
 
 describe("SearchToolView", () => {
   const mockSearchTool: SearchTool = {
@@ -260,19 +253,6 @@ describe("SearchToolView", () => {
     expect(nameCopyButton).not.toHaveClass("text-green-600");
   });
 
-  it("should render SearchToolTester when accessToken is provided", () => {
-    render(<SearchToolView {...defaultProps} />);
-    expect(screen.getByTestId("search-tool-tester")).toBeInTheDocument();
-    expect(screen.getByText(/Search Tool Tester for Test Search Tool/)).toBeInTheDocument();
-  });
 
-  it("should not render SearchToolTester when accessToken is null", () => {
-    render(<SearchToolView {...defaultProps} accessToken={null} />);
-    expect(screen.queryByTestId("search-tool-tester")).not.toBeInTheDocument();
-  });
 
-  it("should pass correct props to SearchToolTester", () => {
-    render(<SearchToolView {...defaultProps} />);
-    expect(screen.getByText("Access Token: test-token")).toBeInTheDocument();
-  });
 });

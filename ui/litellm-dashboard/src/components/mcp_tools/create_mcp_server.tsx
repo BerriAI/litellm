@@ -556,10 +556,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             }
           >
             <TeamDropdown
-              teams={teams ?? []}
               value={selectedTeamId}
               onChange={(value) => setSelectedTeamId(value)}
-              loading={isLoadingTeams}
             />
           </Form.Item>
           {!isAdmin && !selectedTeamId ? (
