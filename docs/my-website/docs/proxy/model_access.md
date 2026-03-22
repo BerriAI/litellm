@@ -250,6 +250,12 @@ curl -L 'http://localhost:4000/team/member_update' \
 | Key `models` must be a subset of effective models | `403` on `/key/generate` |
 | Narrowing `team.models` auto-prunes stale `default_models` | Automatic on `/team/update` |
 
+### Important Notes
+
+- **Effective models are capped by `team.models`**: If `team.models` is later narrowed, any member overrides outside the new pool are silently excluded at runtime — no access is granted beyond the team's allowed list.
+- **Service/bot keys** (keys without a `user_id`) are **not affected** by this feature. They always use the full `team.models` pool, preserving backward compatibility.
+- **Access groups** (`access_group_ids`) are a team-level concept and are **not** restricted by per-member overrides. Models granted via access groups remain available to all team members.
+
 ### Backward Compatibility
 
 When the feature flag is off **or** when neither `default_models` nor member `models` is configured:

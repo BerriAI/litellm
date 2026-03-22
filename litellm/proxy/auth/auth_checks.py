@@ -2736,6 +2736,12 @@ def get_effective_team_models(
     ):
         return team_object.models if team_object else []
 
+    # Service/bot keys (no user_id) are not team members — skip per-member
+    # effective models and use the full team.models pool. This preserves
+    # backward compatibility for service accounts.
+    if valid_token and not valid_token.user_id:
+        return team_object.models if team_object else []
+
     # Get from team defaults — prefer team_object (authoritative, fresh from DB/cache)
     # over valid_token (snapshot from key creation time, may be stale).
     # Use `is not None` instead of truthiness so that an explicit empty list []

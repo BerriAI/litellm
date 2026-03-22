@@ -59,14 +59,14 @@ class TestGetEffectiveTeamModels:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"d1", "mo1"}
 
     def test_overrides_only_no_defaults(self):
         """3. User with overrides only (no defaults) → can access override models."""
         team = LiteLLM_TeamTable(team_id="t1", models=["m1", "mo1", "mo2"])
-        token = UserAPIKeyAuth(team_member_models=["mo1", "mo2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1", "mo2"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"mo1", "mo2"}
 
@@ -95,8 +95,8 @@ class TestGetEffectiveTeamModels:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "d1", "mo_a", "mo_b"], default_models=["d1"]
         )
-        token_a = UserAPIKeyAuth(team_member_models=["mo_a"])
-        token_b = UserAPIKeyAuth(team_member_models=["mo_b"])
+        token_a = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo_a"])
+        token_b = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo_b"])
         result_a = get_effective_team_models(team, token_a)
         result_b = get_effective_team_models(team, token_b)
         assert set(result_a) == {"d1", "mo_a"}
@@ -109,16 +109,29 @@ class TestGetEffectiveTeamModels:
         litellm.team_model_overrides_enabled = False
         monkeypatch.delenv("TEAM_MODEL_OVERRIDES", raising=False)
         team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
-        token = UserAPIKeyAuth(team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         result = get_effective_team_models(team, token)
         assert result == ["m1"]
+
+    def test_service_key_no_user_id_gets_full_team_pool(self):
+        """Service/bot keys (no user_id) should get full team.models, not defaults."""
+        team = LiteLLM_TeamTable(
+            team_id="t1",
+            models=["m1", "m2", "m3"],
+            default_models=["m1"],
+        )
+        # Service key: valid_token with no user_id
+        token = UserAPIKeyAuth(user_id=None)
+        result = get_effective_team_models(team, token)
+        # Should get full team pool, NOT just defaults
+        assert result == ["m1", "m2", "m3"]
 
     def test_deduplication(self):
         """Overlapping models are deduplicated."""
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "shared", "extra"], default_models=["shared"]
         )
-        token = UserAPIKeyAuth(team_member_models=["shared", "extra"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["shared", "extra"])
         result = get_effective_team_models(team, token)
         assert set(result) == {"shared", "extra"}
         assert len(result) == 2  # no duplicates
@@ -129,7 +142,7 @@ class TestGetEffectiveTeamModels:
 
     def test_no_team_object_with_token(self):
         """No team object but token has defaults → uses token values."""
-        token = UserAPIKeyAuth(team_default_models=["td1"], team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_default_models=["td1"], team_member_models=["mo1"])
         result = get_effective_team_models(None, token)
         assert set(result) == {"td1", "mo1"}
 
@@ -163,7 +176,7 @@ class TestCanTeamAccessModelWithOverrides:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         assert await can_team_access_model(
             model="d1", team_object=team, llm_router=None, valid_token=token
         )
@@ -177,7 +190,7 @@ class TestCanTeamAccessModelWithOverrides:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "m2", "d1", "mo1"], default_models=["d1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         with pytest.raises(Exception):
             await can_team_access_model(
                 model="m2", team_object=team, llm_router=None, valid_token=token
@@ -190,12 +203,12 @@ class TestCanTeamAccessModelWithOverrides:
             team_id="t1", models=["m1", "d1", "mo1"], default_models=["d1"]
         )
         # With override
-        token_with = UserAPIKeyAuth(team_member_models=["mo1"])
+        token_with = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         assert await can_team_access_model(
             model="mo1", team_object=team, llm_router=None, valid_token=token_with
         )
         # After override removal (empty member models)
-        token_without = UserAPIKeyAuth(team_member_models=[])
+        token_without = UserAPIKeyAuth(user_id="test-user", team_member_models=[])
         with pytest.raises(Exception):
             await can_team_access_model(
                 model="mo1",
@@ -211,7 +224,7 @@ class TestCanTeamAccessModelWithOverrides:
             team_id="t1", models=["m1"], default_models=["m1"]
         )
         # Member has stale override for "m2" which is no longer in team.models
-        token = UserAPIKeyAuth(team_member_models=["m2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["m2"])
         # effective = union(["m1"], ["m2"]) capped by team.models=["m1"] → ["m1"]
         with pytest.raises(Exception):
             await can_team_access_model(
@@ -226,7 +239,7 @@ class TestCanTeamAccessModelWithOverrides:
             team_id="t1", models=["m1"]  # no default_models
         )
         # Member has ONLY stale overrides — none are in team.models
-        token = UserAPIKeyAuth(team_member_models=["stale1", "stale2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["stale1", "stale2"])
         result = get_effective_team_models(team, token)
         # Should fall back to team.models=["m1"], NOT [] (allow all)
         assert result == ["m1"]
@@ -264,7 +277,7 @@ class TestCanTeamAccessModelWithOverrides:
         litellm.team_model_overrides_enabled = False
         monkeypatch.delenv("TEAM_MODEL_OVERRIDES", raising=False)
         team = LiteLLM_TeamTable(team_id="t1", models=["m1"], default_models=["d1"])
-        token = UserAPIKeyAuth(team_member_models=["mo1"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["mo1"])
         # Should use team.models=["m1"], not effective models
         assert await can_team_access_model(
             model="m1", team_object=team, llm_router=None, valid_token=token
@@ -290,7 +303,7 @@ class TestKeyGenerationEnforcement:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["m2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["m2"])
         effective = self._get_effective(team, token)
 
         # Simulate key-gen validation: requested models must be subset of effective
@@ -303,7 +316,7 @@ class TestKeyGenerationEnforcement:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["m2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["m2"])
         effective = self._get_effective(team, token)
 
         # When no models requested, key should get effective set
@@ -314,7 +327,7 @@ class TestKeyGenerationEnforcement:
         team = LiteLLM_TeamTable(
             team_id="t1", models=["m1", "m2", "m3"], default_models=["m1"]
         )
-        token = UserAPIKeyAuth(team_member_models=["m2"])
+        token = UserAPIKeyAuth(user_id="test-user", team_member_models=["m2"])
         effective = self._get_effective(team, token)
 
         # all-team-models should resolve to effective set, not team.models
