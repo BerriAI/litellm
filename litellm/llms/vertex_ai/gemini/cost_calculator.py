@@ -14,9 +14,10 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     Calculate the cost of a web search request for Vertex AI Gemini.
 
-    Vertex AI charges $35/1000 prompts, independent of the number of web search requests.
-
-    For a single call, this is $35e-3 USD.
+    Vertex AI charges per grounded prompt. The rate varies by model family
+    (e.g. $35/1K for Gemini 2.x, $14/1K for Gemini 3.x). The per-call cost
+    is read from model_info["web_search_cost_per_request"] and falls back to
+    $35e-3 when the field is absent.
 
     Args:
         usage: The usage object for the web search request.
@@ -27,8 +28,12 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     from litellm.types.utils import PromptTokensDetailsWrapper
 
-    # check if usage object has web search requests
-    cost_per_llm_call_with_web_search = 35e-3
+    # Read per-call cost from model_info; fall back to legacy $35/1K default
+    _cost_per_call = (
+        model_info.get("web_search_cost_per_request") if model_info else None
+    )
+    if _cost_per_call is None:
+        _cost_per_call = 35e-3
 
     makes_web_search_request = False
     if (
@@ -40,6 +45,6 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
 
     # Calculate total cost
     if makes_web_search_request:
-        return cost_per_llm_call_with_web_search
+        return _cost_per_call
     else:
         return 0.0

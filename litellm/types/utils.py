@@ -235,6 +235,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
+    web_search_cost_per_request: Optional[
+        float
+    ]  # Per-request cost for grounding with Google Search (Gemini / Vertex AI)
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     tiered_pricing: Optional[
         List[Dict[str, Any]]

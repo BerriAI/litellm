@@ -160,6 +160,62 @@ def test_get_cost_for_gemini_web_search(model):
     assert cost > 0.0
 
 
+def test_gemini_web_search_cost_uses_model_info():
+    """
+    Verify that the Gemini cost calculator reads web_search_cost_per_request
+    from model_info instead of always using the hardcoded $0.035 value.
+
+    Gemini 3.x models are priced at $14/1K requests ($0.014 each) while
+    Gemini 2.x models remain at $35/1K ($0.035 each).
+    """
+    from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
+    )
+
+    # Gemini 3.x pricing: $0.014 per request
+    model_info_gemini3 = {"web_search_cost_per_request": 0.014}
+    cost_gemini3 = cost_per_web_search_request(usage=usage, model_info=model_info_gemini3)
+    assert cost_gemini3 == pytest.approx(0.014)
+
+    # Gemini 2.x pricing: $0.035 per request
+    model_info_gemini2 = {"web_search_cost_per_request": 0.035}
+    cost_gemini2 = cost_per_web_search_request(usage=usage, model_info=model_info_gemini2)
+    assert cost_gemini2 == pytest.approx(0.035)
+
+    # Fallback when field is absent: should default to $0.035
+    model_info_no_field = {}
+    cost_fallback = cost_per_web_search_request(usage=usage, model_info=model_info_no_field)
+    assert cost_fallback == pytest.approx(0.035)
+
+
+def test_vertex_ai_gemini_web_search_cost_uses_model_info():
+    """
+    Verify that the Vertex AI Gemini cost calculator reads
+    web_search_cost_per_request from model_info.
+    """
+    from litellm.llms.vertex_ai.gemini.cost_calculator import (
+        cost_per_web_search_request,
+    )
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
+    )
+
+    # Gemini 3.x pricing via Vertex AI
+    model_info_gemini3 = {"web_search_cost_per_request": 0.014}
+    cost = cost_per_web_search_request(usage=usage, model_info=model_info_gemini3)
+    assert cost == pytest.approx(0.014)
+
+    # Fallback when field is absent
+    model_info_no_field = {}
+    cost_fallback = cost_per_web_search_request(usage=usage, model_info=model_info_no_field)
+    assert cost_fallback == pytest.approx(0.035)
+
+
 @pytest.mark.parametrize(
     "model,custom_llm_provider",
     [
