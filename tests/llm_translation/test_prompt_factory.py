@@ -775,6 +775,228 @@ def test_ensure_alternating_roles(
     assert messages == expected_messages
 
 
+def test_ensure_alternating_roles_with_tool_calls():
+    """Fixes Regression in #18685 """
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+
+def test_ensure_alternating_roles_three_consecutive_assistants():
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "assistant", "content": "A2"},
+        {"role": "assistant", "content": "A3"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A2"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A3"},
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_does_not_split_tool_call_chain():
+    """Tool-call chains [user, assistant(tc), tool, user] are preserved as-is."""
+    messages = [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+
+def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
+    """
+    Preserve old behavior for malformed adjacent assistant turns:
+    [assistant(tool_calls), assistant(no-tool-calls), user] should insert
+    user_continue between assistant messages.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Please continue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_trailing_tool_call_assistant():
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
 def test_alternating_roles_e2e():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json

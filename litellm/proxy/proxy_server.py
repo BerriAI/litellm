@@ -2961,6 +2961,29 @@ class ProxyConfig:
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
+                elif key == "audit_log_callbacks":
+                    litellm.audit_log_callbacks = []
+
+                    for callback in value:
+                        if "." in callback:
+                            litellm.audit_log_callbacks.append(
+                                get_instance_fn(value=callback)
+                            )
+                        else:
+                            litellm.audit_log_callbacks.append(callback)
+
+                    _store_audit_logs = litellm_settings.get(
+                        "store_audit_logs", litellm.store_audit_logs
+                    )
+                    if _store_audit_logs:
+                        print(  # noqa
+                            f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
+                        )  # noqa
+                    else:
+                        verbose_proxy_logger.warning(
+                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
+                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                        )
                 elif key == "cache_params":
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
@@ -3321,7 +3344,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-        )  # type:ignore
+        )  # type: ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
@@ -5383,8 +5406,8 @@ async def initialize(  # noqa: PLR0915
         litellm.add_function_to_prompt = True
         dynamic_config["general"]["add_function_to_prompt"] = True
     if max_budget:  # litellm-specific param
-        litellm.max_budget = max_budget
-        dynamic_config["general"]["max_budget"] = max_budget
+        litellm.max_budget = float(max_budget)
+        dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
     user_telemetry = telemetry

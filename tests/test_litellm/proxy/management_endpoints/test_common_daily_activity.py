@@ -86,6 +86,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     # query_raw returns list of dicts (pre-aggregated by GROUP BY)
     mock_rows = [
         {
+            "user_id": "user-1",
             "date": "2024-01-01",
             "endpoint": "/v1/chat/completions",
             "api_key": "key-1",
@@ -103,6 +104,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "failed_requests": 0,
         },
         {
+            "user_id": "user-1",
             "date": "2024-01-01",
             "endpoint": "/v1/embeddings",
             "api_key": "key-2",
@@ -452,6 +454,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     # query_raw returns list of dicts (pre-aggregated by GROUP BY)
     mock_rows = [
         {
+            "user_id": "user-1",
             "date": "2024-01-01",
             "endpoint": "/v1/chat/completions",
             "api_key": "deleted-key-hash",
@@ -507,3 +510,119 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.key_alias == "toto-test-2"
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metrics.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_preserves_entity_breakdown():
+    """Test that aggregated daily activity preserves per-entity breakdown.
+
+    Regression test for PR #21613: the GROUP BY optimization omitted entity_id
+    from the query and hardcoded entity_id_field=None, causing breakdown.entities
+    to always be empty.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    # query_raw returns rows WITH user_id (entity_id_field included in GROUP BY)
+    mock_rows = [
+        {
+            "user_id": "user-alice",
+            "date": "2024-01-01",
+            "api_key": "key-1",
+            "model": "gpt-4",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "endpoint": "/v1/chat/completions",
+            "spend": 20.0,
+            "prompt_tokens": 200,
+            "completion_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 5,
+            "successful_requests": 5,
+            "failed_requests": 0,
+        },
+        {
+            "user_id": "user-bob",
+            "date": "2024-01-01",
+            "api_key": "key-2",
+            "model": "gpt-4",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "endpoint": "/v1/chat/completions",
+            "spend": 8.0,
+            "prompt_tokens": 80,
+            "completion_tokens": 40,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 2,
+            "successful_requests": 2,
+            "failed_requests": 0,
+        },
+        {
+            "user_id": None,
+            "date": "2024-01-01",
+            "api_key": "key-3",
+            "model": "gpt-4",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "endpoint": "/v1/chat/completions",
+            "spend": 2.0,
+            "prompt_tokens": 20,
+            "completion_tokens": 10,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
+    ]
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+    )
+
+    # Verify per-entity breakdown is populated (not empty)
+    daily_data = result.results[0]
+    assert len(daily_data.breakdown.entities) == 3, (
+        "breakdown.entities should contain per-user entries"
+    )
+
+    # Verify individual entity metrics
+    assert "user-alice" in daily_data.breakdown.entities
+    assert daily_data.breakdown.entities["user-alice"].metrics.spend == 20.0
+    assert daily_data.breakdown.entities["user-alice"].metrics.prompt_tokens == 200
+    assert daily_data.breakdown.entities["user-alice"].metrics.api_requests == 5
+
+    assert "user-bob" in daily_data.breakdown.entities
+    assert daily_data.breakdown.entities["user-bob"].metrics.spend == 8.0
+    assert daily_data.breakdown.entities["user-bob"].metrics.prompt_tokens == 80
+    assert daily_data.breakdown.entities["user-bob"].metrics.api_requests == 2
+
+    # Verify NULL entity_id is mapped to "Unassigned" (line 294-296)
+    assert "Unassigned" in daily_data.breakdown.entities
+    assert daily_data.breakdown.entities["Unassigned"].metrics.spend == 2.0
+
+    # Verify per-entity API key breakdown
+    assert "key-1" in daily_data.breakdown.entities["user-alice"].api_key_breakdown
+    assert "key-2" in daily_data.breakdown.entities["user-bob"].api_key_breakdown
+    assert "key-3" in daily_data.breakdown.entities["Unassigned"].api_key_breakdown
+
+    # Verify totals still correct
+    assert result.metadata.total_spend == 30.0
+    assert result.metadata.total_api_requests == 8

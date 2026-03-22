@@ -3803,3 +3803,100 @@ def test_streaming_without_json_mode_passes_all_tools():
     assert tool_use_delta is not None
     assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
 
+
+def test_cache_control_injection_tool_config():
+    """Test that cache_control_injection_points with location=tool_config appends cachePoint to tools."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tool_config = result["toolConfig"]
+    tools = tool_config["tools"]
+    # Last element should be a cachePoint block
+    assert tools[-1] == {"cachePoint": {"type": "default"}}
+    # First element should be the actual tool
+    assert "toolSpec" in tools[0]
+
+
+def test_cache_control_injection_tool_config_no_tools():
+    """Test that tool_config injection is ignored when no tools are provided."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "Hello"},
+    ]
+    optional_params = {
+        "cache_control_injection_points": [
+            {"location": "tool_config"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    assert "toolConfig" not in result
+
+
+def test_cache_control_injection_tool_config_not_added_without_injection_point():
+    """Test that cachePoint is NOT appended when cache_control_injection_points doesn't include tool_config."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    # No cachePoint should be appended
+    assert all("cachePoint" not in tool for tool in tools)
+

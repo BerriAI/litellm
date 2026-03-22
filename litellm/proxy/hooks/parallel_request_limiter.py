@@ -295,16 +295,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
 
         # Check if request under RPM/TPM per model for a given API Key
-        if (
-            get_key_model_tpm_limit(user_api_key_dict) is not None
-            or get_key_model_rpm_limit(user_api_key_dict) is not None
-        ):
-            _model = data.get("model", None)
+        _model = data.get("model", None)
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(
+            user_api_key_dict, model_name=_model
+        )
+        if _tpm_limit_for_key_model is not None or _rpm_limit_for_key_model is not None:
             request_count_api_key = (
                 f"{api_key}::{_model}::{precise_minute}::request_count"
             )
-            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
-            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
             tpm_limit_for_model = None
             rpm_limit_for_model = None
 
@@ -477,6 +478,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {})
                 or {}
             )
+            user_api_key_team_metadata = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key_team_metadata", None
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key=user_api_key,
+                metadata=user_api_key_metadata,
+                model_max_budget=user_api_key_model_max_budget,
+                team_metadata=user_api_key_team_metadata,
+            )
 
             # ------------
             # Setup values
@@ -538,6 +548,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - model group + API Key
             # ------------
             model_group = get_model_group_from_litellm_kwargs(kwargs)
+            _success_tpm_limit = (
+                get_key_model_tpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
+            _success_rpm_limit = (
+                get_key_model_rpm_limit(user_api_key_dict, model_name=model_group)
+                if model_group is not None
+                else None
+            )
             if (
                 user_api_key is not None
                 and model_group is not None
@@ -545,6 +565,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     "model_rpm_limit" in user_api_key_metadata
                     or "model_tpm_limit" in user_api_key_metadata
                     or user_api_key_model_max_budget is not None
+                    or _success_tpm_limit is not None
+                    or _success_rpm_limit is not None
                 )
             ):
                 request_count_api_key = (

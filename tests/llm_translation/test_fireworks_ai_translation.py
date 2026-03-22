@@ -161,6 +161,24 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
             "vision-gpt",
             "http://example.com/image.png",
         ),
+        # data: URLs must never have #transform=inline appended — doing so
+        # corrupts the base64 payload (fixes #23583).
+        # URI schemes are case-insensitive (RFC 3986) so check all variants.
+        (
+            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
+            "gpt-4",
+            "data:image/png;base64,iVBORw0KGgo=",
+        ),
+        (
+            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
+            "gpt-4",
+            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
+        ),
+        (
+            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
+            "gpt-4",
+            "Data:image/png;base64,iVBORw0KGgo=",
+        ),
     ],
 )
 def test_transform_inline(content, model, expected_url):
