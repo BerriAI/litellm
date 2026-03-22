@@ -298,7 +298,7 @@ class TestKeyRotationManagerDistributedLock:
     @pytest.mark.asyncio
     async def test_process_rotations_acquires_lock(self):
         """Test that process_rotations acquires distributed lock before processing."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
 
         mock_prisma_client = AsyncMock()
         mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = []
