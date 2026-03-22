@@ -457,7 +457,7 @@ All these checks must pass before your PR can be merged.
 
 # Why did we build this
 
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI and Cohere.
+- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI and Cohere..
 
 # Contributors
 
