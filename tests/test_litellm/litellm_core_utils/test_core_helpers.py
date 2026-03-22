@@ -126,6 +126,14 @@ class TestMapFinishReasonBedrock:
         assert map_finish_reason("guardrail_intervened") == "content_filter"
 
 
+class TestMapFinishReasonZhipu:
+    def test_network_error(self):
+        assert map_finish_reason("network_error") == "stop"
+
+    def test_sensitive(self):
+        assert map_finish_reason("sensitive") == "content_filter"
+
+
 class TestMapFinishReasonOpenAIPassthrough:
     @pytest.mark.parametrize(
         "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
