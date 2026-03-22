@@ -234,8 +234,10 @@ async def add_new_member(  # noqa: PLR0915
     else:
         _budget_id = default_team_budget_id
 
+    # Create membership row when budget, or models is explicitly provided (even []).
+    # models=None means "not specified" (skip), models=[] means "explicitly no overrides".
     if (
-        (_budget_id or new_member.models)
+        (_budget_id or new_member.models is not None)
         and returned_user is not None
         and returned_user.user_id is not None
     ):
@@ -245,9 +247,9 @@ async def add_new_member(  # noqa: PLR0915
         }
         if _budget_id:
             membership_create_data["budget_id"] = _budget_id
-        if new_member.models:
-            # Defense-in-depth: validate member models are within team models
-            if team_models:
+        if new_member.models is not None:
+            # Defense-in-depth: validate non-empty member models are within team models
+            if new_member.models and team_models:
                 disallowed = set(new_member.models) - set(team_models)
                 if disallowed:
                     raise HTTPException(

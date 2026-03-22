@@ -667,6 +667,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             team_pool=team_pool,
         )
 
+        # When effective_models is non-empty, enforce per-member restrictions.
+        # When empty (team.models=[] = "allow all" and no overrides configured),
+        # skip validation — any model is permitted, matching runtime auth behavior.
         if effective_models:
             # if 'all-team-models' was requested, restrict it to the effective models
             if "all-team-models" in (data.models or []):
