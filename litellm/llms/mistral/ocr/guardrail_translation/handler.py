@@ -91,6 +91,7 @@ class OCRHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process OCR output by applying guardrails to extracted page text.
@@ -134,7 +135,7 @@ class OCRHandler(BaseTranslation):
 
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data or {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )

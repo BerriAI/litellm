@@ -306,6 +306,13 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default=None,
         description="Where to apply Presidio checks: input, output, or both (default).",
     )
+    presidio_skip_assistant_messages: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, skip PII analysis on assistant messages (model's own "
+            "output). Reduces latency on multi-turn conversations. Default: False."
+        ),
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
