@@ -548,7 +548,13 @@ class LiteLLM_Proxy_MCP_Handler:
         agent_tool_map: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
-        from fastapi import HTTPException
+        try:
+            from fastapi import HTTPException
+        except ImportError:
+            # FastAPI is a proxy-only dependency; fall back to a plain exception so
+            # SDK users (without fastapi installed) can still call MCP tools.
+            # The .detail access below is already guarded with hasattr().
+            HTTPException = Exception  # type: ignore[assignment,misc]
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -585,6 +591,11 @@ class LiteLLM_Proxy_MCP_Handler:
                 if agent_tool_map and tool_name in agent_tool_map:
                     agent_info = agent_tool_map[tool_name]
                     message = parsed_arguments.get("message") or str(parsed_arguments)
+                    verbose_logger.debug(
+                        "Executing A2A agent tool call: tool=%s agent=%s",
+                        tool_name,
+                        agent_info["agent_name"],
+                    )
                     result = await RegistryOrchestrator.execute_a2a_tool_call(
                         agent_url=agent_info["url"],
                         agent_name=agent_info["agent_name"],
@@ -593,10 +604,22 @@ class LiteLLM_Proxy_MCP_Handler:
                         tool_name=tool_name,
                         litellm_trace_id=litellm_trace_id,
                     )
+                    verbose_logger.debug(
+                        "A2A tool call complete: tool=%s result_len=%d",
+                        tool_name,
+                        len(str(result.get("result", ""))),
+                    )
                     tool_results.append(result)
                     continue
 
-                server_name = tool_server_map[tool_name]
+                server_name = tool_server_map.get(tool_name)
+                if server_name is None:
+                    verbose_logger.warning(
+                        "Tool '%s' not found in tool_server_map — skipping (possible "
+                        "hallucinated tool name)",
+                        tool_name,
+                    )
+                    continue
 
                 # Remove the server name prefix if the tool name includes it.
                 sanitized_tool_name = tool_name
@@ -803,7 +826,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
-                error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
+                error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"  # type: ignore[union-attr]
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,

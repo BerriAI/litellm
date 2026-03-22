@@ -21,6 +21,14 @@ ToolParam = Any
 
 LITELLM_PROXY_AGENTS_URL = "litellm_proxy/agents"
 
+# Import hoisted out of the callback loop to avoid re-evaluating on every iteration.
+try:
+    from litellm.proxy.hooks.mcp_semantic_filter.hook import (  # noqa: E501
+        SemanticToolFilterHook as _SemanticToolFilterHook,
+    )
+except ImportError:
+    _SemanticToolFilterHook = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Module-level helper
@@ -95,7 +103,7 @@ class RegistryOrchestrator:
                     server_url = tool.get("server_url", "")
                     if (
                         isinstance(server_url, str)
-                        and LITELLM_PROXY_AGENTS_URL in server_url
+                        and server_url == LITELLM_PROXY_AGENTS_URL
                     ):
                         agent_tool_configs.append(tool)
                     else:
@@ -120,6 +128,11 @@ class RegistryOrchestrator:
         """
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
+        # NOTE: user_api_key_auth is accepted for future per-key agent filtering
+        # (mirroring get_allowed_mcp_servers). Agent-level access control is not yet
+        # implemented in AgentRegistry; all registered agents are returned for now.
+        _ = user_api_key_auth
+
         agents = global_agent_registry.get_agent_list()
         function_tools: List[Dict[str, Any]] = []
         agent_tool_map: Dict[str, Dict[str, str]] = {}
@@ -128,6 +141,13 @@ class RegistryOrchestrator:
             card = agent.agent_card_params or {}
             agent_url = card.get("url", "")
             agent_name = card.get("name") or agent.agent_name
+
+            if not agent_url:
+                verbose_logger.warning(
+                    "Agent '%s' has no URL configured, skipping", agent_name
+                )
+                continue
+
             description = card.get("description") or f"A2A agent: {agent_name}"
 
             # Enrich description with up to 3 skill descriptions
@@ -145,6 +165,15 @@ class RegistryOrchestrator:
                 re.sub(r"[^a-zA-Z0-9_-]", "_", agent_name)[:64]
                 or f"agent_{agent.agent_id[:8]}"
             )
+
+            # Deduplicate: if two agents produce the same sanitized name, append the
+            # agent_id suffix so neither is silently dropped.
+            if func_name in agent_tool_map:
+                func_name = f"{func_name}_{agent.agent_id[:8]}"[:64]
+                verbose_logger.warning(
+                    "Agent name collision: renamed to '%s' to avoid overwrite",
+                    func_name,
+                )
 
             function_tools.append(
                 {
@@ -187,14 +216,20 @@ class RegistryOrchestrator:
         """Send a message to an A2A agent via LiteLLM's asend_message and return the result."""
         import uuid
 
-        from a2a.types import (
-            Message,
-            MessageSendParams,
-            Part,
-            Role,
-            SendMessageRequest,
-            TextPart,
-        )
+        try:
+            from a2a.types import (
+                Message,
+                MessageSendParams,
+                Part,
+                Role,
+                SendMessageRequest,
+                TextPart,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "The 'a2a' package is required for A2A agent calls. "
+                "Install it with: pip install a2a-sdk"
+            ) from exc
 
         from litellm.a2a_protocol.main import asend_message
 
@@ -249,11 +284,9 @@ class RegistryOrchestrator:
             import litellm
 
             for callback in litellm.callbacks or []:
-                from litellm.proxy.hooks.mcp_semantic_filter.hook import (
-                    SemanticToolFilterHook,
-                )
-
-                if isinstance(callback, SemanticToolFilterHook):
+                if _SemanticToolFilterHook is None:
+                    break
+                if isinstance(callback, _SemanticToolFilterHook):
                     query = callback.filter.extract_user_query(messages)
                     if query:
                         filtered = await callback.filter.filter_tools(

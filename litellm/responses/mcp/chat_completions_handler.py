@@ -10,7 +10,6 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
-from litellm.proxy.agent_endpoints.registry_orchestrator import RegistryOrchestrator
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -152,6 +151,7 @@ class MCPStreamingIterator:
         self.stream_exhausted = False
         self.tool_execution_done = False
         self.follow_up_stream: Optional[CustomStreamWrapper] = None
+        self.follow_up_non_stream: Optional[ModelResponse] = None
         self.follow_up_iterator: Any = None
         self.follow_up_exhausted = False
 
@@ -268,15 +268,28 @@ class MCPStreamingIterator:
                 verbose_logger.debug("Follow-up stream exhausted")
                 raise StopAsyncIteration
 
-        if (
-            self.stream_exhausted
-            and self.tool_results
-            and self.complete_response
-            and self.follow_up_stream is None
-        ):
-            verbose_logger.warning(
-                "Follow-up stream was not created despite having tool results"
+        # Phase 3: emit non-streaming follow-up answer as a synthetic final chunk
+        if self.follow_up_non_stream is not None:
+            from litellm.types.utils import ModelResponseStream, StreamingChoices
+
+            non_stream = self.follow_up_non_stream
+            self.follow_up_non_stream = None
+            # Build a minimal streaming chunk from the ModelResponse
+            content = ""
+            if non_stream.choices:
+                content = getattr(non_stream.choices[0].message, "content", "") or ""
+            synthetic = ModelResponseStream(
+                id=non_stream.id,
+                model=non_stream.model or "",
+                choices=[
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta={"role": "assistant", "content": content},  # type: ignore[arg-type]
+                    )
+                ],
             )
+            return synthetic
 
         raise StopAsyncIteration
 
@@ -349,12 +362,19 @@ class MCPStreamingIterator:
         if isinstance(follow_up_response, CustomStreamWrapper):
             self.follow_up_stream = follow_up_response
             verbose_logger.debug("Follow-up stream created successfully")
+        elif isinstance(follow_up_response, ModelResponse):
+            # Provider returned a non-streaming response despite stream=True.
+            # Store it so __anext__ can yield it as a synthetic final chunk rather
+            # than silently dropping the follow-up answer.
+            self.follow_up_non_stream = follow_up_response
+            verbose_logger.debug(
+                "Follow-up response is non-streaming ModelResponse; will emit as final chunk"
+            )
         else:
             verbose_logger.warning(
-                "Follow-up response is not a CustomStreamWrapper: %s",
+                "Follow-up response is unexpected type %s, answer may be dropped",
                 type(follow_up_response),
             )
-            self.follow_up_stream = None
 
 
 class MCPStreamWrapper(CustomStreamWrapper):
@@ -432,6 +452,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
     5. Make a follow-up call with the tool results
     """
     from litellm import acompletion as litellm_acompletion
+    from litellm.proxy.agent_endpoints.registry_orchestrator import RegistryOrchestrator
 
     # Parse MCP tools and separate from other tools
     (
@@ -482,10 +503,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         mcp_server_auth_headers=mcp_server_auth_headers,
     )
 
-    # Apply per-tool semantic filter if any MCP tool has semantic_filter=true
+    # Apply per-tool semantic filter if any MCP or agent tool config has semantic_filter=true
     if any(
         isinstance(t, dict) and t.get("semantic_filter")
-        for t in mcp_tools_with_litellm_proxy
+        for t in list(mcp_tools_with_litellm_proxy) + list(agent_tool_configs)
     ):
         deduplicated_mcp_tools = await RegistryOrchestrator.apply_semantic_filter(
             tools=deduplicated_mcp_tools,
