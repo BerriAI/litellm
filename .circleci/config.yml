@@ -2649,7 +2649,7 @@ jobs:
 
       - run:
           name: Start outputting logs for second container
-          command: docker logs -f my-app-2
+          command: docker logs -f my-app-3
           background: true
 
       - run:
@@ -3586,7 +3586,7 @@ jobs:
                 echo "Twine upload to dist"
                 echo "Contents of dist directory:"
                 ls dist/
-                twine upload --verbose dist/*
+                twine upload --skip-existing --verbose dist/*
             else
                 echo "Version ${VERSION} of package is already published on PyPI."
                 
@@ -3734,7 +3734,7 @@ jobs:
             python -m pip install --upgrade pip build twine setuptools wheel
             rm -rf build dist
             python -m build
-            twine upload --verbose dist/*
+            twine upload --skip-existing --verbose dist/*
 
   ui_build:
     docker:
