@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -46,22 +46,25 @@ def _make_minimal_chat_completion_response(model: str) -> litellm.ModelResponse:
     return response
 
 
-def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream:
+def _make_model_response_stream_chunk(
+    model: str, logprobs: Optional[dict] = None
+) -> litellm.ModelResponseStream:
     """
     Create a minimal OpenAI-compatible chat.completion.chunk object.
     """
+    choice = {
+        "index": 0,
+        "delta": {"role": "assistant", "content": "hi"},
+        "finish_reason": None,
+    }
+    if logprobs is not None:
+        choice["logprobs"] = logprobs
     chunk_dict = {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 0,
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"role": "assistant", "content": "hi"},
-                "finish_reason": None,
-            }
-        ],
+        "choices": [choice],
     }
     return litellm.ModelResponseStream(**chunk_dict)
 
@@ -273,3 +276,53 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
     # Azure Model Router: preserve actual model used, not the router model
     assert payload["model"] == actual_model_used
     assert payload["model"] != router_model
+
+
+@pytest.mark.asyncio
+async def test_proxy_streaming_chunk_with_empty_logprobs_does_not_crash(monkeypatch):
+    """
+    Regression test for streaming chunks with empty logprobs.
+
+    If a streaming chunk contains an empty logprobs dict, the proxy should not crash
+    when trying to sanitize the model field. This was an issue because some logprobs
+    sanitization logic expected logprobs to be None or a non-empty dict.
+    """
+    model = "test-model"
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def _iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        yield _make_model_response_stream_chunk(model=model, logprobs={"content": None})
+
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    gen = proxy_server.async_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+        request_data={"model": model},
+    )
+
+    chunks = []
+    async for item in gen:
+        chunks.append(item)
+
+    assert len(chunks) >= 2
+    first = chunks[0]
+    assert first.startswith("data: ")
+
+    payload = json.loads(first[len("data: ") :].strip())
+    # logprobs should be absent (nullified and excluded)
+    choice = payload["choices"][0]
+    assert "logprobs" not in choice or choice["logprobs"] is None

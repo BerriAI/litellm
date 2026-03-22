@@ -5586,6 +5586,14 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
+                # fix for https://github.com/BerriAI/litellm/issues/24357
+                for c in getattr(chunk, "choices", []):
+                    if (
+                        getattr(c, "logprobs", None)
+                        and getattr(c.logprobs, "content", None) is None
+                        and getattr(c.logprobs, "refusal", None) is None
+                    ):
+                        c.logprobs = None
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
