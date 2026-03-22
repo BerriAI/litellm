@@ -276,7 +276,16 @@ def preserve_upstream_non_openai_attributes(
         if "MockValSer" not in str(e):
             raise
         # Fallback for Pydantic MockValSer bug (issue #18801)
-        obj_dict = dict(original_chunk.__dict__) if hasattr(original_chunk, '__dict__') else {}
+        import logging
+        logging.getLogger("LiteLLM").warning(
+            "Pydantic MockValSer bug detected (issue #18801); falling back to __dict__ extraction. "
+            "Upgrade/downgrade pydantic if this persists. Error: %s", e
+        )
+        # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+        obj_dict = {
+            **dict(original_chunk.__dict__),
+            **(getattr(original_chunk, '__pydantic_extra__', None) or {}),
+        }
     for key, value in obj_dict.items():
         if key not in expected_keys:
             setattr(model_response, key, value)

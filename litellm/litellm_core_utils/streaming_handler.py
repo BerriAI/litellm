@@ -1865,7 +1865,16 @@ class CustomStreamWrapper:
                             if "MockValSer" not in str(e):
                                 raise
                             # Fallback for Pydantic MockValSer bug (issue #18801)
-                            obj_dict = dict(response.__dict__) if hasattr(response, '__dict__') else {}
+                            import logging
+                            logging.getLogger("LiteLLM").warning(
+                                "Pydantic MockValSer bug detected (issue #18801); falling back to __dict__ extraction. "
+                                "Upgrade/downgrade pydantic if this persists. Error: %s", e
+                            )
+                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+                            obj_dict = {
+                                **dict(response.__dict__),
+                                **(getattr(response, '__pydantic_extra__', None) or {}),
+                            }
 
                         # Remove an attribute (e.g., 'attr2')
                         if "usage" in obj_dict:
@@ -2059,7 +2068,16 @@ class CustomStreamWrapper:
                             if "MockValSer" not in str(e):
                                 raise
                             # Fallback for Pydantic MockValSer bug (issue #18801)
-                            obj_dict = dict(processed_chunk.__dict__) if hasattr(processed_chunk, '__dict__') else {}
+                            import logging
+                            logging.getLogger("LiteLLM").warning(
+                                "Pydantic MockValSer bug detected (issue #18801); falling back to __dict__ extraction. "
+                                "Upgrade/downgrade pydantic if this persists. Error: %s", e
+                            )
+                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
+                            obj_dict = {
+                                **dict(processed_chunk.__dict__),
+                                **(getattr(processed_chunk, '__pydantic_extra__', None) or {}),
+                            }
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
