@@ -6657,6 +6657,99 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
+export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch MCP toolsets:", error);
+    throw error;
+  }
+};
+
+export const createMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to create MCP toolset:", error);
+    throw error;
+  }
+};
+
+export const updateMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP toolset:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPToolset = async (accessToken: string, toolsetId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset/${toolsetId}`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+  } catch (error) {
+    console.error("Failed to delete MCP toolset:", error);
+    throw error;
+  }
+};
+
 export const registerMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
     const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/register`;
