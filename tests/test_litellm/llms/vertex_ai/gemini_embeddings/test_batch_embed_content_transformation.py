@@ -8,12 +8,7 @@ Covers:
 - Response processing with correct indices
 """
 
-import os
-import sys
-
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
