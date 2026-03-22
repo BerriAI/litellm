@@ -313,7 +313,19 @@ def process_response(
     model_response.model = model
 
     if _is_multimodal_input(input):
-        prompt_tokens = 0
+        input_list = input if isinstance(input, list) else [input]
+        text_elements = [
+            e for e in input_list
+            if isinstance(e, str)
+            and not (e.startswith("data:") and ";base64," in e)
+            and not _is_gcs_url(e)
+            and not _is_file_reference(e)
+        ]
+        if text_elements:
+            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
+            prompt_tokens = token_counter(model=model, text=input_text)
+        else:
+            prompt_tokens = 0
     else:
         input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
         prompt_tokens = token_counter(model=model, text=input_text)
