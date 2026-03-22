@@ -1,9 +1,11 @@
 import React, { useMemo, useState, type UIEvent } from "react";
-import { Select } from "antd";
+import { Select, Typography } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../key_team_helpers/key_list";
+
+const { Text } = Typography;
 
 interface TeamDropdownProps {
   value?: string;
@@ -25,7 +27,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   onTeamSelect,
   disabled,
   organizationId,
-  pageSize = 50,
+  pageSize = 20,
 }) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
@@ -57,15 +59,6 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     }
     return result;
   }, [data]);
-
-  const options = useMemo(
-    () =>
-      teams.map((team) => ({
-        label: `${team.team_alias} (${team.team_id})`,
-        value: team.team_id,
-      })),
-    [teams],
-  );
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
@@ -103,7 +96,6 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
       notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
-      options={options}
       popupRender={(menu) => (
         <>
           {menu}
@@ -114,7 +106,14 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
           )}
         </>
       )}
-    />
+    >
+      {teams.map((team) => (
+        <Select.Option key={team.team_id} value={team.team_id}>
+          <span className="font-medium">{team.team_alias}</span>{" "}
+          <Text type="secondary">({team.team_id})</Text>
+        </Select.Option>
+      ))}
+    </Select>
   );
 };
 
