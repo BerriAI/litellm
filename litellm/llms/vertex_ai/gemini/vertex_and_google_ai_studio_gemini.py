@@ -2378,6 +2378,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             usage = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response
             )
+
+            web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
+                grounding_metadata
+            )
+            if web_search_requests is not None:
+                cast(
+                    PromptTokensDetailsWrapper, usage.prompt_tokens_details
+                ).web_search_requests = web_search_requests
+
             setattr(model_response, "usage", usage)
 
             ## ADD METADATA TO RESPONSE ##
