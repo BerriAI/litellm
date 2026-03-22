@@ -1862,7 +1862,9 @@ class CustomStreamWrapper:
                         try:
                             obj_dict = response.model_dump()
                         except TypeError as e:
-                            # Fallback: manually extract dict from __dict__ to bypass Pydantic serializer
+                            if "MockValSer" not in str(e):
+                                raise
+                            # Fallback for Pydantic MockValSer bug (issue #18801)
                             obj_dict = dict(response.__dict__) if hasattr(response, '__dict__') else {}
 
                         # Remove an attribute (e.g., 'attr2')
@@ -2054,7 +2056,9 @@ class CustomStreamWrapper:
                         try:
                             obj_dict = processed_chunk.model_dump()
                         except TypeError as e:
-                            # Fallback: manually extract dict from __dict__ to bypass Pydantic serializer
+                            if "MockValSer" not in str(e):
+                                raise
+                            # Fallback for Pydantic MockValSer bug (issue #18801)
                             obj_dict = dict(processed_chunk.__dict__) if hasattr(processed_chunk, '__dict__') else {}
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
