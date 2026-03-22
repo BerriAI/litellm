@@ -1,6 +1,5 @@
 # What is this?
 ## Helper utilities
-import logging
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
@@ -277,7 +276,7 @@ def preserve_upstream_non_openai_attributes(
         if "MockValSer" not in str(e):
             raise
         # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-        logging.getLogger("LiteLLM").warning(
+        verbose_logger.warning(
             "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
             "Upgrading pydantic may resolve this. Error: %s", e
         )
