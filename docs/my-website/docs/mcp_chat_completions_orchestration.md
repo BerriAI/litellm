@@ -183,6 +183,80 @@ curl -X POST http://localhost:4000/v1/agents \
 
 The proxy wraps each registered agent as a function tool. When the LLM calls it, the proxy sends a JSON-RPC `message/send` to the agent and returns the result as a tool message.
 
+## Real-world example — Finance MCP + Compliance Agent
+
+Register a finance calculation MCP server and a compliance analyst A2A agent once. Every request can then use both without knowing any server URLs.
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000",
+)
+
+# MCP only — financial calculation
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{
+        "role": "user",
+        "content": "What is the monthly repayment on a £250,000 mortgage at 4.5% APR over 25 years?"
+    }],
+    tools=[{
+        "type": "mcp",
+        "server_url": "litellm_proxy/mcp",
+        "require_approval": "never",
+    }],
+)
+# → calls calculate_loan_payment tool → £1,389.58/mo
+
+# Both MCP + Agent in a single call
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{
+        "role": "user",
+        "content": (
+            "Calculate compound interest on £100,000 at 2.8% over 3 years, "
+            "then draft a compliance note summarising the outcome for the audit file."
+        )
+    }],
+    tools=[
+        {
+            "type": "mcp",
+            "server_url": "litellm_proxy/mcp",
+            "require_approval": "never",
+        },
+        {
+            "type": "a2a_agent",
+            "server_url": "litellm_proxy/agents",
+            "require_approval": "never",
+        },
+    ],
+)
+# → calls calculate_compound_interest (£8,637.40 interest) AND compliance_analyst agent
+# → final answer includes both the numbers and the audit-ready compliance note
+```
+
+### Demo results (10 scenarios, local proxy, gpt-4o-mini)
+
+MCP server registered: `finance` — `calculate_compound_interest`, `convert_currency`, `calculate_loan_payment`, `calculate_var`
+Agent registered: `compliance_analyst` — Basel III, KYC, VaR, earnings, trade summaries
+
+| # | Scenario | MCP | Agent | Tool Called | Result |
+|---|----------|:---:|:---:|-------------|--------|
+| 1 | Mortgage repayment | ✓ | — | `calculate_loan_payment(£250k, 4.5%, 25yr)` | **£1,389.58/mo** |
+| 2 | FX conversion GBP→USD | ✓ | — | `convert_currency(£1.25M, 1.2738)` | £1,592,250 USD |
+| 3 | Compound interest | ✓ | — | `calculate_compound_interest(£50k, 3.5%, 5yr)` | **£9,384 interest** |
+| 4 | Basel III notice | — | ✓ | `compliance_analyst` | CET1 ≥4.5%, Tier1 ≥6% — review capital position |
+| 5 | KYC note | — | ✓ | `compliance_analyst` | Entity verified, no sanctions, onboarding approved |
+| 6 | VaR calculation | ✓ | ✓ | `calculate_var(£5M, 0.8% vol, 99%)` | 1-day VaR **£93,040**, 10-day **£294,218** |
+| 7 | Interest calc + audit note | ✓ | ✓ | `calculate_compound_interest` + `compliance_analyst` | **£8,637 interest** + audit-ready compliance note |
+| 8 | Mortgage refinance | ✓ | ✓ | `calculate_loan_payment(£180k, 3.9%, 20yr)` | **£1,081.30/mo** |
+| 9 | Large FX GBP→JPY | ✓ | — | `convert_currency(£2.5M, 191.45)` | **¥478,625,000** |
+| 10 | Earnings summary | — | ✓ | `compliance_analyst` | NII +8% YoY, CET1=13.8%, guidance reaffirmed |
+
+Row 7 demonstrates the orchestrator routing a single request to **both** the MCP finance server and the compliance analyst agent — the LLM received the calculation result from MCP and the formatted audit note from the agent in one turn, with no URL configuration in the client.
+
 ## Semantic filter
 
 Add `"semantic_filter": true` to only inject tools relevant to the user's query. Useful when you have many registered servers and want to keep the LLM context lean.
