@@ -116,28 +116,35 @@ def _parse_data_url(data_url: str) -> Tuple[str, str]:
 
 def _is_multimodal_input(input: EmbeddingInput) -> bool:
     """
-    Check if the input contains multimodal data (data URIs, file references, or GCS URLs).
+    Check if the input contains multimodal data (data URIs, file references,
+    GCS URLs, or nested lists for combined embeddings).
 
     Args:
-        input: EmbeddingInput (str or List[str])
+        input: EmbeddingInput — str, List[str], or List[Union[str, List[str]]]
 
     Returns:
-        bool: True if any element is a data URI, file reference, or GCS URL
+        bool: True if any element is multimodal or a nested list
     """
     if isinstance(input, str):
-        input_list = [input]
-    else:
-        input_list = input
+        return _is_multimodal_element(input)
 
-    for element in input_list:
-        if isinstance(element, str):
-            if element.startswith("data:") and ";base64," in element:
-                return True
-            if _is_file_reference(element):
-                return True
-            if _is_gcs_url(element):
-                return True
+    for element in input:
+        if isinstance(element, list):
+            return True
+        if isinstance(element, str) and _is_multimodal_element(element):
+            return True
 
+    return False
+
+
+def _is_multimodal_element(element: str) -> bool:
+    """Check if a single string element is multimodal."""
+    if element.startswith("data:") and ";base64," in element:
+        return True
+    if _is_file_reference(element):
+        return True
+    if _is_gcs_url(element):
+        return True
     return False
 
 
@@ -186,6 +193,15 @@ def transform_openai_input_gemini_content(
 
     Each input element becomes a separate EmbedContentRequest, supporting
     text, data URIs, file references, and GCS URLs.
+
+    If an element is a list (nested input), all sub-elements are combined
+    into a single content with multiple parts, producing one combined
+    embedding for the group.
+
+    Examples:
+        input=["text", "image"]         → 2 separate embeddings
+        input=[["text", "image"]]       → 1 combined embedding
+        input=[["text", "image"], "x"]  → 2 embeddings (1 combined + 1 separate)
     """
     gemini_model_name = "models/{}".format(model)
 
@@ -199,10 +215,23 @@ def transform_openai_input_gemini_content(
     requests: List[EmbedContentRequest] = []
 
     for element in input_list:
-        part = _build_part_for_input(element, resolved_files=resolved_files)
+        if isinstance(element, list):
+            if not element:
+                raise ValueError("Nested input list must not be empty")
+            for sub in element:
+                if not isinstance(sub, str):
+                    raise ValueError(
+                        f"Elements inside a nested input list must be strings, got {type(sub)}"
+                    )
+            parts = [
+                _build_part_for_input(sub, resolved_files=resolved_files)
+                for sub in element
+            ]
+        else:
+            parts = [_build_part_for_input(element, resolved_files=resolved_files)]
         request = EmbedContentRequest(
             model=gemini_model_name,
-            content=ContentType(parts=[part]),
+            content=ContentType(parts=parts),
             **gemini_params,
         )
         requests.append(request)
@@ -240,6 +269,11 @@ def transform_openai_input_gemini_embed_content(
     parts: List[PartType] = []
 
     for element in input_list:
+        if isinstance(element, list):
+            raise ValueError(
+                "Nested (combined) embeddings are not supported on the embedContent path. "
+                "Use the batchEmbedContents path or pass a flat list instead."
+            )
         if not isinstance(element, str):
             raise ValueError(f"Unsupported input type: {type(element)}")
         parts.append(_build_part_for_input(element, resolved_files=resolved_files))
@@ -318,13 +352,15 @@ def process_response(
 
     if _is_multimodal_input(input):
         input_list = input if isinstance(input, list) else [input]
-        text_elements = [
-            e for e in input_list
-            if isinstance(e, str)
-            and not (e.startswith("data:") and ";base64," in e)
-            and not _is_gcs_url(e)
-            and not _is_file_reference(e)
-        ]
+        text_elements = []
+        for e in input_list:
+            if isinstance(e, list):
+                text_elements.extend(
+                    sub for sub in e
+                    if isinstance(sub, str) and not _is_multimodal_element(sub)
+                )
+            elif isinstance(e, str) and not _is_multimodal_element(e):
+                text_elements.append(e)
         if text_elements:
             input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
             prompt_tokens = token_counter(model=model, text=input_text)
