@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider, Alert } from "antd";
 import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
 import {
   reloadModelCostMap,
@@ -11,6 +11,13 @@ import {
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Text } = Typography;
+
+const isAuthError = (error: unknown): boolean => {
+  if (error instanceof Error) {
+    return /HTTP (400|401)/.test(error.message);
+  }
+  return false;
+};
 
 interface ReloadStatus {
   scheduled: boolean;
@@ -55,22 +62,18 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
   const [loadingSource, setLoadingSource] = useState(false);
+  const [pollingDisabled, setPollingDisabled] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch status on component mount and periodically
-  useEffect(() => {
-    fetchReloadStatus();
-    fetchSourceInfo();
+  const stopPolling = useCallback(() => {
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setPollingDisabled(true);
+  }, []);
 
-    // Refresh status every 30 seconds to keep it up to date
-    const interval = setInterval(() => {
-      fetchReloadStatus();
-      fetchSourceInfo();
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, [accessToken]);
-
-  const fetchReloadStatus = async () => {
+  const fetchReloadStatus = useCallback(async () => {
     if (!accessToken) return;
 
     setLoadingStatus(true);
@@ -81,7 +84,10 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       setReloadStatus(status);
     } catch (error) {
       console.error("Failed to fetch reload status:", error);
-      // Set a default status to prevent UI issues
+      if (isAuthError(error)) {
+        stopPolling();
+        return;
+      }
       setReloadStatus({
         scheduled: false,
         interval_hours: null,
@@ -91,9 +97,9 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
     } finally {
       setLoadingStatus(false);
     }
-  };
+  }, [accessToken, stopPolling]);
 
-  const fetchSourceInfo = async () => {
+  const fetchSourceInfo = useCallback(async () => {
     if (!accessToken) return;
 
     setLoadingSource(true);
@@ -102,10 +108,32 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       setSourceInfo(info);
     } catch (error) {
       console.error("Failed to fetch cost map source info:", error);
+      if (isAuthError(error)) {
+        stopPolling();
+      }
     } finally {
       setLoadingSource(false);
     }
-  };
+  }, [accessToken, stopPolling]);
+
+  useEffect(() => {
+    if (!accessToken || pollingDisabled) return;
+
+    fetchReloadStatus();
+    fetchSourceInfo();
+
+    intervalRef.current = setInterval(() => {
+      fetchReloadStatus();
+      fetchSourceInfo();
+    }, 30000);
+
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [accessToken, pollingDisabled, fetchReloadStatus, fetchSourceInfo]);
 
   const handleHardRefresh = async () => {
     if (!accessToken) {
@@ -210,7 +238,14 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   return (
     <div className={className}>
-      {/* Action Buttons */}
+      {pollingDisabled && (
+        <Alert
+          type="warning"
+          message="Auto-refresh paused — your session key has expired. Please re-login to restore live status."
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Space direction="horizontal" size="middle" style={{ marginBottom: 16 }}>
         {/* Hard Refresh Button - Always visible */}
         <Popconfirm
