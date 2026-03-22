@@ -151,8 +151,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         optional_params = optional_params or {}
 
-        is_multimodal = _is_multimodal_input(input)
-        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        use_embed_content = custom_llm_provider == "vertex_ai"
         mode: Literal["embedding", "batch_embedding"]
         if use_embed_content:
             mode = "embedding"
@@ -215,8 +214,16 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            resolved_files = {}
+            if api_key and _is_multimodal_input(input):
+                resolved_files = self._resolve_file_references(
+                    input=input, api_key=api_key, sync_handler=sync_handler
+                )
             request_data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params
+                input=input,
+                model=model,
+                optional_params=optional_params,
+                resolved_files=resolved_files,
             )
 
         ## LOGGING
@@ -303,8 +310,16 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            resolved_files = {}
+            if api_key and _is_multimodal_input(input):
+                resolved_files = await self._async_resolve_file_references(
+                    input=input, api_key=api_key, async_handler=async_handler
+                )
             data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params or {}
+                input=input,
+                model=model,
+                optional_params=optional_params or {},
+                resolved_files=resolved_files,
             )
 
         ## LOGGING
