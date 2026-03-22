@@ -172,10 +172,11 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Create a local_request_data dict with response info and user API key metadata
+        # Merge caller's request_data (e.g. pii_tokens) with response info.
+        # Always nest response under "response" key to avoid key collisions.
         local_request_data: dict = {
             **(request_data or {}),
-            **({"response": response} if not isinstance(response, dict) else response),
+            "response": response,
         }
 
         # Add user API key metadata with prefixed keys

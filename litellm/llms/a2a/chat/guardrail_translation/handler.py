@@ -260,7 +260,10 @@ class A2AGuardrailHandler(BaseTranslation):
         if not combined_text:
             return responses_so_far
 
-        local_request_data: dict = {**(request_data or {}), "responses_so_far": responses_so_far}
+        local_request_data: dict = {
+            **(request_data or {}),
+            "responses_so_far": responses_so_far,
+        }
         user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         if user_metadata:
             local_request_data["litellm_metadata"] = user_metadata

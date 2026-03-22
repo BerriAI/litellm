@@ -20,7 +20,6 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
 )
 
-
 # ---------------------------------------------------------------------------
 # Signature conformance tests
 # ---------------------------------------------------------------------------
@@ -29,9 +28,9 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 def test_base_translation_process_output_response_has_request_data_param():
     """Abstract base declares request_data so implementations stay consistent."""
     sig = inspect.signature(BaseTranslation.process_output_response)
-    assert "request_data" in sig.parameters, (
-        "BaseTranslation.process_output_response() must declare 'request_data'"
-    )
+    assert (
+        "request_data" in sig.parameters
+    ), "BaseTranslation.process_output_response() must declare 'request_data'"
     param = sig.parameters["request_data"]
     assert param.default is None, "'request_data' must default to None"
 
@@ -39,9 +38,9 @@ def test_base_translation_process_output_response_has_request_data_param():
 def test_base_translation_process_output_streaming_has_request_data_param():
     """Streaming variant also declares request_data."""
     sig = inspect.signature(BaseTranslation.process_output_streaming_response)
-    assert "request_data" in sig.parameters, (
-        "BaseTranslation.process_output_streaming_response() must declare 'request_data'"
-    )
+    assert (
+        "request_data" in sig.parameters
+    ), "BaseTranslation.process_output_streaming_response() must declare 'request_data'"
     param = sig.parameters["request_data"]
     assert param.default is None, "'request_data' must default to None"
 
@@ -60,6 +59,8 @@ def test_all_handler_implementations_accept_request_data():
         "litellm.llms.pass_through.guardrail_translation.handler",
         "litellm.llms.a2a.chat.guardrail_translation.handler",
         "litellm.llms.cohere.rerank.guardrail_translation.handler",
+        "litellm.llms.mistral.ocr.guardrail_translation.handler",
+        "litellm.proxy._experimental.mcp_server.guardrail_translation.handler",
     ]
 
     validated = 0
@@ -83,6 +84,43 @@ def test_all_handler_implementations_accept_request_data():
             validated += 1
 
     assert validated > 0, "No handler classes validated — all imports failed"
+
+
+def test_all_streaming_handlers_accept_request_data():
+    """Verify handlers that override process_output_streaming_response accept request_data."""
+    streaming_handler_modules = [
+        "litellm.llms.openai.chat.guardrail_translation.handler",
+        "litellm.llms.openai.responses.guardrail_translation.handler",
+        "litellm.llms.anthropic.chat.guardrail_translation.handler",
+        "litellm.llms.a2a.chat.guardrail_translation.handler",
+    ]
+
+    validated = 0
+    for module_path in streaming_handler_modules:
+        try:
+            mod = importlib.import_module(module_path)
+        except ImportError:
+            continue
+
+        for _name, obj in inspect.getmembers(mod, inspect.isclass):
+            if obj is BaseTranslation or obj.__module__ != module_path:
+                continue
+            if not hasattr(obj, "process_output_streaming_response"):
+                continue
+            if (
+                obj.process_output_streaming_response
+                is BaseTranslation.process_output_streaming_response
+            ):
+                continue
+
+            sig = inspect.signature(obj.process_output_streaming_response)
+            assert "request_data" in sig.parameters, (
+                f"{module_path}.{_name}.process_output_streaming_response() "
+                f"must accept 'request_data'"
+            )
+            validated += 1
+
+    assert validated > 0, "No streaming handler classes validated"
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +167,9 @@ async def test_openai_handler_forwards_request_data():
         request_data=sentinel,
     )
 
-    assert "pii_tokens" in captured, (
-        "request_data with pii_tokens was not forwarded to apply_guardrail()"
-    )
+    assert (
+        "pii_tokens" in captured
+    ), "request_data with pii_tokens was not forwarded to apply_guardrail()"
     assert captured["pii_tokens"] == {"<NAME_1>": "Alice"}
 
 

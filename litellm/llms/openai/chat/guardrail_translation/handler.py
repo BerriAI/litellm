@@ -86,9 +86,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs[
-                    "structured_messages"
-                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                inputs["structured_messages"] = (
+                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                )
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:
@@ -440,7 +440,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
             # Create a local_request_data dict with response info and user API key metadata
-            local_request_data: dict = {**(request_data or {}), "responses": responses_so_far}
+            local_request_data: dict = {
+                **(request_data or {}),
+                "responses": responses_so_far,
+            }
 
             # Add user API key metadata with prefixed keys
             user_metadata = self.transform_user_api_key_dict_to_metadata(

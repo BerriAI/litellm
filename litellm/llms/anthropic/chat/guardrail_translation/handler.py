@@ -87,9 +87,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[
-            ChatCompletionToolParam
-        ] = chat_completion_compatible_request.get("tools", [])
+        tools_to_check: List[ChatCompletionToolParam] = (
+            chat_completion_compatible_request.get("tools", [])
+        )
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
