@@ -30,22 +30,10 @@ from litellm.utils import (
 
 
 def _load_model_cost_json() -> dict:
-    """Load the model cost JSON directly from disk."""
-    # Try project root first (development)
-    root_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "model_prices_and_context_window.json",
-    )
-    if os.path.exists(root_path):
-        with open(root_path, encoding="utf-8") as f:
-            return json.load(f)
-    # Fallback to package resources (production)
-    pkg_path = os.path.join(
-        os.path.dirname(litellm.__file__),
-        "model_prices_and_context_window.json",
-    )
-    with open(pkg_path, encoding="utf-8") as f:
-        return json.load(f)
+    """Load the model cost JSON via the production loading path."""
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return GetModelCostMap.load_local_model_cost_map()
 
 
 class TestDeepSeekModelCostEntries:

@@ -28,12 +28,12 @@ class GetModelCostMap:
     """
     Handles fetching, validating, and loading the model cost map.
 
-    Only the backup model *count* is cached (a single int). The full
-    backup dict is never held in memory — it is only parsed when it
+    Only the local model *count* is cached (a single int). The full
+    local dict is never held in memory — it is only parsed when it
     needs to be *returned* as a fallback.
     """
 
-    _backup_model_count: int = -1  # -1 = not yet loaded
+    _local_model_count: int = -1  # -1 = not yet loaded
 
     @staticmethod
     def load_local_model_cost_map() -> dict:
@@ -59,12 +59,12 @@ class GetModelCostMap:
             return json.load(f)
 
     @classmethod
-    def _get_backup_model_count(cls) -> int:
-        """Return the number of models in the local backup (cached int)."""
-        if cls._backup_model_count < 0:
-            backup = cls.load_local_model_cost_map()
-            cls._backup_model_count = len(backup)
-        return cls._backup_model_count
+    def _get_local_model_count(cls) -> int:
+        """Return the number of models in the local model cost map (cached int)."""
+        if cls._local_model_count < 0:
+            local = cls.load_local_model_cost_map()
+            cls._local_model_count = len(local)
+        return cls._local_model_count
 
     @staticmethod
     def _check_is_valid_dict(fetched_map: dict) -> bool:
@@ -72,7 +72,7 @@ class GetModelCostMap:
         if not isinstance(fetched_map, dict):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map is not a dict (type=%s). "
-                "Falling back to local backup.",
+                "Falling back to local model cost map.",
                 type(fetched_map).__name__,
             )
             return False
@@ -80,7 +80,7 @@ class GetModelCostMap:
         if len(fetched_map) == 0:
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map is empty. "
-                "Falling back to local backup.",
+                "Falling back to local model cost map.",
             )
             return False
 
@@ -90,34 +90,34 @@ class GetModelCostMap:
     def _check_model_count_not_reduced(
         cls,
         fetched_map: dict,
-        backup_model_count: int,
+        local_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
-        """Check 2: model count has not reduced significantly vs backup."""
+        """Check 2: model count has not reduced significantly vs local."""
         fetched_count = len(fetched_map)
 
         if fetched_count < min_model_count:
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map has only %d models (minimum=%d). "
                 "This may indicate a corrupted upstream file. "
-                "Falling back to local backup.",
+                "Falling back to local model cost map.",
                 fetched_count,
                 min_model_count,
             )
             return False
 
         if (
-            backup_model_count > 0
-            and fetched_count < backup_model_count * max_shrink_ratio
+            local_model_count > 0
+            and fetched_count < local_model_count * max_shrink_ratio
         ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map shrank significantly "
-                "(fetched=%d, backup=%d, threshold=%.0f%%). "
+                "(fetched=%d, local=%d, threshold=%.0f%%). "
                 "This may indicate a corrupted upstream file. "
-                "Falling back to local backup.",
+                "Falling back to local model cost map.",
                 fetched_count,
-                backup_model_count,
+                local_model_count,
                 max_shrink_ratio * 100,
             )
             return False
@@ -128,7 +128,7 @@ class GetModelCostMap:
     def validate_model_cost_map(
         cls,
         fetched_map: dict,
-        backup_model_count: int,
+        local_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
@@ -140,7 +140,7 @@ class GetModelCostMap:
         Checks:
         1. ``_check_is_valid_dict`` -- fetched map is a non-empty dict.
         2. ``_check_model_count_not_reduced`` -- model count meets minimum
-           and has not shrunk >``max_shrink_ratio`` vs backup.
+           and has not shrunk >``max_shrink_ratio`` vs local.
 
         Returns True if all checks pass, False otherwise.
         """
@@ -149,7 +149,7 @@ class GetModelCostMap:
 
         if not cls._check_model_count_not_reduced(
             fetched_map=fetched_map,
-            backup_model_count=backup_model_count,
+            local_model_count=local_model_count,
             min_model_count=min_model_count,
             max_shrink_ratio=max_shrink_ratio,
         ):
@@ -260,12 +260,12 @@ def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
 
-    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
+    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local model cost map only.
     2. Otherwise fetches from ``url``, validates integrity, and falls back
-       to the local backup on any failure.
+       to the local model cost map on any failure.
 
-    Only the backup model count is cached (a single int) for validation.
-    The full backup dict is only parsed when it must be *returned* as a
+    Only the local model count is cached (a single int) for validation.
+    The full local dict is only parsed when it must be *returned* as a
     fallback — it is never held in memory long-term.
     """
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
@@ -285,7 +285,7 @@ def get_model_cost_map(url: str) -> dict:
     except Exception as e:
         verbose_logger.warning(
             "LiteLLM: Failed to fetch remote model cost map from %s: %s. "
-            "Falling back to local backup.",
+            "Falling back to local model cost map.",
             url,
             str(e),
         )
@@ -296,11 +296,11 @@ def get_model_cost_map(url: str) -> dict:
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=content,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        local_model_count=GetModelCostMap._get_local_model_count(),
     ):
         verbose_logger.warning(
             "LiteLLM: Fetched model cost map failed integrity check. "
-            "Using local backup instead. url=%s",
+            "Using local model cost map instead. url=%s",
             url,
         )
         _cost_map_source_info.source = "local"
