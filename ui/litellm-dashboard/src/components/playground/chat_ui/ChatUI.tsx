@@ -34,7 +34,8 @@ import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/M
 import { MCPServer } from "../../mcp_tools/types";
 import { ByokCredentialModal } from "../../mcp_tools/ByokCredentialModal";
 import NotificationsManager from "../../molecules/notifications_manager";
-import { callMCPTool, fetchMCPServers, listMCPTools } from "../../networking";
+import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "../../networking";
+import { MCPToolset } from "../../mcp_tools/types";
 import TagSelector from "../../tag_management/TagSelector";
 import VectorStoreSelector from "../../vector_store_management/VectorStoreSelector";
 import { makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
@@ -111,6 +112,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   fixedModel,
 }) => {
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
+  const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
+  const [isToolsetsInfoModalVisible, setIsToolsetsInfoModalVisible] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedMCPServers");
@@ -255,15 +258,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Fetch MCP servers
+  // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
     if (!userApiKey) return;
 
     setIsLoadingMCPServers(true);
     try {
-      const servers = await fetchMCPServers(userApiKey);
+      const [servers, toolsets] = await Promise.all([
+        fetchMCPServers(userApiKey),
+        fetchMCPToolsets(userApiKey).catch(() => []),
+      ]);
       setMCPServers(Array.isArray(servers) ? servers : servers.data || []);
+      setMCPToolsets(Array.isArray(toolsets) ? toolsets : []);
     } catch (error) {
       console.error("Error fetching MCP servers:", error);
     } finally {
@@ -412,17 +419,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     loadMCPServers();
   }, [accessToken, userID, userRole, apiKeySource, apiKey, token, simplified]);
 
-  // Load tools when MCP direct mode has a server selected
+  // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
     if (
       endpointType === EndpointType.MCP &&
       selectedMCPServers.length === 1 &&
-      selectedMCPServers[0] !== "__all__" &&
-      !serverToolsMap[selectedMCPServers[0]]
+      selectedMCPServers[0] !== "__all__"
     ) {
-      loadServerTools(selectedMCPServers[0]);
+      const selected = selectedMCPServers[0];
+      if (selected.startsWith("toolset:")) {
+        // For a toolset, load tools for each server in it
+        const toolsetId = selected.slice("toolset:".length);
+        const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+        if (toolset) {
+          const uniqueServerIds = [...new Set(toolset.tools.map((t) => t.server_id))];
+          uniqueServerIds.forEach((sid) => {
+            if (!serverToolsMap[sid]) loadServerTools(sid);
+          });
+        }
+      } else if (!serverToolsMap[selected]) {
+        loadServerTools(selected);
+      }
     }
-  }, [endpointType, selectedMCPServers, serverToolsMap]);
+  }, [endpointType, selectedMCPServers, serverToolsMap, mcpToolsets]);
 
   // Fetch agents when A2A endpoint is selected
   useEffect(() => {
@@ -568,19 +587,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // For MCP direct mode, require server and tool selection, and get form values early
     let mcpToolArguments: Record<string, any> = {};
     if (endpointType === EndpointType.MCP) {
-      const mcpServerId =
+      const rawSelected =
         selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__"
           ? selectedMCPServers[0]
           : null;
-      if (!mcpServerId) {
+      if (!rawSelected) {
         NotificationsManager.fromBackend("Please select an MCP server to test");
         return;
       }
+      // Resolve the real server ID (toolsets use toolset: prefix)
+      const mcpServerId = rawSelected.startsWith("toolset:") ? rawSelected : rawSelected;
       if (!selectedMCPDirectTool) {
         NotificationsManager.fromBackend("Please select an MCP tool to call");
         return;
       }
-      const mcpTool = (serverToolsMap[selectedMCPServers[0]] || []).find(
+      // For toolsets, find the tool in the servers that back this toolset
+      const toolsetForSelected = rawSelected.startsWith("toolset:")
+        ? mcpToolsets.find((t) => t.toolset_id === rawSelected.slice("toolset:".length))
+        : null;
+      let searchPool: any[] = [];
+      if (toolsetForSelected) {
+        const uniqueServerIds = [...new Set(toolsetForSelected.tools.map((t) => t.server_id))];
+        uniqueServerIds.forEach((sid) => {
+          searchPool = searchPool.concat(serverToolsMap[sid] || []);
+        });
+      } else {
+        searchPool = serverToolsMap[rawSelected] || [];
+      }
+      const mcpTool = searchPool.find(
         (t: any) => t.name === selectedMCPDirectTool,
       );
       if (!mcpTool) {
@@ -738,6 +772,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServerToolRestrictions,
             handleMCPEvent,
             mockTestFallbacks,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -818,6 +853,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             customProxyBaseUrl || undefined,
             mcpServers,
             mcpServerToolRestrictions,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -875,14 +911,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
       // Handle MCP direct tool calls (no chat completions)
       if (endpointType === EndpointType.MCP) {
-        const mcpServerId =
+        const rawSelected =
           selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__"
             ? selectedMCPServers[0]
             : null;
-        if (mcpServerId && selectedMCPDirectTool) {
+        // For toolsets, resolve the real server_id from the toolset's tool list
+        let resolvedServerId = rawSelected;
+        if (rawSelected?.startsWith("toolset:")) {
+          const toolsetId = rawSelected.slice("toolset:".length);
+          const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+          const toolEntry = toolset?.tools.find((t) => t.tool_name === selectedMCPDirectTool);
+          resolvedServerId = toolEntry?.server_id ?? rawSelected;
+        }
+        if (resolvedServerId && !resolvedServerId.startsWith("toolset:") && selectedMCPDirectTool) {
           const result = await callMCPTool(
             effectiveApiKey,
-            mcpServerId,
+            resolvedServerId,
             selectedMCPDirectTool,
             mcpToolArguments,
             selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : undefined,
@@ -1297,11 +1341,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     className="ml-1"
                     title={
                       endpointType === EndpointType.MCP
-                        ? "Select an MCP server to test tools directly."
-                        : "Select MCP servers to use in your conversation."
+                        ? "Select an MCP server or toolset to test tools directly."
+                        : "Select MCP servers or toolsets to use in your conversation."
                     }
                   >
-                    <InfoCircleOutlined />
+                    <InfoCircleOutlined
+                      className="cursor-pointer"
+                      onClick={() => setIsToolsetsInfoModalVisible(true)}
+                    />
                   </Tooltip>
                 </Text>
                 <Select
@@ -1357,7 +1404,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     if (option?.value === "__all__") {
                       return "All MCP Servers".toLowerCase().includes(input.toLowerCase());
                     }
-                    const server = mcpServers.find((s) => s.server_id === option?.value);
+                    const val = option?.value as string | undefined;
+                    if (val?.startsWith("toolset:")) {
+                      const toolsetId = val.slice("toolset:".length);
+                      const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                      if (!toolset) return false;
+                      return [toolset.toolset_name, toolset.description]
+                        .filter(Boolean)
+                        .join(" ")
+                        .toLowerCase()
+                        .includes(input.toLowerCase());
+                    }
+                    const server = mcpServers.find((s) => s.server_id === val);
                     if (!server) return false;
                     const searchText = [
                       server.server_name,
@@ -1381,44 +1439,99 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </Select.Option>
                   )}
 
+                  {/* Toolsets (purple badge) */}
+                  {mcpToolsets.length > 0 && (
+                    <Select.OptGroup label="Toolsets">
+                      {mcpToolsets.map((toolset) => (
+                        <Select.Option
+                          key={`toolset:${toolset.toolset_id}`}
+                          value={`toolset:${toolset.toolset_id}`}
+                          label={toolset.toolset_name}
+                          disabled={
+                            endpointType === EndpointType.MCP ? false : selectedMCPServers.includes("__all__")
+                          }
+                        >
+                          <div className="flex flex-col py-1">
+                            <div className="flex items-center gap-1">
+                              <span className="font-medium">{toolset.toolset_name}</span>
+                              <span
+                                className="text-xs px-1 rounded"
+                                style={{ background: "#ede9fe", color: "#7c3aed" }}
+                              >
+                                Toolset
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                ({toolset.tools.length} tools)
+                              </span>
+                            </div>
+                            {toolset.description && (
+                              <span className="text-xs text-gray-500 mt-1">{toolset.description}</span>
+                            )}
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+
                   {/* Individual servers */}
-                  {mcpServers.map((server) => (
-                    <Select.Option
-                      key={server.server_id}
-                      value={server.server_id}
-                      label={server.alias || server.server_name || server.server_id}
-                      disabled={
-                        endpointType === EndpointType.MCP ? false : selectedMCPServers.includes("__all__")
-                      }
-                    >
-                      <div className="flex flex-col py-1">
-                        <span className="font-medium">{server.alias || server.server_name || server.server_id}</span>
-                        {server.description && <span className="text-xs text-gray-500 mt-1">{server.description}</span>}
-                      </div>
-                    </Select.Option>
-                  ))}
+                  {mcpServers.length > 0 && (
+                    <Select.OptGroup label="Servers">
+                      {mcpServers.map((server) => (
+                        <Select.Option
+                          key={server.server_id}
+                          value={server.server_id}
+                          label={server.alias || server.server_name || server.server_id}
+                          disabled={
+                            endpointType === EndpointType.MCP ? false : selectedMCPServers.includes("__all__")
+                          }
+                        >
+                          <div className="flex flex-col py-1">
+                            <span className="font-medium">{server.alias || server.server_name || server.server_id}</span>
+                            {server.description && <span className="text-xs text-gray-500 mt-1">{server.description}</span>}
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
                 </Select>
 
                 {/* MCP Tool selector - only for MCP direct mode */}
                 {endpointType === EndpointType.MCP &&
                   selectedMCPServers.length === 1 &&
-                  selectedMCPServers[0] !== "__all__" && (
-                    <div className="mt-3">
-                      <Text className="text-xs text-gray-600 mb-1 block">Select Tool</Text>
-                      <Select
-                        style={{ width: "100%" }}
-                        placeholder="Select a tool to call"
-                        value={selectedMCPDirectTool}
-                        onChange={(value) => setSelectedMCPDirectTool(value)}
-                        options={(serverToolsMap[selectedMCPServers[0]] || []).map((tool: any) => ({
-                          value: tool.name,
-                          label: tool.name,
-                        }))}
-                        allowClear
-                        className="rounded-md"
-                      />
-                    </div>
-                  )}
+                  selectedMCPServers[0] !== "__all__" && (() => {
+                    const rawSel = selectedMCPServers[0];
+                    const isToolset = rawSel.startsWith("toolset:");
+                    let toolOptions: { value: string; label: string }[] = [];
+                    if (isToolset) {
+                      const toolsetId = rawSel.slice("toolset:".length);
+                      const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                      if (toolset) {
+                        toolOptions = toolset.tools.map((t) => ({
+                          value: t.tool_name,
+                          label: t.tool_name,
+                        }));
+                      }
+                    } else {
+                      toolOptions = (serverToolsMap[rawSel] || []).map((tool: any) => ({
+                        value: tool.name,
+                        label: tool.name,
+                      }));
+                    }
+                    return (
+                      <div className="mt-3">
+                        <Text className="text-xs text-gray-600 mb-1 block">Select Tool</Text>
+                        <Select
+                          style={{ width: "100%" }}
+                          placeholder="Select a tool to call"
+                          value={selectedMCPDirectTool}
+                          onChange={(value) => setSelectedMCPDirectTool(value)}
+                          options={toolOptions}
+                          allowClear
+                          className="rounded-md"
+                        />
+                      </div>
+                    );
+                  })()}
 
                 {/* Tool restrictions UI (optional) - hidden for MCP direct mode */}
                 {selectedMCPServers.length > 0 &&
@@ -1920,7 +2033,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   selectedMCPDirectTool ? (
                     <div className="flex-1 overflow-y-auto max-h-48 min-h-[44px] p-2 border border-gray-200 rounded-lg bg-gray-50/50">
                       {(() => {
-                        const mcpTool = (serverToolsMap[selectedMCPServers[0]] || []).find(
+                        const rawSel = selectedMCPServers[0];
+                        let toolPool: any[] = [];
+                        if (rawSel.startsWith("toolset:")) {
+                          const toolsetId = rawSel.slice("toolset:".length);
+                          const toolset = mcpToolsets.find((t) => t.toolset_id === toolsetId);
+                          if (toolset) {
+                            const uniqueServerIds = [...new Set(toolset.tools.map((t) => t.server_id))];
+                            uniqueServerIds.forEach((sid) => {
+                              toolPool = toolPool.concat(serverToolsMap[sid] || []);
+                            });
+                          }
+                        } else {
+                          toolPool = serverToolsMap[rawSel] || [];
+                        }
+                        const mcpTool = toolPool.find(
                           (t: any) => t.name === selectedMCPDirectTool,
                         );
                         return mcpTool ? (
@@ -2066,6 +2193,47 @@ const ChatUI: React.FC<ChatUIProps> = ({
           accessToken={accessToken || ""}
         />
       )}
+
+      {/* Toolsets info modal */}
+      <Modal
+        title="How Toolsets Work"
+        open={isToolsetsInfoModalVisible}
+        onCancel={() => setIsToolsetsInfoModalVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsToolsetsInfoModalVisible(false)}>
+            Close
+          </Button>,
+        ]}
+        width={600}
+      >
+        <div className="space-y-4 py-2">
+          <p className="text-gray-700">
+            <strong>Toolsets</strong> are named collections of specific tools from one or more MCP servers.
+            Instead of exposing all tools from a server, a toolset gives an agent exactly the tools it needs.
+          </p>
+          <div>
+            <h4 className="font-semibold text-gray-800 mb-2">How to use a toolset:</h4>
+            <ol className="list-decimal list-inside space-y-2 text-gray-700">
+              <li>Select a <span style={{ color: "#7c3aed", fontWeight: 600 }}>Toolset</span> (purple badge) from the MCP Servers dropdown.</li>
+              <li>The tool picker will show only the tools included in that toolset.</li>
+              <li>Select a tool and fill in its parameters, then send.</li>
+              <li>The tool call is routed to the correct underlying MCP server automatically.</li>
+            </ol>
+          </div>
+          <div className="bg-purple-50 border border-purple-200 rounded p-3">
+            <p className="text-sm text-purple-800">
+              <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server — preventing agents from making writes.
+            </p>
+          </div>
+          <div>
+            <h4 className="font-semibold text-gray-800 mb-1">Creating toolsets:</h4>
+            <p className="text-sm text-gray-600">
+              Admins can create and manage toolsets from the <strong>MCP</strong> page → <strong>Toolsets</strong> tab.
+              Toolsets can then be assigned to keys and teams to scope their tool access.
+            </p>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
