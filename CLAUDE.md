@@ -140,6 +140,11 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - **Check index coverage.** For new or modified queries, check `schema.prisma` for a supporting index. Prefer extending an existing index (e.g. `@@index([a])` → `@@index([a, b])`) over adding a new one, unless it's a `@@unique`. Only add indexes for large/frequent queries.
 - **Keep schema files in sync.** Apply schema changes to all `schema.prisma` copies (`schema.prisma`, `litellm/proxy/`, `litellm-proxy-extras/`, `litellm-js/spend-logs/` for SpendLogs) with a migration under `litellm-proxy-extras/litellm_proxy_extras/migrations/`.
 
+### Setup Wizard (`litellm/setup_wizard.py`)
+- The wizard is implemented as a single `SetupWizard` class with `@staticmethod` methods — keep it that way. No module-level functions except `run_setup_wizard()` (the public entrypoint) and pure helpers (color, ANSI).
+- Use `litellm.utils.check_valid_key(model, api_key)` for credential validation — never roll a custom completion call.
+- Do not hardcode provider env-key names or model lists that already exist in the codebase. Add a `test_model` field to each provider entry to drive `check_valid_key`; set it to `None` for providers that can't be validated with a single API key (Azure, Bedrock, Ollama).
+
 ### Enterprise Features
 - Enterprise-specific code in `enterprise/` directory
 - Optional features enabled via environment variables
