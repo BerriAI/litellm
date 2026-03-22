@@ -177,7 +177,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         return {"input": {"invokeModel": {"body": json.dumps(body_data)}}}
 
     def get_bedrock_count_tokens_endpoint(
-        self, model: str, aws_region_name: str
+        self,
+        model: str,
+        aws_region_name: str,
+        api_base: Optional[str] = None,
+        aws_bedrock_runtime_endpoint: Optional[str] = None,
     ) -> str:
         """
         Construct the AWS Bedrock CountTokens API endpoint using existing LiteLLM functions.
@@ -185,6 +189,8 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Args:
             model: The resolved model ID from router lookup
             aws_region_name: AWS region (e.g., "eu-west-1")
+            api_base: Optional custom API base URL (takes highest priority)
+            aws_bedrock_runtime_endpoint: Optional custom Bedrock runtime endpoint
 
         Returns:
             Complete endpoint URL for CountTokens API
@@ -196,7 +202,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if model_id.startswith("bedrock/"):
             model_id = model_id[8:]  # Remove "bedrock/" prefix
 
-        base_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        base_url, _ = self.get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
         endpoint = f"{base_url}/model/{model_id}/count-tokens"
 
         return endpoint
