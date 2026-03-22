@@ -810,19 +810,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown
-                teams={selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams}
                 disabled={selectedProjectId !== null}
-                loading={!teams}
-                onChange={(teamId) => {
-                  const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-                  setSelectedCreateKeyTeam(selectedTeam);
+                organizationId={selectedOrganizationId}
+                onTeamSelect={(team) => {
+                  setSelectedCreateKeyTeam(team);
                   setSelectedProjectId(null);
                   form.setFieldValue("project_id", undefined);
                   // Auto-populate org from team for non-admin users
-                  if (selectedTeam?.organization_id) {
-                    setSelectedOrganizationId(selectedTeam.organization_id);
-                    form.setFieldValue("organization_id", selectedTeam.organization_id);
-                  } else if (!teamId) {
+                  if (team?.organization_id) {
+                    setSelectedOrganizationId(team.organization_id);
+                    form.setFieldValue("organization_id", team.organization_id);
+                  } else if (!team) {
                     setSelectedOrganizationId(null);
                     form.setFieldValue("organization_id", undefined);
                   }
