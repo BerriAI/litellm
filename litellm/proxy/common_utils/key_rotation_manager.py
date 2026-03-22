@@ -103,7 +103,11 @@ class KeyRotationManager:
         except Exception as e:
             verbose_proxy_logger.error(f"Key rotation process failed: {e}")
         finally:
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+            if (
+                lock_acquired
+                and self.pod_lock_manager
+                and self.pod_lock_manager.redis_cache
+            ):
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=self.KEY_ROTATION_JOB_NAME,
                 )

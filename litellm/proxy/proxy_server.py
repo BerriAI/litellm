@@ -1523,7 +1523,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-key_rotation_pod_lock_manager: Optional[Any] = None  # PodLockManager for key rotation distributed lock
+key_rotation_pod_lock_manager: Optional[
+    Any
+] = None  # PodLockManager for key rotation distributed lock
 shared_aiohttp_session: Optional[
     "ClientSession"
 ] = None  # Global shared session for connection reuse
@@ -6237,9 +6239,15 @@ class ProxyStartupEvent:
                 # Get prisma_client from global scope
                 global prisma_client, key_rotation_pod_lock_manager
                 if prisma_client is not None:
-                    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+                    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import (
+                        PodLockManager,
+                    )
+
                     key_rotation_pod_lock_manager = PodLockManager(
-                        redis_cache=litellm.cache.cache if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache) else None
+                        redis_cache=litellm.cache.cache
+                        if litellm.cache is not None
+                        and isinstance(litellm.cache.cache, RedisCache)
+                        else None
                     )
                     key_rotation_manager = KeyRotationManager(
                         prisma_client,
