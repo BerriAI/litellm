@@ -13651,7 +13651,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -13688,7 +13689,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -13744,7 +13746,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -14191,7 +14194,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -14254,7 +14258,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -14310,7 +14315,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -14371,7 +14377,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -14425,7 +14432,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -14488,7 +14496,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -14551,7 +14560,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -15069,7 +15079,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "input_cost_per_token": 2.5e-07,
@@ -15110,7 +15121,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -15625,7 +15637,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -15683,7 +15696,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -15741,7 +15755,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -15804,7 +15819,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -15867,7 +15883,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -15923,7 +15940,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -24692,7 +24710,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "web_search_billing_unit": "per_query"
     },
     "openrouter/google/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -24739,7 +24758,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 800000
+        "tpm": 800000,
+        "web_search_billing_unit": "per_query"
     },
     "openrouter/google/gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -26286,14 +26306,16 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "web_search_billing_unit": "per_query"
     },
     "perplexity/google/gemini-3-flash-preview": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "web_search_billing_unit": "per_query"
     },
     "perplexity/google/gemini-2.5-pro": {
         "litellm_provider": "perplexity",
@@ -31029,7 +31051,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
-        }
+        },
+        "web_search_billing_unit": "per_query"
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,

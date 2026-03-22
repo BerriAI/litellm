@@ -613,11 +613,15 @@ LiteLLM tracks web search costs automatically based on provider-specific billing
 
 ### Pricing configuration
 
-Web search costs are defined in `model_prices_and_context_window.json` using the `search_context_cost_per_query` field:
+Web search costs are defined in `model_prices_and_context_window.json` using two fields:
+
+- **`search_context_cost_per_query`**: the cost per billable unit (per search context size tier).
+- **`web_search_billing_unit`**: `"per_query"` (each search query is billed individually) or `"per_prompt"` (default — flat fee per API call that uses search).
 
 ```json
 {
     "gemini/gemini-3-flash-preview": {
+        "web_search_billing_unit": "per_query",
         "search_context_cost_per_query": {
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014,
@@ -634,7 +638,11 @@ Web search costs are defined in `model_prices_and_context_window.json` using the
 }
 ```
 
-You can override these costs in your proxy config using `model_info`:
+:::info
+Models without `web_search_billing_unit` default to `"per_prompt"` — one flat charge per API call that uses web search, regardless of how many internal queries the model executes.
+:::
+
+You can override these in your proxy config using `model_info`:
 
 ```yaml
 model_list:
@@ -642,6 +650,7 @@ model_list:
     litellm_params:
       model: gemini/gemini-3-flash-preview
     model_info:
+      web_search_billing_unit: per_query
       search_context_cost_per_query:
         search_context_size_low: 0.014
         search_context_size_medium: 0.014
