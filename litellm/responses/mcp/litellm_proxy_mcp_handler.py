@@ -148,7 +148,8 @@ class LiteLLM_Proxy_MCP_Handler:
             _get_tools_from_mcp_servers,
         )
 
-        mcp_servers: List[str] = []
+        # None means "fetch from all allowed servers"; a non-empty list means specific servers only.
+        mcp_servers: Optional[List[str]] = None
         if mcp_tools_with_litellm_proxy:
             for _tool in mcp_tools_with_litellm_proxy:
                 # if user specifies servers as server_url: litellm_proxy/mcp/zapier,github then return zapier,github
@@ -158,7 +159,14 @@ class LiteLLM_Proxy_MCP_Handler:
                 if isinstance(server_url, str) and server_url.startswith(
                     LITELLM_PROXY_MCP_SERVER_URL_PREFIX
                 ):
-                    mcp_servers.append(server_url.split("/")[-1])
+                    # "litellm_proxy/mcp/github" → specific server "github"
+                    # "litellm_proxy/mcp" → no server name suffix → fetch all (leave mcp_servers=None)
+                    server_name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX) :]
+                    if server_name:
+                        if mcp_servers is None:
+                            mcp_servers = []
+                        mcp_servers.append(server_name)
+                    # else: bare "litellm_proxy/mcp" means all servers → keep None
 
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -537,20 +545,30 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        agent_tool_map: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
-        from fastapi import HTTPException
+        try:
+            from fastapi import HTTPException
+        except ImportError:
+            # FastAPI is a proxy-only dependency; fall back to a plain exception so
+            # SDK users (without fastapi installed) can still call MCP tools.
+            # The .detail access below is already guarded with hasattr().
+            HTTPException = Exception  # type: ignore[assignment,misc]
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.agent_endpoints.registry_orchestrator import (
+            RegistryOrchestrator,
+        )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        rules_obj = Rules()
         tool_results = []
         tool_call_id: Optional[str] = None
-        rules_obj = Rules()
         for tool_call in tool_calls:
             logging_request_data: Dict[str, Any] = {}
             tool_name: Optional[str] = None
@@ -569,10 +587,111 @@ class LiteLLM_Proxy_MCP_Handler:
                     tool_arguments
                 )
 
-                # Import here to avoid circular import
-                from litellm.proxy.proxy_server import proxy_logging_obj
+                # Route A2A agent tool calls through the same logging path as MCP tools
+                if agent_tool_map and tool_name in agent_tool_map:
+                    agent_info = agent_tool_map[tool_name]
+                    message = parsed_arguments.get("message") or str(parsed_arguments)
+                    start_time = datetime.now()
+                    logging_request_data = {
+                        "model": f"A2A: {tool_name}",
+                        "metadata": {
+                            "tool_call_id": tool_call_id,
+                            "tool_name": tool_name,
+                            "agent_name": agent_info["agent_name"],
+                        },
+                        "input": [{"role": "tool", "content": message}],
+                        "call_type": CallTypes.call_mcp_tool.value,
+                        "litellm_call_id": litellm_call_id or str(uuid.uuid4()),
+                        "proxy_server_request": {
+                            "url": agent_info["url"],
+                            "method": "POST",
+                            "headers": {},
+                            "body": {"message": message},
+                        },
+                    }
+                    if litellm_trace_id:
+                        logging_request_data["litellm_trace_id"] = litellm_trace_id
+                    if user_api_key_auth is not None:
+                        user_api_key = getattr(user_api_key_auth, "api_key", None)
+                        if user_api_key:
+                            logging_request_data["metadata"][
+                                "user_api_key"
+                            ] = user_api_key
 
-                server_name = tool_server_map[tool_name]
+                    litellm_logging_obj = None
+                    try:
+                        litellm_logging_obj, _ = function_setup(
+                            original_function="call_mcp_tool",
+                            rules_obj=rules_obj,
+                            start_time=start_time,
+                            **logging_request_data,
+                        )
+                    except Exception as _log_err:
+                        verbose_logger.debug(
+                            "Failed to init logging for A2A tool call %s: %s",
+                            tool_name,
+                            _log_err,
+                        )
+
+                    standard_logging_a2a_tool_call: StandardLoggingMCPToolCall = {
+                        "name": tool_name,
+                        "arguments": parsed_arguments,
+                        "namespaced_tool_name": tool_name,
+                        "mcp_server_name": agent_info["agent_name"],
+                    }
+                    if litellm_logging_obj:
+                        litellm_logging_obj.model_call_details[
+                            "mcp_tool_call_metadata"
+                        ] = standard_logging_a2a_tool_call
+                        litellm_logging_obj.model = f"A2A: {tool_name}"
+                        litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+                        try:
+                            litellm_logging_obj.pre_call(input=[message], api_key="")
+                        except Exception:
+                            pass
+
+                    result = await RegistryOrchestrator.execute_a2a_tool_call(
+                        agent_url=agent_info["url"],
+                        agent_name=agent_info["agent_name"],
+                        message=message,
+                        tool_call_id=tool_call_id or "",
+                        tool_name=tool_name,
+                        litellm_trace_id=litellm_trace_id,
+                    )
+
+                    if litellm_logging_obj:
+                        try:
+                            litellm_logging_obj.post_call(
+                                original_response=result.get("result", "")
+                            )
+                            end_time = datetime.now()
+                            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                                kwargs=litellm_logging_obj.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                            await litellm_logging_obj.async_success_handler(
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                        except Exception:
+                            verbose_logger.exception(
+                                "Failed to log A2A tool call success for %s", tool_name
+                            )
+
+                    tool_results.append(result)
+                    continue
+
+                server_name = tool_server_map.get(tool_name)
+                if server_name is None:
+                    verbose_logger.warning(
+                        "Tool '%s' not found in tool_server_map — skipping (possible "
+                        "hallucinated tool name)",
+                        tool_name,
+                    )
+                    continue
 
                 # Remove the server name prefix if the tool name includes it.
                 sanitized_tool_name = tool_name
@@ -682,14 +801,14 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call[
-                            "mcp_server_cost_info"
-                        ] = cost_info
+                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                            cost_info
+                        )
 
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
@@ -779,7 +898,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
-                error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
+                error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"  # type: ignore[union-attr]
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
