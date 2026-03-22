@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _deduplicate_bedrock_content_blocks,
     _deduplicate_bedrock_tool_content,
+    _sort_bedrock_assistant_content_blocks,
     BedrockConverseMessagesProcessor,
 )
 
@@ -445,3 +446,133 @@ def test_bedrock_converse_filters_empty_list_content():
     assert len(text_blocks) == 2
     assert text_blocks[0]["text"] == "Hello"
     assert text_blocks[1]["text"] == "World"
+
+
+# ---------------------------------------------------------------------------
+# Content block ordering tests (text before toolUse)
+# ---------------------------------------------------------------------------
+
+
+def _make_tooluse_before_text_messages():
+    """Return messages where the assistant message has a tool_call followed by
+    a separate assistant message with text content.  When merged, the toolUse
+    block would end up before the text block without sorting."""
+    return [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Let me check the weather for you.",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_abc123",
+            "content": '{"temp": 22}',
+        },
+    ]
+
+
+def test_sort_bedrock_assistant_content_blocks_text_before_tooluse():
+    """Direct unit test: text blocks should come before toolUse blocks."""
+    blocks = [
+        {"toolUse": {"toolUseId": "id_1", "name": "fn_a", "input": {}}},
+        {"text": "thinking..."},
+    ]
+
+    result = _sort_bedrock_assistant_content_blocks(blocks)
+
+    assert len(result) == 2
+    assert "text" in result[0]
+    assert "toolUse" in result[1]
+
+
+def test_sort_bedrock_assistant_content_blocks_reasoning_first():
+    """reasoningContent blocks should come before text and toolUse."""
+    blocks = [
+        {"toolUse": {"toolUseId": "id_1", "name": "fn_a", "input": {}}},
+        {"text": "thinking..."},
+        {"reasoningContent": {"reasoningText": {"text": "reasoning"}}},
+    ]
+
+    result = _sort_bedrock_assistant_content_blocks(blocks)
+
+    assert "reasoningContent" in result[0]
+    assert "text" in result[1]
+    assert "toolUse" in result[2]
+
+
+def test_sort_bedrock_assistant_content_blocks_preserves_order_when_correct():
+    """If blocks are already in the correct order, sorting should not change them."""
+    blocks = [
+        {"text": "hello"},
+        {"toolUse": {"toolUseId": "id_1", "name": "fn_a", "input": {}}},
+        {"toolUse": {"toolUseId": "id_2", "name": "fn_b", "input": {}}},
+    ]
+
+    result = _sort_bedrock_assistant_content_blocks(blocks)
+
+    assert result == blocks
+
+
+def test_bedrock_converse_sorts_text_before_tooluse_sync():
+    """Verify the sync path sorts text blocks before toolUse blocks in
+    assistant messages."""
+    messages = _make_tooluse_before_text_messages()
+    result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
+
+    assistant_msgs = [msg for msg in result if msg["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+
+    content = assistant_msgs[0]["content"]
+    text_indices = [i for i, b in enumerate(content) if "text" in b]
+    tool_indices = [i for i, b in enumerate(content) if "toolUse" in b]
+
+    # All text blocks must come before all toolUse blocks
+    assert max(text_indices) < min(tool_indices), (
+        f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_sorts_text_before_tooluse_async():
+    """Verify the async path sorts text blocks before toolUse blocks in
+    assistant messages."""
+    messages = _make_tooluse_before_text_messages()
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages, MODEL, PROVIDER
+    )
+
+    assistant_msgs = [msg for msg in result if msg["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+
+    content = assistant_msgs[0]["content"]
+    text_indices = [i for i, b in enumerate(content) if "text" in b]
+    tool_indices = [i for i, b in enumerate(content) if "toolUse" in b]
+
+    assert max(text_indices) < min(tool_indices), (
+        f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_content_ordering_sync_async_parity():
+    """Sync and async paths should produce identical content block ordering."""
+    messages = _make_tooluse_before_text_messages()
+    sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages, MODEL, PROVIDER
+    )
+    assert sync_result == async_result
