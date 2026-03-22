@@ -14,7 +14,6 @@ Refs:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
 
