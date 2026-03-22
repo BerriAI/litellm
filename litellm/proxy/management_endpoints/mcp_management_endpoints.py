@@ -424,17 +424,17 @@ if MCP_AVAILABLE:
             inherited_credentials["scopes"] = existing_server.scopes
         # AWS SigV4 fields
         if existing_server.aws_access_key_id:
-            inherited_credentials[
-                "aws_access_key_id"
-            ] = existing_server.aws_access_key_id
+            inherited_credentials["aws_access_key_id"] = (
+                existing_server.aws_access_key_id
+            )
         if existing_server.aws_secret_access_key:
-            inherited_credentials[
-                "aws_secret_access_key"
-            ] = existing_server.aws_secret_access_key
+            inherited_credentials["aws_secret_access_key"] = (
+                existing_server.aws_secret_access_key
+            )
         if existing_server.aws_session_token:
-            inherited_credentials[
-                "aws_session_token"
-            ] = existing_server.aws_session_token
+            inherited_credentials["aws_session_token"] = (
+                existing_server.aws_session_token
+            )
         if existing_server.aws_region_name:
             inherited_credentials["aws_region_name"] = existing_server.aws_region_name
         if existing_server.aws_service_name:
@@ -2031,3 +2031,139 @@ if MCP_AVAILABLE:
                 f"Failed to load OpenAPI registry from {_OPENAPI_REGISTRY_PATH}: {e}"
             )
             return {"apis": []}
+
+    # ---------------------------------------------------------------------------
+    # MCP Toolset endpoints
+    # ---------------------------------------------------------------------------
+
+    from litellm.proxy._experimental.mcp_server.toolset_db import (
+        create_mcp_toolset,
+        delete_mcp_toolset,
+        get_mcp_toolset,
+        list_mcp_toolsets,
+        update_mcp_toolset,
+    )
+    from litellm.types.mcp_server.mcp_toolset import (
+        MCPToolset,
+        NewMCPToolsetRequest,
+        UpdateMCPToolsetRequest,
+    )
+
+    @router.post(
+        "/toolset",
+        description="Create a new MCP toolset (admin only)",
+        status_code=status.HTTP_201_CREATED,
+    )
+    @management_endpoint_wrapper
+    async def add_mcp_toolset(
+        payload: NewMCPToolsetRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        """Create a named toolset — a curated selection of {server_id, tool_name} pairs."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can create MCP toolsets."},
+            )
+        touched_by = (
+            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        )
+        return await create_mcp_toolset(prisma_client, payload, touched_by)
+
+    @router.get(
+        "/toolset",
+        description="List MCP toolsets accessible to the calling key",
+    )
+    @management_endpoint_wrapper
+    async def fetch_mcp_toolsets(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """Return toolsets the calling key is allowed to access."""
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        # Admins with no explicit restriction see all toolsets
+        if _user_has_admin_view(user_api_key_dict):
+            op = user_api_key_dict.object_permission
+            if op is None or getattr(op, "mcp_toolsets", None) is None:
+                return await list_mcp_toolsets(prisma_client)
+
+        op = user_api_key_dict.object_permission
+        allowed_ids = (getattr(op, "mcp_toolsets", None) or []) if op else []
+        return await list_mcp_toolsets(
+            prisma_client, toolset_ids=allowed_ids if allowed_ids else None
+        )
+
+    @router.get(
+        "/toolset/{toolset_id}",
+        description="Get a specific MCP toolset by ID",
+    )
+    @management_endpoint_wrapper
+    async def fetch_mcp_toolset(
+        toolset_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        toolset = await get_mcp_toolset(prisma_client, toolset_id)
+        if toolset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{toolset_id}' not found."},
+            )
+        return toolset
+
+    @router.put(
+        "/toolset",
+        description="Update an existing MCP toolset (admin only)",
+    )
+    @management_endpoint_wrapper
+    async def edit_mcp_toolset(
+        payload: UpdateMCPToolsetRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can update MCP toolsets."},
+            )
+        touched_by = (
+            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        )
+        return await update_mcp_toolset(prisma_client, payload, touched_by)
+
+    @router.delete(
+        "/toolset/{toolset_id}",
+        description="Delete an MCP toolset (admin only)",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    @management_endpoint_wrapper
+    async def remove_mcp_toolset(
+        toolset_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(None),
+    ):
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only proxy admins can delete MCP toolsets."},
+            )
+        deleted = await delete_mcp_toolset(prisma_client, toolset_id)
+        if deleted is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{toolset_id}' not found."},
+            )
+        return Response(status_code=status.HTTP_202_ACCEPTED)
