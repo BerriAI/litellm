@@ -99,8 +99,10 @@ def _generic_cost_per_character(
             assert (
                 "input_cost_per_character" in model_info
                 and model_info["input_cost_per_character"] is not None
-            ), "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
-                model, model_info
+            ), (
+                "model info for model={} does not have 'input_cost_per_character'-pricing\nmodel_info={}".format(
+                    model, model_info
+                )
             )
             custom_prompt_cost = model_info["input_cost_per_character"]
 
@@ -120,8 +122,10 @@ def _generic_cost_per_character(
             assert (
                 "output_cost_per_character" in model_info
                 and model_info["output_cost_per_character"] is not None
-            ), "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
-                model, model_info
+            ), (
+                "model info for model={} does not have 'output_cost_per_character'-pricing\nmodel_info={}".format(
+                    model, model_info
+                )
             )
             custom_completion_cost = model_info["output_cost_per_character"]
         completion_cost = completion_characters * custom_completion_cost
@@ -669,9 +673,11 @@ def generic_cost_per_token(  # noqa: PLR0915
     image_tokens = prompt_tokens_details["image_tokens"]
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
-    accounted_tokens = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    accounted_tokens = (
+        text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    )
     has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
- 
+
     # Some models use alternative billing dimensions (image_count, character_count,
     # video_length_seconds) that account for prompt_tokens without being included
     # in the per-token detail fields. When these are active, a gap between
@@ -689,7 +695,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         and not has_non_token_alternative_billing
         and not (accounted_tokens == 0 and has_image_count_billing)
     )
- 
+
     if has_double_counting:
         # Double-counting fix (xAI etc.): recalculate text_tokens from scratch
         # Clamp to 0 to prevent negative cost when cache_hit exceeds prompt_tokens
@@ -702,7 +708,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif (text_tokens == 0 and not has_alternative_billing):
+    elif text_tokens == 0 and not has_alternative_billing:
         # text_tokens not set by provider and no alternative billing dimensions:
         # calculate text_tokens as the remainder of prompt_tokens
         text_tokens = max(
@@ -728,8 +734,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         # (PDF + image_count) where text_tokens > 0 still get their gap filled.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
- 
- 
+
     (
         prompt_base_cost,
         completion_base_cost,
@@ -739,7 +744,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     ) = _get_token_base_cost(
         model_info=model_info, usage=usage, service_tier=service_tier
     )
- 
+
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
@@ -749,7 +754,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
     )
-    
+
     ## CALCULATE OUTPUT COST
     text_tokens = 0
     audio_tokens = 0
