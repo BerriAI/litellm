@@ -73,6 +73,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -82,6 +83,7 @@ class BaseTranslation(ABC):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
+            request_data: Optional original request data dict from the proxy
         """
         pass
 
@@ -91,11 +93,15 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
 
         Optional to override in subclasses.
+
+        Args:
+            request_data: Optional original request data dict from the proxy
         """
         return responses_so_far
 

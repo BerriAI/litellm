@@ -10,6 +10,8 @@
 
 import asyncio
 import json
+import json as _json
+import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -36,6 +38,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
@@ -485,47 +488,80 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                     redacted_text = await response.json()
 
-            new_text = text
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                # Process items in reverse order by start position so that
-                # replacing later spans first does not shift earlier coordinates.
-                for item in sorted(
-                    redacted_text["items"], key=lambda x: x["start"], reverse=True
-                ):
+                new_text = redacted_text["text"]
+
+                # Both lists sorted right-to-left by start position. Presidio
+                # preserves positional order in both analyzer and anonymizer
+                # responses, so consuming _sorted_ar in order correctly pairs
+                # each item with its analyze_results entry.
+                def _ar_val(ar, key, default=None):
+                    return (
+                        ar.get(key, default)
+                        if isinstance(ar, dict)
+                        else getattr(ar, key, default)
+                    )
+
+                _sorted_ar = sorted(
+                    analyze_results if isinstance(analyze_results, list) else [],
+                    key=lambda x: -(_ar_val(x, "start") or 0),
+                )
+                _ar_used: set = set()
+                # Sort items right-to-left so position offsets remain valid
+                # after each in-place substitution, and so the consumption
+                # order of _sorted_ar matches item order for correct pairing.
+                _sorted_items = sorted(
+                    redacted_text["items"],
+                    key=lambda x: -(x.get("start") or 0),
+                )
+                for item in _sorted_items:
                     start = item["start"]
                     end = item["end"]
                     replacement = item["text"]  # replacement token
                     if item["operator"] == "replace" and output_parse_pii is True:
-                        if request_data is None:
-                            verbose_proxy_logger.warning(
-                                "Presidio anonymize_text called without request_data — "
-                                "PII tokens cannot be stored per-request. "
-                                "This may indicate a missing caller update."
-                            )
-                            request_data = {}
-                        # Store pii_tokens in metadata to avoid leaking to LLM providers.
-                        # Providers like Anthropic reject unknown top-level fields.
-                        if not request_data.get("metadata"):
-                            request_data["metadata"] = {}
-                        if "pii_tokens" not in request_data["metadata"]:
-                            request_data["metadata"]["pii_tokens"] = {}
-                        pii_tokens = request_data["metadata"]["pii_tokens"]
-
-                        # Append a sequential number to make each token unique
-                        # per request, so unmasking maps back to the correct
-                        # original value.  Format: <PHONE_NUMBER_1>, <PHONE_NUMBER_2>
-                        # This is LLM-friendly and degrades gracefully if the
-                        # LLM doesn't echo the token verbatim.
-                        seq = len(pii_tokens) + 1
+                        # Always append UUID to ensure uniqueness — prevents
+                        # str.replace() collisions when multiple entities share
+                        # the same type (e.g. two <PHONE_NUMBER> tokens).
+                        # UUID goes INSIDE angle brackets so LLMs treat the
+                        # whole thing as one opaque token and don't strip the
+                        # <TYPE> prefix as if it were an XML/HTML tag.
+                        _uuid_suffix = str(uuid.uuid4())[:12]
                         if replacement.endswith(">"):
-                            replacement = f"{replacement[:-1]}_{seq}>"
+                            replacement = f"{replacement[:-1]}_{_uuid_suffix}>"
                         else:
-                            replacement = f"{replacement}_{seq}"
+                            replacement = f"{replacement}_{_uuid_suffix}"
 
-                        # Use ORIGINAL text (not new_text) since start/end
-                        # reference the original text's coordinates.
-                        pii_tokens[replacement] = text[start:end]
+                        # Use analyze_results (original text positions) to look
+                        # up the original value. Both _sorted_ar and _sorted_items
+                        # are right-to-left, so consuming _sorted_ar in order
+                        # correctly pairs each item with its analyze_results entry.
+                        _orig_val = None
+                        for _ar_i, _ar in enumerate(_sorted_ar):
+                            if _ar_i not in _ar_used and _ar_val(
+                                _ar, "entity_type"
+                            ) == item.get("entity_type"):
+                                _s = _ar_val(_ar, "start")
+                                _e = _ar_val(_ar, "end")
+                                if _s is not None and _e is not None:
+                                    _orig_val = text[_s:_e]
+                                _ar_used.add(_ar_i)
+                                break
+                        _token_value = (
+                            _orig_val if _orig_val is not None else new_text[start:end]
+                        )
+                        # Store in request_data["metadata"]["pii_tokens"] for
+                        # per-request thread safety (matches upstream convention).
+                        # Do NOT write to self.pii_tokens — the guardrail instance
+                        # is shared across concurrent requests.
+                        if request_data is not None:
+                            if "metadata" not in request_data:
+                                request_data["metadata"] = {}
+                            if "pii_tokens" not in request_data["metadata"]:
+                                request_data["metadata"]["pii_tokens"] = {}
+                            request_data["metadata"]["pii_tokens"][
+                                replacement
+                            ] = _token_value
 
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
@@ -533,13 +569,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         masked_entity_count[entity_type] = (
                             masked_entity_count.get(entity_type, 0) + 1
                         )
-                # When output_parse_pii is True, new_text contains sequentially
-                # numbered tokens (e.g. <PHONE_NUMBER_1>) that match the keys
-                # in pii_tokens.  Returning redacted_text["text"] (Presidio's
-                # original output) would send un-numbered tokens to the LLM,
-                # making unmasking impossible.
-                # When output_parse_pii is False, new_text == redacted_text["text"]
-                # because no suffix is appended.
+                # Return new_text (with UUID-suffixed tokens for duplicate
+                # entity types), NOT redacted_text["text"] which has identical
+                # placeholders for all entities of the same type.
                 return new_text
             else:
                 raise Exception("Invalid anonymizer response: received None")
@@ -729,9 +761,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -832,9 +864,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -921,18 +953,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
+        # Prefer pii_tokens from request_data (stored by pre_call masking instance).
+        _pii_tokens = (
+            (data.get("metadata") or {}).get("pii_tokens") if data else None
+        ) or {}
+
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
-        ):  # /chat/completions requests
+        ):  # /chat/completions requests — handles all choices, list content, tool calls
             await self._process_response_for_pii(
                 response=response,
                 request_data=data,
                 mode="unmask",
             )
-        elif self._is_anthropic_message_response(response):
-            await self._process_anthropic_response_for_pii(
-                response=cast(dict, response), request_data=data, mode="unmask"
-            )
+        elif (
+            isinstance(response, dict)
+            and response.get("type") == "message"
+            and response.get("role") == "assistant"
+        ):  # Anthropic native /v1/messages response
+            for block in response.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    block["text"] = self._unmask_pii_text(
+                        block.get("text", ""), _pii_tokens
+                    )
         return response
 
     @staticmethod
@@ -950,15 +993,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for token, original_text in pii_tokens.items():
             if token in text:
                 text = text.replace(token, original_text)
-            else:
-                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                # Only check at the very end of the text.
-                min_overlap = min(20, len(token) // 2)
-                for i in range(max(0, len(text) - len(token)), len(text)):
-                    sub = text[i:]
-                    if token.startswith(sub) and len(sub) >= min_overlap:
-                        text = text[:i] + original_text
-                        break
+                continue
+
+            # FALLBACK 1: LLM stripped angle brackets (e.g. <PERSON_abc> -> PERSON_abc)
+            # Use word-boundary anchoring to avoid false positives in technical text
+            stripped = token.strip("<>")
+            if stripped:
+                _fb_pattern = r"(?<!\w)" + re.escape(stripped) + r"(?!\w)"
+                if re.search(_fb_pattern, text):
+                    text = re.sub(_fb_pattern, lambda m: original_text, text)
+                    continue
+
+            # FALLBACK 2: Handle truncated tokens (token cut off by max_tokens)
+            # Only check at the very end of the text.
+            min_overlap = min(20, len(token) // 2)
+            for i in range(max(0, len(text) - len(token)), len(text)):
+                sub = text[i:]
+                if token.startswith(sub) and len(sub) >= min_overlap:
+                    text = text[:i] + original_text
+                    break
         return text
 
     @staticmethod
@@ -980,11 +1033,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = (
+            (request_data.get("metadata") or {}).get("pii_tokens")
+            if request_data
+            else None
+        ) or {}
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens in metadata for Anthropic response unmask"
+                "No pii_tokens in request_data for Anthropic response unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1022,11 +1078,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = (
+            (request_data.get("metadata") or {}).get("pii_tokens")
+            if request_data
+            else None
+        ) or {}
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data['metadata'] — nothing to unmask"
+                "No pii_tokens found in request_data — nothing to unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1246,6 +1305,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         streaming sends raw bytes chunks that pass through untransformed.
         The base class declares ModelResponseStream only.
         """
+        # If we need to mask model output, collect the full stream, apply masking, and replay it.
         if self.apply_to_output:
             async for chunk in self._stream_apply_output_masking(
                 response, request_data
@@ -1253,18 +1313,161 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        # --- PII unmasking path (output_parse_pii=True) ---
+        pii_tokens = (
+            (request_data.get("metadata") or {}).get("pii_tokens", {})
+            if request_data
+            else {}
+        )
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
-                "No pii_tokens in request_data['metadata'] for streaming unmask path"
+                "No pii_tokens in request_data for streaming unmask path"
             )
-        if not (self.output_parse_pii and pii_tokens):
+        if not ((self.output_parse_pii or litellm.output_parse_pii) and pii_tokens):
             async for chunk in response:
                 yield chunk
             return
 
-        async for chunk in self._stream_pii_unmasking(response, request_data):
+        # Peek at first chunk to detect format without buffering the full stream.
+        # bytes = Anthropic native SSE; ModelResponseStream = OpenAI format.
+        first_chunk = None
+        async for chunk in response:
+            first_chunk = chunk
+            break
+
+        if first_chunk is None:
+            return
+
+        is_anthropic_native = isinstance(first_chunk, bytes)
+
+        if is_anthropic_native:
+            # --- Anthropic native SSE: true streaming with carry-buffer unmask ---
+            #
+            # PII tokens look like <TYPE_HEXUUID> (max ~30 chars). They can be split
+            # across SSE events. We keep a small carry buffer (MAX_CARRY chars) to
+            # catch split tokens, then flush everything else immediately.
+            MAX_CARRY = 80
+            sse_buf = b""  # accumulator for incomplete SSE event bytes
+            carry_text = ""  # pending text that might be a partial PII token
+            carry_lines: Optional[list] = None  # SSE event lines for carry_text
+            carry_data: Optional[dict] = None
+            carry_data_idx: Optional[int] = None
+
+            async def _chunks_with_first():
+                yield first_chunk
+                async for c in response:
+                    yield c
+
+            try:
+                async for chunk in _chunks_with_first():
+                    if not isinstance(chunk, bytes):
+                        yield chunk
+                        continue
+
+                    sse_buf += chunk
+
+                    # Yield complete SSE events as they arrive
+                    while b"\n\n" in sse_buf:
+                        event_bytes, sse_buf = sse_buf.split(b"\n\n", 1)
+                        event_str = event_bytes.decode("utf-8", errors="replace")
+
+                        if not event_str.strip():
+                            yield b"\n\n"
+                            continue
+
+                        lines = event_str.split("\n")
+                        data, data_idx = None, None
+                        for j, line in enumerate(lines):
+                            if line.startswith("data: "):
+                                try:
+                                    data = _json.loads(line[6:])
+                                    data_idx = j
+                                except (_json.JSONDecodeError, ValueError):
+                                    pass
+                                break
+
+                        is_text_delta = (
+                            data is not None
+                            and data.get("type") == "content_block_delta"
+                            and data.get("delta", {}).get("type") == "text_delta"
+                        )
+
+                        if not is_text_delta:
+                            # Flush any pending carry before non-text events
+                            if carry_text and carry_lines is not None:
+                                unmasked_carry = self._unmask_pii_text(
+                                    carry_text, pii_tokens
+                                )
+                                carry_data["delta"]["text"] = unmasked_carry
+                                carry_lines[carry_data_idx] = "data: " + _json.dumps(
+                                    carry_data, ensure_ascii=False
+                                )
+                                yield ("\n".join(carry_lines) + "\n\n").encode("utf-8")
+                                carry_text = ""
+                                carry_lines = None
+                            yield (event_str + "\n\n").encode("utf-8")
+                            continue
+
+                        # Text delta: prepend any carry, unmask, split at safe point
+                        fragment = data["delta"].get("text", "")
+                        combined = carry_text + fragment
+                        unmasked = self._unmask_pii_text(combined, pii_tokens)
+
+                        # Safe flush point: everything before the last '<' within MAX_CARRY
+                        lt_pos = unmasked.rfind("<")
+                        if lt_pos < 0 or (len(unmasked) - lt_pos) > MAX_CARRY:
+                            flush_text = unmasked
+                            carry_text = ""
+                            carry_lines = None
+                        else:
+                            flush_text = unmasked[:lt_pos]
+                            carry_text = unmasked[lt_pos:]
+                            carry_lines = lines
+                            carry_data = data
+                            carry_data_idx = data_idx
+
+                        # Only yield text_delta when there's actually text to send
+                        if flush_text:
+                            data["delta"]["text"] = flush_text
+                            lines[data_idx] = "data: " + _json.dumps(
+                                data, ensure_ascii=False
+                            )
+                            yield (("\n".join(lines)) + "\n\n").encode("utf-8")
+
+                # Flush remaining carry at end of stream
+                if carry_text and carry_lines is not None:
+                    unmasked_carry = self._unmask_pii_text(carry_text, pii_tokens)
+                    carry_data["delta"]["text"] = unmasked_carry
+                    carry_lines[carry_data_idx] = "data: " + _json.dumps(
+                        carry_data, ensure_ascii=False
+                    )
+                    yield ("\n".join(carry_lines) + "\n\n").encode("utf-8")
+
+                # Yield any trailing bytes (incomplete event, shouldn't normally happen)
+                if sse_buf.strip():
+                    yield sse_buf
+
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error in Anthropic SSE PII streaming unmask: {str(e)}"
+                )
+                # Fallback: yield whatever is left in the response
+                if sse_buf:
+                    yield sse_buf
+                async for c in response:
+                    yield c
+            return
+
+        # --- OpenAI format path: buffer all chunks (needed for chunk assembly) ---
+        all_chunks: list = [first_chunk]
+        async for chunk in response:
+            all_chunks.append(chunk)
+
+        async def _iter_chunks():
+            for c in all_chunks:
+                yield c
+
+        async for chunk in self._stream_pii_unmasking(_iter_chunks(), request_data):
             yield chunk
 
     @staticmethod
@@ -1313,27 +1516,48 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
+        # --- PII unmask path for output responses ---
+        # When the unified guardrail calls apply_guardrail(input_type="response"),
+        # we unmask PII tokens instead of masking. The tokens were stored in
+        # request_data["metadata"]["pii_tokens"] during input masking.
+        # Unmask path only — applies when unified guardrail calls apply_guardrail()
+        # with input_type="response". The apply_to_output masking path is handled
+        # separately by async_post_call_*_hook, not by this method.
+        if input_type == "response" and (
+            self.output_parse_pii or litellm.output_parse_pii
+        ):
+            pii_tokens = (
+                (request_data.get("metadata") or {}).get("pii_tokens", {})
+                if request_data
+                else {}
+            )
+            if pii_tokens:
+                _texts = inputs.get("texts", [])
+                inputs["texts"] = [self._unmask_pii_text(t, pii_tokens) for t in _texts]
+            else:
+                verbose_proxy_logger.debug(
+                    "apply_guardrail: no pii_tokens in request_data for output unmask path"
+                )
+            return inputs
+
         texts = inputs.get("texts", [])
 
-        # When input_type is "response" and pii_tokens are available,
-        # unmask the text instead of masking it.
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
-
         new_texts = []
-        if input_type == "response" and pii_tokens:
-            for text in texts:
-                new_texts.append(self._unmask_pii_text(text, pii_tokens))
-        else:
-            for text in texts:
-                modified_text = await self.check_pii(
-                    text=text,
-                    output_parse_pii=self.output_parse_pii,
-                    presidio_config=None,
-                    request_data=request_data or {},
-                )
-                new_texts.append(modified_text)
+        for text in texts:
+            modified_text = await self.check_pii(
+                text=text,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data or {},
+            )
+            new_texts.append(modified_text)
         inputs["texts"] = new_texts
+        # Strip keys that process_input_messages() converted to OpenAI format.
+        # Returning them would overwrite native Anthropic tools with type:"function".
+        for _k in ("tools", "structured_messages", "model", "images"):
+            inputs.pop(_k, None)
+        # pii_tokens are already stored in request_data["metadata"]["pii_tokens"]
+        # by anonymize_text() above — no need to copy from self.pii_tokens.
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
