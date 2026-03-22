@@ -2285,3 +2285,54 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
         )
 
     dummy_logger.log_failure_event.assert_called_once()
+
+
+def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
+    """Streaming completion path should mirror non-stream: metadata.hidden_params from response."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-test",
+        function_id="merge-hp-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}},
+    }
+
+    class _Resp:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-test"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Resp())
+    meta = logging_obj.model_call_details["litellm_params"]["metadata"]
+    assert meta["hidden_params"]["response_cost"] == 0.001
+    assert meta["hidden_params"]["model_id"] == "mid-test"
+
+
+def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-empty",
+        function_id="merge-hp-empty-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {"existing": True}},
+    }
+
+    class _NoHp:
+        _hidden_params = {}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_NoHp())
+    assert "hidden_params" not in logging_obj.model_call_details["litellm_params"][
+        "metadata"
+    ]

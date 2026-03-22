@@ -213,3 +213,52 @@ def test_json_excepthook_redacts_traceback_secrets():
     output = h.formatter.format(record)
     assert SECRET not in output
     assert "REDACTED" in output
+
+
+def test_key_name_redaction_catches_secrets_in_dict_repr():
+    """Secrets inside dict repr strings are redacted based on key names."""
+    cases = [
+        # Python dict repr (the exact leak format from the bug report)
+        "param_name=general_settings, param_value={'master_key': 'my-random-secret-key-1234', 'enable_jwt_auth': True}",
+        # database_url
+        "'database_url': 'postgres://admin:password@db.example.com:5432/litellm'",
+        # JSON format
+        '"database_url": "postgres://admin:password@db.example.com:5432/litellm"',
+        # access_token
+        "'access_token': 'some-opaque-token-value'",
+        # refresh_token
+        "refresh_token=my-refresh-tok-12345",
+        # auth_token
+        "'auth_token': 'random-auth-value'",
+        # slack_webhook_url
+        "'slack_webhook_url': 'https://hooks.slack.com/services/T00/B00/xxx'",
+    ]
+    for secret_line in cases:
+        result = _redact_string(secret_line)
+        assert "REDACTED" in result, f"Key-name redaction missed: {secret_line!r}"
+
+    # Non-sensitive keys should NOT be redacted
+    safe = "'enable_jwt_auth': True, 'store_model_in_db': True"
+    assert _redact_string(safe) == safe
+
+
+def test_key_name_redaction_in_general_settings_dict():
+    """End-to-end: secrets inside a general_settings dict dump are redacted
+    when logged through the named litellm loggers."""
+
+    def log_messages():
+        general_settings = {
+            "master_key": "my-random-secret-key-1234",
+            "database_url": "postgres://admin:password@db.example.com:5432/litellm",
+            "enable_jwt_auth": True,
+            "store_model_in_db": True,
+        }
+        verbose_proxy_logger.debug(
+            f"param_name=general_settings, param_value={general_settings}"
+        )
+
+    output = _capture_logger_output(log_messages)
+    assert "my-random-secret-key-1234" not in output
+    assert "REDACTED" in output
+    # Non-sensitive values should survive
+    assert "enable_jwt_auth" in output

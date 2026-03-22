@@ -1,12 +1,11 @@
 import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { getProxyBaseUrl } from "@/components/networking";
-import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { MenuFoldOutlined, MenuUnfoldOutlined, MessageOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
+import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
 import { Button, Switch, Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
@@ -46,11 +45,6 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
-  const { data: uiConfig } = useUIConfig();
-  const uiRoot = uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
-    ? uiConfig.server_root_path.replace(/\/+$/, "")
-    : "";
-  const chatHref = `${uiRoot}/ui/chat`;
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
@@ -146,41 +140,6 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
-            {/* Chat CTA — always visible, opens in new tab */}
-            <a
-              href={chatHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 14px",
-                borderRadius: 8,
-                background: "#1677ff",
-                color: "#fff",
-                fontSize: 13,
-                fontWeight: 600,
-                textDecoration: "none",
-                whiteSpace: "nowrap",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#0958d9"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.background = "#1677ff"; }}
-            >
-              <MessageOutlined style={{ fontSize: 14 }} />
-              Chat
-              <span style={{
-                fontSize: 9,
-                fontWeight: 700,
-                background: "#fff",
-                color: "#1677ff",
-                borderRadius: 3,
-                padding: "1px 4px",
-                letterSpacing: "0.05em",
-              }}>
-                NEW
-              </span>
-            </a>
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
             <CommunityEngagementButtons />
             {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.

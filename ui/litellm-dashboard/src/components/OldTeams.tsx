@@ -579,14 +579,12 @@ const Teams: React.FC<TeamProps> = ({
           }
         }
 
-        const response: any = await teamCreateCall(accessToken, formValues);
-        if (teams !== null) {
-          setTeams([...teams, response]);
-        } else {
-          setTeams([response]);
-        }
-        console.log(`response for team create call: ${response}`);
+        await teamCreateCall(accessToken, formValues);
         NotificationsManager.success("Team created");
+        await fetchTeamsV2({
+          page: currentPage,
+          size: pageSize,
+        });
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
