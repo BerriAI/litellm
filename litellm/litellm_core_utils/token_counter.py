@@ -216,9 +216,12 @@ def get_image_dimensions(
         response = client.get(data)
         img_data = response.read()
     except Exception:
-        # If not URL, assume it's base64
-        _header, encoded = data.split(",", 1)
-        img_data = base64.b64decode(encoded)
+        # If not URL, only decode data URIs as base64.
+        if data.startswith("data:") and "," in data:
+            _header, encoded = data.split(",", 1)
+            img_data = base64.b64decode(encoded)
+        else:
+            return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
     img_type = get_image_type(img_data)
 
