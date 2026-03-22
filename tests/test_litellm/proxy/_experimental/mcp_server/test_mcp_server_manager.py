@@ -219,7 +219,10 @@ class TestMCPServerManager:
         with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.verbose_logger.warning") as mock_warning:
             await manager.load_servers_from_config(config)
 
-        assert any("invalid alias 'bad/name'" in str(call.args[0]) for call in mock_warning.call_args_list)
+        assert any(
+            len(call.args) >= 4 and call.args[1] == "alias" and call.args[2] == "bad/name"
+            for call in mock_warning.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_accepts_valid_alias(self):
@@ -238,7 +241,10 @@ class TestMCPServerManager:
             await manager.load_servers_from_config(config)
 
         # No warnings logged for the valid alias
-        assert all("invalid alias" not in str(call.args[0]) for call in mock_warning.call_args_list)
+        assert all(
+            not (len(call.args) >= 4 and call.args[1] == "alias" and call.args[2] == "friendly_alias")
+            for call in mock_warning.call_args_list
+        )
 
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.alias == "friendly_alias"
