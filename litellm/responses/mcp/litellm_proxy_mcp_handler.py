@@ -160,10 +160,38 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     mcp_servers.append(server_url.split("/")[-1])
 
+        # Resolve toolset names: if any name in mcp_servers is a toolset (not a real
+        # server name), apply toolset scope to user_api_key_auth so that only the
+        # toolset's servers and tools are visible. Non-toolset names are kept as-is.
+        resolved_mcp_servers: List[str] = []
+        for name in mcp_servers:
+            if not global_mcp_server_manager.get_mcp_server_by_name(name):
+                try:
+                    from litellm.proxy._experimental.mcp_server.server import (
+                        _apply_toolset_scope,
+                    )
+                    from litellm.proxy._experimental.mcp_server.toolset_db import (
+                        get_mcp_toolset_by_name,
+                    )
+                    from litellm.proxy.proxy_server import prisma_client
+
+                    if prisma_client is not None and user_api_key_auth is not None:
+                        toolset = await get_mcp_toolset_by_name(prisma_client, name)
+                        if toolset is not None:
+                            user_api_key_auth = await _apply_toolset_scope(
+                                user_api_key_auth, toolset.toolset_id
+                            )
+                            # Don't add to resolved_mcp_servers — toolset scope
+                            # restricts via object_permission, not server name filter.
+                            continue
+                except Exception as _e:
+                    verbose_logger.debug(f"Could not resolve '{name}' as toolset: {_e}")
+            resolved_mcp_servers.append(name)
+
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
+            mcp_servers=resolved_mcp_servers if resolved_mcp_servers else None,
             mcp_server_auth_headers=mcp_server_auth_headers,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
@@ -178,7 +206,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
-            mcp_servers=mcp_servers,
+            mcp_servers=resolved_mcp_servers if resolved_mcp_servers else None,
             allowed_mcp_servers=allowed_mcp_servers,
         )
 
@@ -682,14 +710,14 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call[
-                            "mcp_server_cost_info"
-                        ] = cost_info
+                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                            cost_info
+                        )
 
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
