@@ -1722,18 +1722,33 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
         # The code should gracefully fall back to __dict__ and not crash
         initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
 
+        # Use a DIFFERENT object as the target model_response
+        fresh_model_response = ModelResponseStream(
+            id="fresh",
+            created=1742056047,
+            model="sap-ai-core/test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="test content", role="assistant"),
+                )
+            ],
+        )
+
         # Process the chunk through return_processed_chunk_logic which calls model_dump
         result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
             completion_obj={"content": "test content"},
-            response_obj={"original_chunk": chunk_with_usage},
-            model_response=chunk_with_usage,
+            response_obj={"original_chunk": chunk_with_usage},  # source of extra attrs
+            model_response=fresh_model_response,                 # target (different object)
         )
 
         # Should not raise TypeError and should successfully process the chunk
         assert result is not None
         assert result.choices[0].delta.content == "test content"
 
-        # Verify that extra/provider attributes survive the fallback
+        # Now this assertion is meaningful: it verifies the attribute was actually COPIED
         assert getattr(result, "sap_extra_field", None) == "sap-value"
     finally:
         # Restore original method

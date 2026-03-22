@@ -1865,7 +1865,7 @@ class CustomStreamWrapper:
                             if "MockValSer" not in str(e):
                                 raise
                             # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            logging.getLogger("LiteLLM").warning(
+                            verbose_logger.warning(
                                 "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
                                 "Upgrading pydantic may resolve this. Error: %s", e
                             )
@@ -2067,7 +2067,7 @@ class CustomStreamWrapper:
                             if "MockValSer" not in str(e):
                                 raise
                             # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            logging.getLogger("LiteLLM").warning(
+                            verbose_logger.warning(
                                 "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
                                 "Upgrading pydantic may resolve this. Error: %s", e
                             )
