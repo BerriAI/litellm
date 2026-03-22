@@ -220,7 +220,7 @@ class TestMCPServerManager:
             await manager.load_servers_from_config(config)
 
         assert any(
-            len(call.args) >= 4 and call.args[1] == "alias" and call.args[2] == "bad/name"
+            len(call.args) >= 5 and call.args[2] == "alias" and call.args[3] == "bad/name"
             for call in mock_warning.call_args_list
         )
 
@@ -242,7 +242,7 @@ class TestMCPServerManager:
 
         # No warnings logged for the valid alias
         assert all(
-            not (len(call.args) >= 4 and call.args[1] == "alias" and call.args[2] == "friendly_alias")
+            not (len(call.args) >= 5 and call.args[2] == "alias" and call.args[3] == "friendly_alias")
             for call in mock_warning.call_args_list
         )
 
