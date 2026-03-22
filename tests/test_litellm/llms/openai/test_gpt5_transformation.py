@@ -1031,3 +1031,86 @@ def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
     assert "logprobs" not in params
     assert "top_p" not in params
     assert params["reasoning_effort"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# Responses API: GPT-5 temperature validation (#16090)
+# ---------------------------------------------------------------------------
+
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+
+@pytest.fixture()
+def responses_config() -> OpenAIResponsesAPIConfig:
+    return OpenAIResponsesAPIConfig()
+
+
+def test_responses_gpt5_drop_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """drop_params=True should silently drop temperature!=1 for gpt-5."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+        ),
+        model="gpt-5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_reject_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """Without drop_params, temperature!=1 should raise UnsupportedParamsError."""
+    with pytest.raises(litellm.UnsupportedParamsError):
+        responses_config.map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                temperature=0.5,
+            ),
+            model="gpt-5",
+            drop_params=False,
+        )
+
+
+def test_responses_gpt5_allow_temperature_1(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """temperature=1 should always be allowed for gpt-5."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=1,
+        ),
+        model="gpt-5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 1
+
+
+def test_responses_gpt5_mini_drop_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5-mini should also drop temperature!=1."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.7,
+        ),
+        model="gpt-5-mini",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_chat_allow_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5-chat models should allow any temperature (not GPT-5 restricted)."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.3,
+        ),
+        model="gpt-5-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.3
