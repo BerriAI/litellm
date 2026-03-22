@@ -29,48 +29,45 @@ from litellm.utils import (
 # ---------------------------------------------------------------------------
 
 
-def _load_backup_json() -> dict:
-    """Load the backup JSON directly from disk."""
-    backup_path = os.path.join(
-        os.path.dirname(litellm.__file__),
-        "model_prices_and_context_window_backup.json",
-    )
-    with open(backup_path, encoding="utf-8") as f:
-        return json.load(f)
+def _load_model_cost_json() -> dict:
+    """Load the model cost JSON via the production loading path."""
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return GetModelCostMap.load_local_model_cost_map()
 
 
 class TestDeepSeekModelCostEntries:
     """Verify that provider-prefixed DeepSeek entries contain the same
     capability flags as their bare-name counterparts in the JSON files."""
 
-    def test_deepseek_chat_supports_response_schema_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_chat_supports_response_schema(self):
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-chat", {})
         assert entry.get("supports_response_schema") is True
 
-    def test_deepseek_reasoner_supports_response_schema_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_reasoner_supports_response_schema(self):
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-reasoner", {})
         assert entry.get("supports_response_schema") is True
 
-    def test_deepseek_chat_supports_system_messages_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_chat_supports_system_messages(self):
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-chat", {})
         assert entry.get("supports_system_messages") is True
 
-    def test_deepseek_reasoner_supports_system_messages_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_reasoner_supports_system_messages(self):
+        data = _load_model_cost_json()
         entry = data.get("deepseek/deepseek-reasoner", {})
         assert entry.get("supports_system_messages") is True
 
-    def test_deepseek_chat_max_input_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_chat_max_input_tokens_matches_bare(self):
+        data = _load_model_cost_json()
         bare = data.get("deepseek-chat", {})
         prefixed = data.get("deepseek/deepseek-chat", {})
         assert prefixed.get("max_input_tokens") == bare.get("max_input_tokens")
 
-    def test_deepseek_reasoner_max_output_tokens_matches_bare_in_backup(self):
-        data = _load_backup_json()
+    def test_deepseek_reasoner_max_output_tokens_matches_bare(self):
+        data = _load_model_cost_json()
         bare = data.get("deepseek-reasoner", {})
         prefixed = data.get("deepseek/deepseek-reasoner", {})
         assert prefixed.get("max_output_tokens") == bare.get("max_output_tokens")

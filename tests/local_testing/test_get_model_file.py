@@ -16,10 +16,10 @@ def test_get_model_cost_map():
         pytest.fail(f"An exception occurred: {e}")
 
 
-def test_get_backup_model_cost_map():
-    with importlib.resources.open_text(
-        "litellm", "model_prices_and_context_window_backup.json"
-    ) as f:
-        print("inside backup")
-        content = json.load(f)
-        print("content", content)
+def test_get_local_model_cost_map():
+    """Test that load_local_model_cost_map returns a valid non-empty dict."""
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    content = GetModelCostMap.load_local_model_cost_map()
+    assert isinstance(content, dict)
+    assert len(content) > 0

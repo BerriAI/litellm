@@ -32,9 +32,3 @@ repos:
     hooks:
       - id: poetry-check
         files: ^(pyproject.toml|litellm-proxy-extras/pyproject.toml)$
--   repo: local
-    hooks:
-    -   id: check-files-match
-        name: Check if files match
-        entry: python3 ci_cd/check_files_match.py
-        language: system
