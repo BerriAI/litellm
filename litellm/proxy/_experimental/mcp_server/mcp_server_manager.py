@@ -501,12 +501,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[
-                        base_tool_name
-                    ] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[
-                        prefixed_tool_name
-                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -786,7 +786,12 @@ class MCPServerManager:
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
             combined_servers = set(allowed_mcp_servers)
-            combined_servers.update(allow_all_server_ids)
+            # Only add allow_all_keys servers when there is no explicit server
+            # restriction on the key/object_permission.  When mcp_servers is
+            # explicitly set (e.g. by a toolset scope), the explicit list IS
+            # the permission boundary — allow_all_keys servers must not bleed in.
+            if not has_explicit_object_permission:
+                combined_servers.update(allow_all_server_ids)
 
             if len(combined_servers) == 0:
                 verbose_logger.debug(
@@ -796,6 +801,41 @@ class MCPServerManager:
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
             return allow_all_server_ids
+
+    async def resolve_toolset_tool_permissions(
+        self,
+        toolset_ids: List[str],
+    ) -> Dict[str, List[str]]:
+        """
+        Resolve a list of toolset IDs into a mcp_tool_permissions dict.
+
+        Returns: {server_id: [tool_name, ...]} — the union of all tools across
+        the given toolsets. This is merged (union semantics) into the key's
+        existing mcp_tool_permissions before access-control filtering runs.
+        """
+        from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not toolset_ids or prisma_client is None:
+            return {}
+
+        try:
+            toolsets = await list_mcp_toolsets(prisma_client, toolset_ids=toolset_ids)
+            tool_permissions: Dict[str, List[str]] = {}
+            for toolset in toolsets:
+                for tool in toolset.tools:
+                    # Stored tool_names may include the server prefix (e.g.
+                    # "server_alias__tool_name"). filter_tools_by_key_team_permissions
+                    # compares against the unprefixed name, so strip it here.
+                    raw_name = tool["tool_name"]
+                    unprefixed, _ = split_server_prefix_from_name(raw_name)
+                    tool_permissions.setdefault(tool["server_id"], [])
+                    if unprefixed not in tool_permissions[tool["server_id"]]:
+                        tool_permissions[tool["server_id"]].append(unprefixed)
+            return tool_permissions
+        except Exception as e:
+            verbose_logger.warning(f"Failed to resolve toolset permissions: {str(e)}")
+            return {}
 
     def filter_server_ids_by_ip(
         self, server_ids: List[str], client_ip: Optional[str]
@@ -1071,6 +1111,17 @@ class MCPServerManager:
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
+                # OpenAPI tools are stored in the registry with their prefix already
+                # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
+                # through _create_prefixed_tools — that would add the prefix a second
+                # time producing "test_petstore-test_petstore-getinventory".
+                if not add_prefix:
+                    prefix = get_server_prefix(server)
+                    sep = MCP_TOOL_PREFIX_SEPARATOR
+                    for t in tools:
+                        if t.name.startswith(f"{prefix}{sep}"):
+                            t.name = t.name[len(prefix) + len(sep) :]
+                return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 
@@ -2421,9 +2472,18 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(
-            prisma_client, approval_status="active"
+        _all_db_mcp_servers = await get_all_mcp_servers(
+            prisma_client, approval_status=None
         )
+        # Load servers that are "active" (explicit approval) or "approved"
+        # (legacy default value pre-dating the approval workflow).
+        # Exclude "pending_review" and "rejected".
+        _load_statuses = {"active", "approved"}
+        db_mcp_servers = [
+            s
+            for s in _all_db_mcp_servers
+            if s.approval_status in _load_statuses or s.approval_status is None
+        ]
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
