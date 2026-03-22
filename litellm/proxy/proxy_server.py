@@ -541,6 +541,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -1546,6 +1547,7 @@ user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
+_cp_no_redis_warning_emitted: bool = False
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -2295,6 +2297,7 @@ class ProxyConfig:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
+        self.worker_registry: List["WorkerRegistryEntry"] = []
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -2958,6 +2961,29 @@ class ProxyConfig:
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
+                elif key == "audit_log_callbacks":
+                    litellm.audit_log_callbacks = []
+
+                    for callback in value:
+                        if "." in callback:
+                            litellm.audit_log_callbacks.append(
+                                get_instance_fn(value=callback)
+                            )
+                        else:
+                            litellm.audit_log_callbacks.append(callback)
+
+                    _store_audit_logs = litellm_settings.get(
+                        "store_audit_logs", litellm.store_audit_logs
+                    )
+                    if _store_audit_logs:
+                        print(  # noqa
+                            f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
+                        )  # noqa
+                    else:
+                        verbose_proxy_logger.warning(
+                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
+                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                        )
                 elif key == "cache_params":
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
@@ -3095,6 +3121,21 @@ class ProxyConfig:
                         "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
                         "instead of continuing without a code_verifier."
                     )
+
+            ### CONTROL PLANE CODE-EXCHANGE PREREQUISITE CHECK ###
+            cp_url = general_settings.get("control_plane_url")
+            if cp_url and redis_usage_cache is None:
+                global _cp_no_redis_warning_emitted
+                if not _cp_no_redis_warning_emitted:
+                    _cp_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "control_plane_url is configured but Redis is not configured for LiteLLM caching. "
+                        "Login codes (SSO and /v3/login) will not be shared across instances — "
+                        "the /v3/login/exchange call may land on a different pod and fail with 401. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or ensure sticky sessions for single-instance deployments."
+                    )
+
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
@@ -3303,7 +3344,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-        )  # type:ignore
+        )  # type: ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
@@ -3385,7 +3426,15 @@ class ProxyConfig:
             litellm.vector_store_registry.load_vector_stores_from_config(
                 vector_store_registry_config
             )
-        pass
+
+        ## WORKER REGISTRY (Control Plane)
+        worker_registry_config = config.get("worker_registry", None)
+        if worker_registry_config:
+            self.worker_registry = [
+                WorkerRegistryEntry(**e) for e in worker_registry_config
+            ]
+        else:
+            self.worker_registry = []
 
     async def _init_policy_engine(
         self,
@@ -5357,8 +5406,8 @@ async def initialize(  # noqa: PLR0915
         litellm.add_function_to_prompt = True
         dynamic_config["general"]["add_function_to_prompt"] = True
     if max_budget:  # litellm-specific param
-        litellm.max_budget = max_budget
-        dynamic_config["general"]["max_budget"] = max_budget
+        litellm.max_budget = float(max_budget)
+        dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
     user_telemetry = telemetry
@@ -7445,6 +7494,9 @@ async def audio_speech(
                 media_type = (
                     "audio/wav"  # Gemini TTS returns WAV format after conversion
                 )
+
+        if data.get("stream_format") == "sse":
+            media_type = "text/event-stream"
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
@@ -11093,6 +11145,165 @@ async def login_v2(request: Request):  # noqa: PLR0915
                 param="None",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+@router.post(
+    "/v3/login", include_in_schema=False
+)  # control-plane login — always returns token in body for cross-origin use
+async def login_v3(request: Request):  # noqa: PLR0915
+    global premium_user, general_settings, master_key
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.utils import get_custom_url
+
+    try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        body = await request.json()
+        username = str(body.get("username"))
+        password = str(body.get("password"))
+
+        login_result = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
+
+        returned_ui_token_object = create_ui_token_object(
+            login_result=login_result,
+            general_settings=general_settings,
+            premium_user=premium_user,
+        )
+
+        import jwt
+
+        jwt_token = jwt.encode(
+            cast(dict, returned_ui_token_object),
+            cast(str, master_key),
+            algorithm="HS256",
+        )
+
+        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
+        litellm_dashboard_ui += "?login=success"
+
+        # Store JWT behind a single-use opaque code (60s TTL)
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": litellm_dashboard_ui}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+        else:
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+
+        return JSONResponse(
+            content={"code": code, "expires_in": 60},
+            status_code=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v3(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        if isinstance(e, ProxyException):
+            raise e
+        elif isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=error_msg,
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@router.post(
+    "/v3/login/exchange", include_in_schema=False
+)  # exchange single-use opaque code for JWT
+async def login_v3_exchange(request: Request):
+    try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login/exchange is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        body = await request.json()
+        code = body.get("code")
+        if not code:
+            raise ProxyException(
+                message="Missing 'code' parameter",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f"login_code:{code}"
+        if redis_usage_cache is not None:
+            cached_data = await redis_usage_cache.async_get_cache(key=cache_key)
+        else:
+            cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
+
+        if not cached_data or not isinstance(cached_data, dict):
+            raise ProxyException(
+                message="Invalid or expired login code",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Single-use: delete immediately
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_delete_cache(key=cache_key)
+        else:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+
+        json_response = JSONResponse(
+            content={
+                "token": cached_data["token"],
+                "redirect_url": cached_data["redirect_url"],
+            },
+            status_code=status.HTTP_200_OK,
+        )
+        json_response.set_cookie(key="token", value=cached_data["token"])
+        return json_response
+    except ProxyException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v3_exchange(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @app.get("/onboarding/get_token", include_in_schema=False)
