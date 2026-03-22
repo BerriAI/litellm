@@ -1,1 +1,0 @@
-# CompactifAI chat completions

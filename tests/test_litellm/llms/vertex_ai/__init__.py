@@ -1,2 +1,0 @@
-"""Vertex AI tests package."""
-

@@ -1,3 +1,6 @@
+import asyncio
+from unittest.mock import patch
+
 import pytest
 from fastapi import HTTPException
 
@@ -105,9 +108,6 @@ async def test_heuristics_check_does_not_block_event_loop():
 
     This test exercises the `else` branch (prompt_injection_params is None).
     """
-    import asyncio
-    from unittest.mock import patch
-
     detector = _OPTIONAL_PromptInjectionDetection()
     user_key = UserAPIKeyAuth(api_key="sk-test")
     cache = DualCache()
@@ -151,9 +151,6 @@ async def test_heuristics_check_true_branch_does_not_block_event_loop():
     the explicit `heuristics_check=True` branch (line 178 of the
     production code) rather than the `else` fallback.
     """
-    import asyncio
-    from unittest.mock import patch
-
     params = LiteLLMPromptInjectionParams(heuristics_check=True)
     detector = _OPTIONAL_PromptInjectionDetection(prompt_injection_params=params)
     user_key = UserAPIKeyAuth(api_key="sk-test")
