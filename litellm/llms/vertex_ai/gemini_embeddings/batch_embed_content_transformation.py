@@ -130,8 +130,9 @@ def _is_multimodal_input(input: EmbeddingInput) -> bool:
 
     for element in input:
         if isinstance(element, list):
-            return True
-        if isinstance(element, str) and _is_multimodal_element(element):
+            if any(_is_multimodal_element(sub) for sub in element if isinstance(sub, str)):
+                return True
+        elif isinstance(element, str) and _is_multimodal_element(element):
             return True
 
     return False
@@ -350,7 +351,8 @@ def process_response(
     model_response.data = openai_embeddings
     model_response.model = model
 
-    if _is_multimodal_input(input):
+    has_nested = isinstance(input, list) and any(isinstance(e, list) for e in input)
+    if _is_multimodal_input(input) or has_nested:
         input_list = input if isinstance(input, list) else [input]
         text_elements = []
         for e in input_list:

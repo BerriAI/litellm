@@ -215,18 +215,22 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
         else:
             input_list = [input] if isinstance(input, str) else input
-            has_file_refs = any(
-                _is_file_reference(e) for e in input_list if isinstance(e, str)
-            )
+            flat_elements = [
+                e
+                for item in input_list
+                for e in (item if isinstance(item, list) else [item])
+                if isinstance(e, str)
+            ]
+            has_file_refs = any(_is_file_reference(e) for e in flat_elements)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
                     "Pass api_key= or set GEMINI_API_KEY."
                 )
             resolved_files = {}
-            if api_key and _is_multimodal_input(input):
+            if api_key and has_file_refs:
                 resolved_files = self._resolve_file_references(
-                    input=input, api_key=api_key, sync_handler=sync_handler
+                    input=flat_elements, api_key=api_key, sync_handler=sync_handler
                 )
             request_data = transform_openai_input_gemini_content(
                 input=input,
@@ -320,18 +324,22 @@ class GoogleBatchEmbeddings(VertexLLM):
             )
         else:
             input_list = [input] if isinstance(input, str) else input
-            has_file_refs = any(
-                _is_file_reference(e) for e in input_list if isinstance(e, str)
-            )
+            flat_elements = [
+                e
+                for item in input_list
+                for e in (item if isinstance(item, list) else [item])
+                if isinstance(e, str)
+            ]
+            has_file_refs = any(_is_file_reference(e) for e in flat_elements)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
                     "Pass api_key= or set GEMINI_API_KEY."
                 )
             resolved_files = {}
-            if api_key and _is_multimodal_input(input):
+            if api_key and has_file_refs:
                 resolved_files = await self._async_resolve_file_references(
-                    input=input, api_key=api_key, async_handler=async_handler
+                    input=flat_elements, api_key=api_key, async_handler=async_handler
                 )
             data = transform_openai_input_gemini_content(
                 input=input,
