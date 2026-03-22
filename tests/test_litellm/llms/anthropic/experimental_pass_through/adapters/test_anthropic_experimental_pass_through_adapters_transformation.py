@@ -2123,26 +2123,6 @@ class TestAnthropicStreamWrapperToolArgs:
     containing input_json_delta. This verifies the args are preserved.
     """
 
-    def _parse_sse_events(self, raw_bytes_list):
-        """Parse SSE bytes from the stream wrapper into event dicts."""
-        import json
-
-        events = []
-        for raw in raw_bytes_list:
-            if not isinstance(raw, bytes):
-                continue
-            for line in raw.decode("utf-8").strip().split("\n"):
-                line = line.strip()
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if not line or line == "[DONE]" or line.startswith("event:"):
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return events
-
     def _build_chunks(self):
         """Build mock OpenAI-format chunks simulating Gemini tool call response."""
         # Chunk 1: text content
