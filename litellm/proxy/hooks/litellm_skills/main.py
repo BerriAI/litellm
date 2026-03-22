@@ -97,42 +97,63 @@ class SkillsInjectionHook(CustomLogger):
             f"SkillsInjectionHook: Processing {len(skills)} skills"
         )
 
+        from fastapi import HTTPException
+
+        from litellm.llms.litellm_proxy.skills.skill_applicator import (
+            SkillApplicator,
+            get_provider_from_model,
+        )
+
+        model = data.get("model", "")
+        provider = get_provider_from_model(model)
+        applicator = SkillApplicator()
+
         litellm_skills: List[LiteLLM_SkillsTable] = []
         anthropic_skills: List[Dict[str, Any]] = []
 
-        # Separate skills by prefix
+        # Classify and validate skills
         for skill in skills:
             if not isinstance(skill, dict):
                 continue
 
             skill_id = skill.get("skill_id", "")
-            if skill_id.startswith("litellm_"):
-                # Fetch from LiteLLM DB
+
+            if skill_id.startswith("litellm_skill_"):
+                # LiteLLM gateway-managed skill — fetch from DB
                 db_skill = await self._fetch_skill_from_db(skill_id)
                 if db_skill:
                     litellm_skills.append(db_skill)
                 else:
-                    verbose_proxy_logger.warning(
-                        f"SkillsInjectionHook: Skill '{skill_id}' not found in LiteLLM DB"
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Skill not found: {skill_id}",
                     )
-            else:
-                # Native Anthropic skill - pass through
+            elif skill_id.startswith("skill_"):
+                # Native Anthropic skill — only allowed with native-skills providers
+                if not applicator.supports_native_skills(provider):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Anthropic skill '{skill_id}' cannot be used with "
+                        f"model '{model}' (provider '{provider}' does not support "
+                        f"native skills). Use a litellm_skill_* ID instead.",
+                    )
                 anthropic_skills.append(skill)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid skill_id '{skill_id}'. Must start with "
+                    f"'litellm_skill_' (gateway skill) or 'skill_' (Anthropic native).",
+                )
 
         if len(litellm_skills) > 0:
-            # Determine provider to pick the right strategy
-            from litellm.llms.litellm_proxy.skills.skill_applicator import (
-                SkillApplicator,
-                get_provider_from_model,
-            )
 
-            model = data.get("model", "")
-            provider = get_provider_from_model(model)
-            applicator = SkillApplicator()
+            # When the request comes through /v1/messages (anthropic_messages),
+            # we must inject into the top-level 'system' param because
+            # anthropic_messages() has separate 'messages' and 'system' params.
+            use_anthropic_format = call_type == "anthropic_messages"
 
             if applicator.supports_native_skills(provider):
                 # Native skills path: convert to tools + system prompt
-                use_anthropic_format = call_type == "anthropic_messages"
                 data = self._process_for_messages_api(
                     data=data,
                     litellm_skills=litellm_skills,
@@ -140,11 +161,16 @@ class SkillsInjectionHook(CustomLogger):
                 )
             else:
                 # Non-native path: inject into system prompt only
-                data = await applicator.apply_skills(
-                    data=data,
-                    skills=litellm_skills,
-                    provider=provider,
-                )
+                skill_contents = []
+                for skill in litellm_skills:
+                    content = applicator._format_skill_content(skill)
+                    if content:
+                        skill_contents.append(content)
+
+                if skill_contents:
+                    data = self.prompt_handler.inject_skill_content_to_messages(
+                        data, skill_contents, use_anthropic_format=use_anthropic_format
+                    )
                 # Remove container (not supported by underlying providers)
                 data.pop("container", None)
 

@@ -53,6 +53,7 @@ class TestCreateSkill:
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_first = AsyncMock(return_value=None)
         mock_prisma.db.litellm_skillstable.create = AsyncMock(
             return_value=_make_prisma_skill()
         )
@@ -87,6 +88,7 @@ class TestCreateSkill:
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_first = AsyncMock(return_value=None)
         mock_prisma.db.litellm_skillstable.create = AsyncMock(
             return_value=_make_prisma_skill()
         )
@@ -122,6 +124,36 @@ class TestCreateSkill:
 
             with pytest.raises(ValueError, match="Prisma client"):
                 await LiteLLMSkillsHandler.create_skill(data=request)
+
+    @pytest.mark.asyncio
+    async def test_create_skill_duplicate_title_raises(self):
+        """Test that creating a skill with a duplicate display_title raises ValueError."""
+        from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+        existing_skill = MagicMock()
+        existing_skill.skill_id = "litellm_skill_existing"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_skillstable.find_first = AsyncMock(
+            return_value=existing_skill
+        )
+
+        with patch.object(
+            LiteLLMSkillsHandler,
+            "_get_prisma_client",
+            new_callable=AsyncMock,
+            return_value=mock_prisma,
+        ):
+            request = NewSkillRequest(
+                display_title="Duplicate Name",
+                instructions="test",
+            )
+
+            with pytest.raises(ValueError, match="already exists"):
+                await LiteLLMSkillsHandler.create_skill(data=request)
+
+            # Should never reach create
+            mock_prisma.db.litellm_skillstable.create.assert_not_called()
 
 
 class TestListSkills:

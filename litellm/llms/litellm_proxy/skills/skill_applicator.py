@@ -165,12 +165,27 @@ def get_provider_from_model(model: str) -> str:
     """
     Determine the provider from a model string.
 
-    Uses LiteLLM's get_llm_provider to resolve the provider.
+    First checks the proxy router's model list to resolve aliases
+    (e.g., "claude-sonnet" -> "anthropic/claude-sonnet-4-20250514"),
+    then uses get_llm_provider on the resolved model.
     """
+    resolved_model = model
+
+    # Try to resolve through the router's model list
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            deployments = llm_router.get_model_list(model_name=model)
+            if deployments:
+                resolved_model = deployments[0]["litellm_params"]["model"]
+    except Exception:
+        pass
+
     try:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        _, custom_llm_provider, _, _ = get_llm_provider(model=resolved_model)
         return custom_llm_provider or "openai"
     except Exception as e:
         verbose_logger.warning(

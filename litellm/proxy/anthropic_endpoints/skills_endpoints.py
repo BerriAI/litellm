@@ -126,10 +126,13 @@ async def _handle_litellm_create_skill(
     )
 
     # Create skill in DB
-    skill_record = await LiteLLMSkillsHandler.create_skill(
-        data=skill_request,
-        user_id=user_api_key_dict.user_id,
-    )
+    try:
+        skill_record = await LiteLLMSkillsHandler.create_skill(
+            data=skill_request,
+            user_id=user_api_key_dict.user_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     verbose_proxy_logger.debug(f"Created LiteLLM skill: {skill_record.skill_id}")
 

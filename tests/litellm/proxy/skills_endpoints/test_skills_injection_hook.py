@@ -166,8 +166,10 @@ class TestPreCallHookOptIn:
             assert "container" not in result
 
     @pytest.mark.asyncio
-    async def test_missing_skill_logged_but_continues(self):
-        """Test that missing skills don't break the request."""
+    async def test_missing_skill_raises_404(self):
+        """Test that referencing a nonexistent skill raises 404."""
+        from fastapi import HTTPException
+
         hook = SkillsInjectionHook()
 
         with patch.object(
@@ -181,6 +183,34 @@ class TestPreCallHookOptIn:
                 },
             }
 
+            with pytest.raises(HTTPException) as exc_info:
+                await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+            assert exc_info.value.status_code == 404
+            assert "litellm_skill_nonexistent" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_native_skill_on_native_provider(self):
+        """Test that Anthropic skill_ IDs pass through on native providers."""
+        hook = SkillsInjectionHook()
+
+        with patch(
+            "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+            return_value="anthropic",
+        ):
+            data = {
+                "model": "claude-sonnet-4-20250514",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "container": {
+                    "skills": [{"skill_id": "skill_01abc123", "type": "anthropic"}]
+                },
+            }
+
             result = await hook.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test"),
                 cache=None,
@@ -188,31 +218,68 @@ class TestPreCallHookOptIn:
                 call_type="completion",
             )
 
-            # Should still succeed, just without skill injection
+            # Anthropic native skill should pass through
             assert isinstance(result, dict)
 
     @pytest.mark.asyncio
-    async def test_non_litellm_skill_treated_as_anthropic_native(self):
-        """Test that skills without litellm_ prefix are treated as native Anthropic."""
+    async def test_anthropic_native_skill_on_non_native_provider_fails(self):
+        """Test that Anthropic skill_ IDs fail on non-native providers."""
+        from fastapi import HTTPException
+
         hook = SkillsInjectionHook()
 
-        data = {
-            "model": "claude-3-5-sonnet",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "container": {
-                "skills": [{"skill_id": "anthropic_native_skill_123", "type": "anthropic"}]
-            },
-        }
+        with patch(
+            "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+            return_value="openai",
+        ):
+            data = {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "container": {
+                    "skills": [{"skill_id": "skill_01abc123", "type": "anthropic"}]
+                },
+            }
 
-        result = await hook.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test"),
-            cache=None,
-            data=data,
-            call_type="completion",
-        )
+            with pytest.raises(HTTPException) as exc_info:
+                await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
 
-        # No litellm skills found, so no processing should happen
-        assert isinstance(result, dict)
+            assert exc_info.value.status_code == 400
+            assert "does not support native skills" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_invalid_skill_id_prefix_fails(self):
+        """Test that skill IDs with unrecognized prefixes fail."""
+        from fastapi import HTTPException
+
+        hook = SkillsInjectionHook()
+
+        with patch(
+            "litellm.llms.litellm_proxy.skills.skill_applicator.get_provider_from_model",
+            return_value="openai",
+        ):
+            data = {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "container": {
+                    "skills": [{"skill_id": "random_garbage_id", "type": "anthropic"}]
+                },
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await hook.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    cache=None,
+                    data=data,
+                    call_type="completion",
+                )
+
+            assert exc_info.value.status_code == 400
+            assert "Invalid skill_id" in str(exc_info.value.detail)
 
 
 class TestSystemPromptInjection:

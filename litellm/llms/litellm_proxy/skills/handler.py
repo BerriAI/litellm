@@ -71,6 +71,17 @@ class LiteLLMSkillsHandler:
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
+        # Enforce unique display_title
+        if data.display_title:
+            existing = await prisma_client.db.litellm_skillstable.find_first(
+                where={"display_title": data.display_title}
+            )
+            if existing is not None:
+                raise ValueError(
+                    f"A skill with display_title '{data.display_title}' already exists "
+                    f"(id: {existing.skill_id}). Skill names must be unique."
+                )
+
         skill_id = f"litellm_skill_{uuid.uuid4()}"
 
         skill_data: Dict[str, Any] = {
