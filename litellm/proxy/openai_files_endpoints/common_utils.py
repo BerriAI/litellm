@@ -767,8 +767,10 @@ async def get_batch_from_database(
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
 
-        # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
+        # The stored batch object may contain raw provider file IDs. Resolve them to
+        # unified IDs before returning the batch to callers.
         await resolve_input_file_id_to_unified(response, prisma_client)
+        await resolve_output_file_ids_to_unified(response, prisma_client)
 
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"

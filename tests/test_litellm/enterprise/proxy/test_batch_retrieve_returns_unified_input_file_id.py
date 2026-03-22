@@ -8,10 +8,11 @@ batch is later read from DB, get_batch_from_database returns the raw ID
 without resolving it to the unified ID.
 """
 
+import base64
 import json
-import pytest
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from litellm.proxy.openai_files_endpoints.common_utils import get_batch_from_database
 
@@ -53,7 +54,7 @@ async def test_should_resolve_raw_input_file_id_to_unified_id():
         "input_file_id": raw_input_file_id,
         "object": "batch",
         "status": "completed",
-        "output_file_id": "file-output-raw",
+        "output_file_id": None,
     }
 
     managed_file_record = MagicMock()
@@ -84,6 +85,62 @@ async def test_should_resolve_raw_input_file_id_to_unified_id():
 
 
 @pytest.mark.asyncio
+async def test_should_resolve_raw_output_file_id_to_unified_id():
+    """
+    When output_file_id in the stored batch is a raw provider ID,
+    get_batch_from_database must look up the unified ID from the
+    managed files table.
+    """
+    unified_batch_id = "bGl0ZWxsbV9wcm94eTpiYXRjaF9pZA"
+    unified_output_file_id = "bGl0ZWxsbV9wcm94eTp1bmlmaWVkX291dHB1dA"
+    raw_output_file_id = "file-output-raw"
+    managed_input_file_id = (
+        base64.urlsafe_b64encode(
+            "litellm_proxy:application/octet-stream;unified_id,input-123".encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    batch_data = {
+        "id": "batch-raw-123",
+        "completion_window": "24h",
+        "created_at": 1700000000,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": managed_input_file_id,
+        "object": "batch",
+        "status": "completed",
+        "output_file_id": raw_output_file_id,
+    }
+
+    managed_file_record = MagicMock()
+    managed_file_record.unified_file_id = unified_output_file_id
+
+    prisma = _mock_prisma(
+        batch_json=json.dumps(batch_data),
+        managed_file_record=managed_file_record,
+    )
+
+    _, response = await get_batch_from_database(
+        batch_id=unified_batch_id,
+        unified_batch_id="decoded_unified_batch_id",
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma,
+        verbose_proxy_logger=MagicMock(),
+    )
+
+    assert response is not None
+    assert response.output_file_id == unified_output_file_id, (
+        f"output_file_id should be resolved to '{unified_output_file_id}', "
+        f"got raw: '{response.output_file_id}'"
+    )
+
+    prisma.db.litellm_managedfiletable.find_first.assert_called_once_with(
+        where={"flat_model_file_ids": {"has": raw_output_file_id}}
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_preserve_already_managed_input_file_id():
     """
     When input_file_id is already a managed/unified ID, it should
@@ -93,7 +150,9 @@ async def test_should_preserve_already_managed_input_file_id():
 
     unified_batch_id = "bGl0ZWxsbV9wcm94eTpiYXRjaF9pZA"
     decoded_unified = "litellm_proxy:application/octet-stream;unified_id,test-123"
-    base64_input_file_id = base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    base64_input_file_id = (
+        base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    )
 
     batch_data = {
         "id": "batch-raw-123",
