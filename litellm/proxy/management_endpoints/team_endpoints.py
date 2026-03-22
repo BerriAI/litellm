@@ -2239,7 +2239,7 @@ def _cleanup_members_with_roles(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def team_member_delete(
+async def team_member_delete(  # noqa: PLR0915
     data: TeamMemberDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -2366,6 +2366,14 @@ async def team_member_delete(
         await prisma_client.db.litellm_teammembership.delete_many(
             where={"team_id": data.team_id, "user_id": _uid}
         )
+        # Invalidate cached membership so re-add doesn't serve stale models
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            _cache_key = f"team_membership:{_uid}:{data.team_id}"
+            await user_api_key_cache.async_delete_cache(key=_cache_key)
+        except Exception:
+            pass  # cache invalidation is best-effort
 
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
     if user_ids_to_delete:
@@ -2528,22 +2536,18 @@ async def team_member_update(  # noqa: PLR0915
             models=data.models,
         )
 
-    # Invalidate the get_team_membership cache so subsequent key-gen calls
-    # see the updated models immediately (not stale cached values).
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
-    await user_api_key_cache.async_delete_cache(key=_cache_key)
-
-    ### update team member role
-    # Resolve the effective models for this member (from the authoritative
-    # LiteLLM_TeamMembership table via cached helper) so we can: (a) keep the
-    # members_with_roles JSON in sync, and (b) return the actual stored state
-    # in the response.
-    stored_models = data.models
-    if stored_models is None:
+    # Resolve the stored models for this member.
+    # If models were explicitly provided in the request, use that value directly
+    # (it was just written to the DB by _upsert_budget_and_membership).
+    # Only fetch from DB when models weren't provided (e.g., role-only update).
+    stored_models = data.models if data.models is not None else []
+    if data.models is None:
         from litellm.proxy.auth.auth_checks import get_team_membership
         from litellm.proxy.proxy_server import user_api_key_cache
+
+        # Invalidate stale cache entry before fetching fresh data
+        _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
+        await user_api_key_cache.async_delete_cache(key=_cache_key)
 
         _tm_row = await get_team_membership(
             user_id=received_user_id,
@@ -2552,6 +2556,12 @@ async def team_member_update(  # noqa: PLR0915
             user_api_key_cache=user_api_key_cache,
         )
         stored_models = (_tm_row.models or []) if _tm_row is not None else []
+    else:
+        # Models were explicitly changed — invalidate cache so key-gen sees fresh data
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        _cache_key = f"team_membership:{received_user_id}:{data.team_id}"
+        await user_api_key_cache.async_delete_cache(key=_cache_key)
 
     if data.role is not None or data.models is not None:
         team_members: List[Member] = []

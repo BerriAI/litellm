@@ -271,12 +271,17 @@ async def add_new_member(  # noqa: PLR0915
             **_returned_team_membership.model_dump()
         )
 
-        # Invalidate any stale cached membership for this user+team pair
-        # (e.g., from a previous add/remove cycle).
-        from litellm.proxy.proxy_server import user_api_key_cache
+    # Always invalidate stale cached membership for this user+team pair,
+    # even when no membership row was created (e.g., models=[] with no budget).
+    # This handles the re-add cycle where a member was removed but cache persists.
+    if returned_user is not None and returned_user.user_id is not None:
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
 
-        _cache_key = f"team_membership:{returned_user.user_id}:{team_id}"
-        await user_api_key_cache.async_delete_cache(key=_cache_key)
+            _cache_key = f"team_membership:{returned_user.user_id}:{team_id}"
+            await user_api_key_cache.async_delete_cache(key=_cache_key)
+        except Exception:
+            pass  # cache invalidation is best-effort
 
     if returned_user is None:
         raise Exception("Unable to update user table with membership information!")
