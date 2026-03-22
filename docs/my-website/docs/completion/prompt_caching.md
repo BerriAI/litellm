@@ -6,6 +6,8 @@ import TabItem from '@theme/TabItem';
 Supported Providers:
 - OpenAI (`openai/`)
 - Anthropic API (`anthropic/`)
+- Google AI Studio (`gemini/`)
+- Vertex AI (`vertex_ai/`, `vertex_ai_beta/`)
 - Bedrock (`bedrock/`, `bedrock/invoke/`, `bedrock/converse`) ([All models bedrock supports prompt caching on](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html))
 - Deepseek API (`deepseek/`)
 
@@ -63,7 +65,6 @@ for _ in range(2):
                     }
                 ],
             },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
             {
                 "role": "user",
                 "content": [
@@ -77,7 +78,6 @@ for _ in range(2):
                 "role": "assistant",
                 "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
             },
-            # The final turn is marked with cache-control, for continuing in followups.
             {
                 "role": "user",
                 "content": [
@@ -112,16 +112,16 @@ model_list:
         api_key: os.environ/OPENAI_API_KEY
 ```
 
-2. Start proxy 
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it! 
+3. Test it!
 
 ```python
-from openai import OpenAI 
+from openai import OpenAI
 import os
 
 client = OpenAI(
@@ -144,7 +144,6 @@ for _ in range(2):
                     }
                 ],
             },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
             {
                 "role": "user",
                 "content": [
@@ -158,7 +157,6 @@ for _ in range(2):
                 "role": "assistant",
                 "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
             },
-            # The final turn is marked with cache-control, for continuing in followups.
             {
                 "role": "user",
                 "content": [
@@ -183,13 +181,85 @@ assert response.usage.prompt_tokens_details.cached_tokens > 0
 </TabItem>
 </Tabs>
 
+### OpenAI `prompt_cache_key` and `prompt_cache_retention`
+
+OpenAI prompt caching is [**automatic**](https://platform.openai.com/docs/guides/prompt-caching) — no `cache_control` message annotations are needed. Any request with 1024+ prompt tokens is eligible for caching.
+
+OpenAI also supports two optional parameters for more control over caching behavior:
+
+- **`prompt_cache_key`** (string) — A routing hint that improves cache hit rates for requests sharing long common prefixes. Requests with the same cache key are routed to the same backend, increasing the likelihood of a cache hit.
+- **`prompt_cache_retention`** (`"in_memory"` or `"24h"`) — Controls cache TTL. Default is `"in_memory"` (5–10 min). Set to `"24h"` for extended caching that offloads KV tensors to GPU-local storage.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["OPENAI_API_KEY"] = ""
+
+response = completion(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are an AI assistant tasked with analyzing legal documents. "
+            + "Here is the full text of a complex legal agreement " * 400,
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions?",
+        },
+    ],
+    prompt_cache_key="legal-doc-analysis",
+    prompt_cache_retention="24h",
+)
+print(response.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY",
+    base_url="LITELLM_PROXY_BASE",
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are an AI assistant tasked with analyzing legal documents. "
+            + "Here is the full text of a complex legal agreement " * 400,
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions?",
+        },
+    ],
+    extra_body={
+        "prompt_cache_key": "legal-doc-analysis",
+        "prompt_cache_retention": "24h",
+    },
+)
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
+
 ### Anthropic Example 
 
 Anthropic charges for cache writes. 
 
 Specify the content to cache with `"cache_control": {"type": "ephemeral"}`.
 
-If you pass that in for any other llm provider, it will be ignored. 
+This same format also works for [Gemini / Vertex AI](#google-ai-studio--vertex-ai-gemini-example). For other providers, it will be ignored.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -280,6 +350,208 @@ response = client.chat.completions.create(
             "content": "what are the key terms and conditions in this agreement?",
         },
     ]
+)
+
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
+
+### Google AI Studio / Vertex AI (Gemini) Example
+
+Use the same Anthropic-style `cache_control` format — LiteLLM automatically translates it to Google's [context caching API](https://ai.google.dev/api/caching).
+
+**How it works under the hood:**
+1. Messages with `cache_control` are separated and sent to Google's `cachedContents` API
+2. The cached content ID is then passed as `cachedContent` in the Gemini request body
+3. Works across all three providers: `gemini/` (Google AI Studio), `vertex_ai/`, and `vertex_ai_beta/`
+4. Requires a minimum of **1024 tokens** in the cached content — below that, caching is silently skipped
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ""
+
+response = completion(
+    model="gemini/gemini-2.5-flash",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+)
+
+print(response.usage)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gemini-2.5-flash
+      litellm_params:
+        model: gemini/gemini-2.5-flash
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY",  # sk-1234
+    base_url="LITELLM_PROXY_BASE",  # http://0.0.0.0:4000
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+)
+
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
+
+#### Vertex AI
+
+For Vertex AI, use `vertex_ai/` prefix:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-2.5-flash",
+    vertex_project="my-gcp-project",
+    vertex_location="us-central1",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+)
+
+print(response.usage)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gemini-2.5-flash
+      litellm_params:
+        model: vertex_ai/gemini-2.5-flash
+        vertex_project: my-gcp-project
+        vertex_location: us-central1
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY",  # sk-1234
+    base_url="LITELLM_PROXY_BASE",  # http://0.0.0.0:4000
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
 )
 
 print(response.usage)

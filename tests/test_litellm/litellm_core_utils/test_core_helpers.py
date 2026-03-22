@@ -1,173 +1,152 @@
-import json
-import os
-import sys
-from unittest.mock import MagicMock, patch
+"""Tests for litellm_core_utils.core_helpers module."""
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
 from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,
-    safe_divide,
-    safe_deep_copy
-) 
+    _FINISH_REASON_MAP,
+    map_finish_reason,
+    reconstruct_model_name,
+)
 
 
-def test_get_litellm_metadata_from_kwargs():
-    kwargs = {
-        "litellm_params": {
-            "litellm_metadata": {},
-            "metadata": {"user_api_key": "1234567890"},
-        },
-    }
-    assert get_litellm_metadata_from_kwargs(kwargs) == {"user_api_key": "1234567890"}
+def test_reconstruct_model_name_prefers_deployment_value():
+    """Ensure deployment metadata wins when reconstructing the model name."""
 
+    metadata = {"deployment": "vertex_ai/gemini-1.5-flash"}
 
-def test_add_missing_spend_metadata_to_litellm_metadata():
-    litellm_metadata = {"test_key": "test_value"}
-    metadata = {"user_api_key_hash_value": "1234567890"}
-    kwargs = {
-        "litellm_params": {
-            "litellm_metadata": litellm_metadata,
-            "metadata": metadata,
-        },
-    }
-    assert get_litellm_metadata_from_kwargs(kwargs) == {
-        "test_key": "test_value",
-        "user_api_key_hash_value": "1234567890",
-    }
-
-
-def test_preserve_upstream_non_openai_attributes():
-    from litellm.litellm_core_utils.core_helpers import (
-        preserve_upstream_non_openai_attributes,
-    )
-    from litellm.types.utils import ModelResponseStream
-
-    model_response = ModelResponseStream(
-        id="123",
-        object="text_completion",
-        created=1715811200,
-        model="gpt-3.5-turbo",
+    result = reconstruct_model_name(
+        model_name="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        metadata=metadata,
     )
 
-    setattr(model_response, "test_key", "test_value")
-    preserve_upstream_non_openai_attributes(
-        model_response=ModelResponseStream(),
-        original_chunk=model_response,
+    assert result == "vertex_ai/gemini-1.5-flash"
+
+
+def test_reconstruct_model_name_adds_bedrock_prefix_when_missing():
+    """Bedrock model names without prefixes should gain the provider prefix."""
+
+    metadata = {}
+
+    result = reconstruct_model_name(
+        model_name="us.anthropic.claude-3-sonnet",
+        custom_llm_provider="bedrock",
+        metadata=metadata,
     )
 
-    assert model_response.test_key == "test_value"
+    assert result == "bedrock/us.anthropic.claude-3-sonnet"
 
 
-def test_safe_divide_basic():
-    """Test basic safe division functionality"""
-    # Normal division
-    result = safe_divide(10, 2)
-    assert result == 5.0, f"Expected 5.0, got {result}"
-    
-    # Division with float
-    result = safe_divide(7.5, 2.5)
-    assert result == 3.0, f"Expected 3.0, got {result}"
-    
-    # Division by zero with default
-    result = safe_divide(10, 0)
-    assert result == 0, f"Expected 0, got {result}"
-    
-    # Division by zero with custom default
-    result = safe_divide(10, 0, default=1)
-    assert result == 1, f"Expected 1, got {result}"
-    
-    # Division by zero with custom default as float
-    result = safe_divide(10, 0, default=0.5)
-    assert result == 0.5, f"Expected 0.5, got {result}"
+def test_reconstruct_model_name_returns_original_for_other_providers():
+    """Non-Bedrock providers should not prepend anything."""
+
+    metadata = {}
+
+    result = reconstruct_model_name(
+        model_name="claude-3-sonnet",
+        custom_llm_provider="anthropic",
+        metadata=metadata,
+    )
+
+    assert result == "claude-3-sonnet"
 
 
-def test_safe_divide_edge_cases():
-    """Test edge cases for safe division"""
-    # Zero numerator
-    result = safe_divide(0, 5)
-    assert result == 0.0, f"Expected 0.0, got {result}"
-    
-    # Negative numbers
-    result = safe_divide(-10, 2)
-    assert result == -5.0, f"Expected -5.0, got {result}"
-    
-    # Negative denominator
-    result = safe_divide(10, -2)
-    assert result == -5.0, f"Expected -5.0, got {result}"
-    
-    # Both negative
-    result = safe_divide(-10, -2)
-    assert result == 5.0, f"Expected 5.0, got {result}"
-    
-    # Float division
-    result = safe_divide(1, 3)
-    assert abs(result - 0.3333333333333333) < 1e-10, f"Expected ~0.333..., got {result}"
+# ---------------------------------------------------------------------------
+# map_finish_reason tests
+# ---------------------------------------------------------------------------
+
+VALID_OPENAI_FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", "content_filter"}
 
 
-def test_safe_divide_weight_scenario():
-    """Test safe division in the context of weight calculations"""
-    # Simulate weight calculation scenario
-    weights = [3, 7, 0, 2]
-    total_weight = sum(weights)  # 12
-    
-    # Normal case
-    normalized_weights = [safe_divide(w, total_weight) for w in weights]
-    expected = [0.25, 7/12, 0.0, 1/6]
-    
-    for i, (actual, exp) in enumerate(zip(normalized_weights, expected)):
-        assert abs(actual - exp) < 1e-10, f"Weight {i}: Expected {exp}, got {actual}"
-    
-    # Zero total weight scenario (division by zero)
-    zero_weights = [0, 0, 0]
-    zero_total = sum(zero_weights)  # 0
-    
-    # Should return default values (0) for all weights
-    normalized_zero_weights = [safe_divide(w, zero_total) for w in zero_weights]
-    expected_zero = [0, 0, 0]
-    
-    assert normalized_zero_weights == expected_zero, f"Expected {expected_zero}, got {normalized_zero_weights}"
+class TestMapFinishReasonAnthropic:
+    @pytest.mark.parametrize(
+        "provider_reason,expected",
+        [
+            ("stop_sequence", "stop"),
+            ("end_turn", "stop"),
+            ("max_tokens", "length"),
+            ("tool_use", "tool_calls"),
+            ("compaction", "length"),
+            ("content_filtered", "content_filter"),
+        ],
+    )
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
+        assert map_finish_reason(provider_reason) == expected
+
+    def test_refusal(self):
+        assert map_finish_reason("refusal") == "content_filter"
 
 
-def test_safe_deep_copy_with_non_pickleables_and_span():
-    """
-    Verify safe_deep_copy:
-    - does not crash when non-pickleables are present,
-    - preserves structure/keys,
-    - deep-copies JSON-y payloads (e.g., messages),
-    - keeps non-pickleables by reference,
-    - redacts OTEL span in the copy and restores it in the original.
-    """
-    import threading
-    rlock = threading.RLock()
-    data = {
-        "metadata": {"litellm_parent_otel_span": rlock, "x": 1},
-        "messages": [{"role": "user", "content": "hi"}],
-        "optional_params": {"handle": rlock},
-        "ok": True,
-    }
+class TestMapFinishReasonGemini:
+    @pytest.mark.parametrize(
+        "gemini_reason,expected",
+        [
+            ("STOP", "stop"),
+            ("MAX_TOKENS", "length"),
+            ("SAFETY", "content_filter"),
+            ("RECITATION", "content_filter"),
+            ("FINISH_REASON_UNSPECIFIED", "stop"),
+            ("MALFORMED_FUNCTION_CALL", "stop"),
+            ("LANGUAGE", "content_filter"),
+            ("OTHER", "content_filter"),
+            ("BLOCKLIST", "content_filter"),
+            ("PROHIBITED_CONTENT", "content_filter"),
+            ("SPII", "content_filter"),
+            ("IMAGE_SAFETY", "content_filter"),
+            ("IMAGE_PROHIBITED_CONTENT", "content_filter"),
+            ("TOO_MANY_TOOL_CALLS", "stop"),
+            ("MALFORMED_RESPONSE", "stop"),
+        ],
+    )
+    def test_gemini_finish_reasons(self, gemini_reason, expected):
+        assert map_finish_reason(gemini_reason) == expected
 
-    copied = safe_deep_copy(data)
 
-    # Structure preserved
-    assert set(copied.keys()) == set(data.keys())
+class TestMapFinishReasonCohere:
+    def test_complete(self):
+        assert map_finish_reason("COMPLETE") == "stop"
 
-    # Messages are deep-copied (new object, same content)
-    assert copied["messages"] is not data["messages"]
-    assert copied["messages"][0] == data["messages"][0]
+    def test_error_toxic(self):
+        assert map_finish_reason("ERROR_TOXIC") == "content_filter"
 
-    # Non-pickleable subtree kept by reference (no crash)
-    assert copied["optional_params"] is data["optional_params"]
-    assert copied["optional_params"]["handle"] is rlock
+    def test_error(self):
+        assert map_finish_reason("ERROR") == "stop"
 
-    # OTEL span: redacted in the copy, restored in original
-    assert copied["metadata"]["litellm_parent_otel_span"] == "placeholder"
-    assert data["metadata"]["litellm_parent_otel_span"] is rlock
 
-    # Other simple fields unchanged
-    assert copied["ok"] is True
-    assert copied["metadata"]["x"] == 1
+class TestMapFinishReasonHuggingFace:
+    def test_eos_token(self):
+        assert map_finish_reason("eos_token") == "stop"
+
+    def test_eos(self):
+        assert map_finish_reason("eos") == "stop"
+
+
+class TestMapFinishReasonBedrock:
+    def test_guardrail_intervened(self):
+        assert map_finish_reason("guardrail_intervened") == "content_filter"
+
+
+class TestMapFinishReasonOpenAIPassthrough:
+    @pytest.mark.parametrize(
+        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
+    )
+    def test_openai_values_pass_through(self, reason):
+        assert map_finish_reason(reason) == reason
+
+
+class TestMapFinishReasonUnknown:
+    def test_unknown_value_defaults_to_stop(self):
+        assert map_finish_reason("some_unknown_value") == "stop"
+
+    def test_empty_string_defaults_to_stop(self):
+        assert map_finish_reason("") == "stop"
+
+
+class TestFinishReasonMapOutputsAreValid:
+    def test_all_mapped_values_are_valid_openai_reasons(self):
+        """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
+        for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
+            assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
+                f"is not a valid OpenAI finish reason"
+            )

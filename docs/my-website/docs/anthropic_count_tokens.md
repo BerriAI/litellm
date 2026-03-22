@@ -92,6 +92,7 @@ model_list:
       model: vertex_ai/claude-3-5-sonnet-v2@20241022
       vertex_project: my-project
       vertex_location: us-east5
+      vertex_count_tokens_location: us-east5 # Optional: Override location for token counting (count_tokens not available on global location)
 
   - model_name: claude-bedrock
     litellm_params:
@@ -137,6 +138,7 @@ The `/v1/messages/count_tokens` endpoint automatically routes to the appropriate
 | Provider | Token Counting Method |
 |----------|----------------------|
 | Anthropic | [Anthropic Token Counting API](https://docs.anthropic.com/en/docs/build-with-claude/token-counting) |
+| OpenAI | [OpenAI Responses API `/input_tokens`](https://platform.openai.com/docs/api-reference/responses/input-tokens) — see [Token Counting](./count_tokens.md) |
 | Vertex AI (Claude) | Vertex AI Partner Models Token Counter |
 | Bedrock (Claude) | AWS Bedrock CountTokens API |
 | Gemini | Google AI Studio countTokens API |

@@ -114,6 +114,107 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Here's how to use `thinking` blocks by Anthropic with tool calling.
 
+### Important: OpenAI-Compatible API Limitations
+
+:::warning Compatibility Notice
+
+Anthropic extended thinking with tool calling is **not fully compatible** with OpenAI-compatible API clients. This is due to fundamental architectural differences between how OpenAI and Anthropic handle reasoning in multi-turn conversations.
+
+:::
+
+When using Anthropic models with `thinking` enabled and tool calling, you **must include `thinking_blocks`** from the previous assistant response when sending tool results back. Failure to do so will result in a `400 Bad Request` error.
+
+**OpenAI vs Anthropic Architecture:**
+
+| Provider | API Architecture | Reasoning Storage | Multi-turn Handling |
+|----------|------------------|-------------------|---------------------|
+| **OpenAI** (o1, o3) | Responses API (Stateful) | Server-side | Server stores reasoning internally; client sends `previous_response_id` |
+| **Anthropic** (Claude) | Messages API (Stateless) | Client-side | Client must store and resend `thinking_blocks` with every request |
+
+
+1. OpenAI's Chat Completions spec has **no field** for `thinking_blocks`
+2. OpenAI-compatible clients (LibreChat, Open WebUI, Vercel AI SDK, etc.) **ignore** the `thinking_blocks` field in responses
+3. When these clients reconstruct the assistant message for the next turn, the thinking blocks are lost
+4. Anthropic rejects the request because the assistant message doesn't start with a thinking block
+
+:::tip LiteLLM supports thinking_blocks
+LiteLLM's `completion()` API **does support** sending `thinking_blocks` in assistant messages. If you're using LiteLLM directly (not through an OpenAI-compatible client), you can preserve and resend `thinking_blocks` and everything will work correctly.
+:::
+
+**Solutions:**
+
+1. **Use LiteLLM's built-in workaround** (recommended): Set `litellm.modify_params = True` and LiteLLM will automatically handle this incompatibility by dropping the `thinking` param when `thinking_blocks` are missing (see below)
+2. **For client developers**: Explicitly handle and resend the `thinking_blocks` field (see example below)
+3. **Disable extended thinking** when using tools with OpenAI-compatible clients that don't support `thinking_blocks`
+4. **Use Anthropic's native API** directly instead of OpenAI-compatible endpoints
+
+### LiteLLM Built-in Workaround
+
+LiteLLM can automatically handle this incompatibility when `modify_params=True` is set. If the client sends a request with `thinking` enabled but the assistant message with `tool_calls` is missing `thinking_blocks`, LiteLLM will automatically drop the `thinking` param for that turn to avoid the error.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+import litellm
+
+# Enable automatic parameter modification
+litellm.modify_params = True
+
+# Now this will work even if thinking_blocks are missing from the assistant message
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    tools=[...],
+    messages=[
+        {"role": "user", "content": "What's the weather in Madrid?"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Madrid"}'}}]
+            # Note: thinking_blocks is missing here - LiteLLM will handle it
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "22°C sunny"}
+    ]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  modify_params: true  # Enable automatic parameter modification
+
+model_list:
+  - model_name: claude-thinking
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      thinking:
+        type: enabled
+        budget_tokens: 1024
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When `modify_params=True` and LiteLLM drops the `thinking` param, the model will **not** use extended thinking for that specific turn. The conversation will continue normally, but without reasoning for that response.
+:::
+
+**Correct way to include `thinking_blocks`:**
+
+```python
+# After receiving a response with tool_calls, include thinking_blocks when sending back:
+assistant_message = {
+    "role": "assistant",
+    "content": response.choices[0].message.content,
+    "tool_calls": [...],
+    "thinking_blocks": response.choices[0].message.thinking_blocks  # ← Required!
+}
+```
+
+---
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -490,3 +591,178 @@ Expected Response
 
 </TabItem>
 </Tabs>
+
+:::tip gpt-5.4: reasoning_effort + function tools
+
+When `gpt-5.4+` requests to `litellm.completion()` include both `reasoning_effort` and `tools`, LiteLLM **automatically routes** the request through the Responses API bridge. This works for both **OpenAI** (`openai/gpt-5.4`) and **Azure** (`azure/gpt-5.4`) providers — no extra configuration needed.
+
+You can also route explicitly via `openai/responses/gpt-5.4` or `azure/responses/gpt-5.4`. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+**Azure custom deployment names:** Auto-routing relies on the deployment name matching the `gpt-5.4*` pattern. If you use a custom deployment name (e.g. `"my-reasoning-model"`), enable routing via:
+
+**SDK:**
+```python
+litellm.completion(model="azure/responses/my-reasoning-model", ...)
+```
+
+**Proxy config:**
+```yaml
+model_list:
+  - model_name: my-reasoning-model
+    litellm_params:
+      model: azure/my-reasoning-model
+    model_info:
+      mode: responses
+```
+
+:::
+
+## OpenAI Responses API - Auto-Summary Control
+
+When using OpenAI Responses API models (like `gpt-5`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.
+
+### Enabling Auto-Summary
+
+You can enable automatic `summary="detailed"` in two ways:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Enable auto-summary globally
+litellm.reasoning_auto_summary = True
+
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",  # Will automatically add summary="detailed"
+)
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+# Set environment variable
+export LITELLM_REASONING_AUTO_SUMMARY=true
+
+# Or in your .env file
+LITELLM_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+litellm_settings:
+  reasoning_auto_summary: true  # Enable auto-summary for all requests
+
+model_list:
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: openai/responses/gpt-5-mini
+```
+
+**Per-model configuration** (recommended when using Open WebUI or clients that cannot set `extra_body`):
+
+```yaml
+model_list:
+  - model_name: gpt-5.1
+    litellm_params:
+      model: openai/gpt-5.1
+      # String format - uses reasoning_auto_summary for summary when set
+      reasoning_effort: "high"
+    model_info:
+      mode: responses  # if using Responses API bridge
+
+  - model_name: gpt-5.1-with-summary
+    litellm_params:
+      model: openai/gpt-5.1
+      # Dict format - explicit control over effort and summary
+      reasoning_effort: {"effort": "high", "summary": "detailed"}
+```
+
+</TabItem>
+</Tabs>
+
+### Manual Control (Recommended)
+
+For fine-grained control, pass `reasoning_effort` as a dictionary:
+
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
+)
+```
+
+### Summary Preservation via `/v1/messages` Adapter
+
+When using the Anthropic `/v1/messages` adapter to route non-Claude models (e.g., `openai/gpt-5.1`), the `thinking.summary` value is preserved and forwarded to the downstream provider. For example:
+
+```python
+import litellm
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000, "summary": "concise"},
+)
+# The summary="concise" is preserved when routing to OpenAI's Responses API
+```
+
+### Enabling Default Summary Injection for `/v1/messages` Adapter
+
+When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, you can opt-in to automatic `summary="detailed"` injection using the `reasoning_auto_summary` flag. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
+
+To **enable** this default injection, use the `reasoning_auto_summary` flag:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Enable default summary="detailed" injection
+litellm.reasoning_auto_summary = True
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000},
+)
+# summary="detailed" will be automatically added to reasoning_effort
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+export LITELLM_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+litellm_settings:
+  reasoning_auto_summary: true
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+This flag only affects the automatic injection of `summary="detailed"` when no user-provided summary is present. If you explicitly pass `thinking.summary` (e.g., `"concise"` or `"auto"`), your value is always preserved regardless of this flag.
+
+:::

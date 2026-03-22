@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._types import PassThroughGuardrailSettings
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -118,8 +119,13 @@ class PassThroughEndpointHandler(BaseTranslation):
             return data
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
+        # Include model information if available
+        model = data.get("model")
+        if model:
+            inputs["model"] = model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [text_to_check]},
+            inputs=inputs,
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
@@ -178,8 +184,13 @@ class PassThroughEndpointHandler(BaseTranslation):
             request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
+        # Include model information from the response if available
+        response_model = response.get("model") if isinstance(response, dict) else None
+        if response_model:
+            inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [text_to_check]},
+            inputs=inputs,
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,

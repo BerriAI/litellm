@@ -31,14 +31,16 @@ from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
-    Batch,
     CancelBatchRequest,
     CreateBatchRequest,
+    FileExpiresAfter,
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
 )
@@ -107,10 +109,13 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -132,6 +137,7 @@ async def acreate_batch(
             metadata,
             extra_headers,
             extra_body,
+            output_expires_after,
             **kwargs,
         )
 
@@ -151,14 +157,17 @@ async def acreate_batch(
 
 
 @client
-def create_batch(
+def create_batch(  # noqa: PLR0915
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
+    output_expires_after: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
@@ -190,7 +199,8 @@ def create_batch(
         )
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=None,
             optional_params=optional_params.model_dump(),
@@ -198,7 +208,6 @@ def create_batch(
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),
@@ -214,6 +223,10 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
+        if output_expires_after is not None:
+            _create_batch_request["output_expires_after"] = cast(
+                FileExpiresAfter, output_expires_after
+            )
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
@@ -357,7 +370,9 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -403,7 +418,10 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"
+    ] = "openai",
+    logging_obj: Optional[Any] = None,
 ):
     api_base: Optional[str] = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
@@ -499,12 +517,14 @@ def _handle_retrieve_batch_providers_without_provider_config(
             vertex_credentials=vertex_credentials,
             timeout=timeout,
             max_retries=optional_params.max_retries,
+            logging_obj=logging_obj,
         )
     elif custom_llm_provider == "anthropic":
         api_base = (
             optional_params.api_base
             or litellm.api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
         )
         api_key = (
             optional_params.api_key
@@ -540,7 +560,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -563,7 +585,8 @@ def retrieve_batch(
             **kwargs,
         )
         if litellm_logging_obj is not None:
-            litellm_logging_obj.update_environment_variables(
+            litellm_logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 user=None,
                 optional_params=optional_params.model_dump(),
@@ -662,6 +685,7 @@ def retrieve_batch(
             _retrieve_batch_request=_retrieve_batch_request,
             _is_async=_is_async,
             timeout=timeout,
+            logging_obj=litellm_logging_obj,
         )
 
     except Exception as e:
@@ -672,7 +696,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
+    custom_llm_provider: ListBatchesSupportedProvider = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -715,7 +739,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "vertex_ai"] = "openai",
+    custom_llm_provider: ListBatchesSupportedProvider = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -841,8 +865,9 @@ def list_batches(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: openai, azure, vertex_ai.".format(
-                    custom_llm_provider
+                message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: {}.".format(
+                    custom_llm_provider,
+                    ", ".join(sorted(LIST_BATCHES_SUPPORTED_PROVIDERS)),
                 ),
                 model="n/a",
                 llm_provider=custom_llm_provider,
@@ -860,12 +885,12 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Cancels a batch.
 
@@ -874,7 +899,9 @@ async def acancel_batch(
     try:
         loop = asyncio.get_event_loop()
         kwargs["acancel_batch"] = True
-        model = kwargs.pop("model", None)
+        # Preserve model parameter - only pop from kwargs if it exists there
+        # (to avoid passing it twice), otherwise keep the function parameter value
+        model = kwargs.pop("model", None) or model
 
         # Use a partial function to pass your keyword arguments
         func = partial(
@@ -904,19 +931,18 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
     Cancels a batch.
 
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
-
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(
@@ -1022,9 +1048,35 @@ def cancel_batch(
                 cancel_batch_data=_cancel_batch_request,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or None
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -1084,25 +1136,40 @@ def _handle_async_invoke_status(
             "inprogress": "in_progress",
             "in_progress": "in_progress",
         }
-        normalized_status: BatchJobStatus = status_mapping.get(aws_status_lower, "failed")  # Default to "failed" if unknown status
+        normalized_status: BatchJobStatus = status_mapping.get(
+            aws_status_lower, "failed"
+        )  # Default to "failed" if unknown status
 
         # Get output S3 URI safely
         output_s3_uri = ""
         try:
-            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
+            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"][
+                "s3Uri"
+            ]
         except (KeyError, TypeError):
             pass
-        
+
         # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
         import time
 
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
-        created_at, in_progress_at, completed_at, failed_at, _, _ = BedrockBatchesConfig()._parse_timestamps_and_status(status_response, aws_status_raw)
+
+        (
+            created_at,
+            in_progress_at,
+            completed_at,
+            failed_at,
+            _,
+            _,
+        ) = BedrockBatchesConfig()._parse_timestamps_and_status(
+            status_response, aws_status_raw
+        )
         result = LiteLLMBatch(
             id=status_response["invocationArn"],
             object="batch",
             status=normalized_status,
-            created_at=created_at or int(time.time()),  # Provide default timestamp if None
+            created_at=created_at
+            or int(time.time()),  # Provide default timestamp if None
             in_progress_at=in_progress_at,
             completed_at=completed_at,
             failed_at=failed_at,

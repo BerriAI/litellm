@@ -282,6 +282,8 @@ async def get_vector_store_info(
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
                     litellm_params=vector_store.get("litellm_params") or None,
+                    team_id=vector_store.get("team_id"),
+                    user_id=vector_store.get("user_id"),
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 

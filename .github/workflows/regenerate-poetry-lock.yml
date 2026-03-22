@@ -1,0 +1,80 @@
+name: Regenerate poetry.lock
+
+# Runs whenever pyproject.toml is merged into main (the most common cause of
+# the "pyproject.toml changed significantly since poetry.lock was last generated"
+# CI failure).  Can also be triggered manually.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: write       # needed to push the auto/regenerate-poetry-lock-* branch
+  pull-requests: write  # needed to open the PR and enable auto-merge
+
+jobs:
+  regenerate-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Regenerate poetry.lock
+        run: poetry lock
+
+      - name: Check whether poetry.lock actually changed
+        id: diff
+        run: |
+          if git diff --quiet poetry.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR with the refreshed lock file
+        if: steps.diff.outputs.changed == 'true'
+        id: open-pr
+        run: |
+          BRANCH="auto/regenerate-poetry-lock-$(date +'%Y%m%d%H%M%S')"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add poetry.lock
+          git commit -m "chore: regenerate poetry.lock to match pyproject.toml"
+          git push -f origin "$BRANCH"
+
+          cat > /tmp/pr-body.md << 'BODY'
+          Automated regeneration of `poetry.lock` after `pyproject.toml` was updated on `main`.
+
+          Fixes the recurring CI failure:
+          ```
+          pyproject.toml changed significantly since poetry.lock was last generated.
+          Run `poetry lock` to fix the lock file.
+          ```
+          BODY
+
+          PR_URL=$(gh pr create \
+            --title "chore: regenerate poetry.lock to match pyproject.toml" \
+            --body-file /tmp/pr-body.md \
+            --head "$BRANCH" \
+            --base main)
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Enable auto-merge
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          gh pr merge "${{ steps.open-pr.outputs.pr_url }}" --auto --squash
+        env:
+          GH_TOKEN: ${{ github.token }}

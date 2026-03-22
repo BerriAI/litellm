@@ -24,7 +24,7 @@ class BaseImageGenerationConfig(ABC):
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         pass
-    
+
     @abstractmethod
     def map_openai_params(
         self,
@@ -34,7 +34,6 @@ class BaseImageGenerationConfig(ABC):
         drop_params: bool,
     ) -> dict:
         pass
-
 
     def get_complete_url(
         self,
@@ -103,3 +102,11 @@ class BaseImageGenerationConfig(ABC):
         raise NotImplementedError(
             "ImageVariationConfig implements 'transform_response_image_variation' for image variation models"
         )
+
+    def use_multipart_form_data(self) -> bool:
+        """
+        Returns True if this provider requires multipart/form-data instead of JSON.
+
+        Override this method in subclasses that need form-data (e.g., Stability AI).
+        """
+        return False

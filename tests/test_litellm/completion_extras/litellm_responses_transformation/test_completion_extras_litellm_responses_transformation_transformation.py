@@ -119,7 +119,9 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
             function_call_output = item
             break
 
-    assert function_call_output is not None, "function_call_output not found in response"
+    assert (
+        function_call_output is not None
+    ), "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed
@@ -129,11 +131,95 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
     image_item = output[0]
     # Should be transformed to Responses API format
-    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
-    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
+    assert (
+        image_item["type"] == "input_image"
+    ), f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert (
+        image_item["image_url"] == test_image_base64
+    ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
     print("✓ Tool result with image correctly transformed to Responses API format")
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
+    """
+    Test that tool messages with text content are correctly transformed to Responses API format.
+
+    This is a regression test for the issue where tool results were being transformed
+    with type='output_text' instead of type='input_text', which caused OpenAI's Responses API
+    to reject the request with "Invalid value: 'output_text'".
+
+    Chat Completion format:
+        {"role": "tool", "tool_call_id": "call_abc123", "content": "15 degrees"}
+
+    Responses API format should use input_text, not output_text:
+        {"type": "function_call_output", "call_id": "call_abc123", "output": [{"type": "input_text", "text": "15 degrees"}]}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Chat Completion format with tool result containing text
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the weather like in San Francisco?",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "San Francisco, CA", "unit": "celsius"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": "15 degrees",
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert (
+        function_call_output is not None
+    ), "function_call_output not found in response"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # Check that the output is correctly transformed to use input_text, not output_text
+    output = function_call_output["output"]
+    assert isinstance(output, list), "output should be a list"
+    assert len(output) == 1, "output should have one item"
+
+    text_item = output[0]
+    # Should be transformed to use input_text for tool results in Responses API format
+    assert (
+        text_item["type"] == "input_text"
+    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
+    assert (
+        text_item["text"] == "15 degrees"
+    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
+
+    print(
+        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
+    )
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -174,6 +260,7 @@ def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -183,10 +270,12 @@ def test_chunk_parser_string_output_text_delta_produces_text():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["text"] == "literal text"
-    assert result.get("tool_use") is None
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.content == "literal text"
+    assert choice.delta.tool_calls is None
+    assert choice.finish_reason is None
 
 
 def test_chunk_parser_enum_output_text_delta_produces_text():
@@ -194,6 +283,7 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -203,10 +293,12 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["text"] == "enum text"
-    assert result.get("tool_use") is None
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.content == "enum text"
+    assert choice.delta.tool_calls is None
+    assert choice.finish_reason is None
 
 
 def test_chunk_parser_function_call_added_produces_tool_use():
@@ -214,6 +306,7 @@ def test_chunk_parser_function_call_added_produces_tool_use():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -227,14 +320,17 @@ def test_chunk_parser_function_call_added_produces_tool_use():
 
     result = iterator.chunk_parser(chunk)
 
-    tool_use = result["tool_use"]
-    assert tool_use is not None
-    assert tool_use["id"] == "call-42"
-    assert tool_use["type"] == "function"
-    assert tool_use["function"]["name"] == "fn"
-    assert tool_use["function"]["arguments"] == '{"key": "value"}'
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.tool_calls is not None
+    assert len(choice.delta.tool_calls) == 1
+    tool_call = choice.delta.tool_calls[0]
+    assert tool_call.id == "call-42"
+    assert tool_call.type == "function"
+    assert tool_call.function.name == "fn"
+    assert tool_call.function.arguments == '{"key": "value"}'
+    assert choice.finish_reason is None
 
 
 def test_transform_response_with_reasoning_and_output():
@@ -527,7 +623,9 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+    print(
+        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
+    )
 
 
 # =============================================================================
@@ -553,14 +651,17 @@ def test_message_done_does_not_emit_is_finished():
 
     chunk = {
         "type": "response.output_item.done",
-        "item": {"type": "message", "content": []}
+        "item": {"type": "message", "content": []},
     }
 
     result = iterator.chunk_parser(chunk)
 
-    # After the fix, message completion should NOT set is_finished=True
-    assert result["is_finished"] == False, "message completion should not emit is_finished=True"
-    assert result["finish_reason"] == "", "message completion should not emit finish_reason"
+    # After the fix, message completion should NOT set finish_reason
+    # ModelResponseStream doesn't have is_finished - check finish_reason instead
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason is None or result.choices[0].finish_reason == ""
+    ), "message completion should not emit finish_reason"
 
 
 def test_response_completed_emits_is_finished():
@@ -580,14 +681,165 @@ def test_response_completed_emits_is_finished():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["is_finished"] == True, "response.completed should emit is_finished=True"
-    assert result["finish_reason"] == "stop", "response.completed should emit finish_reason='stop'"
+    # response.completed should emit finish_reason='stop'
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason == "stop"
+    ), "response.completed should emit finish_reason='stop'"
+
+
+def test_response_completed_with_function_calls_emits_tool_calls_finish_reason():
+    """
+    Test that response.completed with function_call items in output emits finish_reason='tool_calls'.
+
+    This is a regression test for an issue where response.completed always returned
+    finish_reason='stop' even when the response contained tool calls, causing agents
+    like OpenCode to incorrectly conclude the stream ended without tools to execute.
+
+    When the response.completed event includes function_call items in its output,
+    the finish_reason should be 'tool_calls' to signal the client that tools need
+    to be executed.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    # Simulate a response.completed event with function_call in output
+    # This matches what Azure/OpenAI sends for gpt-5.1-codex-mini and similar models
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_123",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "call_abc123",
+                    "call_id": "call_abc123",
+                    "name": "read_file",
+                    "arguments": '{"path": "/tmp/test.py"}',
+                    "status": "completed",
+                }
+            ],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # response.completed with function_call should emit finish_reason='tool_calls'
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason == "tool_calls"
+    ), "response.completed with function_call output should emit finish_reason='tool_calls'"
+
+
+def test_response_completed_with_message_only_emits_stop_finish_reason():
+    """
+    Test that response.completed with only message output (no function_call) emits finish_reason='stop'.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    # Simulate a response.completed event with only message output
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_456",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_xyz",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello, world!"}],
+                    "status": "completed",
+                }
+            ],
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # response.completed with only message should emit finish_reason='stop'
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason == "stop"
+    ), "response.completed with only message output should emit finish_reason='stop'"
+
+
+def test_response_completed_preserves_usage_with_cached_tokens():
+    """
+    Test that response.completed correctly translates Responses API usage
+    (input_tokens_details) to chat completion usage (prompt_tokens_details).
+
+    This is a regression test for an issue where streaming with models that
+    use the Responses API bridge (e.g. gpt-5.2-codex) would drop
+    prompt_tokens_details, causing cached_tokens to always be None.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_789",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_abc",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Six"}],
+                    "status": "completed",
+                }
+            ],
+            "usage": {
+                "input_tokens": 1226,
+                "output_tokens": 5,
+                "total_tokens": 1231,
+                "input_tokens_details": {"cached_tokens": 1024},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None, "usage should be set on response.completed chunk"
+    assert (
+        result.usage.prompt_tokens == 1226
+    ), "prompt_tokens should map from input_tokens"
+    assert (
+        result.usage.completion_tokens == 5
+    ), "completion_tokens should map from output_tokens"
+    assert (
+        result.usage.prompt_tokens_details is not None
+    ), "prompt_tokens_details should be set"
+    assert (
+        result.usage.prompt_tokens_details.cached_tokens == 1024
+    ), "cached_tokens should be preserved from input_tokens_details"
 
 
 def test_function_call_done_emits_is_finished():
     """
-    Test that OUTPUT_ITEM_DONE for a function_call still emits is_finished=True.
-    This preserves existing behavior for tool_calls.
+    Test that OUTPUT_ITEM_DONE for a function_call does NOT emit finish_reason.
+    The response.completed event handles the terminal finish_reason correctly.
+    Emitting finish_reason here would prematurely terminate the stream in multi-tool
+    scenarios (same fix as #17246 for the message-type branch).
     """
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -603,15 +855,21 @@ def test_function_call_done_emits_is_finished():
             "type": "function_call",
             "name": "get_weather",
             "call_id": "call_123",
-            "arguments": '{"location": "Tokyo"}'
-        }
+            "arguments": '{"location": "Tokyo"}',
+        },
     }
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["is_finished"] == True, "function_call completion should emit is_finished=True"
-    assert result["finish_reason"] == "tool_calls", "function_call should emit finish_reason='tool_calls'"
-    assert result["tool_use"] is not None, "function_call should include tool_use"
+    # function_call completion should NOT emit finish_reason — response.completed handles it
+    assert len(result.choices) > 0, "result should have choices"
+    assert result.choices[0].finish_reason is None, (
+        "output_item.done for function_call must not emit finish_reason; "
+        "response.completed is responsible for the terminal finish_reason"
+    )
+    assert not result.choices[
+        0
+    ].delta.tool_calls, "output_item.done for function_call must not include a duplicate tool_calls delta"
 
 
 def test_text_plus_tool_calls_sequence():
@@ -634,24 +892,1295 @@ def test_text_plus_tool_calls_sequence():
     chunks = [
         {"type": "response.output_text.delta", "delta": "Hello"},
         {"type": "response.output_text.delta", "delta": "!"},
-        {"type": "response.output_item.done", "item": {"type": "message", "content": []}},  # message done
-        {"type": "response.output_item.added", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123"}},
-        {"type": "response.function_call_arguments.delta", "delta": '{"location":"Tokyo"}'},
-        {"type": "response.output_item.done", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123", "arguments": '{"location":"Tokyo"}'}},
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "message", "content": []},
+        },  # message done
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_123",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "delta": '{"location":"Tokyo"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_123",
+                "arguments": '{"location":"Tokyo"}',
+            },
+        },
         {"type": "response.completed"},
     ]
 
     results = [iterator.chunk_parser(chunk) for chunk in chunks]
 
-    # Check message done (index 2) does NOT have is_finished=True
+    # Check message done (index 2) does NOT have finish_reason set
     message_done_result = results[2]
-    assert message_done_result["is_finished"] == False, "message done should not have is_finished=True"
+    assert len(message_done_result.choices) > 0, "message done should have choices"
+    assert (
+        message_done_result.choices[0].finish_reason is None
+        or message_done_result.choices[0].finish_reason == ""
+    ), "message done should not have finish_reason"
 
-    # Check function_call done (index 5) DOES have is_finished=True
+    # Check function_call done (index 5) does NOT have finish_reason set
+    # (response.completed is responsible for the terminal finish_reason)
     function_done_result = results[5]
-    assert function_done_result["is_finished"] == True, "function_call done should have is_finished=True"
-    assert function_done_result["finish_reason"] == "tool_calls"
+    assert (
+        len(function_done_result.choices) > 0
+    ), "function_call done should have choices"
+    assert (
+        function_done_result.choices[0].finish_reason is None
+    ), "output_item.done for function_call must not emit finish_reason"
 
-    # Check response.completed (index 6) also has is_finished=True
+    # Check response.completed (index 6) has finish_reason='stop'
+    # (the mock chunk has no nested 'response' data, so has_function_calls is False → 'stop')
     completed_result = results[6]
-    assert completed_result["is_finished"] == True, "response.completed should have is_finished=True"
+    assert len(completed_result.choices) > 0, "response.completed should have choices"
+    assert (
+        completed_result.choices[0].finish_reason == "stop"
+    ), "response.completed should have finish_reason='stop'"
+
+
+# =============================================================================
+# Tests for issue #18201: Tool calls transformation fixes
+# =============================================================================
+
+
+def test_tool_message_output_uses_input_text_not_output_text():
+    """
+    Test that tool message content uses input_text type, not output_text.
+
+    This is a regression test for a bug where tool results were transformed to:
+        {"type": "function_call_output", "output": [{"type": "output_text", "text": "..."}]}
+
+    But the Responses API expects input_text for tool results:
+        {"type": "function_call_output", "output": [{"type": "input_text", "text": "..."}]}
+
+    The incorrect format caused OpenAI to reject with:
+        "Invalid value: 'output_text'. Supported values are: 'input_text', 'input_image', and 'input_file'."
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": '{"temperature": 15, "condition": "sunny"}',
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert function_call_output is not None, "function_call_output not found"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # The output should be a list with input_text type
+    output = function_call_output["output"]
+    assert isinstance(output, list), f"output should be a list, got {type(output)}"
+    assert len(output) == 1
+    assert (
+        output[0]["type"] == "input_text"
+    ), f"Expected input_text, got {output[0].get('type')}"
+    assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
+
+    print("✓ Tool message output correctly uses input_text type")
+
+
+def test_multiple_tool_calls_in_single_choice():
+    """
+    Test that multiple tool calls are grouped into a single choice.
+
+    This is a regression test for a bug where each tool call was put in its own
+    Choice with separate indices:
+        choices = [
+            {"index": 0, "message": {"tool_calls": [tc1]}},
+            {"index": 1, "message": {"tool_calls": [tc2]}},
+            {"index": 2, "message": {"tool_calls": [tc3]}},
+        ]
+
+    But Chat Completions API expects all tool calls in a single choice:
+        choices = [
+            {"index": 0, "message": {"tool_calls": [tc1, tc2, tc3]}},
+        ]
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseFunctionToolCall
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create multiple function tool calls (simulating parallel tool calls)
+    tool_call_1 = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"location": "Paris"}',
+        call_id="call_paris",
+        name="get_weather",
+    )
+    tool_call_2 = ResponseFunctionToolCall(
+        id="fc_2",
+        type="function_call",
+        status="completed",
+        arguments='{"location": "Tokyo"}',
+        call_id="call_tokyo",
+        name="get_weather",
+    )
+    tool_call_3 = ResponseFunctionToolCall(
+        id="fc_3",
+        type="function_call",
+        status="completed",
+        arguments='{"sign": "Leo"}',
+        call_id="call_horoscope",
+        name="get_horoscope",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=50,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=100,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=150,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-4o",
+        object="response",
+        output=[tool_call_1, tool_call_2, tool_call_3],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-4o",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-4o"},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly ONE choice
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.index == 0
+    assert choice.finish_reason == "tool_calls"
+
+    # That one choice should have ALL THREE tool calls
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 3, f"Expected 3 tool_calls, got {len(tool_calls)}"
+
+    # Verify each tool call
+    assert tool_calls[0]["id"] == "call_paris"
+    assert tool_calls[0]["function"]["name"] == "get_weather"
+
+    assert tool_calls[1]["id"] == "call_tokyo"
+    assert tool_calls[1]["function"]["name"] == "get_weather"
+
+    assert tool_calls[2]["id"] == "call_horoscope"
+    assert tool_calls[2]["function"]["name"] == "get_horoscope"
+
+    print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+def test_map_reasoning_effort_adds_summary_detailed():
+    """
+    Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
+
+    By default (flag=False), summary should NOT be added to avoid:
+    1. Breaking for users without verified OpenAI orgs (400 errors)
+    2. Making requests more expensive by including summary reasoning tokens
+
+    When flag is enabled (flag=True or env var), summary="detailed" is added.
+    """
+    import os
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+
+    # Save original flag value
+    original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
+
+    try:
+        # Test 1: Default behavior (flag=False, no env var) - NO summary
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert (
+                "summary" not in result
+            ), f"Summary should NOT be present by default for effort={effort}"
+
+            print(
+                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
+            )
+
+        # Test 2: With flag enabled - summary IS added
+        litellm.reasoning_auto_summary = True
+
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert (
+                result["summary"] == "detailed"
+            ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+
+            print(
+                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
+            )
+
+        # Test 3: With env var enabled (flag disabled) - summary IS added
+        litellm.reasoning_auto_summary = False
+        os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+
+        result = handler._map_reasoning_effort("high")
+        assert (
+            result["summary"] == "detailed"
+        ), "Summary should be 'detailed' when env var is enabled"
+        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
+
+        # Test 4: Dict input is passed through as-is (no modification)
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+        dict_input = {"effort": "high", "summary": "custom_summary"}
+        result_dict = handler._map_reasoning_effort(dict_input)
+        assert result_dict["effort"] == "high"
+        assert result_dict["summary"] == "custom_summary"
+        print("✓ Dict input is passed through without modification")
+
+        # Test 5: None/unknown values return None
+        result_unknown = handler._map_reasoning_effort("unknown_value")
+        assert result_unknown is None
+        print("✓ Unknown reasoning_effort values return None")
+
+        print(
+            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
+        )
+
+    finally:
+        # Restore original values
+        litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+
+def test_transform_response_preserves_annotations():
+    """
+    Test that annotations from Responses API are preserved when transforming to Chat Completions format.
+
+    This is a regression test for the bug where annotations (like url_citation) were being
+    dropped during the transformation from ResponsesAPIResponse to ModelResponse.
+
+    The fix ensures annotations are extracted from ResponseOutputText content items and
+    passed through to the Message object in the Chat Completions response.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create annotations similar to what OpenAI Responses API returns
+    annotations = [
+        {
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": 100,
+            "title": "Example Article",
+            "url": "https://example.com/article",
+        },
+        {
+            "type": "url_citation",
+            "start_index": 101,
+            "end_index": 200,
+            "title": "Another Source",
+            "url": "https://example.com/source",
+        },
+    ]
+
+    # Create output text with annotations
+    output_text = ResponseOutputText(
+        annotations=annotations,
+        text="Here is some information with citations.",
+        type="output_text",
+        logprobs=[],
+    )
+
+    # Create output message
+    output_message = ResponseOutputMessage(
+        id="msg_test123",
+        content=[output_text],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    # Create usage information
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
+        total_tokens=30,
+        cost=None,
+    )
+
+    # Create the full ResponsesAPIResponse
+    raw_response = ResponsesAPIResponse(
+        id="resp_test123",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.1",
+        object="response",
+        output=[output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "openai"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+
+    # Create empty model_response
+    model_response = ModelResponse(
+        id="chatcmpl-test123",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    # Create mock objects for required parameters
+    logging_obj = Mock()
+    messages = [{"role": "user", "content": "Tell me about AI"}]
+    request_data = {"model": "gpt-5.1"}
+    optional_params = {}
+    litellm_params = {"acompletion": False, "api_key": None}
+    encoding = Mock()
+
+    # Call transform_response
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data=request_data,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        encoding=encoding,
+        api_key=None,
+        json_mode=None,
+    )
+
+    # Assertions
+    assert result.model == "gpt-5.1"
+    assert len(result.choices) == 1
+
+    # Check the choice
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.index == 0
+    assert choice.message.role == "assistant"
+    assert choice.message.content == "Here is some information with citations."
+
+    # Check that annotations are preserved
+    assert hasattr(
+        choice.message, "annotations"
+    ), "Message should have annotations attribute"
+    assert choice.message.annotations is not None, "Annotations should not be None"
+    assert (
+        len(choice.message.annotations) == 2
+    ), f"Expected 2 annotations, got {len(choice.message.annotations)}"
+
+    # Verify annotation content
+    annotation1 = choice.message.annotations[0]
+    assert annotation1["type"] == "url_citation"
+    assert annotation1["title"] == "Example Article"
+    assert annotation1["url"] == "https://example.com/article"
+    assert annotation1["start_index"] == 0
+    assert annotation1["end_index"] == 100
+
+    annotation2 = choice.message.annotations[1]
+    assert annotation2["type"] == "url_citation"
+    assert annotation2["title"] == "Another Source"
+    assert annotation2["url"] == "https://example.com/source"
+    assert annotation2["start_index"] == 101
+    assert annotation2["end_index"] == 200
+
+    # Check usage
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 20
+    assert result.usage.total_tokens == 30
+
+    print(
+        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
+    )
+
+
+def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
+    """
+    Test that ResponseApplyPatchToolCall items from the Responses API are
+    correctly converted to ChatCompletions-style tool calls by the bridge.
+
+    This is a regression test for a bug where litellm.completion() with a
+    responses/ model prefix crashed when the model returned an
+    apply_patch_call, because _convert_response_output_to_choices did not
+    handle ResponseApplyPatchToolCall items. The model DID use the tool,
+    but the bridge silently dropped it (or raised an error), while the
+    native litellm.responses() path worked correctly.
+    """
+    pytest.importorskip("openai.types.responses.response_apply_patch_tool_call")
+
+    import json
+    from unittest.mock import Mock
+
+    from openai.types.responses.response_apply_patch_tool_call import (
+        OperationCreateFile,
+    )
+    from openai.types.responses.response_output_item import (
+        ResponseApplyPatchToolCall,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Build an apply_patch_call item like the model would return
+    operation = OperationCreateFile(
+        diff="--- /dev/null\n+++ b/hello.py\n@@ -0,0 +1 @@\n+print('hello world')\n",
+        path="hello.py",
+        type="create_file",
+    )
+    apply_patch_item = ResponseApplyPatchToolCall(
+        id="apc_001",
+        call_id="call_patch_hello",
+        operation=operation,
+        status="completed",
+        type="apply_patch_call",
+    )
+
+    # Minimal usage
+    usage = ResponseAPIUsage(
+        input_tokens=30,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=40,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=70,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_apply_patch_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.2-codex",
+        object="response",
+        output=[apply_patch_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-apply-patch",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.2-codex",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.2-codex"},
+        messages=[
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Create hello.py"},
+        ],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly one choice with finish_reason="tool_calls"
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+
+    # The choice should contain one tool call for apply_patch
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 1, f"Expected 1 tool_call, got {len(tool_calls)}"
+
+    tc = tool_calls[0]
+    assert tc["id"] == "call_patch_hello"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "apply_patch"
+
+    # The operation should be serialised as JSON in arguments
+    args = json.loads(tc["function"]["arguments"])
+    assert args["type"] == "create_file"
+    assert args["path"] == "hello.py"
+    assert "print('hello world')" in args["diff"]
+
+
+def test_multi_tool_call_stream_no_premature_finish():
+    """
+    Regression test for multi-tool-call streaming bug.
+
+    When a response contains multiple tool calls, the stream used to be prematurely
+    terminated after the first output_item.done event because that handler emitted
+    finish_reason="tool_calls". This caused ~58% of streaming requests with multiple
+    tool calls to fail.
+
+    The fix: output_item.done for function_call emits delta=Delta() and finish_reason=None.
+    Only response.completed emits the terminal finish_reason.
+
+    Synthetic event sequence:
+      response.created
+      response.output_item.added   (function_call: read_file,  call_id: call_1)
+      response.function_call_arguments.delta  (read_file args)
+      response.output_item.done    (function_call: read_file)   <- must NOT end stream
+      response.output_item.added   (function_call: list_dir,   call_id: call_2)
+      response.function_call_arguments.delta  (list_dir args)
+      response.output_item.done    (function_call: list_dir)    <- must NOT end stream
+      response.completed           (response with 2 function_call outputs)  <- terminal
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunks = [
+        # 0: response created
+        {
+            "type": "response.created",
+            "response": {"id": "resp_001", "status": "in_progress"},
+        },
+        # 1: first tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1"},
+        },
+        # 2: first tool call arguments delta
+        {
+            "type": "response.function_call_arguments.delta",
+            "delta": '{"path":"/etc/hostname"}',
+        },
+        # 3: first tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/etc/hostname"}',
+            },
+        },
+        # 4: second tool call added
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "name": "list_dir", "call_id": "call_2"},
+        },
+        # 5: second tool call arguments delta
+        {"type": "response.function_call_arguments.delta", "delta": '{"path":"/tmp"}'},
+        # 6: second tool call done  ← must NOT emit finish_reason
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "list_dir",
+                "call_id": "call_2",
+                "arguments": '{"path":"/tmp"}',
+            },
+        },
+        # 7: response completed with both tool calls in output  ← ONLY terminal chunk
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "call_1",
+                        "arguments": '{"path":"/etc/hostname"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "list_dir",
+                        "call_id": "call_2",
+                        "arguments": '{"path":"/tmp"}',
+                    },
+                ],
+            },
+        },
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # 1. output_item.done events (indices 3 and 6) must NOT emit finish_reason
+    for done_idx, label in [(3, "read_file done"), (6, "list_dir done")]:
+        r = results[done_idx]
+        assert r is not None, f"{label}: chunk_parser must return a result"
+        assert len(r.choices) > 0, f"{label}: result must have choices"
+        assert (
+            r.choices[0].finish_reason is None
+        ), f"{label}: output_item.done must not emit finish_reason (stream would terminate prematurely)"
+        assert not r.choices[
+            0
+        ].delta.tool_calls, (
+            f"{label}: output_item.done must not include a duplicate tool_calls delta"
+        )
+
+    # 2. output_item.added events (indices 1 and 4) should carry name + call_id
+    for added_idx, expected_name, expected_call_id in [
+        (1, "read_file", "call_1"),
+        (4, "list_dir", "call_2"),
+    ]:
+        r = results[added_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert (
+                tc.function.name == expected_name
+            ), f"output_item.added for {expected_name}: tool_call name mismatch"
+            assert (
+                tc.id == expected_call_id
+            ), f"output_item.added for {expected_name}: call_id mismatch"
+
+    # 3. argument delta events (indices 2 and 5) should carry arguments
+    for delta_idx, expected_args, label in [
+        (2, '{"path":"/etc/hostname"}', "read_file args"),
+        (5, '{"path":"/tmp"}', "list_dir args"),
+    ]:
+        r = results[delta_idx]
+        if r is not None and r.choices and r.choices[0].delta.tool_calls:
+            tc = r.choices[0].delta.tool_calls[0]
+            assert (
+                tc.function.arguments == expected_args
+            ), f"{label}: argument delta mismatch"
+
+    # 4. Only response.completed (index 7) emits the terminal finish_reason
+    completed_result = results[7]
+    assert completed_result is not None, "response.completed must return a result"
+    assert len(completed_result.choices) > 0, "response.completed must have choices"
+    assert (
+        completed_result.choices[0].finish_reason == "tool_calls"
+    ), "response.completed with function_call outputs must emit finish_reason='tool_calls'"
+
+    # 5. No chunk before the last one should have finish_reason set
+    for idx, r in enumerate(results[:-1]):
+        if r is not None and r.choices:
+            assert r.choices[0].finish_reason is None, (
+                f"Chunk at index {idx} (type={chunks[idx]['type']!r}) must not emit finish_reason "
+                f"— only response.completed should terminate the stream"
+            )
+
+    print(
+        "✓ Multi-tool-call stream completes without premature finish_reason termination"
+    )
+
+
+# =============================================================================
+# Tests for issue #21331: Parallel tool call indices in streaming
+# =============================================================================
+
+
+def test_streaming_parallel_tool_calls_have_distinct_indices():
+    """
+    Test that parallel tool calls get distinct indices matching output_index
+    from the Responses API streaming chunks.
+
+    Regression test for issue #21331 where all tool calls were emitted with
+    index=0, making it impossible to distinguish parallel calls.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    # Simulate two parallel tool calls with output_index 0 and 1
+    chunks = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_001",
+            "delta": '{"city": "SF"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "fc_002",
+            "delta": '{"city": "NY"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_def",
+                "name": "get_weather",
+                "arguments": '{"city": "NY"}',
+            },
+        },
+    ]
+
+    for chunk in chunks:
+        result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            chunk
+        )
+        expected_index = chunk["output_index"]
+        for choice in result.choices:
+            if choice.delta.tool_calls:
+                for tc in choice.delta.tool_calls:
+                    assert tc.index == expected_index, (
+                        f"Event {chunk['type']}: expected tool_call.index={expected_index}, "
+                        f"got {tc.index}"
+                    )
+
+
+# =============================================================================
+# Comprehensive integration test: parallel tool calls with split argument deltas
+# =============================================================================
+
+
+def test_parallel_tool_calls_comprehensive_streaming_integration():
+    """
+    Comprehensive integration test for parallel tool calls via Responses API streaming.
+
+    Regression test combining all fix invariants in a single end-to-end scenario
+    with split argument deltas — the exact event sequence that was broken before
+    the fix to output_item.done.
+
+    Synthesized SSE event sequence:
+      response.created
+      response.output_item.added   {output_index:0, type:function_call, call_id:call_1, name:read_file}
+      response.function_call_arguments.delta  {output_index:0, delta:'{"path"'}
+      response.function_call_arguments.delta  {output_index:0, delta:'":"/etc/foo"}'}
+      response.output_item.done    {output_index:0, item:{type:function_call, call_id:call_1}}
+      response.output_item.added   {output_index:1, type:function_call, call_id:call_2, name:list_dir}
+      response.function_call_arguments.delta  {output_index:1, delta:'{"path"'}
+      response.function_call_arguments.delta  {output_index:1, delta:'":"/tmp"}'}
+      response.output_item.done    {output_index:1, item:{type:function_call, call_id:call_2}}
+      response.completed           {response:{status:completed, output:[call_1, call_2]}}
+
+    Asserts:
+    1. No output_item.done chunk emits finish_reason (no premature stream termination)
+    2. Each call_id appears exactly once in assembled tool_call IDs (no duplicates)
+    3. Final assembled arguments are correct — split deltas concatenate to valid JSON
+    4. Exactly one finish event, at the final response.completed chunk
+    5. Two parallel tool calls have distinct indices (output_index 0 and 1)
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunks = [
+        # 0: response.created
+        {
+            "type": "response.created",
+            "response": {"id": "resp_001", "status": "in_progress"},
+        },
+        # 1: call_1 (read_file) added — output_index=0
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1"},
+        },
+        # 2: call_1 argument delta part 1 — split across two deltas
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"path":',
+        },
+        # 3: call_1 argument delta part 2
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '"/etc/foo"}',
+        },
+        # 4: call_1 done — must NOT emit finish_reason or duplicate tool_call chunk
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/etc/foo"}',  # full JSON, assembled from the two deltas
+            },
+        },
+        # 5: call_2 (list_dir) added — output_index=1
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "function_call", "name": "list_dir", "call_id": "call_2"},
+        },
+        # 6: call_2 argument delta part 1
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": '{"path":',
+        },
+        # 7: call_2 argument delta part 2
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": '"/tmp"}',
+        },
+        # 8: call_2 done — must NOT emit finish_reason or duplicate tool_call chunk
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "name": "list_dir",
+                "call_id": "call_2",
+                "arguments": '{"path":"/tmp"}',
+            },
+        },
+        # 9: response.completed — the ONLY terminal chunk
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "call_1",
+                        "arguments": '{"path":"/etc/foo"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "list_dir",
+                        "call_id": "call_2",
+                        "arguments": '{"path":"/tmp"}',
+                    },
+                ],
+            },
+        },
+    ]
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # 1. output_item.done events (indices 4 and 8) must NOT emit finish_reason
+    for done_idx, label in [(4, "read_file done"), (8, "list_dir done")]:
+        r = results[done_idx]
+        assert r is not None, f"{label}: chunk_parser must return a result"
+        assert len(r.choices) > 0, f"{label}: result must have choices"
+        assert r.choices[0].finish_reason is None, (
+            f"{label}: output_item.done must not emit finish_reason "
+            f"(would prematurely terminate stream before subsequent tool calls arrive)"
+        )
+        assert not r.choices[
+            0
+        ].delta.tool_calls, (
+            f"{label}: output_item.done must not emit a duplicate tool_calls delta"
+        )
+
+    # 2. Each call_id appears exactly once in assembled tool_call IDs
+    # Only output_item.added emits id-bearing tool_call chunks; output_item.done emits Delta()
+    all_tool_call_ids = [
+        tc.id
+        for r in results
+        if r is not None and r.choices and r.choices[0].delta.tool_calls
+        for tc in r.choices[0].delta.tool_calls
+        if tc.id
+    ]
+    assert all_tool_call_ids.count("call_1") == 1, (
+        f"call_1 must appear exactly once in assembled tool_call IDs, "
+        f"got {all_tool_call_ids.count('call_1')} (duplicates indicate output_item.done still emits tool_call)"
+    )
+    assert all_tool_call_ids.count("call_2") == 1, (
+        f"call_2 must appear exactly once in assembled tool_call IDs, "
+        f"got {all_tool_call_ids.count('call_2')} (duplicates indicate output_item.done still emits tool_call)"
+    )
+
+    # 3. Final assembled arguments are correct when split deltas are concatenated
+    # output_item.added emits arguments="" (empty); the two deltas provide the content
+    assembled_args: dict = {}
+    for r in results:
+        if r is None or not r.choices:
+            continue
+        tool_calls = r.choices[0].delta.tool_calls
+        if not tool_calls:
+            continue
+        for tc in tool_calls:
+            if tc.function and tc.function.arguments:
+                idx = tc.index
+                assembled_args[idx] = (
+                    assembled_args.get(idx, "") + tc.function.arguments
+                )
+
+    # delta 1 = '{"path":' + delta 2 = '"/etc/foo"}' → '{"path":"/etc/foo"}'
+    assert assembled_args.get(0) == '{"path":"/etc/foo"}', (
+        f"Assembled args for index 0 (read_file): "
+        f"expected '{{\"path\":\"/etc/foo\"}}', got '{assembled_args.get(0)}'"
+    )
+    # delta 1 = '{"path":' + delta 2 = '"/tmp"}' → '{"path":"/tmp"}'
+    assert assembled_args.get(1) == '{"path":"/tmp"}', (
+        f"Assembled args for index 1 (list_dir): "
+        f"expected '{{\"path\":\"/tmp\"}}', got '{assembled_args.get(1)}'"
+    )
+
+    # 4. Stream terminates with exactly one finish event, at the final response.completed chunk
+    finish_events = [
+        (i, r.choices[0].finish_reason)
+        for i, r in enumerate(results)
+        if r is not None and r.choices and r.choices[0].finish_reason
+    ]
+    assert (
+        len(finish_events) == 1
+    ), f"Expected exactly 1 finish event, got {len(finish_events)}: {finish_events}"
+    assert finish_events[0][0] == len(chunks) - 1, (
+        f"Finish event must be at the last chunk (index {len(chunks) - 1}), "
+        f"but was at index {finish_events[0][0]}"
+    )
+    assert (
+        finish_events[0][1] == "tool_calls"
+    ), f"Terminal finish_reason must be 'tool_calls', got '{finish_events[0][1]}'"
+
+    # 5. Parallel tool calls have distinct indices matching output_index (0 and 1)
+    # Collect indices from output_item.added chunks only (they carry the call id)
+    added_tool_call_indices = [
+        tc.index
+        for r in results
+        if r is not None and r.choices and r.choices[0].delta.tool_calls
+        for tc in r.choices[0].delta.tool_calls
+        if tc.id  # output_item.added chunks carry the id; argument deltas do not
+    ]
+    assert set(added_tool_call_indices) == {
+        0,
+        1,
+    }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
+
+    print(
+        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
+    )
+
+
+def test_map_optional_params_preserves_reasoning_summary():
+    """Test that reasoning_effort dict with summary field is preserved.
+
+    Regression test for: User reported that summary field was being dropped
+    when routing to Responses API. The dict format should be fully preserved.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    optional_params = {
+        "stream": False,
+        "tools": [{"type": "function", "function": {"name": "test_tool"}}],
+        "tool_choice": "auto",
+        "reasoning_effort": {"effort": "high", "summary": "detailed"},
+    }
+
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        optional_params, responses_api_request
+    )
+
+    # Verify reasoning_effort dict with summary was fully preserved
+    assert "reasoning" in responses_api_request
+    assert responses_api_request["reasoning"] == {
+        "effort": "high",
+        "summary": "detailed",
+    }
+    assert responses_api_request["reasoning"]["effort"] == "high"
+    assert responses_api_request["reasoning"]["summary"] == "detailed"
+
+
+def test_convert_chat_completion_file_type_to_input_file():
+    """
+    Test that Chat Completion content with type 'file' is correctly mapped
+    to Responses API 'input_file' format, not stringified as 'input_text'.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23588
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this PDF?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                        "filename": "test.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = (
+        handler.convert_chat_completion_messages_to_responses_api(messages)
+    )
+
+    assert len(input_items) == 1
+    msg = input_items[0]
+    assert msg["type"] == "message"
+    assert msg["role"] == "user"
+
+    content = msg["content"]
+    assert len(content) == 2
+
+    # First item should be the text
+    assert content[0]["type"] == "input_text"
+    assert content[0]["text"] == "What is in this PDF?"
+
+    # Second item should be input_file, NOT input_text with stringified dict
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_data"] == "data:application/pdf;base64,JVBERi0xLjQK"
+    assert content[1]["filename"] == "test.pdf"
+    # Ensure it does NOT have the nested 'file' key
+    assert "file" not in content[1]
+
+
+def test_convert_chat_completion_file_type_with_file_id():
+    """
+    Test that Chat Completion content with type 'file' using file_id is correctly mapped.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "file-abc123",
+                    },
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = (
+        handler.convert_chat_completion_messages_to_responses_api(messages)
+    )
+
+    content = input_items[0]["content"]
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_id"] == "file-abc123"
+    assert "file_data" not in content[1]

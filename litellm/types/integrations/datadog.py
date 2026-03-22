@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Optional
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
@@ -14,13 +14,20 @@ class DataDogStatus(str, Enum):
     ERROR = "error"
 
 
-class DatadogPayload(TypedDict, total=False):
-    ddsource: str
-    ddtags: str
-    hostname: str
-    message: str
-    service: str
-    status: str
+DatadogPayload = TypedDict(
+    "DatadogPayload",
+    {
+        "ddsource": str,
+        "ddtags": str,
+        "hostname": str,
+        "message": str,
+        "service": str,
+        "status": str,
+        "dd.trace_id": NotRequired[str],
+        "dd.span_id": NotRequired[str],
+    },
+    total=False,
+)
 
 
 class DD_ERRORS(Enum):

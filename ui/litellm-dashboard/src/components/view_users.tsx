@@ -1,9 +1,9 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button } from "@tremor/react";
-import BulkEditUserModal from "./bulk_edit_user";
-import CreateUser from "./create_user_button";
+import { Button } from "antd";
+import BulkEditUserModal from "./BulkEditUsers";
+import { CreateUserButton } from "./CreateUserButton";
 import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
@@ -16,7 +16,7 @@ import {
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
 
 import { updateExistingKeys } from "@/utils/dataUtils";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Typography } from "antd";
@@ -39,6 +39,7 @@ interface ViewUserDashboardProps {
   userID: string | null;
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
+  orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
 }
 
 interface FilterState {
@@ -69,7 +70,8 @@ const initialFilters: FilterState = {
   sort_order: "desc",
 };
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams }) => {
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds }) => {
+  const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -245,7 +247,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   };
 
   const userListQuery = useQuery({
-    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage }],
+    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage, orgAdminOrgIds }],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
 
@@ -260,6 +262,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         debouncedFilters.sso_user_id || null,
         debouncedFilters.sort_by,
         debouncedFilters.sort_order,
+        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
@@ -286,7 +289,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     },
     handleDelete,
     handleResetPassword,
-    () => {}, // placeholder function, will be overridden in UserDataTable
+    () => { }, // placeholder function, will be overridden in UserDataTable
   );
 
   return (
@@ -301,18 +304,20 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
-              <Button
-                onClick={handleToggleSelectionMode}
-                variant={selectionMode ? "primary" : "secondary"}
-                className="flex items-center"
-              >
-                {selectionMode ? "Cancel Selection" : "Select Users"}
-              </Button>
+              {isProxyAdmin && (
+                <Button
+                  onClick={handleToggleSelectionMode}
+                  type={selectionMode ? "primary" : "default"}
+                  className="flex items-center"
+                >
+                  {selectionMode ? "Cancel Selection" : "Select Users"}
+                </Button>
+              )}
 
-              {selectionMode && (
-                <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+              {isProxyAdmin && selectionMode && (
+                <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
               )}
@@ -321,61 +326,93 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         </div>
       </div>
 
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
-        <TabList className="mb-4">
-          <Tab>Users</Tab>
-          <Tab>Default User Settings</Tab>
-        </TabList>
+      {isProxyAdmin ? (
+        <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+          <TabList className="mb-4">
+            <Tab>Users</Tab>
+            <Tab>Default User Settings</Tab>
+          </TabList>
 
-        <TabPanels>
-          <TabPanel>
-            <UserDataTable
-              data={userListQuery.data?.users || []}
-              columns={tableColumns}
-              isLoading={userListQuery.isLoading}
-              accessToken={accessToken}
-              userRole={userRole}
-              onSortChange={handleSortChange}
-              currentSort={{
-                sortBy: filters.sort_by,
-                sortOrder: filters.sort_order,
-              }}
-              possibleUIRoles={possibleUIRoles}
-              handleEdit={(user) => {
-                setSelectedUser(user);
-                setEditModalVisible(true);
-              }}
-              handleDelete={handleDelete}
-              handleResetPassword={handleResetPassword}
-              enableSelection={selectionMode}
-              selectedUsers={selectedUsers}
-              onSelectionChange={handleSelectionChange}
-              filters={filters}
-              updateFilters={updateFilters}
-              initialFilters={initialFilters}
-              teams={teams}
-              userListResponse={userListResponse}
-              currentPage={currentPage}
-              handlePageChange={handlePageChange}
-            />
-          </TabPanel>
-
-          <TabPanel>
-            {!userID || !userRole || !accessToken ? (
-              <div className="flex justify-center items-center h-64">
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </div>
-            ) : (
-              <DefaultUserSettings
+          <TabPanels>
+            <TabPanel>
+              <UserDataTable
+                data={userListQuery.data?.users || []}
+                columns={tableColumns}
+                isLoading={userListQuery.isLoading}
                 accessToken={accessToken}
-                possibleUIRoles={possibleUIRoles}
-                userID={userID}
                 userRole={userRole}
+                onSortChange={handleSortChange}
+                currentSort={{
+                  sortBy: filters.sort_by,
+                  sortOrder: filters.sort_order,
+                }}
+                possibleUIRoles={possibleUIRoles}
+                handleEdit={(user) => {
+                  setSelectedUser(user);
+                  setEditModalVisible(true);
+                }}
+                handleDelete={handleDelete}
+                handleResetPassword={handleResetPassword}
+                enableSelection={selectionMode}
+                selectedUsers={selectedUsers}
+                onSelectionChange={handleSelectionChange}
+                filters={filters}
+                updateFilters={updateFilters}
+                initialFilters={initialFilters}
+                teams={teams}
+                userListResponse={userListResponse}
+                currentPage={currentPage}
+                handlePageChange={handlePageChange}
               />
-            )}
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+            </TabPanel>
+
+            <TabPanel>
+              {!userID || !userRole || !accessToken ? (
+                <div className="flex justify-center items-center h-64">
+                  <Skeleton active paragraph={{ rows: 4 }} />
+                </div>
+              ) : (
+                <DefaultUserSettings
+                  accessToken={accessToken}
+                  possibleUIRoles={possibleUIRoles}
+                  userID={userID}
+                  userRole={userRole}
+                />
+              )}
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
+      ) : (
+        <UserDataTable
+          data={userListQuery.data?.users || []}
+          columns={tableColumns}
+          isLoading={userListQuery.isLoading}
+          accessToken={accessToken}
+          userRole={userRole}
+          onSortChange={handleSortChange}
+          currentSort={{
+            sortBy: filters.sort_by,
+            sortOrder: filters.sort_order,
+          }}
+          possibleUIRoles={possibleUIRoles}
+          handleEdit={(user) => {
+            setSelectedUser(user);
+            setEditModalVisible(true);
+          }}
+          handleDelete={handleDelete}
+          handleResetPassword={handleResetPassword}
+          enableSelection={false}
+          selectedUsers={[]}
+          onSelectionChange={handleSelectionChange}
+          filters={filters}
+          updateFilters={updateFilters}
+          initialFilters={initialFilters}
+          teams={teams}
+          userListResponse={userListResponse}
+          currentPage={currentPage}
+          handlePageChange={handlePageChange}
+        />
+      )}
 
       {/* Existing Modals */}
       <EditUserModal
@@ -415,7 +452,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       />
 
       <BulkEditUserModal
-        visible={isBulkEditModalVisible}
+        open={isBulkEditModalVisible}
         onCancel={() => setIsBulkEditModalVisible(false)}
         selectedUsers={selectedUsers}
         possibleUIRoles={possibleUIRoles}

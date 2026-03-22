@@ -11,6 +11,12 @@ Call Bedrock AgentCore in the OpenAI Request/Response format.
 | Provider Route on LiteLLM | `bedrock/agentcore/{AGENT_RUNTIME_ARN}` |
 | Provider Doc | [AWS Bedrock AgentCore ↗](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgentRuntime.html) |
 
+:::info
+
+This documentation is for **AgentCore Agents** (agent runtimes). If you want to use AgentCore MCP servers with LiteLLM, see the [MCP AWS SigV4 Auth](https://docs.litellm.ai/docs/mcp_aws_sigv4) guide for setup instructions.
+
+:::
+
 ## Quick Start
 
 ### Model Format to LiteLLM
