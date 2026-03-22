@@ -16,9 +16,14 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     - International: https://api.minimax.io/v1
     - China: https://api.minimaxi.com/v1
 
+    Note: MiniMax's Claude-compatible `/anthropic/v1/messages` support is implemented
+    separately in `litellm/llms/minimax/messages/transformation.py`.
+    
     Supported models:
     - MiniMax-M2.1
-    - MiniMax-M2.1-lightning
+    - MiniMax-M2.1-highspeed
+    - MiniMax-M2.5
+    - MiniMax-M2.5-highspeed
     - MiniMax-M2
     """
 
