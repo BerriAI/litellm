@@ -14,7 +14,7 @@ async def test_update_litellm_params_max_tokens_default():
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 1
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -62,7 +62,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
             model_params=model_params,
             litellm_logging_obj=MagicMock(),
         )
-        assert model_params["max_tokens"] == 10
+        assert model_params["max_tokens"] == 16
 
         # Test Case 2: Custom health_check_max_tokens passed via model_params, should be respected
         model_params = {"max_tokens": 3}
