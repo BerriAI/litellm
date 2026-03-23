@@ -150,7 +150,7 @@ class AktoLogger(CustomLogger):
             "requestPayload": json.dumps(request_body),
             "responsePayload": response_payload,
             "ip": self.extract_client_ip(data),
-            "destIp": "127.0.0.1",
+            "destIp": "127.0.0.1",  # standard MIRRORING format for proxy-captured traffic
             "time": str(int(datetime.now().timestamp() * 1000)),
             "statusCode": str(status_code),
             "type": "HTTP/1.1",
@@ -175,7 +175,7 @@ class AktoLogger(CustomLogger):
         """Build common HTTP request kwargs for Akto API."""
         return {
             "url": f"{self.akto_base_url}{HTTP_PROXY_PATH}",
-            "data": json.dumps(payload),
+            "json": payload,
             "params": {"akto_connector": AKTO_CONNECTOR_NAME, "ingest_data": "true"},
             "headers": {
                 "content-type": "application/json",

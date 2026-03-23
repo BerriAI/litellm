@@ -54,17 +54,18 @@ def sample_kwargs():
 
 
 def test_init_requires_env_vars():
-    with patch.dict(os.environ, {}, clear=True):
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("AKTO_DATA_INGESTION_API_BASE", None)
+        os.environ.pop("AKTO_API_KEY", None)
         with pytest.raises(Exception, match="AKTO_DATA_INGESTION_API_BASE"):
             AktoLogger()
 
 
 def test_init_requires_api_key():
     with patch.dict(
-        os.environ,
-        {"AKTO_DATA_INGESTION_API_BASE": "http://x"},
-        clear=True,
+        os.environ, {"AKTO_DATA_INGESTION_API_BASE": "http://x"}, clear=False
     ):
+        os.environ.pop("AKTO_API_KEY", None)
         with pytest.raises(Exception, match="AKTO_API_KEY"):
             AktoLogger()
 
@@ -194,7 +195,7 @@ async def test_async_log_success_event(logger, sample_kwargs):
     logger.async_http_handler.post.assert_called_once()
     call = logger.async_http_handler.post.call_args.kwargs
     assert call["params"]["ingest_data"] == "true"
-    payload = json.loads(call["data"])
+    payload = call["json"]
     assert payload["statusCode"] == "200"
     assert (
         json.loads(payload["responsePayload"])["choices"][0]["message"]["content"]
@@ -214,7 +215,7 @@ async def test_async_log_failure_event(logger, sample_kwargs):
     )
 
     logger.async_http_handler.post.assert_called_once()
-    payload = json.loads(logger.async_http_handler.post.call_args.kwargs["data"])
+    payload = logger.async_http_handler.post.call_args.kwargs["json"]
     assert payload["statusCode"] == "500"
 
 
@@ -231,7 +232,7 @@ async def test_async_log_failure_with_response_obj(logger, sample_kwargs):
         kwargs=sample_kwargs, response_obj=mock_resp, start_time=None, end_time=None
     )
 
-    payload = json.loads(logger.async_http_handler.post.call_args.kwargs["data"])
+    payload = logger.async_http_handler.post.call_args.kwargs["json"]
     assert payload["statusCode"] == "500"
     assert json.loads(payload["responsePayload"])["partial"] == "data"
 
@@ -247,7 +248,7 @@ async def test_async_log_failure_with_status_code(logger, sample_kwargs):
         kwargs=sample_kwargs, response_obj=None, start_time=None, end_time=None
     )
 
-    payload = json.loads(logger.async_http_handler.post.call_args.kwargs["data"])
+    payload = logger.async_http_handler.post.call_args.kwargs["json"]
     assert payload["statusCode"] == "403"
 
 

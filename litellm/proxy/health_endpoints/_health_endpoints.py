@@ -355,7 +355,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 verbose_proxy_logger.warning("Akto health check error: %s", e)
                 return {
                     "status": "unhealthy",
-                    "error_message": "Akto health check failed",
+                    "message": "Akto health check failed",
                 }
             return {
                 "status": response["status"],
