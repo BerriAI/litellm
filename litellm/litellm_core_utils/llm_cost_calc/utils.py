@@ -692,7 +692,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - image_tokens,
         )
         prompt_tokens_details["text_tokens"] = text_tokens
-    elif accounted_tokens < usage.prompt_tokens and not has_non_token_alternative_billing:
+    elif accounted_tokens < usage.prompt_tokens and not has_non_token_alternative_billing and prompt_tokens_details["image_count"] == 0:
         # Unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
         # in prompt_tokens by the provider but not broken out into any detail field.
         # Add the gap to text_tokens so they are costed at input_cost_per_token.
@@ -701,10 +701,10 @@ def generic_cost_per_token(  # noqa: PLR0915
         # 1. text_tokens=0 (provider didn't set it) - gap fills the entire remainder
         # 2. text_tokens>0 but < total (mixed content like PDF+text) - gap fills remainder
         #
-        # Skip filling only when non-token alternative billing is active
-        # (character_count, video_length_seconds), since those dimensions
-        # replace token-based billing entirely. image_count is additive and should
-        # not prevent gap-filling for unaccounted document tokens.
+        # Skip filling when:
+        # - Non-token alternative billing is active (character_count, video_length_seconds)
+        # - Image count billing is active (image_count > 0) - those tokens are already
+        #   billed separately via input_cost_per_image and shouldn't be double-charged
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
  
