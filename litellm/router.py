@@ -7057,16 +7057,17 @@ class Router:
 
         # Update model_name_to_deployment_indices
         for model_name, indices in list(self.model_name_to_deployment_indices.items()):
-            # Remove the deleted index
-            if removal_idx in indices:
-                indices.remove(removal_idx)
-
-            # Decrement all indices greater than removal_idx
+            # Build new list without mutating the original
             updated_indices = []
             for idx in indices:
-                if idx > removal_idx:
+                if idx == removal_idx:
+                    # Skip the removed index
+                    continue
+                elif idx > removal_idx:
+                    # Decrement indices after removal
                     updated_indices.append(idx - 1)
                 else:
+                    # Keep indices before removal unchanged
                     updated_indices.append(idx)
 
             # Update or remove the entry
@@ -7077,16 +7078,17 @@ class Router:
 
         # Update team_model_to_deployment_indices
         for key, indices in list(self.team_model_to_deployment_indices.items()):
-            # Remove the deleted index
-            if removal_idx in indices:
-                indices.remove(removal_idx)
-
-            # Decrement all indices greater than removal_idx
+            # Build new list without mutating the original
             updated_indices = []
             for idx in indices:
-                if idx > removal_idx:
+                if idx == removal_idx:
+                    # Skip the removed index
+                    continue
+                elif idx > removal_idx:
+                    # Decrement indices after removal
                     updated_indices.append(idx - 1)
                 else:
+                    # Keep indices before removal unchanged
                     updated_indices.append(idx)
 
             # Update or remove the entry
