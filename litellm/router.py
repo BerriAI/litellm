@@ -8147,7 +8147,8 @@ class Router:
         ):
             return True
         elif model_name is not None and model["model_name"] == model_name:
-            return True
+            if team_id is None or model["model_info"].get("team_id") == team_id:
+                return True
         return False
 
     def _get_all_deployments(
