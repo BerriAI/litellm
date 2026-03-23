@@ -2247,11 +2247,20 @@ def test_resolve_pre_alias_model_name_fallback():
     team_config = {
         "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
     }
-    # Post-alias name doesn't match, but pre-alias does
+    # Post-alias name doesn't match, but pre-alias does (team scope)
     result = _resolve_credential_from_model_config(
-        "azure/gpt-4-0613", team_config, None, pre_alias_model_name="gpt-4"
+        "azure/gpt-4-0613", None, team_config, pre_alias_model_name="gpt-4"
     )
     assert result == "team-gpt4"
+
+    # Same test for project scope
+    project_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "proj-gpt4"}},
+    }
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4-0613", project_config, None, pre_alias_model_name="gpt-4"
+    )
+    assert result == "proj-gpt4"
 
 
 def test_resolve_post_alias_name_takes_priority():
@@ -2260,6 +2269,13 @@ def test_resolve_post_alias_name_takes_priority():
         "gpt-4": {"azure": {"litellm_credentials": "pre-alias-cred"}},
         "gpt-4o-team-1": {"azure": {"litellm_credentials": "post-alias-cred"}},
     }
+    # Team scope
+    result = _resolve_credential_from_model_config(
+        "gpt-4o-team-1", None, team_config, pre_alias_model_name="gpt-4"
+    )
+    assert result == "post-alias-cred"
+
+    # Project scope
     result = _resolve_credential_from_model_config(
         "gpt-4o-team-1", team_config, None, pre_alias_model_name="gpt-4"
     )
