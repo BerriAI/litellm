@@ -1,21 +1,15 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
-    StandardBuiltInToolCostTracking,
-)
 from litellm.llms.gemini.image_generation.cost_calculator import (
     cost_calculator as gemini_image_generation_cost_calculator,
 )
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ImageObject,
@@ -23,9 +17,7 @@ from litellm.types.utils import (
     ImageUsage,
     ImageUsageInputTokensDetails,
     ModelInfo,
-    ModelResponse,
     PromptTokensDetailsWrapper,
-    StandardBuiltInToolsParams,
 )
 
 sys.path.insert(
@@ -73,11 +65,9 @@ def test_reasoning_tokens_no_price_set():
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = (
         model_cost_map["output_cost_per_token"] * usage.completion_tokens
     )
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,
@@ -318,8 +308,12 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
         usage=usage,
         custom_llm_provider=custom_llm_provider,
     )
-    expected_prompt = model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
-    expected_completion = model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    expected_prompt = (
+        model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
+    )
+    expected_completion = (
+        model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    )
     assert round(prompt_cost, 10) == round(expected_prompt, 10)
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
@@ -407,7 +401,11 @@ def test_string_cost_values():
         completion_tokens=500,
         total_tokens=1650,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
+            audio_tokens=100,
+            cached_tokens=200,
+            text_tokens=700,
+            image_tokens=None,
+            cache_creation_tokens=150,
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(
             audio_tokens=50,
@@ -673,7 +671,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     model_info: ModelInfo = {}
 
-    result = _calculate_input_cost(
+    result, breakdown = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
         prompt_base_cost=0.0,
@@ -684,8 +682,11 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
     expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
-    assert result > 0, "Cost should not be zero when ephemeral token details are present"
+    assert (
+        result > 0
+    ), "Cost should not be zero when ephemeral token details are present"
     assert round(result, 6) == round(expected, 6)
+    assert "cache_creation_cost" in breakdown
 
 
 def test_service_tier_flex_pricing():
@@ -693,52 +694,56 @@ def test_service_tier_flex_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-5-nano which has flex pricing
     model = "gpt-5-nano"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test standard pricing
     std_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
     std_total = std_cost[0] + std_cost[1]
-    
+
     # Test flex pricing
     flex_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="flex"
+        service_tier="flex",
     )
     flex_total = flex_cost[0] + flex_cost[1]
-    
+
     # Verify flex is approximately 50% of standard
     assert std_total > 0, "Standard cost should be greater than 0"
     assert flex_total > 0, "Flex cost should be greater than 0"
-    
+
     flex_ratio = flex_total / std_total
-    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
-    
+    assert (
+        0.45 <= flex_ratio <= 0.55
+    ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
     # Verify specific costs match expected values
     # gpt-5-nano flex: input=2.5e-08, output=2e-07
     expected_flex_prompt = 1000 * 2.5e-08  # 0.000025
     expected_flex_completion = 500 * 2e-07  # 0.0001
     expected_flex_total = expected_flex_prompt + expected_flex_completion
-    
-    assert abs(flex_cost[0] - expected_flex_prompt) < 1e-10, f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
-    assert abs(flex_cost[1] - expected_flex_completion) < 1e-10, f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
-    assert abs(flex_total - expected_flex_total) < 1e-10, f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
+
+    assert (
+        abs(flex_cost[0] - expected_flex_prompt) < 1e-10
+    ), f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
+    assert (
+        abs(flex_cost[1] - expected_flex_completion) < 1e-10
+    ), f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
+    assert (
+        abs(flex_total - expected_flex_total) < 1e-10
+    ), f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
 
 
 def test_service_tier_default_pricing():
@@ -746,46 +751,50 @@ def test_service_tier_default_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-5-nano
     model = "gpt-5-nano"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test with no service tier (should use standard)
     default_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
-    
+
     # Test with explicit standard service tier
     standard_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="standard"
+        service_tier="standard",
     )
-    
+
     # Both should be identical
-    assert abs(default_cost[0] - standard_cost[0]) < 1e-10, "Default and standard prompt costs should be identical"
-    assert abs(default_cost[1] - standard_cost[1]) < 1e-10, "Default and standard completion costs should be identical"
-    
+    assert (
+        abs(default_cost[0] - standard_cost[0]) < 1e-10
+    ), "Default and standard prompt costs should be identical"
+    assert (
+        abs(default_cost[1] - standard_cost[1]) < 1e-10
+    ), "Default and standard completion costs should be identical"
+
     # Verify specific costs match expected standard values
     # gpt-5-nano standard: input=5e-08, output=4e-07
     expected_standard_prompt = 1000 * 5e-08  # 0.00005
     expected_standard_completion = 500 * 4e-07  # 0.0002
     expected_standard_total = expected_standard_prompt + expected_standard_completion
-    
-    assert abs(default_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
-    assert abs(default_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
+
+    assert (
+        abs(default_cost[0] - expected_standard_prompt) < 1e-10
+    ), f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
+    assert (
+        abs(default_cost[1] - expected_standard_completion) < 1e-10
+    ), f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
 
 
 def test_service_tier_fallback_pricing():
@@ -793,62 +802,66 @@ def test_service_tier_fallback_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-4 which doesn't have flex pricing keys
     model = "gpt-4"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test standard pricing
     std_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
     std_total = std_cost[0] + std_cost[1]
-    
+
     # Test flex pricing (should fall back to standard since gpt-4 doesn't have flex keys)
     flex_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="flex"
+        service_tier="flex",
     )
     flex_total = flex_cost[0] + flex_cost[1]
-    
+
     # Test priority pricing (should fall back to standard since gpt-4 doesn't have priority keys)
     priority_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="priority"
+        service_tier="priority",
     )
     priority_total = priority_cost[0] + priority_cost[1]
-    
+
     # All should be identical (fallback to standard)
-    assert abs(std_total - flex_total) < 1e-10, f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
-    assert abs(std_total - priority_total) < 1e-10, f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
-    
+    assert (
+        abs(std_total - flex_total) < 1e-10
+    ), f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
+    assert (
+        abs(std_total - priority_total) < 1e-10
+    ), f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
+
     # Verify costs are reasonable (not zero)
     assert std_total > 0, "Standard cost should be greater than 0"
     assert flex_total > 0, "Flex cost should be greater than 0 (fallback)"
     assert priority_total > 0, "Priority cost should be greater than 0 (fallback)"
-    
+
     # Verify specific costs match expected gpt-4 values
     # gpt-4 standard: input=3e-05, output=6e-05
     expected_standard_prompt = 1000 * 3e-05  # 0.03
     expected_standard_completion = 500 * 6e-05  # 0.03
     expected_standard_total = expected_standard_prompt + expected_standard_completion
-    
-    assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
-    assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
+
+    assert (
+        abs(std_cost[0] - expected_standard_prompt) < 1e-10
+    ), f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
+    assert (
+        abs(std_cost[1] - expected_standard_completion) < 1e-10
+    ), f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
 @pytest.mark.parametrize(
@@ -908,7 +921,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     output_cost_per_token = model_cost_map.get("output_cost_per_token", 0)
 
     expected_image_cost = 1120 * output_cost_per_image_token
-    expected_reasoning_cost = 225 * output_cost_per_token  # reasoning uses base token cost
+    expected_reasoning_cost = (
+        225 * output_cost_per_token
+    )  # reasoning uses base token cost
     expected_completion_cost = expected_image_cost + expected_reasoning_cost
 
     # The bug was: all completion tokens were treated as text tokens only.
@@ -917,9 +932,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
         f"Completion cost should be significantly larger than text-only bugged path. "
         f"Expected > {bugged_text_only_cost * 2:.6f}, got {completion_cost:.6f}"
     )
-    assert round(completion_cost, 4) == round(expected_completion_cost, 4), (
-        f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
-    )
+    assert round(completion_cost, 4) == round(
+        expected_completion_cost, 4
+    ), f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
 
 
 def test_vertex_image_generation_cost_prefers_token_usage_metadata():
@@ -957,7 +972,9 @@ def test_vertex_image_generation_cost_prefers_token_usage_metadata():
     )
 
     expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
-    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_completion_cost = (
+        output_image_tokens * model_info["output_cost_per_image_token"]
+    )
     expected_total_cost = expected_prompt_cost + expected_completion_cost
 
     assert round(cost, 10) == round(expected_total_cost, 10)
@@ -1024,7 +1041,9 @@ def test_gemini_image_generation_cost_prefers_token_usage_metadata():
     )
 
     expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
-    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_completion_cost = (
+        output_image_tokens * model_info["output_cost_per_image_token"]
+    )
     expected_total_cost = expected_prompt_cost + expected_completion_cost
 
     assert round(cost, 10) == round(expected_total_cost, 10)
@@ -1120,16 +1139,19 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     expected_prompt_cost = 17 * 0.05 / 1_000_000
     expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
 
-    assert abs(prompt_cost - expected_prompt_cost) < 1e-10, \
-        f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
+    assert (
+        abs(prompt_cost - expected_prompt_cost) < 1e-10
+    ), f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
 
-    assert abs(completion_cost - expected_completion_cost) < 1e-10, \
-        f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
+    assert (
+        abs(completion_cost - expected_completion_cost) < 1e-10
+    ), f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
 
     # Verify it's NOT using only reasoning_tokens (the bug)
     wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
-    assert abs(completion_cost - wrong_cost) > 1e-6, \
-        "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
+    assert (
+        abs(completion_cost - wrong_cost) > 1e-6
+    ), "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
 
 
 def test_image_count_prevents_text_tokens_fallback():

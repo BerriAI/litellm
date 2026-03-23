@@ -2768,15 +2768,36 @@ class CachingDetails(TypedDict):
     """
 
 
+class InputCostBreakdown(TypedDict, total=False):
+    """Per-token-type cost breakdown for input/prompt tokens."""
+
+    prompt_token_cost: float  # Cost of text prompt tokens
+    cached_token_cost: float  # Cost of cache-hit (read) tokens
+    cache_creation_cost: float  # Cost of cache creation tokens
+    audio_token_cost: float  # Cost of audio input tokens
+    image_token_cost: float  # Cost of image input tokens
+
+
+class OutputCostBreakdown(TypedDict, total=False):
+    """Per-token-type cost breakdown for output/completion tokens."""
+
+    completion_token_cost: float  # Cost of text completion tokens
+    reasoning_token_cost: float  # Cost of reasoning/thinking tokens
+    audio_token_cost: float  # Cost of audio output tokens
+    image_token_cost: float  # Cost of image output tokens
+
+
 class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request
     """
 
     input_cost: float  # Cost of input/prompt tokens
+    input_cost_breakdown: InputCostBreakdown  # Per-token-type input cost breakdown
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )
+    output_cost_breakdown: OutputCostBreakdown  # Per-token-type output cost breakdown
     reasoning_tokens_cost: float  # Cost of reasoning/thinking tokens (subset of output_cost)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools

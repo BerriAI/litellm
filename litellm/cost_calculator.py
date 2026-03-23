@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
     calculate_cost_component,
+    calculate_detailed_cost_breakdowns,
     generic_cost_per_token,
     get_billable_input_tokens,
     select_cost_metric_for_model,
@@ -952,45 +953,6 @@ def _apply_cost_margin(
     return base_cost, margin_percent, margin_fixed_amount, margin_total_amount
 
 
-def _calculate_reasoning_tokens_cost(
-    usage: Optional["Usage"],
-    model: str,
-    custom_llm_provider: str,
-) -> float:
-    """
-    Calculate the cost of reasoning tokens separately.
-
-    This mirrors the logic in generic_cost_per_token() but returns the
-    reasoning cost as a standalone value (it is already included in
-    output_cost / completion_tokens_cost).
-    """
-    if usage is None:
-        return 0.0
-
-    completion_tokens_details = getattr(usage, "completion_tokens_details", None)
-    if completion_tokens_details is None:
-        return 0.0
-
-    reasoning_tokens = getattr(completion_tokens_details, "reasoning_tokens", None) or 0
-    if reasoning_tokens <= 0:
-        return 0.0
-
-    try:
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-    except Exception:
-        return 0.0
-
-    output_cost_per_reasoning_token = model_info.get(
-        "output_cost_per_reasoning_token", None
-    )
-    if output_cost_per_reasoning_token is None:
-        output_cost_per_reasoning_token = model_info.get("output_cost_per_token", 0.0)
-
-    return float(reasoning_tokens) * float(output_cost_per_reasoning_token)
-
-
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: Optional[LitellmLoggingObject],
     prompt_tokens_cost_usd_dollar: float,
@@ -998,6 +960,8 @@ def _store_cost_breakdown_in_logging_obj(
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
     reasoning_tokens_cost_usd_dollar: float = 0.0,
+    input_cost_breakdown: Optional[dict] = None,
+    output_cost_breakdown: Optional[dict] = None,
     additional_costs: Optional[dict] = None,
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
@@ -1015,6 +979,8 @@ def _store_cost_breakdown_in_logging_obj(
         completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
+        input_cost_breakdown: Per-token-type input cost breakdown
+        output_cost_breakdown: Per-token-type output cost breakdown
         additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
         original_cost: Cost before discount
         discount_percent: Discount percentage applied (0.05 = 5%)
@@ -1034,6 +1000,8 @@ def _store_cost_breakdown_in_logging_obj(
             total_cost=total_cost_usd_dollar,
             cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
             reasoning_tokens_cost=reasoning_tokens_cost_usd_dollar,
+            input_cost_breakdown=input_cost_breakdown,
+            output_cost_breakdown=output_cost_breakdown,
             additional_costs=additional_costs,
             original_cost=original_cost,
             discount_percent=discount_percent,
@@ -1230,7 +1198,9 @@ def completion_cost(  # noqa: PLR0915
                         and _usage["prompt_tokens_details"] != {}
                         and _usage["prompt_tokens_details"]
                     ):
-                        prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
+                        prompt_tokens_details = (
+                            _usage.get("prompt_tokens_details") or {}
+                        )
                         cache_read_input_tokens = prompt_tokens_details.get(
                             "cached_tokens", 0
                         )
@@ -1556,7 +1526,9 @@ def completion_cost(  # noqa: PLR0915
                 if custom_llm_provider == "azure_ai":
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
-                        hidden_params = getattr(completion_response, "_hidden_params", None) or {}
+                        hidden_params = (
+                            getattr(completion_response, "_hidden_params", None) or {}
+                        )
                         hidden_model = hidden_params.get("model") or hidden_params.get(
                             "litellm_model_name"
                         )
@@ -1624,12 +1596,28 @@ def completion_cost(  # noqa: PLR0915
                     margin_fixed_amount = 0.0
                     margin_total_amount = 0.0
 
-                # Calculate reasoning tokens cost separately
-                reasoning_tokens_cost = _calculate_reasoning_tokens_cost(
-                    usage=cost_per_token_usage_object,
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                # Calculate detailed per-token-type cost breakdowns
+                _input_cost_breakdown: Optional[dict] = None
+                _output_cost_breakdown: Optional[dict] = None
+                reasoning_tokens_cost = 0.0
+                if cost_per_token_usage_object is not None:
+                    try:
+                        (
+                            _input_cost_breakdown,
+                            _output_cost_breakdown,
+                        ) = calculate_detailed_cost_breakdowns(
+                            model=model,
+                            usage=cost_per_token_usage_object,
+                            custom_llm_provider=custom_llm_provider,
+                            service_tier=service_tier,
+                        )
+                        # Extract reasoning cost from the output breakdown
+                        if _output_cost_breakdown:
+                            reasoning_tokens_cost = _output_cost_breakdown.get(
+                                "reasoning_token_cost", 0.0
+                            )
+                    except Exception:
+                        pass
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
@@ -1640,6 +1628,8 @@ def completion_cost(  # noqa: PLR0915
                         cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
                         total_cost_usd_dollar=_final_cost,
                         reasoning_tokens_cost_usd_dollar=reasoning_tokens_cost,
+                        input_cost_breakdown=_input_cost_breakdown,
+                        output_cost_breakdown=_output_cost_breakdown,
                         original_cost=original_cost,
                         additional_costs=additional_costs,
                         discount_percent=discount_percent,
