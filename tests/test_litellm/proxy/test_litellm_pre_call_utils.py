@@ -19,6 +19,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
+    add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
 )
 
@@ -1817,3 +1818,98 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+class TestAddProviderSpecificHeadersOAuthScoping:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/24436.
+
+    When Claude Code sends an Anthropic OAuth token (sk-ant-oat*) via the
+    Authorization header, that token must NOT be forwarded to non-Anthropic
+    providers (Bedrock, Vertex AI). Doing so overwrites those providers'
+    own auth headers (AWS SigV4, service-account credentials) and causes 403s.
+    """
+
+    def test_oauth_token_scoped_to_anthropic_only(self):
+        """provider_specific_header must list only 'anthropic' when an OAuth token is present."""
+        data: dict = {}
+        headers = {"Authorization": "Bearer sk-ant-oat01-abc123xyz"}
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        psh = data.get("provider_specific_header")
+        assert psh is not None
+        assert psh["custom_llm_provider"] == "anthropic"
+        assert psh["extra_headers"]["Authorization"] == "Bearer sk-ant-oat01-abc123xyz"
+
+    def test_oauth_token_with_anthropic_beta_scoped_to_anthropic_only(self):
+        """
+        When both an OAuth token and anthropic-beta are present, both are scoped to
+        anthropic only. Verify this end-to-end: anthropic receives both headers, while
+        bedrock and vertex_ai receive neither (not just "no Authorization" — they receive
+        nothing at all, because a user with an OAuth token is targeting Anthropic directly).
+        """
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
+
+        data: dict = {}
+        headers = {
+            "Authorization": "Bearer sk-ant-oat02-xyz789",
+            "anthropic-beta": "some-beta-feature",
+        }
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        psh = data.get("provider_specific_header")
+        assert psh is not None
+        assert psh["custom_llm_provider"] == "anthropic"
+        assert psh["extra_headers"]["Authorization"] == "Bearer sk-ant-oat02-xyz789"
+        assert psh["extra_headers"]["anthropic-beta"] == "some-beta-feature"
+
+        # Anthropic receives both headers
+        anthropic_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            psh, "anthropic"
+        )
+        assert anthropic_headers["Authorization"] == "Bearer sk-ant-oat02-xyz789"
+        assert anthropic_headers["anthropic-beta"] == "some-beta-feature"
+
+        # Bedrock and Vertex AI receive nothing — the OAuth token is not surgically
+        # stripped; instead the whole header set is scoped to anthropic only
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(psh, "bedrock") == {}
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(psh, "vertex_ai") == {}
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(psh, "bedrock_converse") == {}
+
+    def test_non_oauth_anthropic_headers_forwarded_to_multi_providers(self):
+        """Regular Anthropic API headers without an OAuth token go to anthropic,bedrock,vertex_ai."""
+        data: dict = {}
+        headers = {"anthropic-beta": "some-beta-feature"}
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        psh = data.get("provider_specific_header")
+        assert psh is not None
+        assert "bedrock" in psh["custom_llm_provider"]
+        assert "vertex_ai" in psh["custom_llm_provider"]
+        assert psh["extra_headers"]["anthropic-beta"] == "some-beta-feature"
+        assert "Authorization" not in psh["extra_headers"]
+
+    def test_no_provider_specific_header_when_no_relevant_headers(self):
+        """No provider_specific_header is set when there are no relevant headers."""
+        data: dict = {}
+        headers = {"x-some-other-header": "value"}
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        assert "provider_specific_header" not in data
+
+    def test_raw_oauth_token_scoped_to_anthropic_only(self):
+        """OAuth token without 'Bearer ' prefix is also scoped to anthropic only."""
+        data: dict = {}
+        headers = {"Authorization": "sk-ant-oat01-rawtoken"}
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        psh = data.get("provider_specific_header")
+        assert psh is not None
+        assert psh["custom_llm_provider"] == "anthropic"

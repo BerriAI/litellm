@@ -1928,29 +1928,42 @@ def add_provider_specific_headers_to_request(
 ):
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
-    anthropic_headers = {}
-    # boolean to indicate if a header was added
-    added_header = False
+    # Headers that work identically across Anthropic, Bedrock, and Vertex AI
+    multi_provider_headers: dict = {}
     for header in ANTHROPIC_API_HEADERS:
         if header in headers:
-            header_value = headers[header]
-            anthropic_headers[header] = header_value
-            added_header = True
+            multi_provider_headers[header] = headers[header]
 
-    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
-    # This needs to be handled via provider-specific headers to ensure it only
-    # goes to Anthropic-compatible providers, not all providers in the router
+    # Detect an Anthropic OAuth token (sk-ant-oat*) in the Authorization header.
+    # OAuth tokens must be scoped to the Anthropic provider only — forwarding them
+    # to Bedrock or Vertex AI would overwrite those providers' own auth headers
+    # (AWS SigV4 Authorization for Bedrock, service-account credentials for Vertex AI),
+    # causing 403 errors. See https://github.com/BerriAI/litellm/issues/24436
+    oauth_header_key: str = ""
+    oauth_header_value: str = ""
     for header, value in headers.items():
         if header.lower() == "authorization" and is_anthropic_oauth_key(value):
-            anthropic_headers[header] = value
-            added_header = True
+            oauth_header_key = header
+            oauth_header_value = value
             break
-    if added_header is True:
-        # Anthropic headers work across multiple providers
-        # Store as comma-separated list so retrieval can match any of them
+
+    if oauth_header_key:
+        # Scope ALL Anthropic headers (including the OAuth token) to the Anthropic
+        # provider only. Users sending an OAuth token are targeting Anthropic directly;
+        # Bedrock/Vertex have their own beta-header plumbing.
+        data["provider_specific_header"] = ProviderSpecificHeader(
+            custom_llm_provider=LlmProviders.ANTHROPIC.value,
+            extra_headers={
+                **multi_provider_headers,
+                oauth_header_key: oauth_header_value,
+            },
+        )
+    elif multi_provider_headers:
+        # Regular Anthropic API headers (e.g. anthropic-beta, anthropic-version)
+        # work across all three Anthropic-format providers.
         data["provider_specific_header"] = ProviderSpecificHeader(
             custom_llm_provider=f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}",
-            extra_headers=anthropic_headers,
+            extra_headers=multi_provider_headers,
         )
 
     return
