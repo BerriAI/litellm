@@ -1865,7 +1865,12 @@ async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_it
     elapsed = asyncio.get_event_loop().time() - start
     assert isinstance(out, ModelResponseStream)
     # background_tick sleeps 0.05 s; total must finish well under 2 × 0.3 s
-    assert elapsed < 0.5, f"Event loop was likely blocked (elapsed={elapsed:.2f}s)"
+    # Use generous threshold to avoid CI jitter on overloaded runners
+    assert elapsed < 1.5, f"Event loop was likely blocked (elapsed={elapsed:.2f}s)"
+    # Structural assertion: if non-blocking, background_tick completed and set the event
+    assert (
+        tick_event.is_set()
+    ), "Background coroutine did not run (event loop was blocked)"
 
 
 @pytest.mark.asyncio

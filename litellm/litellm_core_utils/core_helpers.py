@@ -278,6 +278,12 @@ def safe_model_dump(obj: "ModelResponseStream") -> dict:
         ModelResponseStream(**dict), so this divergence is typically transparent.
         However, code that type-checks or iterates dict values may observe
         different types on the fallback path.
+
+    Note:
+        Both call sites in streaming_handler.py pass the returned dict to
+        Pydantic model reconstruction (ModelResponseStream(**dict)), which
+        accepts nested Pydantic instances. No intermediate processing assumes
+        plain dicts, so the type divergence is safe.
     """
     try:
         return obj.model_dump()

@@ -2110,6 +2110,10 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
+                        # Off-load blocking __next__ to thread pool to avoid blocking event loop.
+                        # Providers like boto3 return sync iterators that do real network I/O in
+                        # __next__, so we must prevent them from blocking the async event loop.
+                        # The thread overhead per chunk is acceptable for this I/O-bound path.
                         chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
                         if chunk is _SYNC_ITER_EXHAUSTED:
                             raise StopAsyncIteration
