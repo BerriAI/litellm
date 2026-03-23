@@ -28,7 +28,6 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
 )
 
-
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -41,6 +40,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 
 from litellm.types.utils import CacheCreationTokenDetails, Usage
+
 
 def test_reasoning_tokens_no_price_set():
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
@@ -128,6 +128,7 @@ def test_reasoning_tokens_gemini():
         ),
         10,
     )
+
 
 def test_reasoning_tokens_gemini_3_1_flash_lite():
     """Test cost calculation for gemini-3.1-flash-lite-preview with reasoning tokens"""
@@ -318,8 +319,12 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
         usage=usage,
         custom_llm_provider=custom_llm_provider,
     )
-    expected_prompt = model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
-    expected_completion = model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    expected_prompt = (
+        model_cost_map["input_cost_per_token_above_272k_tokens"] * prompt_tokens
+    )
+    expected_completion = (
+        model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
+    )
     assert round(prompt_cost, 10) == round(expected_prompt, 10)
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
@@ -407,7 +412,11 @@ def test_string_cost_values():
         completion_tokens=500,
         total_tokens=1650,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
+            audio_tokens=100,
+            cached_tokens=200,
+            text_tokens=700,
+            image_tokens=None,
+            cache_creation_tokens=150,
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(
             audio_tokens=50,
@@ -684,7 +693,9 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
     expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
-    assert result > 0, "Cost should not be zero when ephemeral token details are present"
+    assert (
+        result > 0
+    ), "Cost should not be zero when ephemeral token details are present"
     assert round(result, 6) == round(expected, 6)
 
 
@@ -693,52 +704,56 @@ def test_service_tier_flex_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-5-nano which has flex pricing
     model = "gpt-5-nano"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test standard pricing
     std_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
     std_total = std_cost[0] + std_cost[1]
-    
+
     # Test flex pricing
     flex_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="flex"
+        service_tier="flex",
     )
     flex_total = flex_cost[0] + flex_cost[1]
-    
+
     # Verify flex is approximately 50% of standard
     assert std_total > 0, "Standard cost should be greater than 0"
     assert flex_total > 0, "Flex cost should be greater than 0"
-    
+
     flex_ratio = flex_total / std_total
-    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
-    
+    assert (
+        0.45 <= flex_ratio <= 0.55
+    ), f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
     # Verify specific costs match expected values
     # gpt-5-nano flex: input=2.5e-08, output=2e-07
     expected_flex_prompt = 1000 * 2.5e-08  # 0.000025
     expected_flex_completion = 500 * 2e-07  # 0.0001
     expected_flex_total = expected_flex_prompt + expected_flex_completion
-    
-    assert abs(flex_cost[0] - expected_flex_prompt) < 1e-10, f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
-    assert abs(flex_cost[1] - expected_flex_completion) < 1e-10, f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
-    assert abs(flex_total - expected_flex_total) < 1e-10, f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
+
+    assert (
+        abs(flex_cost[0] - expected_flex_prompt) < 1e-10
+    ), f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
+    assert (
+        abs(flex_cost[1] - expected_flex_completion) < 1e-10
+    ), f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
+    assert (
+        abs(flex_total - expected_flex_total) < 1e-10
+    ), f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
 
 
 def test_service_tier_default_pricing():
@@ -746,46 +761,50 @@ def test_service_tier_default_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-5-nano
     model = "gpt-5-nano"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test with no service tier (should use standard)
     default_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
-    
+
     # Test with explicit standard service tier
     standard_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="standard"
+        service_tier="standard",
     )
-    
+
     # Both should be identical
-    assert abs(default_cost[0] - standard_cost[0]) < 1e-10, "Default and standard prompt costs should be identical"
-    assert abs(default_cost[1] - standard_cost[1]) < 1e-10, "Default and standard completion costs should be identical"
-    
+    assert (
+        abs(default_cost[0] - standard_cost[0]) < 1e-10
+    ), "Default and standard prompt costs should be identical"
+    assert (
+        abs(default_cost[1] - standard_cost[1]) < 1e-10
+    ), "Default and standard completion costs should be identical"
+
     # Verify specific costs match expected standard values
     # gpt-5-nano standard: input=5e-08, output=4e-07
     expected_standard_prompt = 1000 * 5e-08  # 0.00005
     expected_standard_completion = 500 * 4e-07  # 0.0002
     expected_standard_total = expected_standard_prompt + expected_standard_completion
-    
-    assert abs(default_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
-    assert abs(default_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
+
+    assert (
+        abs(default_cost[0] - expected_standard_prompt) < 1e-10
+    ), f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
+    assert (
+        abs(default_cost[1] - expected_standard_completion) < 1e-10
+    ), f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
 
 
 def test_service_tier_fallback_pricing():
@@ -793,62 +812,66 @@ def test_service_tier_fallback_pricing():
     # Set up environment for local model cost map
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Test with gpt-4 which doesn't have flex pricing keys
     model = "gpt-4"
     custom_llm_provider = "openai"
-    
+
     # Create usage object
-    usage = Usage(
-        prompt_tokens=1000,
-        completion_tokens=500,
-        total_tokens=1500
-    )
-    
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
     # Test standard pricing
     std_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier=None
+        service_tier=None,
     )
     std_total = std_cost[0] + std_cost[1]
-    
+
     # Test flex pricing (should fall back to standard since gpt-4 doesn't have flex keys)
     flex_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="flex"
+        service_tier="flex",
     )
     flex_total = flex_cost[0] + flex_cost[1]
-    
+
     # Test priority pricing (should fall back to standard since gpt-4 doesn't have priority keys)
     priority_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
-        service_tier="priority"
+        service_tier="priority",
     )
     priority_total = priority_cost[0] + priority_cost[1]
-    
+
     # All should be identical (fallback to standard)
-    assert abs(std_total - flex_total) < 1e-10, f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
-    assert abs(std_total - priority_total) < 1e-10, f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
-    
+    assert (
+        abs(std_total - flex_total) < 1e-10
+    ), f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
+    assert (
+        abs(std_total - priority_total) < 1e-10
+    ), f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
+
     # Verify costs are reasonable (not zero)
     assert std_total > 0, "Standard cost should be greater than 0"
     assert flex_total > 0, "Flex cost should be greater than 0 (fallback)"
     assert priority_total > 0, "Priority cost should be greater than 0 (fallback)"
-    
+
     # Verify specific costs match expected gpt-4 values
     # gpt-4 standard: input=3e-05, output=6e-05
     expected_standard_prompt = 1000 * 3e-05  # 0.03
     expected_standard_completion = 500 * 6e-05  # 0.03
     expected_standard_total = expected_standard_prompt + expected_standard_completion
-    
-    assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
-    assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
+
+    assert (
+        abs(std_cost[0] - expected_standard_prompt) < 1e-10
+    ), f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
+    assert (
+        abs(std_cost[1] - expected_standard_completion) < 1e-10
+    ), f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
 @pytest.mark.parametrize(
@@ -908,7 +931,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     output_cost_per_token = model_cost_map.get("output_cost_per_token", 0)
 
     expected_image_cost = 1120 * output_cost_per_image_token
-    expected_reasoning_cost = 225 * output_cost_per_token  # reasoning uses base token cost
+    expected_reasoning_cost = (
+        225 * output_cost_per_token
+    )  # reasoning uses base token cost
     expected_completion_cost = expected_image_cost + expected_reasoning_cost
 
     # The bug was: all completion tokens were treated as text tokens only.
@@ -917,9 +942,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
         f"Completion cost should be significantly larger than text-only bugged path. "
         f"Expected > {bugged_text_only_cost * 2:.6f}, got {completion_cost:.6f}"
     )
-    assert round(completion_cost, 4) == round(expected_completion_cost, 4), (
-        f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
-    )
+    assert round(completion_cost, 4) == round(
+        expected_completion_cost, 4
+    ), f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
 
 
 def test_vertex_image_generation_cost_prefers_token_usage_metadata():
@@ -957,7 +982,9 @@ def test_vertex_image_generation_cost_prefers_token_usage_metadata():
     )
 
     expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
-    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_completion_cost = (
+        output_image_tokens * model_info["output_cost_per_image_token"]
+    )
     expected_total_cost = expected_prompt_cost + expected_completion_cost
 
     assert round(cost, 10) == round(expected_total_cost, 10)
@@ -1024,7 +1051,9 @@ def test_gemini_image_generation_cost_prefers_token_usage_metadata():
     )
 
     expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
-    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_completion_cost = (
+        output_image_tokens * model_info["output_cost_per_image_token"]
+    )
     expected_total_cost = expected_prompt_cost + expected_completion_cost
 
     assert round(cost, 10) == round(expected_total_cost, 10)
@@ -1120,16 +1149,19 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     expected_prompt_cost = 17 * 0.05 / 1_000_000
     expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
 
-    assert abs(prompt_cost - expected_prompt_cost) < 1e-10, \
-        f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
+    assert (
+        abs(prompt_cost - expected_prompt_cost) < 1e-10
+    ), f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
 
-    assert abs(completion_cost - expected_completion_cost) < 1e-10, \
-        f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
+    assert (
+        abs(completion_cost - expected_completion_cost) < 1e-10
+    ), f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
 
     # Verify it's NOT using only reasoning_tokens (the bug)
     wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
-    assert abs(completion_cost - wrong_cost) > 1e-6, \
-        "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
+    assert (
+        abs(completion_cost - wrong_cost) > 1e-6
+    ), "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
 
 
 def test_image_count_prevents_text_tokens_fallback():
@@ -1183,7 +1215,7 @@ def test_unaccounted_pdf_tokens_fill_text_tokens():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=50,
@@ -1195,25 +1227,25 @@ def test_unaccounted_pdf_tokens_fill_text_tokens():
             image_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-2.0-flash-001",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
     expected_prompt_cost = 1000 * model_info["input_cost_per_token"]
     expected_completion_cost = 50 * model_info["output_cost_per_token"]
     expected_total_cost = expected_prompt_cost + expected_completion_cost
     actual_total_cost = prompt_cost + completion_cost
- 
+
     assert actual_total_cost == pytest.approx(expected_total_cost), (
         f"Expected total cost={expected_total_cost}, got total cost={actual_total_cost}. "
         f"PDF tokens (992 unaccounted) are not being costed."
     )
- 
- 
+
+
 def test_no_prompt_details_all_prompt_tokens_costed():
     """
     Scenario: Provider returns no prompt_tokens_details at all (older API).
@@ -1221,31 +1253,31 @@ def test_no_prompt_details_all_prompt_tokens_costed():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=50,
         total_tokens=1050,
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-2.0-flash-001",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
     expected_prompt_cost = 1000 * model_info["input_cost_per_token"]
     expected_completion_cost = 50 * model_info["output_cost_per_token"]
     expected_total_cost = expected_prompt_cost + expected_completion_cost
     actual_total_cost = prompt_cost + completion_cost
- 
+
     assert actual_total_cost == pytest.approx(expected_total_cost), (
         f"Expected total cost={expected_total_cost}, got total cost={actual_total_cost}. "
         f"Without prompt_tokens_details, all prompt_tokens should be text."
     )
- 
- 
+
+
 def test_fully_accounted_tokens_unchanged():
     """
     Scenario: All prompt_tokens are fully accounted by detail fields.
@@ -1257,7 +1289,7 @@ def test_fully_accounted_tokens_unchanged():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=1000,
         completion_tokens=50,
@@ -1269,31 +1301,30 @@ def test_fully_accounted_tokens_unchanged():
             image_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-2.0-flash-001",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
     cache_read_cost = model_info.get("cache_read_input_token_cost", 0) or 0
- 
+
     # 800 text at input rate + 200 cached at cache-read rate
     expected_prompt_cost = (
-        800 * model_info["input_cost_per_token"]
-        + 200 * cache_read_cost
+        800 * model_info["input_cost_per_token"] + 200 * cache_read_cost
     )
     expected_completion_cost = 50 * model_info["output_cost_per_token"]
     expected_total_cost = expected_prompt_cost + expected_completion_cost
     actual_total_cost = prompt_cost + completion_cost
- 
+
     assert actual_total_cost == pytest.approx(expected_total_cost), (
         f"Expected total cost={expected_total_cost}, got total cost={actual_total_cost}. "
         f"Fully accounted tokens should not be adjusted."
     )
- 
- 
+
+
 def test_double_counting_still_handled():
     """
     Scenario: xAI-style double counting where text_tokens includes cached_tokens.
@@ -1305,7 +1336,7 @@ def test_double_counting_still_handled():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=500,
         completion_tokens=50,
@@ -1317,16 +1348,16 @@ def test_double_counting_still_handled():
             image_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="xai/grok-3",
         usage=usage,
         custom_llm_provider="xai",
     )
- 
+
     model_info = litellm.model_cost["xai/grok-3"]
     cache_read_cost = model_info.get("cache_read_input_token_cost", 0) or 0
- 
+
     # text_tokens should be recalculated to 300 (500 - 200 cache_hit)
     expected_prompt_cost = (
         300 * model_info["input_cost_per_token"]  # non-cached text
@@ -1335,13 +1366,13 @@ def test_double_counting_still_handled():
     expected_completion_cost = 50 * model_info["output_cost_per_token"]
     expected_total_cost = expected_prompt_cost + expected_completion_cost
     actual_total_cost = prompt_cost + completion_cost
- 
+
     assert actual_total_cost == pytest.approx(expected_total_cost), (
         f"Expected total cost={expected_total_cost}, got total cost={actual_total_cost}. "
         f"Double-counting fix should still work."
     )
- 
- 
+
+
 def test_large_pdf_small_text_message():
     """
     Scenario: A large PDF (~50 pages) with a tiny instruction.
@@ -1349,7 +1380,7 @@ def test_large_pdf_small_text_message():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=52000,
         completion_tokens=500,
@@ -1361,27 +1392,27 @@ def test_large_pdf_small_text_message():
             image_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-2.0-flash-001",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
- 
+
     # All 52000 prompt tokens must be costed
     expected_prompt_cost = 52000 * model_info["input_cost_per_token"]
     expected_completion_cost = 500 * model_info["output_cost_per_token"]
     expected_total_cost = expected_prompt_cost + expected_completion_cost
     actual_total_cost = prompt_cost + completion_cost
- 
+
     assert actual_total_cost == pytest.approx(expected_total_cost), (
         f"Expected total cost={expected_total_cost}, got total cost={actual_total_cost}. "
         f"Large PDF content tokens (51992 unaccounted) are not being costed."
     )
- 
- 
+
+
 def test_image_count_billing_does_not_fill_prompt_token_gap():
     """
     Scenario: User sends an image URL alongside some text.
@@ -1396,11 +1427,11 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     # multimodalembedding@001 has non-zero input_cost_per_image (0.0001) and
     # input_cost_per_token (8e-07), making the image billing assertion non-trivial.
     model = "multimodalembedding@001"
- 
+
     usage = Usage(
         prompt_tokens=10000,
         completion_tokens=200,
@@ -1410,25 +1441,25 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
             image_count=1,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost[model]
     input_cost_per_token = model_info["input_cost_per_token"]
     output_cost_per_token = model_info["output_cost_per_token"]
     input_cost_per_image = model_info.get("input_cost_per_image", 0) or 0
- 
+
     # text_tokens should stay at 50 — no gap-fill when image_count is active
     expected_prompt_cost = (
-        50 * input_cost_per_token     # only reported text tokens
-        + 1 * input_cost_per_image    # image billed via flat per-image cost
+        50 * input_cost_per_token  # only reported text tokens
+        + 1 * input_cost_per_image  # image billed via flat per-image cost
     )
     expected_completion_cost = 200 * output_cost_per_token
- 
+
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
         f"Gap should not be filled when image_count billing is active."
@@ -1444,12 +1475,12 @@ def test_character_count_billing_does_not_fill_prompt_token_gap():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     # multimodalembedding@001 has non-zero input_cost_per_character (2e-07),
     # input_cost_per_token (8e-07), and output_cost_per_token (0) in the cost map,
     # making the character_count billing assertion non-trivial.
     model = "multimodalembedding@001"
- 
+
     usage = Usage(
         prompt_tokens=200,
         completion_tokens=20,
@@ -1462,27 +1493,26 @@ def test_character_count_billing_does_not_fill_prompt_token_gap():
             cached_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost[model]
-    expected_prompt_cost = (
-        100 * model_info.get("input_cost_per_token", 0)
-        + 1000 * model_info.get("input_cost_per_character", 0)
-    )
+    expected_prompt_cost = 100 * model_info.get(
+        "input_cost_per_token", 0
+    ) + 1000 * model_info.get("input_cost_per_character", 0)
     expected_completion_cost = 20 * model_info.get("output_cost_per_token", 0)
- 
+
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
         f"character_count-based requests should not fill token gaps as text."
     )
     assert completion_cost == pytest.approx(expected_completion_cost)
- 
- 
+
+
 def test_video_length_billing_does_not_fill_prompt_token_gap():
     """
     Regression: when video_length_seconds pricing is active, gaps between
@@ -1491,11 +1521,11 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     # multimodalembedding@001 has non-zero input_cost_per_video_per_second (0.0005)
     # and input_cost_per_token (8e-07), making the video billing assertion non-trivial.
     model = "multimodalembedding@001"
- 
+
     usage = Usage(
         prompt_tokens=150,
         completion_tokens=10,
@@ -1508,27 +1538,26 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
             cached_tokens=0,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     model_info = litellm.model_cost[model]
-    expected_prompt_cost = (
-        50 * model_info.get("input_cost_per_token", 0)
-        + 12.0 * model_info.get("input_cost_per_video_per_second", 0)
-    )
+    expected_prompt_cost = 50 * model_info.get(
+        "input_cost_per_token", 0
+    ) + 12.0 * model_info.get("input_cost_per_video_per_second", 0)
     expected_completion_cost = 10 * model_info.get("output_cost_per_token", 0)
- 
+
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
         f"video_length_seconds-based requests should not fill token gaps as text."
     )
     assert completion_cost == pytest.approx(expected_completion_cost)
- 
- 
+
+
 def test_negative_text_tokens_clamped_to_zero():
     """
     Scenario: Malformed provider response where cached_tokens > prompt_tokens.
@@ -1541,7 +1570,7 @@ def test_negative_text_tokens_clamped_to_zero():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
- 
+
     usage = Usage(
         prompt_tokens=100,
         completion_tokens=10,
@@ -1551,13 +1580,13 @@ def test_negative_text_tokens_clamped_to_zero():
             cached_tokens=200,
         ),
     )
- 
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-2.0-flash-001",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
- 
+
     # text_tokens = max(0, 100 - 200) = 0, so only cache_read cost applies
     assert prompt_cost >= 0, (
         f"Prompt cost must be non-negative, got {prompt_cost}. "
