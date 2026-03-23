@@ -7,12 +7,13 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import asyncio
 import inspect
 import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
@@ -178,6 +179,28 @@ def create_gcp_iam_redis_connect_func(
     return iam_connect
 
 
+class GCPIAMCredentialProvider:
+    """
+    redis.credentials.CredentialProvider implementation that generates a fresh GCP IAM
+    token on every new connection. This fixes the 1-hour token expiry issue for async
+    Redis cluster clients, which previously generated the token once at startup and
+    cached it as a static password.
+    """
+
+    def __init__(self, gcp_service_account: str) -> None:
+        self._gcp_service_account = gcp_service_account
+
+    def get_credentials(self) -> Tuple[str]:
+        token = _generate_gcp_iam_access_token(self._gcp_service_account)
+        return (token,)
+
+    async def get_credentials_async(self) -> Tuple[str]:
+        token = await asyncio.to_thread(
+            _generate_gcp_iam_access_token, self._gcp_service_account
+        )
+        return (token,)
+
+
 def get_redis_url_from_environment():
     if "REDIS_URL" in os.environ:
         return os.environ["REDIS_URL"]
@@ -262,7 +285,7 @@ def _get_redis_client_logic(**env_overrides):
             service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
         )
         # Store GCP service account in redis_connect_func for async cluster access
-        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
+        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account  # type: ignore[attr-defined]
 
         # Remove GCP-specific kwargs that shouldn't be passed to Redis client
         redis_kwargs.pop("gcp_service_account", None)
@@ -434,23 +457,15 @@ def get_redis_async_client(
             f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
         )
 
-        # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
+        # If GCP IAM is configured (indicated by redis_connect_func), attach a
+        # credential_provider that regenerates the token on every new connection.
+        # This mirrors the sync behaviour where redis_connect_func is called per
+        # connection, and avoids the 1-hour token expiry bug where the old code
+        # generated the token once at startup and set it as a static password.
         if redis_connect_func and gcp_service_account:
-            verbose_logger.debug(
-                "DEBUG: Generating IAM token for service account (value not logged for security reasons)"
+            cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+                gcp_service_account
             )
-            try:
-                # Generate IAM access token using the helper function
-                access_token = _generate_gcp_iam_access_token(gcp_service_account)
-                cluster_kwargs["password"] = access_token
-                verbose_logger.debug(
-                    "DEBUG: Successfully generated GCP IAM access token for async Redis cluster"
-                )
-            except Exception as e:
-                verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
-                from redis.exceptions import AuthenticationError
-
-                raise AuthenticationError("Failed to generate GCP IAM access token")
         else:
             verbose_logger.debug(
                 f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
