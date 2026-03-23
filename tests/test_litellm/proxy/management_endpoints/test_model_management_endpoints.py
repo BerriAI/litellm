@@ -53,6 +53,29 @@ class MockPrismaClient:
         return None
 
     async def find_many(self, where):
+        # Filter sibling deployments by team_id if where clause specifies it
+        if not self.sibling_deployments:
+            return []
+
+        # Extract team_id from where clause if present
+        team_id_filter = None
+        if where and "model_info" in where:
+            model_info_filter = where["model_info"]
+            if isinstance(model_info_filter, dict) and "path" in model_info_filter:
+                if (
+                    model_info_filter["path"] == ["team_id"]
+                    and "equals" in model_info_filter
+                ):
+                    team_id_filter = model_info_filter["equals"]
+
+        # Filter deployments by team_id if specified
+        if team_id_filter:
+            return [
+                d
+                for d in self.sibling_deployments
+                if d.model_info.get("team_id") == team_id_filter
+            ]
+
         return self.sibling_deployments
 
     @property
