@@ -495,6 +495,9 @@ async def _update_existing_team_model_assignment(
     )
 
     if old_public_name and public_model_name != old_public_name:
+        # Clear user-supplied public name from patch before any early return so the
+        # caller does not overwrite the internal UUID-based model_name in the DB.
+        patch_data.model_name = None
         if prisma_client is None:
             verbose_proxy_logger.warning(
                 "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
