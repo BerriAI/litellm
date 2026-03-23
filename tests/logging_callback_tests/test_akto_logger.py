@@ -255,15 +255,25 @@ async def test_async_log_failure_with_status_code(logger, sample_kwargs):
 
 
 def test_extract_client_ip_forwarded():
-    assert AktoLogger.extract_client_ip(
-        {"proxy_server_request": {"headers": {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}}}
-    ) == "1.2.3.4"
+    assert (
+        AktoLogger.extract_client_ip(
+            {
+                "proxy_server_request": {
+                    "headers": {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}
+                }
+            }
+        )
+        == "1.2.3.4"
+    )
 
 
 def test_extract_client_ip_real_ip():
-    assert AktoLogger.extract_client_ip(
-        {"proxy_server_request": {"headers": {"x-real-ip": "10.0.0.1"}}}
-    ) == "10.0.0.1"
+    assert (
+        AktoLogger.extract_client_ip(
+            {"proxy_server_request": {"headers": {"x-real-ip": "10.0.0.1"}}}
+        )
+        == "10.0.0.1"
+    )
 
 
 def test_extract_client_ip_fallback():
@@ -274,9 +284,12 @@ def test_extract_client_ip_fallback():
 
 
 def test_extract_request_path_from_metadata():
-    assert AktoLogger.extract_request_path(
-        {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
-    ) == "/v1/embeddings"
+    assert (
+        AktoLogger.extract_request_path(
+            {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
+        )
+        == "/v1/embeddings"
+    )
 
 
 def test_extract_request_path_fallback():

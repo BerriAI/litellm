@@ -181,6 +181,7 @@ class AktoLogger(CustomLogger):
                 "content-type": "application/json",
                 "Authorization": self.akto_api_key,
             },
+            "timeout": 10,
         }
 
     async def async_health_check(self) -> dict:
