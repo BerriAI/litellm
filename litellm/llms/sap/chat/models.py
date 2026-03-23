@@ -1,8 +1,9 @@
-from typing import Union, Literal, Optional
+from typing import Union, Literal, Optional, Any, Self
 from enum import Enum
 import warnings
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.config import ExtraValues
 
 
 def validate_different_content(v: Union[str, dict, list]) -> str:
@@ -66,6 +67,10 @@ class FunctionTool(BaseModel):
 class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
+
+    def model_dump(self, **kwargs) -> Self:
+        kwargs["exclude_unset"] = False
+        return super().model_dump(**kwargs)
 
 
 class MessageToolCall(BaseModel):
