@@ -66,7 +66,7 @@ def normalize_provider_specific_fields(obj: Any) -> Optional[Dict[str, Any]]:
         return None
     if isinstance(psf, dict):
         return psf
-    return dict(psf) if hasattr(psf, "__dict__") else {}
+    return dict(psf) if hasattr(psf, "__dict__") else None
 
 
 def status_to_finish_reason(status: Optional[str]) -> str:
@@ -189,13 +189,13 @@ def response_api_usage_to_chat_usage(
 
     response_api_usage: ResponseAPIUsage
     if isinstance(usage_input, dict):
+        usage_input = dict(usage_input)
         total_tokens = usage_input.get("total_tokens")
         if total_tokens is None:
             input_tokens = usage_input.get("input_tokens")
             output_tokens = usage_input.get("output_tokens")
             if input_tokens is not None and output_tokens is not None:
-                total_tokens = input_tokens + output_tokens
-                usage_input["total_tokens"] = total_tokens
+                usage_input["total_tokens"] = input_tokens + output_tokens
         response_api_usage = ResponseAPIUsage(**usage_input)
     else:
         response_api_usage = usage_input
