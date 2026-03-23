@@ -114,7 +114,8 @@ class AktoGuardrail(CustomGuardrail):
                 },
                 timeout=self.guardrail_timeout,
             )
-        except Exception as e:
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            # Fire-and-forget: log but never crash the request path
             verbose_proxy_logger.error("Akto blocked-request ingest error: %s", e)
 
     # ── Payload builders ──

@@ -135,6 +135,7 @@ def test_init_from_env():
 
 
 def test_init_defaults():
+    # patch.dict restores popped keys on exit
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("AKTO_ACCOUNT_ID", None)
         os.environ.pop("AKTO_VXLAN_ID", None)
