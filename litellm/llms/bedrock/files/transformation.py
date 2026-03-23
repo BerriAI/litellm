@@ -399,6 +399,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # IO[bytes] path (e.g. SpooledTemporaryFile from FastAPI UploadFile).
             # seek(0) is already called inside _get_content_from_openai_file, but we
             # handle this branch directly to surface a clear error for binary uploads.
+            #
+            # NOTE: Bedrock requires UTF-8 text content for SigV4 request signing
+            # and does not support binary file uploads.  We must materialize the
+            # entire file in memory here — there is no streaming alternative.
+            # Operators uploading large files to Bedrock should be aware that memory
+            # usage will spike proportionally to file size at this point.
             extracted_file_data_content.seek(0)
             raw = extracted_file_data_content.read()
             try:
