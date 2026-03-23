@@ -770,7 +770,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -788,7 +790,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
-async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
     """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
 
     Regression test for https://github.com/BerriAI/litellm/issues/20870
@@ -797,7 +801,9 @@ async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_o
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -825,7 +831,9 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -850,7 +858,9 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -1363,6 +1373,7 @@ def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
             chunks.append(_make_chunk(p))
     return chunks
 
+
 _REPETITION_TEST_CASES = [
     # Basic cases
     pytest.param(
@@ -1419,7 +1430,14 @@ _REPETITION_TEST_CASES = [
         id="last_chunk_different_no_raise",
     ),
     pytest.param(
-        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1)
+        + ["different_mid"]
+        + ["same"]
+        * (
+            litellm.REPEATED_STREAMING_CHUNK_LIMIT
+            - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2
+            + 1
+        ),
         False,
         id="middle_chunk_different_no_raise",
     ),
@@ -1429,7 +1447,9 @@ _REPETITION_TEST_CASES = [
         id="last_two_different_no_raise",
     ),
     pytest.param(
-        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["diff"],
         True,
         id="in_between_same_and_diff_raise",
     ),
@@ -1455,6 +1475,8 @@ def test_raise_on_model_repetition(
         for chunk in chunks:
             wrapper.chunks.append(chunk)
             wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -1536,12 +1558,13 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     last_chunk = collected[-1]
     hidden_usage = last_chunk._hidden_params.get("usage")
     assert hidden_usage is not None, "Expected usage in _hidden_params"
-    assert hidden_usage.prompt_tokens == 20, (
-        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
-    )
-    assert hidden_usage.completion_tokens == 135, (
-        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
-    )
+    assert (
+        hidden_usage.prompt_tokens == 20
+    ), f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    assert (
+        hidden_usage.completion_tokens == 135
+    ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+
 
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
@@ -1615,9 +1638,9 @@ def test_content_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — content was dropped (issue #22098)"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — content was dropped (issue #22098)"
     assert result.choices[0].delta.content == "world!"
 
 
@@ -1669,14 +1692,14 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — tool_use data was dropped"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — tool_use data was dropped"
 
     tool_calls = result.choices[0].delta.tool_calls
-    assert tool_calls is not None and len(tool_calls) > 0, (
-        "tool_calls should contain at least one tool call"
-    )
+    assert (
+        tool_calls is not None and len(tool_calls) > 0
+    ), "tool_calls should contain at least one tool call"
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
 
@@ -1691,10 +1714,17 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     SchemaSerializer in certain scenarios. The fix catches TypeError and falls
     back to __dict__ extraction.
     """
-    from unittest.mock import patch
 
     # Create a chunk with usage that will be stripped
-    chunk_with_usage = ModelResponseStream(
+    # Create a subclass with corrupted model_dump to isolate the bug to a single instance
+    class CorruptedModelResponseStream(ModelResponseStream):
+        def model_dump(self, **kwargs):
+            raise TypeError(
+                "'MockValSer' object cannot be converted to 'SchemaSerializer'"
+            )
+
+    # Create an instance of the corrupted subclass
+    corrupted_chunk = CorruptedModelResponseStream(
         id="test-chunk",
         created=1742056047,
         model="sap-ai-core/test-model",
@@ -1710,14 +1740,9 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     )
 
     # Add a provider-specific field to test __pydantic_extra__ preservation
-    chunk_with_usage.sap_extra_field = "sap-value"
+    corrupted_chunk.sap_extra_field = "sap-value"
 
-    # Mock model_dump at class level to avoid polluting instance attributes
-    def mock_model_dump(self, *args, **kwargs):
-        raise TypeError("'MockValSer' object cannot be converted to 'SchemaSerializer'")
-
-    # Use class-level patching to avoid the mock appearing in __dict__ or __pydantic_extra__
-    with patch.object(type(chunk_with_usage), 'model_dump', mock_model_dump):
+    try:
         # Use a DIFFERENT object as the target model_response
         fresh_model_response = ModelResponseStream(
             id="fresh",
@@ -1733,11 +1758,17 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
             ],
         )
 
+        # Verify fresh_model_response.model_dump() still works normally
+        # (proves instance-level mock doesn't affect other instances)
+        assert callable(fresh_model_response.model_dump)
+        test_dump = fresh_model_response.model_dump()
+        assert isinstance(test_dump, dict)
+
         # Process the chunk through return_processed_chunk_logic which calls model_dump
         result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
             completion_obj={"content": "test content"},
-            response_obj={"original_chunk": chunk_with_usage},  # source of extra attrs
-            model_response=fresh_model_response,                 # target (different object)
+            response_obj={"original_chunk": corrupted_chunk},  # source of extra attrs
+            model_response=fresh_model_response,  # target (different object)
         )
 
         # Should not raise TypeError and should successfully process the chunk
@@ -1747,12 +1778,22 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
         # Now this assertion is meaningful: it verifies the attribute was actually COPIED
         assert getattr(result, "sap_extra_field", None) == "sap-value"
 
+    finally:
+        # No cleanup needed - subclass approach doesn't mutate shared state
+        pass
+
     # Verify that result can still be serialized (model_dump method is not corrupted)
-    # This call is outside the patch context so it should work normally
     result_dict = result.model_dump()
     assert isinstance(result_dict, dict)
     # Extra provider field should survive into the serialized output
     assert result_dict.get("sap_extra_field") == "sap-value"
+
+    # Verify nested structures are accessible (validates fallback behavior)
+    # The fallback returns nested Pydantic instances instead of plain dicts,
+    # but they should still be accessible and functional
+    assert result.choices is not None
+    assert len(result.choices) > 0
+    assert result.choices[0].delta.content == "test content"
 
 
 @pytest.mark.asyncio

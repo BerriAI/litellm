@@ -267,6 +267,17 @@ def safe_model_dump(obj: "ModelResponseStream") -> dict:
     """
     Safely call model_dump(), falling back to __dict__ if the Pydantic
     MockValSer bug (pydantic issue #7713) is encountered.
+
+    Returns:
+        A dictionary representation of the model. Note that the normal path
+        (model_dump()) recursively converts nested Pydantic models to plain
+        dicts/primitives, while the fallback path (__dict__) returns nested
+        Pydantic model instances (e.g., StreamingChoices, Delta) as-is.
+
+        Pydantic v2 initialization handles both representations when passed to
+        ModelResponseStream(**dict), so this divergence is typically transparent.
+        However, code that type-checks or iterates dict values may observe
+        different types on the fallback path.
     """
     try:
         return obj.model_dump()
