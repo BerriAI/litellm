@@ -776,6 +776,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return ChatCompletionToolChoiceObjectParam(
                 type="function", function=tc_function_param
             )
+        elif tool_choice["type"] == "none":
+            return "none"
         else:
             raise ValueError(
                 "Incompatible tool choice param submitted - {}".format(tool_choice)
