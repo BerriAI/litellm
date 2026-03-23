@@ -1,9 +1,8 @@
-from typing import Union, Literal, Optional, Any, Self
+from typing import Union, Literal, Optional
 from enum import Enum
 import warnings
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic.config import ExtraValues
 
 
 def validate_different_content(v: Union[str, dict, list]) -> str:
