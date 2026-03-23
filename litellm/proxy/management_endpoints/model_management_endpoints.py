@@ -491,7 +491,8 @@ async def _update_existing_team_model_assignment(
                 d
                 for d in response
                 if d.model_name != db_model.model_name
-                and d.model_info.get("team_public_model_name") == old_public_name
+                and (d.model_info or {}).get("team_public_model_name")
+                == old_public_name
             ]
 
             if not other_deployments_with_old_name:
