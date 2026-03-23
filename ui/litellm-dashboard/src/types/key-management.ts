@@ -2,7 +2,7 @@
  * Key management types — derived from the backend OpenAPI schema.
  *
  * Depends on api.generated.ts which is gitignored.
- * Run `npm run generate:all` from ui/litellm-dashboard/ to generate it.
+ * Run `npm run generate:types` from ui/litellm-dashboard/ to generate it.
  */
 import type { components, paths } from "./api.generated";
 

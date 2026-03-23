@@ -18,9 +18,7 @@
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
     "knip": "knip",
     "knip:fix": "knip --fix",
-    "generate:schema": "python ../../scripts/export_openapi.py",
-    "generate:types": "openapi-typescript ./openapi.json -o src/types/api.generated.ts",
-    "generate:all": "npm run generate:schema && npm run generate:types"
+    "generate:types": "python ../../scripts/export_openapi.py"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",

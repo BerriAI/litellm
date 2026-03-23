@@ -103,6 +103,5 @@ STABILIZATION_TODO.md
 **/*.storageState.json
 **/coverage
 
-# Generated OpenAPI types (regenerate with: cd ui/litellm-dashboard && npm run generate:all)
-ui/litellm-dashboard/openapi.json
+# Generated OpenAPI types (regenerate with: cd ui/litellm-dashboard && npm run generate:types)
 ui/litellm-dashboard/src/types/api.generated.ts
