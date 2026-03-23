@@ -170,13 +170,14 @@ class LiteLLM_Proxy_MCP_Handler:
                     from litellm.proxy._experimental.mcp_server.server import (
                         _apply_toolset_scope,
                     )
-                    from litellm.proxy._experimental.mcp_server.toolset_db import (
-                        get_mcp_toolset_by_name,
-                    )
                     from litellm.proxy.proxy_server import prisma_client
 
                     if prisma_client is not None and user_api_key_auth is not None:
-                        toolset = await get_mcp_toolset_by_name(prisma_client, name)
+                        toolset = (
+                            await global_mcp_server_manager.get_toolset_by_name_cached(
+                                prisma_client, name
+                            )
+                        )
                         if toolset is not None:
                             user_api_key_auth = await _apply_toolset_scope(
                                 user_api_key_auth, toolset.toolset_id

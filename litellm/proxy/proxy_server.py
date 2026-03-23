@@ -13532,6 +13532,14 @@ async def _stream_mcp_asgi_response(
 
     handler_task = asyncio.create_task(handle_fn(scope, receive, bridging_send))
 
+    # If the handler task dies (exception or cancellation) without sending the EOF
+    # sentinel, body_iter() would block forever on body_queue.get().  The callback
+    # below guarantees the queue gets unblocked regardless of how the task ends.
+    def _ensure_eof(task: asyncio.Task) -> None:
+        body_queue.put_nowait(None)
+
+    handler_task.add_done_callback(_ensure_eof)
+
     try:
         status, raw_headers = await asyncio.wait_for(
             asyncio.shield(headers_ready), timeout=30.0
