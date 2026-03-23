@@ -273,6 +273,7 @@ model LiteLLM_ObjectPermissionTable {
   agent_access_groups   String[]       @default([])
   models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
+  mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -320,6 +321,18 @@ model LiteLLM_MCPServerTable {
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
+}
+
+// Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
+model LiteLLM_MCPToolsetTable {
+  toolset_id   String   @id @default(uuid())
+  toolset_name String   @unique
+  description  String?
+  tools        Json     @default("[]") // [{server_id: string, tool_name: string}]
+  created_at   DateTime @default(now())
+  created_by   String?
+  updated_at   DateTime @default(now()) @updatedAt
+  updated_by   String?
 }
 
 // Per-user BYOK credentials for MCP servers

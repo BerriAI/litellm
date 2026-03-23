@@ -1,6 +1,7 @@
 """
 LiteLLM MCP Server Routes
 """
+
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
@@ -36,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_active_toolset_id
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -1455,6 +1457,49 @@ if MCP_AVAILABLE:
 
         return filtered_tools
 
+    async def _merge_toolset_permissions(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[UserAPIKeyAuth]:
+        """
+        Resolve mcp_toolsets on the key's object_permission into tool-level permissions
+        and merge them (union) into object_permission.mcp_tool_permissions.
+
+        Returns the (possibly mutated copy of) user_api_key_auth.
+        """
+        if user_api_key_auth is None:
+            return None
+        op = user_api_key_auth.object_permission
+        if op is None:
+            return user_api_key_auth
+        toolset_ids = getattr(op, "mcp_toolsets", None) or []
+        if not toolset_ids:
+            return user_api_key_auth
+
+        toolset_perms = (
+            await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                toolset_ids=toolset_ids
+            )
+        )
+        if not toolset_perms:
+            return user_api_key_auth
+
+        # Merge toolset_perms into existing mcp_tool_permissions (union)
+        existing = dict(op.mcp_tool_permissions or {})
+        for server_id, tool_names in toolset_perms.items():
+            existing_tools = existing.get(server_id, [])
+            merged = list(set(existing_tools) | set(tool_names))
+            existing[server_id] = merged
+
+        # Build updated object_permission with merged tool permissions and server IDs.
+        # Union the toolset's server IDs into mcp_servers so downstream server-level
+        # filtering doesn't silently drop servers that the toolset references but that
+        # aren't already in the key's explicit mcp_servers list.
+        merged_servers = list(set(op.mcp_servers or []) | set(existing.keys()))
+        updated_op = op.model_copy(
+            update={"mcp_servers": merged_servers, "mcp_tool_permissions": existing}
+        )
+        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
@@ -1479,6 +1524,11 @@ if MCP_AVAILABLE:
         """
         if not MCP_AVAILABLE:
             return []
+
+        # Resolve toolset permissions and merge into the key's object_permission
+        # so that the existing filter_tools_by_key_team_permissions logic picks them up.
+        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
+
         # Get tools from managed MCP servers with error handling
         managed_tools = []
         try:
@@ -1822,9 +1872,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
@@ -1836,9 +1886,9 @@ if MCP_AVAILABLE:
                 mcp_server.mcp_info or {}
             ).get("mcp_server_cost_info")
             if litellm_logging_obj:
-                litellm_logging_obj.model_call_details[
-                    "mcp_tool_call_metadata"
-                ] = standard_logging_mcp_tool_call
+                litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                    standard_logging_mcp_tool_call
+                )
 
             # BYOK: retrieve the stored per-user credential.  A single DB call
             # both checks existence and fetches the value, avoiding a double query.
@@ -2358,6 +2408,63 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    async def _apply_toolset_scope(
+        user_api_key_auth: UserAPIKeyAuth,
+        toolset_id: str,
+    ) -> UserAPIKeyAuth:
+        """
+        Restrict a key's MCP permissions to a single toolset.
+
+        When a request arrives via /toolset/{name}/mcp we override the key's
+        object_permission so that only the toolset's tools are visible.
+
+        Raises HTTPException(403) if the key has an explicit toolset grant list
+        that does not include toolset_id (i.e. mcp_toolsets is set but empty,
+        or set to a list that omits this toolset).  Admin keys always pass.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+        # Access control: non-admin keys must have this toolset in their grant list.
+        # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
+        is_admin = _user_has_admin_view(user_api_key_auth)
+        if not is_admin:
+            op = user_api_key_auth.object_permission
+            granted = getattr(op, "mcp_toolsets", None) if op else None
+            # granted=None → key has no explicit toolset grants → deny (same semantics as
+            # fetch_mcp_toolsets which returns [] for non-admin keys with no grants configured).
+            # granted=[] or list without toolset_id → also deny.
+            if granted is None or toolset_id not in granted:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"API key does not have access to toolset '{toolset_id}'.",
+                )
+
+        tool_permissions = (
+            await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                toolset_ids=[toolset_id]
+            )
+        )
+        server_ids = list(tool_permissions.keys())
+        existing_op = user_api_key_auth.object_permission
+        if existing_op is not None:
+            updated_op = existing_op.model_copy(
+                update={
+                    "mcp_servers": server_ids,
+                    "mcp_tool_permissions": tool_permissions,
+                    "mcp_toolsets": [],
+                    # mcp_access_groups is preserved: a key's access-group grants
+                    # remain valid even when the request is scoped to a single toolset.
+                }
+            )
+        else:
+            updated_op = LiteLLM_ObjectPermissionTable(
+                object_permission_id="toolset-scope",
+                mcp_servers=server_ids,
+                mcp_tool_permissions=tool_permissions,
+            )
+        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -2401,6 +2508,21 @@ if MCP_AVAILABLE:
                         detail="Unauthorized",
                         headers={"www-authenticate": authorization_uri},
                     )
+
+            # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
+            scope["headers"] = [
+                (k, v)
+                for k, v in scope.get("headers", [])
+                if k.lower() != b"x-mcp-toolset-id"
+            ]
+
+            # Apply toolset scope if set server-side via ContextVar (set by
+            # /toolset/{name}/mcp and /{name}/mcp route handlers in proxy_server.py).
+            active_toolset_id = _mcp_active_toolset_id.get()
+            if active_toolset_id and user_api_key_auth is not None:
+                user_api_key_auth = await _apply_toolset_scope(
+                    user_api_key_auth, active_toolset_id
+                )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers = MCPDebug.maybe_build_debug_headers(
@@ -2580,17 +2702,15 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-            Optional[str],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

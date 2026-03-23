@@ -325,6 +325,7 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
+                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
