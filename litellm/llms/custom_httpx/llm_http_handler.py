@@ -4,6 +4,7 @@ import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Coroutine,
     Dict,
@@ -154,7 +155,7 @@ else:
 
 async def _async_file_chunks(
     fp: Any, chunk_size: int = 65536
-) -> "AsyncIterator[bytes]":
+) -> "AsyncGenerator[bytes, None]":
     """Async generator that reads a sync file-like object in chunks via a thread executor.
 
     Dispatches each blocking disk read to a thread pool via anyio so the async
