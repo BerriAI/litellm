@@ -27,6 +27,10 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.responses.format_mapping import (
+    normalize_provider_specific_fields,
+    response_format_to_text_format,
+)
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
@@ -106,16 +110,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Handle function_call items (e.g., from GPT-5 Codex format)
         if item_type == "function_call":
-            # Extract provider_specific_fields if present and pass through as-is
-            provider_specific_fields = item.get("provider_specific_fields")
-            if provider_specific_fields and not isinstance(
-                provider_specific_fields, dict
-            ):
-                provider_specific_fields = (
-                    dict(provider_specific_fields)
-                    if hasattr(provider_specific_fields, "__dict__")
-                    else {}
-                )
+            provider_specific_fields = normalize_provider_specific_fields(item)
 
             tool_call_dict = {
                 "id": item.get("call_id") or item.get("id", ""),
@@ -875,51 +870,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]
     ) -> Optional[Dict[str, Any]]:
-        """
-        Transform Chat Completion response_format parameter to Responses API text.format parameter.
-
-        Chat Completion response_format structure:
-        {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "schema_name",
-                "schema": {...},
-                "strict": True
-            }
-        }
-
-        Responses API text parameter structure:
-        {
-            "format": {
-                "type": "json_schema",
-                "name": "schema_name",
-                "schema": {...},
-                "strict": True
-            }
-        }
-        """
-        if not response_format:
-            return None
-
-        if isinstance(response_format, dict):
-            format_type = response_format.get("type")
-
-            if format_type == "json_schema":
-                json_schema = response_format.get("json_schema", {})
-                return {
-                    "format": {
-                        "type": "json_schema",
-                        "name": json_schema.get("name", "response_schema"),
-                        "schema": json_schema.get("schema", {}),
-                        "strict": json_schema.get("strict", False),
-                    }
-                }
-            elif format_type == "json_object":
-                return {"format": {"type": "json_object"}}
-            elif format_type == "text":
-                return {"format": {"type": "text"}}
-
-        return None
+        """Transform Chat Completion response_format to Responses API text.format."""
+        return response_format_to_text_format(response_format)
 
     @staticmethod
     def _convert_annotations_to_chat_format(
@@ -960,21 +912,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 continue
 
         return result if result else None
-
-    def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
-        """Map responses API status to chat completion finish_reason"""
-        if not status:
-            return "stop"
-
-        status_mapping = {
-            "completed": "stop",
-            "incomplete": "length",
-            "failed": "stop",
-            "cancelled": "stop",
-        }
-
-        return status_mapping.get(status, "stop")
-
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
@@ -1055,16 +992,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") == "function_call":
-                # Extract provider_specific_fields if present
-                provider_specific_fields = output_item.get("provider_specific_fields")
-                if provider_specific_fields and not isinstance(
-                    provider_specific_fields, dict
-                ):
-                    provider_specific_fields = (
-                        dict(provider_specific_fields)
-                        if hasattr(provider_specific_fields, "__dict__")
-                        else {}
-                    )
+                provider_specific_fields = normalize_provider_specific_fields(output_item)
 
                 function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=output_item.get("name", None),
@@ -1129,23 +1057,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") == "function_call":
-                # Extract provider_specific_fields if present
-                provider_specific_fields = output_item.get("provider_specific_fields")
-                if provider_specific_fields and not isinstance(
-                    provider_specific_fields, dict
-                ):
-                    provider_specific_fields = (
-                        dict(provider_specific_fields)
-                        if hasattr(provider_specific_fields, "__dict__")
-                        else {}
-                    )
+                provider_specific_fields = normalize_provider_specific_fields(output_item)
 
                 function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=output_item.get("name", None),
                     arguments="",  # responses API sends everything again, we don't
                 )
 
-                # Add provider_specific_fields to function if present
                 if provider_specific_fields:
                     function_chunk[
                         "provider_specific_fields"
