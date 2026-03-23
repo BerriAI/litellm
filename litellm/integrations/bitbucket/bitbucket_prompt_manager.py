@@ -5,7 +5,8 @@ Fetches .prompt files from BitBucket repositories and provides team-based access
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
@@ -74,7 +75,7 @@ class BitBucketTemplateManager:
         self.prompts: Dict[str, BitBucketPromptTemplate] = {}
         self.bitbucket_client = BitBucketClient(bitbucket_config)
 
-        self.jinja_env = Environment(
+        self.jinja_env = SandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Handlebars-style delimiters to match Dotprompt spec

@@ -5,7 +5,8 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
@@ -74,7 +75,7 @@ class ArizePhoenixTemplateManager:
             api_key=self.api_key, api_base=self.api_base
         )
 
-        self.jinja_env = Environment(
+        self.jinja_env = SandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Mustache/Handlebars-style delimiters

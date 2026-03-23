@@ -4,7 +4,8 @@ GitLab prompt manager with configurable prompts folder.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
@@ -90,7 +91,7 @@ class GitLabTemplateManager:
             or ""
         ).strip("/")
 
-        self.jinja_env = Environment(
+        self.jinja_env = SandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             variable_start_string="{{",
