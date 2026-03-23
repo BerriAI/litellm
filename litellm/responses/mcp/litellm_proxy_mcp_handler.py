@@ -177,6 +177,27 @@ class LiteLLM_Proxy_MCP_Handler:
                             )
                         )
                         if toolset is not None:
+                            # Access control: only allow if the key explicitly grants this toolset.
+                            if user_api_key_auth is not None:
+                                is_admin = (
+                                    getattr(user_api_key_auth, "user_role", None)
+                                    == "proxy_admin"
+                                )
+                                if not is_admin:
+                                    op = user_api_key_auth.object_permission
+                                    granted = (
+                                        getattr(op, "mcp_toolsets", None)
+                                        if op
+                                        else None
+                                    )
+                                    if (
+                                        granted is not None
+                                        and toolset.toolset_id not in granted
+                                    ):
+                                        verbose_logger.debug(
+                                            f"Key does not have access to toolset '{name}', skipping."
+                                        )
+                                        continue
                             resolved_toolset_ids.append(toolset.toolset_id)
                             # Don't add to resolved_mcp_servers — toolset scope
                             # restricts via object_permission, not server name filter.

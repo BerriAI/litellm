@@ -1497,8 +1497,14 @@ if MCP_AVAILABLE:
             merged = list(set(existing_tools) | set(tool_names))
             existing[server_id] = merged
 
-        # Build updated object_permission with merged tool permissions
-        updated_op = op.model_copy(update={"mcp_tool_permissions": existing})
+        # Build updated object_permission with merged tool permissions and server IDs.
+        # Union the toolset's server IDs into mcp_servers so downstream server-level
+        # filtering doesn't silently drop servers that the toolset references but that
+        # aren't already in the key's explicit mcp_servers list.
+        merged_servers = list(set(op.mcp_servers or []) | set(existing.keys()))
+        updated_op = op.model_copy(
+            update={"mcp_servers": merged_servers, "mcp_tool_permissions": existing}
+        )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
     async def _list_mcp_tools(
