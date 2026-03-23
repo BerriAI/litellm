@@ -12,6 +12,7 @@ from typing import Union
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
+from litellm.integrations.akto.akto_logger import AktoLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
@@ -38,7 +39,6 @@ from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.akto.akto_logger import AktoLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger

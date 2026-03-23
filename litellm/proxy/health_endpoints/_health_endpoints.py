@@ -341,11 +341,15 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "message": "Mock LLM request made - check langfuse.",
             }
         elif service == "akto":
-            from litellm.litellm_core_utils.litellm_logging import aktoLogger as _akto
             from litellm.integrations.akto.akto_logger import AktoLogger
+            from litellm.litellm_core_utils.litellm_logging import (
+                get_custom_logger_compatible_class,
+            )
 
             try:
-                akto_logger = _akto if _akto is not None else AktoLogger()
+                akto_logger = get_custom_logger_compatible_class("akto")
+                if akto_logger is None:
+                    akto_logger = AktoLogger()
                 response = await akto_logger.async_health_check()
             except Exception as e:
                 verbose_proxy_logger.warning("Akto health check error: %s", e)
