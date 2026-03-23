@@ -1456,12 +1456,12 @@ def test_character_count_billing_does_not_fill_prompt_token_gap():
     )
  
     prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-2.5-pro",
+        model="gemini-2.0-pro",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
  
-    model_info = litellm.model_cost["gemini-2.5-pro"]
+    model_info = litellm.model_cost["gemini-2.0-pro"]
     expected_prompt_cost = (
         100 * model_info["input_cost_per_token"]
         + 1000 * model_info.get("input_cost_per_character", 0)
@@ -1498,12 +1498,12 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
     )
  
     prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-2.5-pro",
+        model="gemini-2.0-pro",
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
  
-    model_info = litellm.model_cost["gemini-2.5-pro"]
+    model_info = litellm.model_cost["gemini-2.0-pro"]
     expected_prompt_cost = (
         50 * model_info.get("input_cost_per_token", 0)
         + 12.0 * model_info.get("input_cost_per_video_per_second", 0)
