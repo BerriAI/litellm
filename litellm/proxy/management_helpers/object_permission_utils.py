@@ -380,30 +380,26 @@ async def validate_key_mcp_servers_against_team(
                 detail={"error": detail},
             )
 
-    # Validate requested toolsets (must be subset of team's toolsets)
-    if requested_toolsets:
+    # Validate requested toolsets against team's allowed toolsets.
+    # Only enforce the team-based restriction when a team is present — standalone
+    # keys (no team) can freely be granted any toolset by an admin.
+    if requested_toolsets and team_obj is not None:
         team_toolsets: Set[str] = set()
         if (
-            team_obj is not None
-            and team_obj.object_permission is not None
+            team_obj.object_permission is not None
             and team_obj.object_permission.mcp_toolsets
         ):
             team_toolsets = set(team_obj.object_permission.mcp_toolsets)
 
         disallowed_toolsets = requested_toolsets - team_toolsets
         if disallowed_toolsets:
-            if team_obj is not None:
-                detail = (
-                    f"Key requests MCP toolsets not allowed by team '{team_obj.team_id}': "
-                    f"{sorted(disallowed_toolsets)}. "
-                    f"Team allows: {sorted(team_toolsets)}."
-                )
-            else:
-                detail = (
-                    f"Key is not in a team. MCP toolsets cannot be assigned to "
-                    f"keys outside of a team. Disallowed toolsets: {sorted(disallowed_toolsets)}."
-                )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": detail},
+                detail={
+                    "error": (
+                        f"Key requests MCP toolsets not allowed by team '{team_obj.team_id}': "
+                        f"{sorted(disallowed_toolsets)}. "
+                        f"Team allows: {sorted(team_toolsets)}."
+                    )
+                },
             )

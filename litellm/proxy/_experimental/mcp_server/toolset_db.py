@@ -97,9 +97,15 @@ async def delete_mcp_toolset(
     prisma_client: PrismaClient,
     toolset_id: str,
 ) -> Optional[MCPToolset]:
-    row = await prisma_client.db.litellm_mcptoolsettable.delete(
-        where={"toolset_id": toolset_id}
-    )
-    if row is None:
-        return None
+    try:
+        row = await prisma_client.db.litellm_mcptoolsettable.delete(
+            where={"toolset_id": toolset_id}
+        )
+    except Exception as e:
+        if (
+            "RecordNotFoundError" in type(e).__name__
+            or "record was not found" in str(e).lower()
+        ):
+            return None
+        raise
     return _toolset_from_row(row)

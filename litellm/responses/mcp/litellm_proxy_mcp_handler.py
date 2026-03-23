@@ -160,34 +160,63 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     mcp_servers.append(server_url.split("/")[-1])
 
-        # Resolve toolset names: if any name in mcp_servers is a toolset (not a real
-        # server name), apply toolset scope to user_api_key_auth so that only the
-        # toolset's servers and tools are visible. Non-toolset names are kept as-is.
+        # Resolve toolset names: collect all toolset IDs first, then apply their
+        # combined permissions in a single pass so multiple toolsets are unioned
+        # rather than the last one overwriting the others.
         resolved_mcp_servers: List[str] = []
+        resolved_toolset_ids: List[str] = []
         for name in mcp_servers:
             if not global_mcp_server_manager.get_mcp_server_by_name(name):
                 try:
-                    from litellm.proxy._experimental.mcp_server.server import (
-                        _apply_toolset_scope,
-                    )
                     from litellm.proxy.proxy_server import prisma_client
 
-                    if prisma_client is not None and user_api_key_auth is not None:
+                    if prisma_client is not None:
                         toolset = (
                             await global_mcp_server_manager.get_toolset_by_name_cached(
                                 prisma_client, name
                             )
                         )
                         if toolset is not None:
-                            user_api_key_auth = await _apply_toolset_scope(
-                                user_api_key_auth, toolset.toolset_id
-                            )
+                            resolved_toolset_ids.append(toolset.toolset_id)
                             # Don't add to resolved_mcp_servers — toolset scope
                             # restricts via object_permission, not server name filter.
                             continue
                 except Exception as _e:
                     verbose_logger.debug(f"Could not resolve '{name}' as toolset: {_e}")
             resolved_mcp_servers.append(name)
+
+        # Apply all resolved toolsets at once (union), avoiding permission overwrite.
+        if resolved_toolset_ids and user_api_key_auth is not None:
+            try:
+                from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+                tool_permissions = (
+                    await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                        toolset_ids=resolved_toolset_ids
+                    )
+                )
+                server_ids = list(tool_permissions.keys())
+                existing_op = user_api_key_auth.object_permission
+                if existing_op is not None:
+                    updated_op = existing_op.model_copy(
+                        update={
+                            "mcp_servers": server_ids,
+                            "mcp_tool_permissions": tool_permissions,
+                            "mcp_toolsets": [],
+                            "mcp_access_groups": [],
+                        }
+                    )
+                else:
+                    updated_op = LiteLLM_ObjectPermissionTable(
+                        object_permission_id="toolset-scope",
+                        mcp_servers=server_ids,
+                        mcp_tool_permissions=tool_permissions,
+                    )
+                user_api_key_auth = user_api_key_auth.model_copy(
+                    update={"object_permission": updated_op}
+                )
+            except Exception as _e:
+                verbose_logger.debug(f"Could not apply toolset permissions: {_e}")
 
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
