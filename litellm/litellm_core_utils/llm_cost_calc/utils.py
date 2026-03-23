@@ -668,18 +668,34 @@ def generic_cost_per_token(  # noqa: PLR0915
     cache_creation = prompt_tokens_details["cache_creation_tokens"]
     image_tokens = prompt_tokens_details["image_tokens"]
 
-    # Normalize partial or overlapping prompt token breakdowns back to an
-    # exhaustive text+category split. Some providers only report a subset of
-    # prompt token categories (e.g. text + cache hit but omit PDF tokens), while
-    # others double-count text against cached tokens.
+    # Normalize prompt-token breakdowns when providers under-report token
+    # categories (e.g. text + cache hit but omit PDF tokens) or when cached
+    # tokens are double-counted in text_tokens. Skip this fallback for count-
+    # based pricing paths (image_count / character_count / video length) where
+    # prompt_tokens may not map cleanly back to text tokens.
     total_details = (
         text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     )
-    has_partial_or_overlapping_breakdown = total_details != usage.prompt_tokens
+    has_non_token_pricing_components = (
+        prompt_tokens_details["image_count"] > 0
+        or prompt_tokens_details["character_count"] > 0
+        or prompt_tokens_details["video_length_seconds"] > 0
+    )
+    has_partial_breakdown = (
+        usage.prompt_tokens_details is not None
+        and total_details < usage.prompt_tokens
+        and not has_non_token_pricing_components
+    )
+    has_cached_token_overlap = cache_hit > 0 and total_details > usage.prompt_tokens
 
     if (
-        (text_tokens == 0 and prompt_tokens_details["image_count"] == 0)
-        or has_partial_or_overlapping_breakdown
+        (
+            text_tokens == 0
+            and not has_non_token_pricing_components
+            and total_details == 0
+        )
+        or has_partial_breakdown
+        or has_cached_token_overlap
     ):
         text_tokens = (
             usage.prompt_tokens
@@ -724,19 +740,19 @@ def generic_cost_per_token(  # noqa: PLR0915
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
 
-    # Normalize partial or overlapping completion token breakdowns the same way
-    # we do for prompt tokens so any unaccounted remainder is billed as text
-    # tokens rather than silently dropped.
+    # Normalize partial completion-token breakdowns so any unaccounted
+    # remainder is billed as text tokens rather than silently dropped.
     has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
     total_completion_details = (
         text_tokens + reasoning_tokens + audio_tokens + image_tokens
     )
-    has_partial_or_overlapping_breakdown = (
-        total_completion_details != usage.completion_tokens
+    has_partial_breakdown = (
+        usage.completion_tokens_details is not None
+        and total_completion_details < usage.completion_tokens
     )
 
-    if text_tokens == 0 or has_partial_or_overlapping_breakdown:
-        if has_token_breakdown or has_partial_or_overlapping_breakdown:
+    if text_tokens == 0 or has_partial_breakdown:
+        if has_token_breakdown or has_partial_breakdown:
             text_tokens = max(
                 0,
                 usage.completion_tokens
