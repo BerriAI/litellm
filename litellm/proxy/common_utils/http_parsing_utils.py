@@ -6,9 +6,6 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.llm_request_utils import (
-    find_surrogate_code_point_path,
-)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -82,22 +79,6 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
                         )
-
-        surrogate_path = find_surrogate_code_point_path(
-            parsed_body,
-            path="request_body",
-        )
-        if surrogate_path is not None:
-            raise ProxyException(
-                message=(
-                    "Invalid Unicode surrogate code point found in "
-                    f"{surrogate_path}. Please replace truncated surrogate "
-                    "characters with valid Unicode before retrying."
-                ),
-                type="invalid_request_error",
-                param="request_body",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
@@ -216,10 +197,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[
+                Deployment
+            ] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment
@@ -276,7 +257,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any],
+    form_data: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
