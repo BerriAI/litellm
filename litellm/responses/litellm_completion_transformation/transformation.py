@@ -16,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
 )
 from litellm.responses.format_mapping import (
+    chat_usage_to_response_api_usage,
     finish_reason_to_status,
     normalize_provider_specific_fields,
     text_format_to_response_format,
@@ -1990,8 +1991,6 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_response: Union[ModelResponse, Usage],
     ) -> ResponseAPIUsage:
         """Transform Chat Completions Usage to ResponseAPIUsage."""
-        from litellm.responses.format_mapping import chat_usage_to_response_api_usage
-
         return chat_usage_to_response_api_usage(chat_completion_response)
 
     @staticmethod

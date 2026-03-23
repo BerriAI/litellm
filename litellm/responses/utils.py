@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponseText,
 )
+from litellm.responses.format_mapping import response_api_usage_to_chat_usage
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -652,6 +653,4 @@ class ResponseAPILoggingUtils:
         usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
         """Transform ResponseAPIUsage to Chat Completions Usage."""
-        from litellm.responses.format_mapping import response_api_usage_to_chat_usage
-
         return response_api_usage_to_chat_usage(usage_input)
