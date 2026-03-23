@@ -649,11 +649,22 @@ class PrometheusMetricLabels:
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
-        # Conditionally add org labels to metrics that already carry team context
-        if (
-            litellm.prometheus_emit_org_labels is True
-            and UserAPIKeyLabelNames.TEAM.value in default_labels
-        ):
+        # Conditionally add org labels to metrics whose emission paths supply org context
+        _org_label_metrics = {
+            "litellm_llm_api_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+            "litellm_request_total_latency_metric",
+            "litellm_request_queue_time_seconds",
+            "litellm_proxy_total_requests_metric",
+            "litellm_proxy_failed_requests_metric",
+            "litellm_deployment_latency_per_output_token",
+            "litellm_requests_metric",
+            "litellm_spend_metric",
+            "litellm_input_tokens_metric",
+            "litellm_total_tokens_metric",
+            "litellm_output_tokens_metric",
+        }
+        if litellm.prometheus_emit_org_labels is True and label_name in _org_label_metrics:
             for label in [
                 UserAPIKeyLabelNames.ORG_ID.value,
                 UserAPIKeyLabelNames.ORG_ALIAS.value,

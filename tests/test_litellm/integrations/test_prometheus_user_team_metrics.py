@@ -566,11 +566,12 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         assert label_kwargs["team"] == "team-abc"
         assert label_kwargs["user"] == "user-1"
 
-        # Metrics without team context must NOT get org labels even when flag is on
+        # Metrics not in the org-emission list must NOT get org labels even when flag is on
         from litellm.types.integrations.prometheus import PrometheusMetricLabels
-        budget_labels = PrometheusMetricLabels.get_labels("litellm_remaining_api_key_budget_metric")
-        assert "org_id" not in budget_labels
-        assert "org_alias" not in budget_labels
+        for metric in ("litellm_remaining_api_key_budget_metric", "litellm_remaining_team_budget_metric"):
+            labels = PrometheusMetricLabels.get_labels(metric)
+            assert "org_id" not in labels, f"{metric} should not have org_id"
+            assert "org_alias" not in labels, f"{metric} should not have org_alias"
 
         # Flag OFF — org labels not in metric schema, absent from label dict entirely
         litellm.prometheus_emit_org_labels = False
