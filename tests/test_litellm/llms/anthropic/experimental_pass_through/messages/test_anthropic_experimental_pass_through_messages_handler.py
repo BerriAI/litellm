@@ -64,6 +64,31 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
+def test_anthropic_messages_adapter_drops_output_config_for_azure():
+    """
+    Test that output_config is not forwarded to litellm.completion for Azure models.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    with patch("litellm.completion", return_value=MagicMock()) as mock_completion:
+        try:
+            anthropic_messages_handler(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="azure/o1",
+                api_key="test-api-key",
+                output_config={"effort": "medium"},
+            )
+        except (ValueError, TypeError, AttributeError) as e:
+            print(f"Error: {e}")
+
+        mock_completion.assert_called_once()
+        call_kwargs = mock_completion.call_args.kwargs
+        assert "output_config" not in call_kwargs
+
+
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
     """
     Test that litellm.completion is called when a custom LLM provider is given
