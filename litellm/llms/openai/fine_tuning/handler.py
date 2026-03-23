@@ -6,6 +6,10 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from litellm._logging import verbose_logger
 from litellm.types.utils import LiteLLMFineTuningJob
 
+_AZURE_STATUS_MAP = {
+    "pending": "queued",
+}
+
 
 def _normalize_fine_tuning_job_dict(
     data: Dict[str, Any], is_azure: bool = False
@@ -16,7 +20,7 @@ def _normalize_fine_tuning_job_dict(
     Azure differences:
     - organization_id: null → ""
     - result_files: null → []
-    - status: "pending" → "queued"
+    - status: mapped via _AZURE_STATUS_MAP
     """
     if not is_azure:
         return data
@@ -29,8 +33,9 @@ def _normalize_fine_tuning_job_dict(
     if normalized.get("result_files") is None:
         normalized["result_files"] = []
 
-    if normalized.get("status") == "pending":
-        normalized["status"] = "queued"
+    status = normalized.get("status")
+    if status in _AZURE_STATUS_MAP:
+        normalized["status"] = _AZURE_STATUS_MAP[status]
 
     return normalized
 

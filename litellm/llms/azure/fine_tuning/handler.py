@@ -37,7 +37,6 @@ class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI, BaseAzureLLM):
         create_fine_tuning_job_data: dict,
         openai_client: Union[AsyncOpenAI, AsyncAzureOpenAI],
     ) -> LiteLLMFineTuningJob:
-        self._ensure_training_type(create_fine_tuning_job_data)
         response = await openai_client.fine_tuning.jobs.create(
             **create_fine_tuning_job_data
         )
