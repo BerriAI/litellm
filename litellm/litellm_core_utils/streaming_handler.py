@@ -46,7 +46,7 @@ from litellm.types.utils import (
 )
 
 from ..exceptions import OpenAIError
-from .core_helpers import map_finish_reason, process_response_headers
+from .core_helpers import map_finish_reason, process_response_headers, safe_model_dump
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -1875,26 +1875,7 @@ class CustomStreamWrapper:
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
-                        try:
-                            obj_dict = response.model_dump()
-                        except TypeError as e:
-                            if "MockValSer" not in str(e):
-                                raise
-                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            verbose_logger.warning(
-                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
-                                "Upgrading pydantic may resolve this. Error: %s", e
-                            )
-                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
-                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
-                            obj_dict = {
-                                k: v
-                                for k, v in {
-                                    **dict(response.__dict__),
-                                    **(getattr(response, '__pydantic_extra__', None) or {}),
-                                }.items()
-                                if not k.startswith('_')
-                            }
+                        obj_dict = safe_model_dump(response)
 
                         # Remove an attribute (e.g., 'attr2')
                         if "usage" in obj_dict:
@@ -2082,26 +2063,7 @@ class CustomStreamWrapper:
 
                         # Strip usage from the outgoing chunk so it's not sent twice
                         # (once in the chunk, once in _hidden_params).
-                        try:
-                            obj_dict = processed_chunk.model_dump()
-                        except TypeError as e:
-                            if "MockValSer" not in str(e):
-                                raise
-                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            verbose_logger.warning(
-                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
-                                "Upgrading pydantic may resolve this. Error: %s", e
-                            )
-                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
-                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
-                            obj_dict = {
-                                k: v
-                                for k, v in {
-                                    **dict(processed_chunk.__dict__),
-                                    **(getattr(processed_chunk, '__pydantic_extra__', None) or {}),
-                                }.items()
-                                if not k.startswith('_')
-                            }
+                        obj_dict = safe_model_dump(processed_chunk)
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(

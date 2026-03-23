@@ -263,6 +263,31 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
     return additional_headers
 
 
+def safe_model_dump(obj: "ModelResponseStream") -> dict:
+    """
+    Safely call model_dump(), falling back to __dict__ if the Pydantic
+    MockValSer bug (pydantic issue #7713) is encountered.
+    """
+    try:
+        return obj.model_dump()
+    except TypeError as e:
+        if "MockValSer" not in str(e):
+            raise
+        verbose_logger.warning(
+            "Pydantic MockValSer bug detected (pydantic issue #7713); "
+            "falling back to __dict__ extraction. "
+            "Upgrading pydantic may resolve this. Error: %s", e
+        )
+        return {
+            k: v
+            for k, v in {
+                **dict(obj.__dict__),
+                **(getattr(obj, "__pydantic_extra__", None) or {}),
+            }.items()
+            if not k.startswith("_")
+        }
+
+
 def preserve_upstream_non_openai_attributes(
     model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
 ):
@@ -271,26 +296,7 @@ def preserve_upstream_non_openai_attributes(
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys = set(type(model_response).model_fields.keys()).union({"usage"})
-    try:
-        obj_dict = original_chunk.model_dump()
-    except TypeError as e:
-        if "MockValSer" not in str(e):
-            raise
-        # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-        verbose_logger.warning(
-            "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
-            "Upgrading pydantic may resolve this. Error: %s", e
-        )
-        # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
-        # Filter out underscore-prefixed private attributes to match model_dump() behavior
-        obj_dict = {
-            k: v
-            for k, v in {
-                **dict(original_chunk.__dict__),
-                **(getattr(original_chunk, '__pydantic_extra__', None) or {}),
-            }.items()
-            if not k.startswith('_')
-        }
+    obj_dict = safe_model_dump(original_chunk)
     for key, value in obj_dict.items():
         if key not in expected_keys:
             setattr(model_response, key, value)

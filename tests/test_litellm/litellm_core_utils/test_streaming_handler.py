@@ -1718,9 +1718,6 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
 
     # Use class-level patching to avoid the mock appearing in __dict__ or __pydantic_extra__
     with patch.object(type(chunk_with_usage), 'model_dump', mock_model_dump):
-        # The code should gracefully fall back to __dict__ and not crash
-        initialized_custom_stream_wrapper.chunks.append(chunk_with_usage)
-
         # Use a DIFFERENT object as the target model_response
         fresh_model_response = ModelResponseStream(
             id="fresh",
