@@ -1444,8 +1444,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 

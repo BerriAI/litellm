@@ -1578,7 +1578,8 @@ class DBSpendUpdateWriter:
                                                 "mcp_namespaced_tool_name"
                                             )
                                             or "",
-                                            "endpoint": transaction.get("endpoint") or "",
+                                            "endpoint": transaction.get("endpoint")
+                                            or "",
                                         }
                                     }
 
@@ -1609,22 +1610,29 @@ class DBSpendUpdateWriter:
                                         "successful_requests": transaction[
                                             "successful_requests"
                                         ],
-                                        "failed_requests": transaction["failed_requests"],
+                                        "failed_requests": transaction[
+                                            "failed_requests"
+                                        ],
                                     }
 
                                     # Add cache-related fields if they exist
                                     if "cache_read_input_tokens" in transaction:
-                                        common_data["cache_read_input_tokens"] = (
-                                            transaction.get("cache_read_input_tokens", 0)
+                                        common_data[
+                                            "cache_read_input_tokens"
+                                        ] = transaction.get(
+                                            "cache_read_input_tokens", 0
                                         )
                                     if "cache_creation_input_tokens" in transaction:
-                                        common_data["cache_creation_input_tokens"] = (
-                                            transaction.get(
-                                                "cache_creation_input_tokens", 0
-                                            )
+                                        common_data[
+                                            "cache_creation_input_tokens"
+                                        ] = transaction.get(
+                                            "cache_creation_input_tokens", 0
                                         )
 
-                                    if entity_type == "tag" and "request_id" in transaction:
+                                    if (
+                                        entity_type == "tag"
+                                        and "request_id" in transaction
+                                    ):
                                         common_data["request_id"] = transaction.get(
                                             "request_id"
                                         )
@@ -1635,14 +1643,18 @@ class DBSpendUpdateWriter:
                                             "increment": transaction["prompt_tokens"]
                                         },
                                         "completion_tokens": {
-                                            "increment": transaction["completion_tokens"]
+                                            "increment": transaction[
+                                                "completion_tokens"
+                                            ]
                                         },
                                         "spend": {"increment": transaction["spend"]},
                                         "api_requests": {
                                             "increment": transaction["api_requests"]
                                         },
                                         "successful_requests": {
-                                            "increment": transaction["successful_requests"]
+                                            "increment": transaction[
+                                                "successful_requests"
+                                            ]
                                         },
                                         "failed_requests": {
                                             "increment": transaction["failed_requests"]
@@ -1663,7 +1675,10 @@ class DBSpendUpdateWriter:
                                             )
                                         }
 
-                                    if entity_type == "tag" and "request_id" in transaction:
+                                    if (
+                                        entity_type == "tag"
+                                        and "request_id" in transaction
+                                    ):
                                         update_data["request_id"] = transaction.get(
                                             "request_id"
                                         )
