@@ -712,6 +712,15 @@ class TestTeamModelSiblingRouting:
                         "team_public_model_name": public_name,
                     },
                 },
+                {
+                    "model_name": "global-gpt-4o",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o",
+                        "api_key": "global-key",
+                        "api_base": "https://global.openai.azure.com",
+                    },
+                    "model_info": {},  # No team_id - global deployment
+                },
             ],
         )
 
@@ -731,6 +740,38 @@ class TestTeamModelSiblingRouting:
             "https://eastus.openai.azure.com",
             "https://westus.openai.azure.com",
         }
+
+    def test_global_deployments_accessible_to_teams(self):
+        """Test that global deployments (no team_id) are accessible to all teams"""
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "global-gpt-4o",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o",
+                        "api_key": "global-key",
+                        "api_base": "https://global.openai.azure.com",
+                    },
+                    "model_info": {},  # No team_id - global deployment
+                },
+            ],
+        )
+
+        # Global deployment should be accessible when team_id is provided
+        deployments = router._get_all_deployments(
+            model_name="global-gpt-4o", team_id="teamA"
+        )
+        assert len(deployments) == 1
+        assert deployments[0]["model_name"] == "global-gpt-4o"
+
+        # should_include_deployment should return True for global deployments
+        assert router.should_include_deployment(
+            model_name="global-gpt-4o",
+            model={"model_name": "global-gpt-4o", "model_info": {}},
+            team_id="teamA",
+        )
 
 
 class TestTeamModelUpdate:
