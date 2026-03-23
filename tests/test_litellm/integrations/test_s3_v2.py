@@ -705,6 +705,16 @@ def test_get_logging_id_none_id_does_not_raise():
     assert result.startswith("time-17-40-11-901585_")
 
 
+def test_get_logging_id_non_s3_uri_scheme_stripped():
+    """Non-S3 URI schemes (e.g. ftp://) are also stripped — lock in that behaviour."""
+    start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
+    response_obj = {"id": "ftp://host/path/to/file"}
+    result = get_logging_id(start_time, response_obj)
+    assert "://" not in result
+    assert "host" not in result
+    assert result.startswith("time-17-40-11-901585_")
+
+
 def test_get_logging_id_s3_uri_safe_for_url_path():
     """The sanitized log ID must be embeddable in an S3 object key URL without creating a malformed path."""
     start_time = datetime(2026, 3, 9, 17, 40, 11, 901585)
