@@ -527,7 +527,6 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
 
 def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
     """Verify all identity labels (key, team, org, user) are passed to litellm_requests_metric."""
-    import litellm
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     prometheus_logger.litellm_requests_metric = MagicMock()
@@ -556,8 +555,7 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         enum_values=enum_values,
     )
 
-    # Flag ON — org labels should be present
-    litellm.prometheus_emit_org_labels = True
+    # Flag ON — org values passed through to labels
     prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
     label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
     assert label_kwargs["org_id"] == "org-abc"
@@ -565,10 +563,21 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
     assert label_kwargs["team"] == "team-abc"
     assert label_kwargs["user"] == "user-1"
 
-    # Flag OFF — org labels should be None
-    litellm.prometheus_emit_org_labels = False
+    # Flag OFF — async_log_success_event passes None for org values
     prometheus_logger.litellm_requests_metric.reset_mock()
-    prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
+    no_org_enum = UserAPIKeyLabelValues(
+        hashed_api_key="hashed-key",
+        api_key_alias="my-key",
+        model="gpt-4",
+        team="team-abc",
+        team_alias="my-team",
+        org_id=None,
+        org_alias=None,
+        user="user-1",
+    )
+    prometheus_logger._increment_top_level_request_and_spend_metrics(
+        **{**common_kwargs, "enum_values": no_org_enum}
+    )
     label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
     assert label_kwargs["org_id"] is None
     assert label_kwargs["org_alias"] is None
