@@ -538,6 +538,17 @@ async def _update_existing_team_model_assignment(
                 http_request=Request(scope={"type": "http"}),
                 user_api_key_dict=user_api_key_dict,
             )
+    elif not old_public_name and public_model_name:
+        # First-time assignment of public name on an existing team deployment:
+        # ensure the team's models list is updated so team routing can resolve it.
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=team_id,
+                models=[public_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
 
     patch_data.model_name = None
 
