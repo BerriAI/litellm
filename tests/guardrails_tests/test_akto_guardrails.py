@@ -119,7 +119,7 @@ def test_init_from_env():
         },
     ):
         g = AktoGuardrail(guardrail_name="t", event_hook="pre_call")
-        assert g.akto_base_url == "http://env:9090"
+        assert g.akto_base_url == "http://env-host:9090"
         assert g.akto_api_key == "env-token"
         assert g.guardrail_timeout == 5
         assert g.akto_account_id == "2000000"
@@ -142,8 +142,8 @@ def test_init_defaults():
 # ── Payload ──
 
 
-def test_build_akto_payload(akto_validate, sample_request_data):
-    payload = akto_validate.build_akto_payload(sample_request_data)
+def test_build_akto_payload(akto_validate, sample_inputs, sample_request_data):
+    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data)
 
     assert payload["path"] == "/v1/chat/completions"
     assert payload["method"] == "POST"
@@ -186,7 +186,8 @@ def test_build_akto_payload_custom_ids(sample_request_data):
             guardrail_name="t",
             event_hook="pre_call",
         )
-        payload = g.build_akto_payload(sample_request_data)
+        inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
+        payload = g.build_akto_payload(inputs, sample_request_data)
         assert payload["akto_account_id"] == "9999"
         assert payload["akto_vxlan_id"] == "7"
 
@@ -309,7 +310,7 @@ async def test_pre_call_allowed(akto_validate, sample_inputs, sample_request_dat
 
 @pytest.mark.asyncio
 async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_data):
-    akto_validate.async_handler.post = AsyncMock(return_value=_mock_blocked("PII"))
+    akto_validate.async_handler.post = AsyncMock(return_value=_mock_blocked_response("PII"))
 
     with pytest.raises(HTTPException) as exc_info:
         await akto_validate.apply_guardrail(
@@ -318,8 +319,8 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
             input_type="request",
         )
 
-    assert exc.value.status_code == 403
-    assert "PII" in exc.value.detail
+    assert exc_info.value.status_code == 403
+    assert "PII" in exc_info.value.detail
     akto_validate.async_handler.post.assert_called_once()
 
 

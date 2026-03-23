@@ -293,7 +293,7 @@ class AktoGuardrail(CustomGuardrail):
     async def send_to_akto(self, payload: dict) -> httpx.Response:
         """POST payload to Akto guardrail API for validation."""
         return await self.async_handler.post(
-            url=endpoint,
+            url=f"{self.akto_base_url}{HTTP_PROXY_PATH}",
             data=json.dumps(payload),
             params={"akto_connector": AKTO_CONNECTOR_NAME, "guardrails": "true"},
             headers={
@@ -394,10 +394,10 @@ class AktoGuardrail(CustomGuardrail):
         if input_type != "request":
             return inputs
 
-        payload = self.build_akto_payload(request_data)
+        payload = self.build_akto_payload(inputs, request_data)
         try:
             response = await self.send_to_akto(payload)
-            allowed, reason = self.parse_guardrail_response(response)
+            allowed, reason = self.handle_guardrail_response(response)
         except HTTPException:
             raise
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
