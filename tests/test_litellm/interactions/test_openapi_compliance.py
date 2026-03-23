@@ -11,10 +11,8 @@ Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import pytest
 from openapi_core import OpenAPI
