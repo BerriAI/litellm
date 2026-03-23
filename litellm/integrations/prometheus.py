@@ -2571,6 +2571,37 @@ class PrometheusLogger(CustomLogger):
             data_type="users",
         )
 
+    async def _initialize_org_budget_metrics(self):
+        """
+        Initialize org budget metrics by reusing the generic pagination logic.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping org metrics initialization, DB not initialized"
+            )
+            return
+
+        async def fetch_orgs(
+            page_size: int, page: int
+        ) -> Tuple[list, Optional[int]]:
+            skip = (page - 1) * page_size
+            orgs = await prisma_client.db.litellm_organizationtable.find_many(
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+                include={"litellm_budget_table": True},
+            )
+            total_count = await prisma_client.db.litellm_organizationtable.count()
+            return orgs, total_count
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=fetch_orgs,
+            set_metrics_function=self._set_org_list_budget_metrics,
+            data_type="orgs",
+        )
+
     async def initialize_remaining_budget_metrics(self):
         """
         Handler for initializing remaining budget metrics for all teams to avoid metric discrepancies.
@@ -2605,10 +2636,11 @@ class PrometheusLogger(CustomLogger):
         """
         Helper to initialize remaining budget metrics for all teams, API keys, and users.
         """
-        verbose_logger.debug("Emitting key, team, user budget metrics....")
+        verbose_logger.debug("Emitting key, team, user, org budget metrics....")
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
         await self._initialize_user_budget_metrics()
+        await self._initialize_org_budget_metrics()
         await self._initialize_user_and_team_count_metrics()
 
     async def _initialize_user_and_team_count_metrics(self):
@@ -2663,6 +2695,20 @@ class PrometheusLogger(CustomLogger):
         """Helper function to set budget metrics for a list of users"""
         for user in users:
             self._set_user_budget_metrics(user)
+
+    async def _set_org_list_budget_metrics(self, orgs: list):
+        """Helper function to set budget metrics for a list of orgs"""
+        for org in orgs:
+            budget_table = getattr(org, "litellm_budget_table", None)
+            self._set_org_budget_metrics(
+                org_id=org.organization_id or "",
+                org_alias=org.organization_alias or "",
+                spend=org.spend or 0.0,
+                max_budget=budget_table.max_budget if budget_table else None,
+                budget_reset_at=getattr(budget_table, "budget_reset_at", None)
+                if budget_table
+                else None,
+            )
 
     async def _set_team_budget_metrics_after_api_request(
         self,
@@ -2793,21 +2839,24 @@ class PrometheusLogger(CustomLogger):
         """
         Set org budget metrics after an LLM API request
 
-        - Fetches org info from db
+        - Fetches org info via cache (get_org_object)
         - Sets org budget metrics
         """
         if not org_id:
             return
 
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import get_org_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
             return
 
         try:
-            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
-                where={"organization_id": org_id},
-                include={"litellm_budget_table": True},
+            org_info = await get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                include_budget_table=True,
             )
         except Exception as e:
             verbose_logger.debug(
@@ -2815,12 +2864,12 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        if org_row is None:
+        if org_info is None:
             return
 
-        org_alias = org_row.organization_alias or ""
-        spend = org_row.spend or 0.0
-        budget_table = org_row.litellm_budget_table
+        org_alias = org_info.organization_alias or ""
+        _total_org_spend = (org_info.spend or 0.0) + response_cost
+        budget_table = org_info.litellm_budget_table
         max_budget = budget_table.max_budget if budget_table else None
         budget_reset_at = (
             getattr(budget_table, "budget_reset_at", None) if budget_table else None
@@ -2829,7 +2878,7 @@ class PrometheusLogger(CustomLogger):
         self._set_org_budget_metrics(
             org_id=org_id,
             org_alias=org_alias,
-            spend=spend,
+            spend=_total_org_spend,
             max_budget=max_budget,
             budget_reset_at=budget_reset_at,
         )

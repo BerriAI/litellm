@@ -616,7 +616,7 @@ def test_set_org_budget_metrics_remaining_hours(prometheus_logger):
 
 @pytest.mark.asyncio
 async def test_set_org_budget_metrics_after_api_request(prometheus_logger):
-    """_set_org_budget_metrics_after_api_request fetches from DB and sets gauges."""
+    """_set_org_budget_metrics_after_api_request uses cache helper and accounts for response_cost."""
     import sys
 
     prometheus_logger.litellm_remaining_org_budget_metric = MagicMock()
@@ -632,23 +632,29 @@ async def test_set_org_budget_metrics_after_api_request(prometheus_logger):
     org_mock.organization_alias = "test-org"
     org_mock.spend = 300.0
     org_mock.litellm_budget_table = budget_mock
-    org_mock.model_dump.return_value = {}
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
-        return_value=org_mock
-    )
-
     mock_proxy_server = MagicMock()
     mock_proxy_server.prisma_client = mock_prisma
+    mock_proxy_server.user_api_key_cache = MagicMock()
 
-    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+    with (
+        patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_org_object",
+            AsyncMock(return_value=org_mock),
+        ),
+    ):
         await prometheus_logger._set_org_budget_metrics_after_api_request(
             org_id="org-xyz",
-            response_cost=0.0,
+            response_cost=50.0,
         )
 
-    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once()
+    # remaining budget should reflect spend + response_cost (300 + 50 = 350, remaining = 1000 - 350 = 650)
+    remaining_call = prometheus_logger.litellm_remaining_org_budget_metric.labels().set.call_args
+    assert remaining_call is not None
+    assert remaining_call[0][0] == pytest.approx(650.0)
+
     prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
         1000.0
     )
@@ -670,3 +676,40 @@ async def test_set_org_budget_metrics_after_api_request_no_org_id(prometheus_log
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_not_called()
     prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_not_called()
     prometheus_logger.litellm_org_budget_remaining_hours_metric.labels().set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_initialize_org_budget_metrics(prometheus_logger):
+    """_initialize_org_budget_metrics fetches all orgs and sets gauges for each."""
+    import sys
+
+    prometheus_logger.litellm_remaining_org_budget_metric = MagicMock()
+    prometheus_logger.litellm_org_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_org_budget_remaining_hours_metric = MagicMock()
+
+    budget_mock = MagicMock()
+    budget_mock.max_budget = 500.0
+    budget_mock.budget_reset_at = None
+
+    org_mock = MagicMock()
+    org_mock.organization_id = "org-init"
+    org_mock.organization_alias = "init-org"
+    org_mock.spend = 100.0
+    org_mock.litellm_budget_table = budget_mock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[org_mock]
+    )
+    mock_prisma.db.litellm_organizationtable.count = AsyncMock(return_value=1)
+
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.prisma_client = mock_prisma
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._initialize_org_budget_metrics()
+
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once()
+    prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
+        500.0
+    )
