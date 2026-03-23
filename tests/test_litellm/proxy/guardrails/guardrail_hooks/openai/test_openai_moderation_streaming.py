@@ -170,3 +170,106 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
             assert exc_info.value.status_code == 400
             assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_streaming_end_of_stream_request_data_passthrough():
+    """Test that streaming end-of-stream guardrail info flows through to the
+    real request_data (Bug 1 fix for streaming path)."""
+    from litellm.types.llms.openai import (
+        OpenAIModerationResponse,
+        OpenAIModerationResult,
+    )
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        openai_guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = OpenAIModerationResponse(
+            id="modr-stream-test",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={"hate": False, "violence": False},
+                    category_scores={"hate": 0.001, "violence": 0.002},
+                    category_applied_input_types={"hate": [], "violence": []},
+                )
+            ],
+        )
+
+        async def mock_stream():
+            import litellm
+
+            chunks_data = ["Hello", " world"]
+            for i, content in enumerate(chunks_data):
+                chunk = MagicMock(spec=ModelResponseStream)
+                chunk.model = "gpt-4"
+                choice = MagicMock()
+                choice.delta = MagicMock()
+                choice.delta.content = content
+                choice.finish_reason = "stop" if i == len(chunks_data) - 1 else None
+                chunk.choices = [choice]
+                yield chunk
+
+        import litellm
+
+        mock_model_response = ModelResponse(
+            id="mock-stream-response",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(
+                        role="assistant", content="Hello world"
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": openai_guardrail,
+            "metadata": {
+                "guardrails": ["test-openai-moderation"],
+                "guardrail_config": {"streaming_sampling_rate": 1},
+            },
+        }
+
+        with patch.object(
+            openai_guardrail, "async_make_request", return_value=mock_mod_response
+        ), patch(
+            "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
+            return_value=mock_model_response,
+        ):
+            user_api_key_dict = UserAPIKeyAuth(
+                api_key="test", request_route="/chat/completions"
+            )
+
+            async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        # Verify guardrail info reached the REAL request_data (not a throwaway)
+        guardrail_info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert guardrail_info_list is not None, (
+            "Guardrail info should be in request_data after streaming"
+        )
+        info = guardrail_info_list[0]
+        assert info["guardrail_status"] == "success"
+
+        # Full moderation response dict, NOT the simplified "allow" string
+        guardrail_resp = info["guardrail_response"]
+        assert isinstance(guardrail_resp, dict), (
+            f"Expected full moderation response dict, got {type(guardrail_resp)}: {guardrail_resp}"
+        )
+        assert "results" in guardrail_resp
