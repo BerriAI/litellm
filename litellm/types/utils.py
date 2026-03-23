@@ -3323,11 +3323,11 @@ class LiteLLMLoggingBaseClass:
     Meant to simplify type checking for logging obj.
     """
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args=None):
         pass
 
     def post_call(
-        self, original_response, input=None, api_key=None, additional_args={}
+        self, original_response, input=None, api_key=None, additional_args=None
     ):
         pass
 

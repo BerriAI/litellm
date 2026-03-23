@@ -934,7 +934,8 @@ class Logging(LiteLLMLoggingBaseClass):
             masked_api_base = api_base
         return str(masked_api_base)
 
-    def _pre_call(self, input, api_key, model=None, additional_args={}):
+    def _pre_call(self, input, api_key, model=None, additional_args=None):
+        additional_args = additional_args or {}
         """
         Common helper function across the sync + async pre-call function
         """
@@ -951,7 +952,8 @@ class Logging(LiteLLMLoggingBaseClass):
             "api_base"
         ] = self._get_masked_api_base(additional_args.get("api_base", ""))
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
+    def pre_call(self, input, api_key, model=None, additional_args=None):
+        additional_args = additional_args or {}  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
