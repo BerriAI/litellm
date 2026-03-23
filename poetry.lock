@@ -598,7 +598,7 @@ files = [
     {file = "cachetools-6.2.2-py3-none-any.whl", hash = "sha256:6c09c98183bf58560c97b2abfcedcbaf6a896a490f534b031b661d3723b45ace"},
     {file = "cachetools-6.2.2.tar.gz", hash = "sha256:8e6d266b25e539df852251cfd6f990b4bc3a141db73b939058d809ebd2590fc6"},
 ]
-markers = {main = "extra == \"google\" or extra == \"extra-proxy\" or python_version >= \"3.10\"", proxy-dev = "python_version >= \"3.10\""}
+markers = {main = "extra == \"google\" or extra == \"extra-proxy\" or extra == \"proxy\" or python_version >= \"3.10\"", proxy-dev = "python_version >= \"3.10\""}
 
 [[package]]
 name = "certifi"
@@ -7998,15 +7998,15 @@ type = ["pytest-mypy"]
 
 [extras]
 caching = ["diskcache"]
-extra-proxy = ["a2a-sdk", "azure-identity", "azure-keyvault-secrets", "google-cloud-iam", "google-cloud-kms", "prisma", "redisvl", "resend"]
+extra-proxy = ["a2a-sdk", "azure-identity", "azure-keyvault-secrets", "cachetools", "google-cloud-iam", "google-cloud-kms", "prisma", "redisvl", "resend"]
 google = ["google-cloud-aiplatform"]
 grpc = ["grpcio", "grpcio"]
 mlflow = ["mlflow"]
-proxy = ["PyJWT", "apscheduler", "azure-identity", "azure-storage-blob", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-enterprise", "litellm-proxy-extras", "mcp", "orjson", "polars", "pynacl", "pyroscope-io", "python-multipart", "pyyaml", "rich", "rq", "soundfile", "uvicorn", "uvloop", "websockets"]
+proxy = ["PyJWT", "apscheduler", "azure-identity", "azure-storage-blob", "backoff", "boto3", "cachetools", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-enterprise", "litellm-proxy-extras", "mcp", "orjson", "polars", "pynacl", "pyroscope-io", "python-multipart", "pyyaml", "rich", "rq", "soundfile", "uvicorn", "uvloop", "websockets"]
 semantic-router = ["semantic-router"]
 utils = ["numpydoc"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "b4e3ee072f600fab9810024afdd550407d25733a9b6752476aa61826e33bc08e"
+content-hash = "15515f4e516e455dbb1c5bb94e83f89b7c07f0b1c8b406b1350ffdb50094f248"
