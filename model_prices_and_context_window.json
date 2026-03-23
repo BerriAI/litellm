@@ -37398,7 +37398,8 @@
         "aliases": [
             "bedrock/us-east-1/zai.glm-5",
             "bedrock/us-west-2/zai.glm-5"
-        ]
+        ],
+        "supports_system_messages": true
     },
     "minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
