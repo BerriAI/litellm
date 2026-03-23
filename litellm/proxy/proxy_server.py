@@ -7495,6 +7495,9 @@ async def audio_speech(
                     "audio/wav"  # Gemini TTS returns WAV format after conversion
                 )
 
+        if data.get("stream_format") == "sse":
+            media_type = "text/event-stream"
+
         return StreamingResponse(
             _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,

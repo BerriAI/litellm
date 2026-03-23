@@ -6721,6 +6721,10 @@ def speech(  # noqa: PLR0915
             kwargs=kwargs,
         )
 
+    stream_format = kwargs.get("stream_format")
+    if stream_format is not None:
+        optional_params["stream_format"] = stream_format
+
     logging_obj: LiteLLMLoggingObj = cast(
         LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
     )
