@@ -2460,7 +2460,8 @@ if MCP_AVAILABLE:
                     "mcp_servers": server_ids,
                     "mcp_tool_permissions": tool_permissions,
                     "mcp_toolsets": [],
-                    "mcp_access_groups": [],
+                    # mcp_access_groups is preserved: a key's access-group grants
+                    # remain valid even when the request is scoped to a single toolset.
                 }
             )
         else:
