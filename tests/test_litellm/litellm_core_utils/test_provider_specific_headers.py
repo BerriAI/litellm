@@ -112,3 +112,85 @@ class TestProviderSpecificHeaderUtils:
             provider_specific_header, None
         )
         assert result == {}
+
+    def test_anthropic_oauth_token_not_forwarded_to_bedrock(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/24436.
+
+        When Claude Code sets an Anthropic OAuth token (sk-ant-oat*) in Authorization,
+        it must NOT reach Bedrock — forwarding it overwrites the AWS SigV4 Authorization
+        header and causes a 403 from Bedrock.
+        """
+        oauth_token = "Bearer sk-ant-oat01-abc123xyz"
+        provider_specific_header: ProviderSpecificHeader = {
+            "custom_llm_provider": "anthropic,bedrock,vertex_ai",
+            "extra_headers": {
+                "Authorization": oauth_token,
+                "anthropic-beta": "some-beta-feature",
+            },
+        }
+
+        # Anthropic should receive the OAuth token
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "anthropic"
+        )
+        assert result["Authorization"] == oauth_token
+        assert result["anthropic-beta"] == "some-beta-feature"
+
+        # Bedrock must NOT receive the OAuth token (it would overwrite SigV4 auth)
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "bedrock"
+        )
+        assert "Authorization" not in result
+        assert result.get("anthropic-beta") == "some-beta-feature"
+
+        # Vertex AI must NOT receive the OAuth token
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "vertex_ai"
+        )
+        assert "Authorization" not in result
+        assert result.get("anthropic-beta") == "some-beta-feature"
+
+    def test_anthropic_oauth_token_not_forwarded_to_bedrock_converse(self):
+        """Anthropic OAuth token must not be forwarded to bedrock_converse either."""
+        oauth_token = "Bearer sk-ant-oat02-xyz789"
+        provider_specific_header: ProviderSpecificHeader = {
+            "custom_llm_provider": "anthropic,bedrock,bedrock_converse,vertex_ai",
+            "extra_headers": {"Authorization": oauth_token},
+        }
+
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "bedrock_converse"
+        )
+        assert result == {}
+
+    def test_non_oauth_authorization_still_forwarded_to_non_anthropic(self):
+        """A plain Bearer token (not Anthropic OAuth) should still pass through."""
+        plain_token = "Bearer some-regular-api-key"
+        provider_specific_header: ProviderSpecificHeader = {
+            "custom_llm_provider": "openai,azure",
+            "extra_headers": {"Authorization": plain_token},
+        }
+
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "openai"
+        )
+        assert result["Authorization"] == plain_token
+
+    def test_anthropic_oauth_token_raw_format_not_forwarded_to_bedrock(self):
+        """Anthropic OAuth token in raw format (without 'Bearer ' prefix) is also stripped."""
+        raw_oauth_token = "sk-ant-oat01-abc123"
+        provider_specific_header: ProviderSpecificHeader = {
+            "custom_llm_provider": "anthropic,bedrock,vertex_ai",
+            "extra_headers": {"Authorization": raw_oauth_token},
+        }
+
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "bedrock"
+        )
+        assert "Authorization" not in result
+
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header, "anthropic"
+        )
+        assert result["Authorization"] == raw_oauth_token
