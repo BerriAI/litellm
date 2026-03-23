@@ -8,6 +8,7 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm._service_logger import ServiceLogging
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -1251,6 +1252,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Team/Project credential overrides from model_config
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
@@ -1331,6 +1338,119 @@ def _update_model_if_key_alias_exists(
     ):
         data["model"] = user_api_key_dict.aliases[_model]
     return
+
+
+def _apply_credential_overrides_from_model_config(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Walk the model_config precedence chain in team/project metadata.
+    If a matching credential is found, set api_base/api_key/api_version on data
+    so they override deployment defaults in the router.
+
+    Precedence (highest to lowest):
+    1. Clientside credentials (already in data — skip if present)
+    2. Project model-specific override
+    3. Project default override (defaultconfig)
+    4. Team model-specific override
+    5. Team default override (defaultconfig)
+    6. Deployment default (no action needed)
+    """
+    # Respect clientside credentials — highest precedence
+    if data.get("api_base") or data.get("api_key"):
+        return
+
+    model_name = data.get("model")
+    if not model_name:
+        return
+
+    project_metadata = user_api_key_dict.project_metadata or {}
+    team_metadata = user_api_key_dict.team_metadata or {}
+
+    project_model_config = project_metadata.get("model_config")
+    team_model_config = team_metadata.get("model_config")
+
+    if not project_model_config and not team_model_config:
+        return
+
+    credential_name = _resolve_credential_from_model_config(
+        model_name=model_name,
+        project_model_config=project_model_config,
+        team_model_config=team_model_config,
+    )
+
+    if not credential_name:
+        return
+
+    credential_values = CredentialAccessor.get_credential_values(credential_name)
+    if not credential_values:
+        verbose_proxy_logger.warning(
+            "model_config references credential '%s' but it was not found",
+            credential_name,
+        )
+        return
+
+    # Apply credential overrides to request data
+    for key in ("api_base", "api_key", "api_version"):
+        if key in credential_values:
+            data[key] = credential_values[key]
+
+    verbose_proxy_logger.debug(
+        "Applied credential override '%s' for model '%s'",
+        credential_name,
+        model_name,
+    )
+
+
+def _resolve_credential_from_model_config(
+    model_name: str,
+    project_model_config: Optional[dict],
+    team_model_config: Optional[dict],
+) -> Optional[str]:
+    """
+    Walk the precedence chain and return the first matching credential name.
+
+    Checks (in order):
+    1. project_model_config[model_name][provider] — project model-specific
+    2. project_model_config["defaultconfig"][provider] — project default
+    3. team_model_config[model_name][provider] — team model-specific
+    4. team_model_config["defaultconfig"][provider] — team default
+    """
+    for model_config in (project_model_config, team_model_config):
+        if not model_config:
+            continue
+
+        # Model-specific check
+        model_entry = model_config.get(model_name)
+        if model_entry:
+            credential_name = _extract_credential_from_entry(model_entry)
+            if credential_name:
+                return credential_name
+
+        # Default check
+        default_entry = model_config.get("defaultconfig")
+        if default_entry:
+            credential_name = _extract_credential_from_entry(default_entry)
+            if credential_name:
+                return credential_name
+
+    return None
+
+
+def _extract_credential_from_entry(entry: dict) -> Optional[str]:
+    """
+    Extract litellm_credentials from a model_config entry.
+
+    Entry structure: {"azure": {"litellm_credentials": "name"}, ...}
+    Returns the first credential name found across all provider keys.
+    """
+    for provider_config in entry.values():
+        if isinstance(provider_config, dict):
+            credential_name = provider_config.get("litellm_credentials")
+            if credential_name:
+                return credential_name
+    return None
 
 
 def _get_enforced_params(
