@@ -34,8 +34,30 @@ def contains_surrogate_code_point(value: str) -> bool:
     return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
 
 
+def sanitize_surrogate_code_points(value: str) -> str:
+    if not contains_surrogate_code_point(value):
+        return value
+    return value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
 def _format_path_key(key: str) -> str:
     return key.encode("unicode_escape").decode("ascii")
+
+
+def sanitize_request_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return sanitize_surrogate_code_points(value)
+
+    if isinstance(value, dict):
+        return {
+            sanitize_surrogate_code_points(key) if isinstance(key, str) else key: sanitize_request_payload(nested_value)
+            for key, nested_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [sanitize_request_payload(nested_value) for nested_value in value]
+
+    return value
 
 
 def find_surrogate_code_point_path(

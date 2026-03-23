@@ -411,29 +411,25 @@ class TestAzureExceptionMapping:
         assert "enable_pre_call_checks" in error.message
 
 
-def test_azure_chat_request_rejects_lone_surrogates_before_send():
+def test_azure_chat_request_sanitizes_lone_surrogates_before_send():
     azure_chat_completion = AzureChatCompletion()
     azure_client = MagicMock()
 
-    with pytest.raises(AzureOpenAIError) as exc_info:
-        azure_chat_completion.make_sync_azure_openai_chat_completion_request(
-            azure_client=azure_client,
-            data={
-                "model": "gpt-5.4",
-                "messages": [{"role": "user", "content": "\ud83e"}],
-            },
-            timeout=30,
-        )
+    azure_chat_completion.make_sync_azure_openai_chat_completion_request(
+        azure_client=azure_client,
+        data={
+            "model": "gpt-5.4",
+            "messages": [{"role": "user", "content": "\ud83e"}],
+        },
+        timeout=30,
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "surrogate" in exc_info.value.message.lower()
-    azure_client.chat.completions.with_raw_response.create.assert_not_called()
+    azure_client.chat.completions.with_raw_response.create.assert_called_once()
+    call_kwargs = azure_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert call_kwargs["messages"][0]["content"] == "\ufffd"
 
 
-def test_azure_request_rejects_surrogate_in_dict_key():
-    with pytest.raises(AzureOpenAIError) as exc_info:
-        validate_azure_request_payload({"bad\ud83e": "value"})
+def test_azure_request_sanitizes_surrogate_in_dict_key():
+    sanitized = validate_azure_request_payload({"bad\ud83e": "value"})
 
-    assert exc_info.value.status_code == 400
-    assert "surrogate" in exc_info.value.message.lower()
-    assert "bad\\ud83e" in exc_info.value.message
+    assert sanitized == {"bad\ufffd": "value"}

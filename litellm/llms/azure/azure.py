@@ -140,7 +140,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
-        validate_azure_request_payload(data)
+        data = validate_azure_request_payload(data)
         try:
             raw_response = azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
@@ -164,7 +164,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create by default
         """
         start_time = time.time()
-        validate_azure_request_payload(data)
+        data = validate_azure_request_payload(data)
         try:
             raw_response = await azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
@@ -299,6 +299,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                 )
             else:
+                data = validate_azure_request_payload(data)
                 ## LOGGING
                 logging_obj.pre_call(
                     input=messages,
@@ -393,6 +394,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ):
         response = None
         try:
+            data = validate_azure_request_payload(data)
             # setting Azure client
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
@@ -530,6 +532,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 status_code=500,
                 message="azure_client is not an instance of AzureOpenAI or OpenAI",
             )
+        data = validate_azure_request_payload(data)
         ## LOGGING
         logging_obj.pre_call(
             input=data["messages"],
@@ -574,6 +577,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         litellm_params: Optional[dict] = {},
     ):
         try:
+            data = validate_azure_request_payload(data)
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -653,7 +657,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> EmbeddingResponse:
         response = None
         try:
-            validate_azure_request_payload(data)
+            data = validate_azure_request_payload(data)
             openai_aclient = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -775,7 +779,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                     api_base=api_base,
                 )
-            validate_azure_request_payload(data)
+            data = validate_azure_request_payload(data)
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -841,7 +845,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         Alternative to needing a custom transport implementation
         """
-        validate_azure_request_payload(data)
+        data = validate_azure_request_payload(data)
         if client is None:
             _params = {}
             if timeout is not None:
@@ -950,7 +954,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         Alternative to needing a custom transport implementation
         """
-        validate_azure_request_payload(data)
+        data = validate_azure_request_payload(data)
         if client is None:
             _params = {}
             if timeout is not None:
