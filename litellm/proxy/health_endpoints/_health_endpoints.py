@@ -344,7 +344,23 @@ async def health_services_endpoint(  # noqa: PLR0915
             from litellm.litellm_core_utils.litellm_logging import aktoLogger as _akto
             from litellm.integrations.akto.akto_logger import AktoLogger
 
-            akto_logger = _akto if _akto is not None else AktoLogger()
+        elif service == "akto":
+            from litellm.litellm_core_utils.litellm_logging import aktoLogger as _akto
+            from litellm.integrations.akto.akto_logger import AktoLogger
+
+            try:
+                akto_logger = _akto if _akto is not None else AktoLogger()
+                response = await akto_logger.async_health_check()
+            except Exception as e:
+                return {"status": "unhealthy", "error_message": str(e)}
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Akto is healthy"
+                ),
+            }
             response = await akto_logger.async_health_check()
             return {
                 "status": response["status"],
