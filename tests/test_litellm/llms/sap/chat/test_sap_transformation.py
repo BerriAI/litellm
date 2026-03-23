@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 class TestSAPTransformationIntegration:
-    """Integration tests for SAP transformation with parameter classification."""
+    """Integration tests for SAP transformation."""
 
     @pytest.fixture
     def mock_config(self):
