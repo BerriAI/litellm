@@ -792,11 +792,16 @@ class MCPServerManager:
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
             combined_servers = set(allowed_mcp_servers)
-            # Only add allow_all_keys servers when there is no explicit server
-            # restriction on the key/object_permission.  When mcp_servers is
-            # explicitly set (e.g. by a toolset scope), the explicit list IS
-            # the permission boundary — allow_all_keys servers must not bleed in.
-            if not has_explicit_object_permission:
+            # Only skip allow_all_keys servers when the request is inside a toolset
+            # scope.  _apply_toolset_scope marks this by setting mcp_toolsets=[].
+            # For regular keys (mcp_toolsets=None) or keys with configured toolsets
+            # (mcp_toolsets=[...non-empty...]), allow_all_keys servers must still be
+            # included to preserve backward-compatible behavior.
+            op = user_api_key_auth.object_permission if user_api_key_auth else None
+            in_toolset_scope = (
+                op is not None and op.mcp_servers is not None and op.mcp_toolsets == []
+            )
+            if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
 
             if len(combined_servers) == 0:
@@ -2554,18 +2559,19 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        _all_db_mcp_servers = await get_all_mcp_servers(
-            prisma_client, approval_status=None
+        # Load only "active", legacy "approved", and NULL (no approval workflow) rows.
+        # Pending/rejected servers are excluded at the DB level so we never load them.
+        from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
+
+        raw_rows = await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "OR": [
+                    {"approval_status": None},
+                    {"approval_status": {"in": ["active", "approved"]}},
+                ]
+            }
         )
-        # Load servers that are "active" (explicit approval) or "approved"
-        # (legacy default value pre-dating the approval workflow).
-        # Exclude "pending_review" and "rejected".
-        _load_statuses = {"active", "approved"}
-        db_mcp_servers = [
-            s
-            for s in _all_db_mcp_servers
-            if s.approval_status in _load_statuses or s.approval_status is None
-        ]
+        db_mcp_servers = [LiteLLM_MCPServerTable(**r.model_dump()) for r in raw_rows]
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
