@@ -13,7 +13,6 @@ Ref: https://github.com/BerriAI/litellm/issues/24442
 
 import pytest
 
-import litellm
 from litellm import ModelResponse
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,

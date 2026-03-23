@@ -3014,7 +3014,13 @@ class ModelResponseIterator:
                             hasattr(choice, "finish_reason")
                             and choice.finish_reason == "stop"
                             and hasattr(choice, "delta")
-                            and (choice.delta is None or not choice.delta.tool_calls)
+                            and (
+                                choice.delta is None
+                                or (
+                                    not choice.delta.tool_calls
+                                    and choice.delta.content is None
+                                )
+                            )
                         ):
                             choice.finish_reason = "tool_calls"
 
