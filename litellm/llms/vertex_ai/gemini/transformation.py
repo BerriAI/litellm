@@ -827,7 +827,16 @@ def _transform_request_body(  # noqa: PLR0915
         raise e
 
     if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
-        return _transform_part_to_httpx_format(data)  # type: ignore
+        if "contents" in data:
+            data["contents"] = _transform_part_to_httpx_format(
+                {"contents": data["contents"]}, parent_key=None
+            )["contents"]
+        if "system_instruction" in data:
+            data["systemInstruction"] = _transform_part_to_httpx_format(
+                {"system_instruction": data["system_instruction"]}, parent_key=None
+            )["systemInstruction"]
+            del data["system_instruction"]
+
     return data
 
 

@@ -14,6 +14,7 @@ from litellm.utils import is_cached_message
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
+    _transform_part_to_httpx_format,
     _transform_system_message,
 )
 
@@ -198,8 +199,14 @@ def transform_openai_messages_to_gemini_context_caching(
         data["system_instruction"] = transformed_system_messages
 
     if is_vertex_ai:
-        from ..gemini.transformation import _transform_part_to_httpx_format
-
-        return _transform_part_to_httpx_format(data)  # type: ignore
+        if "contents" in data:
+            data["contents"] = _transform_part_to_httpx_format(
+                {"contents": data["contents"]}, parent_key=None
+            )["contents"]
+        if "system_instruction" in data:
+            data["systemInstruction"] = _transform_part_to_httpx_format(
+                {"system_instruction": data["system_instruction"]}, parent_key=None
+            )["systemInstruction"]
+            del data["system_instruction"]
 
     return data
