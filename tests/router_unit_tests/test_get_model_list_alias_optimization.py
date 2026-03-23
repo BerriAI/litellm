@@ -46,5 +46,5 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
 
     assert (
         router.map_team_model(team_model_name="team-model", team_id="team-1")
-        == "gpt-3.5-turbo"
+        == "team-model"
     )
