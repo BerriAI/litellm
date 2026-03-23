@@ -1397,6 +1397,10 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
  
+    # multimodalembedding@001 has non-zero input_cost_per_image (0.0001) and
+    # input_cost_per_token (8e-07), making the image billing assertion non-trivial.
+    model = "multimodalembedding@001"
+ 
     usage = Usage(
         prompt_tokens=10000,
         completion_tokens=200,
@@ -1408,12 +1412,12 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
     )
  
     prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-2.0-flash-001",
+        model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
  
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost[model]
     input_cost_per_token = model_info["input_cost_per_token"]
     output_cost_per_token = model_info["output_cost_per_token"]
     input_cost_per_image = model_info.get("input_cost_per_image", 0) or 0
@@ -1430,7 +1434,6 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
         f"Gap should not be filled when image_count billing is active."
     )
     assert completion_cost == pytest.approx(expected_completion_cost)
-
 
 def test_character_count_billing_does_not_fill_prompt_token_gap():
     """
