@@ -276,7 +276,8 @@ def safe_model_dump(obj: "ModelResponseStream") -> dict:
         verbose_logger.warning(
             "Pydantic MockValSer bug detected (pydantic issue #7713); "
             "falling back to __dict__ extraction. "
-            "Upgrading pydantic may resolve this. Error: %s", e
+            "Upgrading pydantic may resolve this. Error: %s",
+            e,
         )
         return {
             k: v
