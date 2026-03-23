@@ -1984,3 +1984,27 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+
+
+@pytest.mark.parametrize(
+    "anthropic_type,expected_openai",
+    [
+        ("none", "none"),
+        ("auto", "auto"),
+        ("any", "required"),
+    ],
+)
+def test_translate_anthropic_tool_choice_to_openai(anthropic_type, expected_openai):
+    """tool_choice type 'none' should translate to the OpenAI string 'none'."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_tool_choice_to_openai({"type": anthropic_type})  # type: ignore
+    assert result == expected_openai
+
+
+def test_translate_anthropic_tool_choice_tool_to_openai():
+    """tool_choice type 'tool' should translate to an object with the function name."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_tool_choice_to_openai(
+        {"type": "tool", "name": "get_weather"}
+    )
+    assert result == {"type": "function", "function": {"name": "get_weather"}}
