@@ -390,6 +390,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             file_content = extracted_file_data_content.decode("utf-8")
         elif isinstance(extracted_file_data_content, str):
             file_content = extracted_file_data_content
+        elif hasattr(extracted_file_data_content, "read") and hasattr(
+            extracted_file_data_content, "seek"
+        ):
+            # IO[bytes] path (e.g. SpooledTemporaryFile from FastAPI UploadFile)
+            extracted_file_data_content.seek(0)
+            file_content = extracted_file_data_content.read().decode("utf-8")
         else:
             raise ValueError("Unsupported file content type")
 
