@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 class TestSAPTransformationIntegration:
     """Integration tests for SAP transformation with parameter classification."""
@@ -265,6 +266,25 @@ class TestSAPTransformationIntegration:
         assert config["placeholder_values"] == placeholder_values
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
+    def test_grounding_search_config_rejects_both_count_fields(self, mock_config):
+        with pytest.raises(ValidationError):
+            mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hi"}],
+                optional_params={
+                    "grounding": {
+                        "type": "document_grounding_service",
+                        "config": {
+                            "filters": [{"data_repository_type": "vector",
+                                         "search_config": {"max_chunk_count": 2,
+                                                           "max_document_count": 5}}],
+                            "placeholders": {"input": ["q"], "output": "r"},
+                        }
+                    }
+                },
+                litellm_params={}, headers={}
+            )
+
     def test_sap_filtering(self, mock_config):
         filtering_config_azure = {
             'input':
@@ -340,6 +360,21 @@ class TestSAPTransformationIntegration:
         assert config["config"]["modules"]["filtering"] == filtering_config_llama
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
+    def test_filtering_config_requires_at_least_one_property(self, mock_config):
+        with pytest.raises(ValidationError) as exc_info:
+            mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={
+                    "filtering": {}
+                },
+                litellm_params={},
+                headers={}
+            )
+
+        assert "For using SAP Filtering Module you must provide at least one property" in str(exc_info.value)
+
+
     def test_sap_masking(self, mock_config):
         masking_config = {
             'providers':
@@ -369,6 +404,46 @@ class TestSAPTransformationIntegration:
         assert config["config"]["modules"]["masking"] == masking_config
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
 
+    def test_masking_config_requires_exactly_one_provider_list(self, mock_config):
+        masking_config = {
+            'providers':
+                [
+                    {
+                        'type': 'sap_data_privacy_integration',
+                        'method': 'anonymization',
+                        'entities': [
+                            {'type': 'profile-address'},
+                            {'type': 'profile-email'},
+                            {'type': 'profile-phone'},
+                            {'type': 'profile-person'},
+                            {'type': 'profile-location'}
+                        ]
+                    }
+                ],
+            'masking_providers':
+            [
+                {
+                    'type': 'sap_data_privacy_integration',
+                    'method': 'anonymization',
+                    'entities': [
+                        {'type': 'profile-address'}
+                    ]
+                }
+            ]
+        }
+        with pytest.raises(ValidationError) as exc_info:
+            mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={
+                    "masking": masking_config
+                },
+                litellm_params={},
+                headers={}
+            )
+
+        assert "must set exactly one of: 'providers' or 'masking_providers'" in str(exc_info.value)
+
     def test_sap_translation(self, mock_config):
         translation_config = {
             'input':
@@ -395,6 +470,20 @@ class TestSAPTransformationIntegration:
         )
         assert config["config"]["modules"]["translation"] == translation_config
         assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+
+    def test_translation_config_requires_at_least_one_property(self, mock_config):
+        with pytest.raises(ValidationError) as exc_info:
+            mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={
+                    "translation": {}
+                },
+                litellm_params={},
+                headers={}
+            )
+
+        assert "TranslationModuleConfig requires at least one of 'input' or 'output'" in str(exc_info.value)
 
     def test_sap_multiple_modules(self, mock_config):
         translation_config = {
