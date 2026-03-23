@@ -106,23 +106,42 @@ LiteLLM covers approximately 70-80% of Article 12 requirements out of the box wh
 
 ### Configuring Article 12-compliant logging
 
-Enable comprehensive logging via LiteLLM callbacks:
+**Option 1: Use a built-in integration** (recommended for most deployments):
 
 ```python
 import litellm
 
-litellm.success_callback = ["your_logging_backend"]
-litellm.failure_callback = ["your_logging_backend"]
-
-# Ensure these fields are captured in your callback:
-# - model, messages, response, usage, response_cost
-# - temperature, max_tokens (from kwargs)
-# - user, metadata
-# - timestamps, latency
-# - error type and message (on failure)
+# Use a built-in backend: "langfuse", "s3", "datadog", "helicone", etc.
+litellm.success_callback = ["langfuse"]
+litellm.failure_callback = ["langfuse"]
 ```
 
-Connect to a persistent backend (Langfuse, Helicone, or your own database) with a retention policy of at least 6 months.
+**Option 2: Custom compliance logger** (when you need full control over what's captured):
+
+```python
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+
+class ComplianceLogger(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # Article 12 fields to capture:
+        # - kwargs["model"], kwargs["messages"] (input content)
+        # - response_obj (output content)
+        # - kwargs["optional_params"] (temperature, max_tokens)
+        # - response_obj.usage (token counts)
+        # - kwargs.get("response_cost") (cost per request)
+        # - kwargs.get("user") (user identification)
+        # - start_time, end_time (timestamps and latency)
+        ...
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        # Capture: exception type, message, failing model, timestamp
+        ...
+
+litellm.callbacks = [ComplianceLogger()]
+```
+
+Whichever option you choose, connect to a persistent backend with a retention policy of at least 6 months (Article 26(6) for deployers; Article 18 requires 10 years for providers).
 
 ## Article 13: Transparency
 
