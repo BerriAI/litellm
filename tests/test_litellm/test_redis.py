@@ -1,6 +1,6 @@
 import json
 import os
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import redis

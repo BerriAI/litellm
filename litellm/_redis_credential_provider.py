@@ -1,6 +1,8 @@
 import asyncio
 from typing import Tuple
 
+from redis.credentials import CredentialProvider  # type: ignore[attr-defined]
+
 
 def _generate_gcp_iam_access_token(service_account: str) -> str:
     """
@@ -29,7 +31,7 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
     return str(response.access_token)
 
 
-class GCPIAMCredentialProvider:
+class GCPIAMCredentialProvider(CredentialProvider):
     """
     redis.credentials.CredentialProvider implementation that generates a fresh GCP IAM
     token on every new connection. This fixes the 1-hour token expiry issue for async

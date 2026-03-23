@@ -18,6 +18,10 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
+from litellm._redis_credential_provider import (
+    GCPIAMCredentialProvider,
+    _generate_gcp_iam_access_token,
+)
 from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -105,12 +109,6 @@ def _redis_kwargs_from_environment():
         if value is not None:
             return_dict[v] = value
     return return_dict
-
-
-from litellm._redis_credential_provider import (
-    GCPIAMCredentialProvider,
-    _generate_gcp_iam_access_token,
-)
 
 
 def create_gcp_iam_redis_connect_func(
@@ -392,33 +390,13 @@ def get_redis_async_client(
 
         # Handle GCP IAM authentication for async clusters
         redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
-        from litellm import get_secret_str
 
-        # Get GCP service account - first try from redis_connect_func, then from environment
-        gcp_service_account = None
+        # Use a CredentialProvider so the IAM token is regenerated on every new
+        # connection — mirrors the sync path where redis_connect_func is invoked
+        # per connection.  Without this, the token would expire after ~1 hour.
         if redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
-            gcp_service_account = redis_connect_func._gcp_service_account
-        else:
-            gcp_service_account = redis_kwargs.get(
-                "gcp_service_account"
-            ) or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
-
-        verbose_logger.debug(
-            f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
-        )
-
-        # If GCP IAM is configured (indicated by redis_connect_func), attach a
-        # credential_provider that regenerates the token on every new connection.
-        # This mirrors the sync behaviour where redis_connect_func is called per
-        # connection, and avoids the 1-hour token expiry bug where the old code
-        # generated the token once at startup and set it as a static password.
-        if redis_connect_func and gcp_service_account:
             cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
-                gcp_service_account
-            )
-        else:
-            verbose_logger.debug(
-                f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}"
+                redis_connect_func._gcp_service_account
             )
 
         new_startup_nodes: List[ClusterNode] = []
