@@ -577,6 +577,7 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         litellm.custom_prometheus_metadata_labels = ["org_id"]
         labels = PrometheusMetricLabels.get_labels("litellm_requests_metric")
         assert labels.count("org_id") == 1
+        litellm.custom_prometheus_metadata_labels = []
 
         # Flag OFF — org labels not in metric schema, absent from label dict entirely
         litellm.prometheus_emit_org_labels = False
