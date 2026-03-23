@@ -1847,7 +1847,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
-    mcp_toolsets: Optional[List[str]] = []
+    mcp_toolsets: Optional[List[str]] = None
     blocked_tools: Optional[List[str]] = []
 
 
