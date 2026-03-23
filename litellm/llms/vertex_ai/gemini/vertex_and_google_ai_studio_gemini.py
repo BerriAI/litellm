@@ -1285,8 +1285,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _content_str = ""
             if "text" in part:
                 text_content = part["text"]
+                # Guard against null text (e.g., Gemini image generation responses)
+                if text_content is None:
+                    continue
                 # Check if text content is audio data URI - if so, exclude from text content
-                if text_content.startswith("data:audio") and ";base64," in text_content:
+                elif text_content.startswith("data:audio") and ";base64," in text_content:
                     try:
                         if is_base64_encoded(text_content):
                             media_type, _ = text_content.split("data:")[1].split(

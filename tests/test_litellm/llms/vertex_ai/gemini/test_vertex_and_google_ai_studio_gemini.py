@@ -431,6 +431,26 @@ def test_vertex_ai_empty_content():
     assert reasoning_content is None
 
 
+def test_vertex_ai_gemini_image_generation_text_null():
+    """Test that get_assistant_content_message handles text: null (Gemini image generation responses)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    v = VertexGeminiConfig()
+    # Gemini image generation responses have text: null in the part
+    parts = [
+        HttpxPartType(
+            text=None,
+        ),
+    ]
+    # Should not raise AttributeError: 'NoneType' object has no attribute 'startswith'
+    content, reasoning_content = v.get_assistant_content_message(parts=parts)
+    assert content is None
+    assert reasoning_content is None
+
+
 @pytest.mark.parametrize(
     "usage_metadata, inclusive, expected_usage",
     [
