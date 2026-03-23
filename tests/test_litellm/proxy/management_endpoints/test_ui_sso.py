@@ -3837,10 +3837,10 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify the warning was actually logged
         assert any(
-            "verifier not found" in r.message.lower() or "code_verifier" in r.message.lower()
+            "verifier not found" in r.getMessage().lower() or "code_verifier" in r.getMessage().lower()
             for r in handler.records
             if r.levelno >= logging.WARNING
-        ), f"Expected a cache-miss warning. Records: {[r.message for r in handler.records]}"
+        ), f"Expected a cache-miss warning. Records: {[r.getMessage() for r in handler.records]}"
 
     @pytest.mark.asyncio
     async def test_pkce_token_exchange_non200_raises_proxy_exception(self):
@@ -3940,10 +3940,12 @@ class TestPKCEFunctionality:
         mock_cache.async_get_cache.assert_called_once()
         # Verify a warning was logged about the unexpected format or cache miss
         assert any(
-            "verifier" in r.message.lower() or "format" in r.message.lower() or "cache" in r.message.lower()
+            "verifier" in r.getMessage().lower()
+            or "format" in r.getMessage().lower()
+            or "cache" in r.getMessage().lower()
             for r in handler.records
             if r.levelno >= logging.WARNING
-        ), f"Expected a format/cache warning. Records: {[r.message for r in handler.records]}"
+        ), f"Expected a format/cache warning. Records: {[r.getMessage() for r in handler.records]}"
         # Verify cleanup was attempted for the corrupt/stale cache entry
         mock_cache.async_delete_cache.assert_called_once()
 
