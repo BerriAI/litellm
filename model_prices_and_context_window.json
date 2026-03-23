@@ -20481,7 +20481,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "crusoe/meta-llama/Llama-3.3-70B-Instruct": {
         "input_cost_per_token": 2e-07,

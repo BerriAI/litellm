@@ -71,7 +71,7 @@ messages = [{"content": "Write a short story about AI", "role": "user"}]
 
 # Crusoe call with streaming
 response = completion(
-    model="crusoe/meta-llama/Llama-3.1-70B-Instruct",
+    model="crusoe/meta-llama/Llama-3.3-70B-Instruct",
     messages=messages,
     stream=True
 )
