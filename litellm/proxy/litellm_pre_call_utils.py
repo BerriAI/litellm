@@ -660,7 +660,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_project_id=user_api_key_dict.project_id,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
-            user_api_key_org_alias=None,
+            user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,

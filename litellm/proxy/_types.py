@@ -2410,6 +2410,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_model_max_budget: Optional[dict] = None
 
     # Organization Params
+    organization_alias: Optional[str] = None
     organization_max_budget: Optional[float] = None
     organization_tpm_limit: Optional[int] = None
     organization_rpm_limit: Optional[int] = None
