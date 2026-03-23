@@ -1,4 +1,5 @@
 import json
+import pytest
 import litellm.llms.sap.credentials as sap_credentials
 
 mock_sap_service_key_dict = {
@@ -85,3 +86,23 @@ def test_creds_priority_order(monkeypatch):
     creds = sap_credentials.fetch_credentials(service_key=json.dumps(mock_sap_service_key_dict))
     assert creds['client_id'] == "mockclientid"
     assert creds['resource_group'] == "env-resource-group"
+
+def test_no_credentials_configured(monkeypatch):
+    _prep_env(monkeypatch)
+    with pytest.raises(ValueError, match="No credentials found in any source"):
+        sap_credentials.fetch_credentials()
+
+
+def test_partial_credentials_missing_auth_url(monkeypatch):
+    _prep_env(monkeypatch)
+
+    # Set only client_id and base_url, missing auth_url
+    monkeypatch.setenv("AICORE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AICORE_BASE_URL", "test-base-url")
+
+    # fetch_credentials should succeed (it returns whatever it finds)
+    creds = sap_credentials.fetch_credentials()
+    creds.pop('resource_group')
+
+    with pytest.raises(ValueError, match="SAP AI Core credentials not found."):
+        sap_credentials.validate_credentials(**creds)

@@ -312,7 +312,7 @@ def validate_credentials(
         )
 
     modes = [
-        client_secret is not None,
+        bool(client_secret),
         (cert_str is not None and key_str is not None),
         (cert_file_path is not None and key_file_path is not None),
     ]
