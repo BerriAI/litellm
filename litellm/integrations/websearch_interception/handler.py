@@ -668,6 +668,11 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Any:
         """Execute litellm.search() and make follow-up request"""
 
+        # Extract metadata for cost attribution
+        _metadata = kwargs.get("metadata") or kwargs.get("litellm_params", {}).get(
+            "metadata"
+        )
+
         # Extract search queries from tool_use blocks
         search_tasks = []
         for tool_call in tool_calls:
@@ -676,7 +681,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 verbose_logger.debug(
                     f"WebSearchInterception: Queuing search for query='{query}'"
                 )
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(
+                    self._execute_search(query, metadata=_metadata)
+                )
             else:
                 verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call['id']} has no query"
@@ -792,8 +799,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             raise
 
-    async def _execute_search(self, query: str) -> str:
-        """Execute a single web search using router's search tools"""
+    async def _execute_search(
+        self, query: str, metadata: Optional[Dict] = None
+    ) -> str:
+        """Execute a single web search using router's search tools.
+
+        Args:
+            query: The search query string.
+            metadata: Optional metadata dict from the original request. When
+                provided, it is forwarded to ``litellm.asearch`` so that proxy
+                callbacks (e.g. spend tracking) can attribute the search cost
+                to the correct API key / user / team.
+        """
         try:
             # Import router from proxy_server
             try:
@@ -851,7 +868,13 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            search_kwargs: Dict[str, Any] = {
+                "query": query,
+                "search_provider": search_provider,
+            }
+            if metadata:
+                search_kwargs["metadata"] = metadata
+            result = await litellm.asearch(**search_kwargs)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
@@ -879,6 +902,11 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Any:
         """Execute litellm.search() and make follow-up chat completion request"""
 
+        # Extract metadata for cost attribution
+        _metadata = kwargs.get("metadata") or kwargs.get("litellm_params", {}).get(
+            "metadata"
+        )
+
         # Extract search queries from tool_calls
         search_tasks = []
         for tool_call in tool_calls:
@@ -897,7 +925,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 verbose_logger.debug(
                     f"WebSearchInterception: Queuing search for query='{query}'"
                 )
-                search_tasks.append(self._execute_search(query))
+                search_tasks.append(
+                    self._execute_search(query, metadata=_metadata)
+                )
             else:
                 verbose_logger.debug(
                     f"WebSearchInterception: Tool call {tool_call.get('id')} has no query"
