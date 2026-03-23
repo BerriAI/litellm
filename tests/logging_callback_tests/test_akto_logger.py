@@ -335,3 +335,29 @@ async def test_async_log_failure_swallows_errors(logger):
         start_time=None,
         end_time=None,
     )
+
+
+# ── Health check ──
+
+
+@pytest.mark.asyncio
+async def test_async_health_check_healthy(logger):
+    logger.async_http_handler.get = AsyncMock(return_value=MagicMock(status_code=200))
+    result = await logger.async_health_check()
+    assert result["status"] == "healthy"
+    assert result["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_health_check_unhealthy(logger):
+    logger.async_http_handler.get = AsyncMock(return_value=MagicMock(status_code=503))
+    result = await logger.async_health_check()
+    assert result["status"] == "unhealthy"
+    assert "503" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_async_health_check_exception(logger):
+    logger.async_http_handler.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    result = await logger.async_health_check()
+    assert result["status"] == "unhealthy"
