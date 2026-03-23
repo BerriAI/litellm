@@ -28,9 +28,15 @@ from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
 
 
 class MockPrismaClient:
-    def __init__(self, team_exists: bool = True, user_admin: bool = True):
+    def __init__(
+        self,
+        team_exists: bool = True,
+        user_admin: bool = True,
+        sibling_deployments: list = None,
+    ):
         self.team_exists = team_exists
         self.user_admin = user_admin
+        self.sibling_deployments = sibling_deployments or []
         self.db = self
 
     async def find_unique(self, where):
@@ -47,7 +53,7 @@ class MockPrismaClient:
         return None
 
     async def find_many(self, where):
-        return []
+        return self.sibling_deployments
 
     @property
     def litellm_teamtable(self):
@@ -741,6 +747,66 @@ class TestTeamModelUpdate:
             mock_update_team.assert_not_called()
             # team_model_add must be called to add public name to team's models list
             mock_team_model_add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rename_preserves_old_name_when_siblings_exist(self):
+        """Test that renaming a deployment preserves old public name when sibling deployments still use it"""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        # Create a deployment being renamed
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(
+                team_id="team_123", team_public_model_name="old-public-name"
+            ),
+        )
+
+        # Create a sibling deployment that still uses the old public name
+        sibling_deployment = MagicMock()
+        sibling_deployment.model_name = "model_name_team_123_uuid2"
+        sibling_deployment.model_info = {
+            "team_id": "team_123",
+            "team_public_model_name": "old-public-name",
+        }
+
+        prisma_client = MockPrismaClient(
+            team_exists=True, sibling_deployments=[sibling_deployment]
+        )
+
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+        ) as mock_delete, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+        ) as mock_add:
+            await _update_existing_team_model_assignment(
+                team_id="team_123",
+                public_model_name="new-public-name",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,  # type: ignore
+            )
+
+            # team_model_delete should NOT be called because sibling exists
+            mock_delete.assert_not_called()
+            # team_model_add should be called to add new public name
+            mock_add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_patch_model_with_team_id_validates_permissions(self):
