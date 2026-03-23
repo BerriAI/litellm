@@ -2166,6 +2166,11 @@ if MCP_AVAILABLE:
             litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
         result = await update_mcp_toolset(prisma_client, payload, touched_by)
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Toolset '{payload.toolset_id}' not found."},
+            )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
