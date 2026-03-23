@@ -424,8 +424,17 @@ def test_normalize_fine_tuning_job_dict_maps_azure_pending():
     from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
 
     out = _normalize_fine_tuning_job_dict(
-        {"organization_id": None, "result_files": None, "status": "pending"}
+        {"organization_id": None, "result_files": None, "status": "pending"},
+        is_azure=True,
     )
     assert out["organization_id"] == ""
     assert out["result_files"] == []
     assert out["status"] == "queued"
+
+
+def test_normalize_fine_tuning_job_dict_openai_unchanged():
+    from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
+
+    data = {"organization_id": None, "result_files": None, "status": "pending"}
+    out = _normalize_fine_tuning_job_dict(data, is_azure=False)
+    assert out is data
