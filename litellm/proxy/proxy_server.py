@@ -13536,7 +13536,8 @@ async def _stream_mcp_asgi_response(
     # sentinel, body_iter() would block forever on body_queue.get().  The callback
     # below guarantees the queue gets unblocked regardless of how the task ends.
     def _ensure_eof(task: asyncio.Task) -> None:
-        body_queue.put_nowait(None)
+        if task.cancelled() or task.exception() is not None:
+            body_queue.put_nowait(None)
 
     handler_task.add_done_callback(_ensure_eof)
 

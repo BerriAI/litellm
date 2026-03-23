@@ -37,9 +37,10 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 try:
-    from prisma.errors import RecordNotFoundError
+    from prisma.errors import RecordNotFoundError, UniqueViolationError
 except ImportError:
     RecordNotFoundError = Exception  # type: ignore
+    UniqueViolationError = Exception  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -2074,15 +2075,13 @@ if MCP_AVAILABLE:
         )
         try:
             result = await create_mcp_toolset(prisma_client, payload, touched_by)
-        except Exception as e:
-            if "UniqueViolationError" in type(e).__name__ or "unique" in str(e).lower():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": f"A toolset named '{payload.toolset_name}' already exists."
-                    },
-                )
-            raise
+        except UniqueViolationError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": f"A toolset named '{payload.toolset_name}' already exists."
+                },
+            )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
