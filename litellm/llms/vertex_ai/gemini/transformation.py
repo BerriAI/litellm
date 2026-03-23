@@ -257,13 +257,11 @@ def _transform_part_to_httpx_format(part: dict, parent_key: Optional[str] = None
         # These are user-defined keys that should be preserved.
         should_preserve_keys = False
         if isinstance(v, dict):
-            if k == "args" and parent_key in ["functionCall", "function_call"]:
+            if k == "args" and parent_key == "functionCall":
                 should_preserve_keys = True
             elif k == "response" and parent_key in [
                 "functionResponse",
-                "function_response",
                 "toolResponse",
-                "tool_response",
             ]:
                 should_preserve_keys = True
             elif k == "properties":

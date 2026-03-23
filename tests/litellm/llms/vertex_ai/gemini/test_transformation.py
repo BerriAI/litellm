@@ -309,7 +309,7 @@ def test_vertex_transformation_field_casing():
             "args": {"security_risk": "high", "other_param": 123},
         }
     }
-    transformed = _transform_part_to_httpx_format(part, parent_key="functionCall")
+    transformed = _transform_part_to_httpx_format(part)
     assert "functionCall" in transformed
     assert "args" in transformed["functionCall"]
     # Keys in args should NOT be camelCased
