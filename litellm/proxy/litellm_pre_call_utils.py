@@ -1569,7 +1569,7 @@ def _add_guardrails_from_policies_in_metadata(
     )
 
 
-async def _add_guardrails_from_user_team_memberships(
+async def _add_guardrails_from_user_team_memberships(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth,
     data: dict,
     metadata_variable_name: str,
@@ -1585,6 +1585,8 @@ async def _add_guardrails_from_user_team_memberships(
     guardrails to apply to the user's requests regardless of key-level team
     association.
     """
+    from fastapi import HTTPException
+
     from litellm.proxy.utils import _premium_user_check
 
     user_id = user_api_key_dict.user_id
@@ -1623,6 +1625,8 @@ async def _add_guardrails_from_user_team_memberships(
         if user_obj is None or not user_obj.teams:
             return
 
+        _premium_user_check()
+
         key_team_id = user_api_key_dict.team_id
         for team_id in user_obj.teams:
             if team_id == key_team_id:
@@ -1634,41 +1638,46 @@ async def _add_guardrails_from_user_team_memberships(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                 )
-                if team_obj and team_obj.metadata:
-                    team_meta = (
-                        team_obj.metadata if isinstance(team_obj.metadata, dict) else {}
-                    )
-                    if (
-                        "guardrails" in team_meta
-                        and isinstance(team_meta["guardrails"], list)
-                        and len(team_meta["guardrails"]) > 0
-                    ):
-                        _premium_user_check()
-                        existing = set(
-                            data.get(metadata_variable_name, {}).get("guardrails", [])
-                        )
-                        new_guardrails = sorted(
-                            set(team_meta["guardrails"]) - existing
-                        )
-                        if new_guardrails:
-                            metadata_dict = data.get(metadata_variable_name)
-                            if metadata_dict is None:
-                                data[metadata_variable_name] = {}
-                                metadata_dict = data[metadata_variable_name]
-                            if "guardrails" not in metadata_dict:
-                                metadata_dict["guardrails"] = []
-                            metadata_dict["guardrails"].extend(new_guardrails)
-                            verbose_proxy_logger.debug(
-                                "Applied guardrails %s from user team membership (team_id=%s, user_id=%s)",
-                                new_guardrails,
-                                team_id,
-                                user_id,
-                            )
+            except HTTPException:
+                verbose_proxy_logger.debug(
+                    "Team %s not found during user team guardrails resolution",
+                    team_id,
+                )
+                continue
             except Exception as e:
                 verbose_proxy_logger.warning(
-                    "Could not fetch team object for team_id=%s during user team guardrails resolution: %s",
+                    "Could not fetch team object for team_id=%s: %s",
                     team_id,
                     str(e),
+                )
+                continue
+
+            if not team_obj or not team_obj.metadata:
+                continue
+
+            team_meta = team_obj.metadata if isinstance(team_obj.metadata, dict) else {}
+            if (
+                "guardrails" not in team_meta
+                or not isinstance(team_meta["guardrails"], list)
+                or len(team_meta["guardrails"]) == 0
+            ):
+                continue
+
+            existing = set(data.get(metadata_variable_name, {}).get("guardrails", []))
+            new_guardrails = sorted(set(team_meta["guardrails"]) - existing)
+            if new_guardrails:
+                metadata_dict = data.get(metadata_variable_name)
+                if metadata_dict is None:
+                    data[metadata_variable_name] = {}
+                    metadata_dict = data[metadata_variable_name]
+                if "guardrails" not in metadata_dict:
+                    metadata_dict["guardrails"] = []
+                metadata_dict["guardrails"].extend(new_guardrails)
+                verbose_proxy_logger.debug(
+                    "Applied guardrails %s from user team membership (team_id=%s, user_id=%s)",
+                    new_guardrails,
+                    team_id,
+                    user_id,
                 )
     except Exception as e:
         verbose_proxy_logger.warning(
@@ -1730,10 +1739,10 @@ async def move_guardrails_to_metadata(
     )
 
     #########################################################################################
-    # Apply guardrails from user's team memberships.
-    # Only runs when guardrails are configured in the proxy (past early-exit).
-    # _add_guardrails_from_key_or_team_metadata merges (not overwrites), so
-    # guardrails added here are preserved.
+    # Apply guardrails from user's team memberships (runs after key/team guardrails).
+    # Only reached when guardrails are configured in the proxy (past early-exit).
+    # Both this function and _add_guardrails_from_key_or_team_metadata merge into
+    # the existing guardrails list without overwriting each other.
     #########################################################################################
     if user_api_key_dict.user_id:
         await _add_guardrails_from_user_team_memberships(
