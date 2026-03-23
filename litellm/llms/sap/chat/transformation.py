@@ -30,7 +30,7 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
-from .models import ResponseFormatJSONSchema, ResponseFormat, OrchestrationRequest
+from .models import ResponseFormatJSONSchema, ResponseFormat, OrchestrationRequest, ChatCompletionTool
 from .handler import (
     GenAIHubOrchestrationError,
     AsyncSAPStreamIterator,
@@ -220,12 +220,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
             # LangChain agents pass strict=true at top level, which fails for GPT models
             # Anthropic models accept strict, so preserve it for them
-            if model.startswith("gpt") and "strict" in params:
+            if model_name.startswith("gpt") and "strict" in params:
                 params.pop("strict")
 
             model_version = params.pop("model_version", "latest")
 
             tools_ = params.pop("tools", [])
+            tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
             tools = {"tools": tools_} if tools_ else {}
 
             response_format = params.pop("response_format", {})
