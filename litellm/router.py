@@ -7183,8 +7183,8 @@ class Router:
         - model: dict - the deployment to index
         - idx: int - the index in model_list
         """
-        team_id = model.get("model_info", {}).get("team_id")
-        team_public_model_name = model.get("model_info", {}).get(
+        team_id = (model.get("model_info") or {}).get("team_id")
+        team_public_model_name = (model.get("model_info") or {}).get(
             "team_public_model_name"
         )
         if team_id and team_public_model_name:
@@ -7242,7 +7242,10 @@ class Router:
             )
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
-                if deployment.litellm_params == _deployment_on_router.litellm_params:
+                if (
+                    deployment.litellm_params == _deployment_on_router.litellm_params
+                    and deployment.model_info == _deployment_on_router.model_info
+                ):
                     # No need to update
                     return None
 
@@ -8268,7 +8271,8 @@ class Router:
                         returned_models.append(alias_model)
                     else:
                         returned_models.append(model)
-                return returned_models
+                if returned_models:
+                    return returned_models
 
         # O(1) lookup in model_name index
         if model_name in self.model_name_to_deployment_indices:
