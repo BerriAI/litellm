@@ -11,6 +11,19 @@ mock_sap_service_key_dict = {
     "clientsecret":"mockclientsecret",
     "url":"https://test.sap.hana.ondemand.com/"
 }
+
+mock_wrapped_sap_service_key_dict = {
+    "credentials": {
+        "serviceurls":
+            {
+                "AI_API_URL":"https://testurl.hana.ondemand.com/"
+            },
+        "clientid":"mockclientid",
+        "clientsecret":"mockclientsecret",
+        "url":"https://test.sap.hana.ondemand.com/"
+    }
+}
+
 expected_creds = {'client_id': "mockclientid",
                   'client_secret': "mockclientsecret",
                   'auth_url': 'https://test.sap.hana.ondemand.com/oauth/token',
@@ -42,6 +55,12 @@ def _prep_env(monkeypatch):
 def test_sap_fetch_creds_from_env_service_key(monkeypatch):
     _prep_env(monkeypatch)
     monkeypatch.setenv("AICORE_SERVICE_KEY", json.dumps(mock_sap_service_key_dict))
+    creds = sap_credentials.fetch_credentials()
+    assert creds == expected_creds
+
+def test_sap_fetch_creds_from_env_wrapped_service_key(monkeypatch):
+    _prep_env(monkeypatch)
+    monkeypatch.setenv("AICORE_SERVICE_KEY", json.dumps(mock_wrapped_sap_service_key_dict))
     creds = sap_credentials.fetch_credentials()
     assert creds == expected_creds
 

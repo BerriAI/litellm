@@ -33,6 +33,7 @@ def _get_home() -> str:
 def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
     if isinstance(cur, str):
+        # This shouldn't happen if service keys are pre-parsed correctly
         try:
             cur = json.loads(cur)
         except json.JSONDecodeError:
@@ -205,7 +206,29 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
     return rg_cred.default
 
 
-def _function_to_resolve_cv_from_service_key(
+def _parse_service_key_once(
+        service_key: Optional[Union[str, dict]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Pre-parse service_key if it's a string to avoid repeated JSON parsing.
+
+    Returns None if parsing fails (other credential sources may still work).
+    """
+    if service_key is None:
+        return None
+    if isinstance(service_key, dict):
+        return service_key
+    if isinstance(service_key, str):
+        try:
+            return json.loads(service_key)
+        except json.JSONDecodeError:
+            verbose_logger.warning(
+                "SAP service key is a string but not valid JSON. Skipping this source."
+            )
+            return None
+    return None
+
+def _resolve_credential_from_service_key(
     service_key: Optional[Union[str, dict]], cv: CredentialsValue
 ):
     if service_key is None:
@@ -241,10 +264,14 @@ def fetch_credentials(
     Important:
       - Credentials are extracted from the FIRST source that provides any credential value.
       - Values are NOT merged per key across sources. Except resource_group, which is merged.
+
+    Warning:
+      - This function does NOT validate the returned credentials just parsed it from the sources.
+      - Callers MUST explicitly call validate_credentials() on the returned dict
     """
     config = init_conf(profile)
 
-    service_key = (
+    service_key = _parse_service_key_once(
         service_key or litellm.sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
     )
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
@@ -253,7 +280,7 @@ def fetch_credentials(
         Source("kwargs", lambda cv: _str_or_none(kwargs.get(cv.name))),
         Source(
             "service key",
-            lambda cv: _function_to_resolve_cv_from_service_key(service_key, cv),
+            lambda cv: _resolve_credential_from_service_key(service_key, cv),
         ),  # type: ignore[arg-type]
         Source(
             "environment variables",
