@@ -9,14 +9,15 @@ Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from openapi_core import OpenAPI
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
+OPENAPI_SPEC_SNAPSHOT = Path(__file__).resolve().parent / "google_interactions_openapi_snapshot.json"
 
 
 def _resolve_schema_ref(spec_dict: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -35,17 +36,12 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
     """
     Load the OpenAPI spec JSON.
 
-    In CI or offline environments, network access may not be available.
-    In that case, gracefully skip these tests instead of erroring.
+    Use the checked-in snapshot to keep the suite deterministic and offline.
     """
-    try:
-        response = httpx.get(OPENAPI_SPEC_URL, timeout=5.0)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:  # pragma: no cover - defensive, env-dependent
-        pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
-        )
+    if not OPENAPI_SPEC_SNAPSHOT.exists():
+        pytest.skip(f"Missing OpenAPI snapshot: {OPENAPI_SPEC_SNAPSHOT}")
+
+    return json.loads(OPENAPI_SPEC_SNAPSHOT.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
@@ -270,11 +266,8 @@ class TestEndpointCompliance:
 
 if __name__ == "__main__":
     # Quick manual test
-    import httpx
-
     print("Loading OpenAPI spec...")
-    response = httpx.get(OPENAPI_SPEC_URL)
-    spec = response.json()
+    spec = _load_openapi_spec_dict()
 
     print(f"\nSpec version: {spec.get('openapi')}")
     print(f"API title: {spec.get('info', {}).get('title')}")
