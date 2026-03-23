@@ -1,13 +1,9 @@
 """Akto guardrail integration for LiteLLM proxy.
 
-Uses a two-config-entry pattern:
-  - akto-validate (pre_call): Checks request against Akto guardrails, blocks if flagged.
-  - akto-ingest (post_call): Sends request+response to Akto for data ingestion.
-
-For monitor-only mode, enable only akto-ingest without akto-validate.
+Mode:
+  - pre_call: Validates request against Akto guardrails, blocks if flagged.
 """
 
-import asyncio
 import json
 import os
 from datetime import datetime
@@ -38,10 +34,7 @@ DEFAULT_GUARDRAIL_TIMEOUT = 5
 
 
 class AktoGuardrail(CustomGuardrail):
-    """LiteLLM guardrail hook that validates and ingests LLM traffic via the Akto API."""
-
-    # Maps event_hook to the input_type it should handle; mismatches are no-ops
-    HOOK_TO_INPUT = {"pre_call": "request", "post_call": "response"}
+    """Validates LLM requests against Akto guardrails."""
 
     @staticmethod
     def get_config_model() -> Type["GuardrailConfigModel"]:
@@ -56,8 +49,6 @@ class AktoGuardrail(CustomGuardrail):
         self,
         akto_base_url: Optional[str] = None,
         akto_api_key: Optional[str] = None,
-        akto_account_id: Optional[str] = None,
-        akto_vxlan_id: Optional[str] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         guardrail_timeout: Optional[int] = None,
         **kwargs: Any,
@@ -75,7 +66,6 @@ class AktoGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self.background_tasks: set = set()
 
         self.akto_base_url = (
             akto_base_url or os.environ.get("AKTO_GUARDRAIL_API_BASE", "")
@@ -95,22 +85,15 @@ class AktoGuardrail(CustomGuardrail):
             "fail_closed", "fail_open"
         ] = unreachable_fallback
         self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
-        self.akto_account_id = akto_account_id or os.environ.get(
-            "AKTO_ACCOUNT_ID", "1000000"
-        )
-        self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
+        self.akto_account_id = os.environ.get("AKTO_ACCOUNT_ID", "1000000")
+        self.akto_vxlan_id = os.environ.get("AKTO_VXLAN_ID", "0")
 
         kwargs["supported_event_hooks"] = [
             GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
         ]
         super().__init__(**kwargs)
 
-        verbose_proxy_logger.debug(
-            "Akto guardrail initialized: base_url=%s fallback=%s",
-            self.akto_base_url,
-            self.unreachable_fallback,
-        )
+    # ── Payload builders ──
 
     @staticmethod
     def resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
@@ -305,24 +288,22 @@ class AktoGuardrail(CustomGuardrail):
             "contextSource": "AGENTIC",
         }
 
-    async def send_request(
-        self,
-        *,
-        guardrails: bool,
-        ingest_data: bool,
-        payload: dict,
-    ) -> httpx.Response:
-        """Send an HTTP POST to the Akto API endpoint."""
-        endpoint = f"{self.akto_base_url}{HTTP_PROXY_PATH}"
-        params = self.build_query_params(guardrails=guardrails, ingest_data=ingest_data)
-        headers = self.prepare_headers()
+    # ── HTTP ──
+
+    async def send_to_akto(self, payload: dict) -> httpx.Response:
+        """POST payload to Akto guardrail API for validation."""
         return await self.async_handler.post(
             url=endpoint,
             data=json.dumps(payload),
-            params=params,
-            headers=headers,
+            params={"akto_connector": AKTO_CONNECTOR_NAME, "guardrails": "true"},
+            headers={
+                "content-type": "application/json",
+                "Authorization": self.akto_api_key,
+            },
             timeout=self.guardrail_timeout,
         )
+
+    # ── Response parsing ──
 
     @staticmethod
     def handle_guardrail_response(response: httpx.Response) -> Tuple[bool, str]:
@@ -409,84 +390,30 @@ class AktoGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj=None,
     ) -> GenericGuardrailAPIInputs:
-        """Main entry point called by LiteLLM's guardrail framework.
-
-        Pre_call (input_type="request"):
-          - Awaits guardrail check. If blocked, fires off ingest with 403 marker and raises.
-        Post_call (input_type="response"):
-          - Fire-and-forget combined guardrail + ingest call.
-        """
-        # Skip if this hook doesn't handle the current input_type
-        expected = self.HOOK_TO_INPUT.get(str(self.event_hook))
-        if expected and expected != input_type:
+        """Pre_call: validate request against Akto guardrails, block if flagged."""
+        if input_type != "request":
             return inputs
 
-        if input_type == "request":
-            # Pre_call: awaited guardrail check (no ingestion)
-            payload = self.build_akto_payload(
-                inputs, request_data, include_response=False
+        payload = self.build_akto_payload(request_data)
+        try:
+            response = await self.send_to_akto(payload)
+            allowed, reason = self.parse_guardrail_response(response)
+        except HTTPException:
+            raise
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            if self.unreachable_fallback == "fail_open":
+                verbose_proxy_logger.critical("Akto unreachable (fail-open): %s", e)
+                return inputs
+            raise HTTPException(
+                status_code=503, detail="Akto guardrail service unreachable"
             )
-            try:
-                response = await self.send_request(
-                    guardrails=True,
-                    ingest_data=False,
-                    payload=payload,
-                )
-                allowed, reason = self.handle_guardrail_response(response)
-            except HTTPException:
-                raise
-            except (httpx.RequestError, httpx.HTTPStatusError) as e:
-                return self.handle_unreachable(
-                    inputs=inputs,
-                    error=e,
-                )
 
-            if not allowed:
-                # Build a blocked marker payload with 403 status and reason
-                blocked_payload = self.build_akto_payload(
-                    inputs,
-                    request_data,
-                    include_response=False,
-                    status_code=403,
-                )
-                blocked_payload["responsePayload"] = json.dumps(
-                    {
-                        "body": json.dumps(
-                            {"x-blocked-by": "Akto Proxy", "reason": reason}
-                        ),
-                    }
-                )
-                blocked_payload["responseHeaders"] = json.dumps(
-                    {"content-type": "application/json"},
-                )
-                # Fire-and-forget ingest of the blocked request, then raise 403
-                task = asyncio.create_task(
-                    self.fire_and_forget_request(
-                        guardrails=False,
-                        ingest_data=True,
-                        payload=blocked_payload,
-                    )
-                )
-                self.background_tasks.add(task)
-                task.add_done_callback(self.background_tasks.discard)
-                raise HTTPException(
-                    status_code=403,
-                    detail=reason or "Blocked by Akto Guardrails",
-                )
-
-        elif input_type == "response":
-            # Post_call: fire-and-forget combined guardrail + ingest
-            payload = self.build_akto_payload(
-                inputs, request_data, include_response=True
+        if not allowed:
+            detail = (
+                f"Blocked by Akto Guardrails: {reason}"
+                if reason
+                else "Blocked by Akto Guardrails"
             )
-            task = asyncio.create_task(
-                self.fire_and_forget_request(
-                    guardrails=True,
-                    ingest_data=True,
-                    payload=payload,
-                )
-            )
-            self.background_tasks.add(task)
-            task.add_done_callback(self.background_tasks.discard)
+            raise HTTPException(status_code=403, detail=detail)
 
         return inputs

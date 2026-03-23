@@ -3,15 +3,9 @@
 ## Overview
 [Akto](https://www.akto.io/) provides API security guardrails and data ingestion for LLM traffic.
 
-Akto now uses a **two-entry guardrail pattern** in LiteLLM:
-- `akto-validate` (`pre_call`) for request validation
-- `akto-ingest` (`post_call`) for request/response ingestion
+The Akto guardrail uses `pre_call` mode — it validates requests before the LLM call and blocks if flagged.
 
-There is no `on_flagged` setting anymore.
-
-Use these as two separate guardrails in `config.yaml`:
-- `guardrail_name: "akto-validate"`
-- `guardrail_name: "akto-ingest"`
+For non-blocking traffic monitoring/ingestion, use the Akto logging integration (`success_callback: ["akto"]`).
 
 ## 1. Get Your Akto Credentials
 
@@ -20,14 +14,6 @@ Set up the Akto Guardrail API Service and grab:
 - `AKTO_API_KEY` — your API key
 
 ## 2. Configure in `config.yaml`
-
-### Block + Ingest (recommended)
-
-Use both entries below. This gives you:
-- pre-call block decision
-- post-call ingestion for allowed traffic
-
-Keep these as two separate entries (`akto-validate` and `akto-ingest`).
 
 ```yaml
 guardrails:
@@ -40,31 +26,6 @@ guardrails:
       default_on: true
       unreachable_fallback: fail_closed   # optional: fail_open | fail_closed (default: fail_closed)
       guardrail_timeout: 5                # optional, default: 5
-      akto_account_id: "1000000"         # optional, env fallback: AKTO_ACCOUNT_ID
-      akto_vxlan_id: "0"                 # optional, env fallback: AKTO_VXLAN_ID
-
-  - guardrail_name: "akto-ingest"
-    litellm_params:
-      guardrail: akto
-      mode: post_call
-      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
-      akto_api_key: os.environ/AKTO_API_KEY
-      default_on: true
-```
-
-### Monitor-only mode
-
-If you only want logging/ingestion and no blocking, keep only `akto-ingest`.
-
-```yaml
-guardrails:
-  - guardrail_name: "akto-ingest"
-    litellm_params:
-      guardrail: akto
-      mode: post_call
-      akto_base_url: os.environ/AKTO_GUARDRAIL_API_BASE
-      akto_api_key: os.environ/AKTO_API_KEY
-      default_on: true
 ```
 
 ## 3. Test It
@@ -96,29 +57,13 @@ If a request gets blocked:
 
 ## 4. How It Works
 
-**Block + Ingest mode:**
 ```
-Request → LiteLLM → Akto guardrail check
-  → Allowed  → forward to LLM → ingest response
-  → Blocked  → ingest blocked marker → 403 error
-```
-
-**Monitor-only mode:**
-```
-Request → LiteLLM → forward to LLM → get response
-  → Send to Akto (guardrails + ingest) → log only
+Request → LiteLLM → Akto guardrail check (pre_call, awaited)
+  → Allowed  → LLM call → response
+  → Blocked  → 403 error
 ```
 
-## 5. Event behavior
-
-| Entry | LiteLLM hook | Akto call behavior |
-|------|---|---|
-| `akto-validate` | `pre_call` | Awaited call with `guardrails=true`, `ingest_data=false` |
-| `akto-ingest` | `post_call` | Fire-and-forget call with `guardrails=true`, `ingest_data=true` |
-
-When blocked in `pre_call`, LiteLLM sends one fire-and-forget ingest payload with blocked metadata and returns `403`.
-
-## 6. Parameters
+## 5. Parameters
 
 | Parameter | Env Variable | Default | Description |
 |-----------|-------------|---------|-------------|
@@ -130,7 +75,7 @@ When blocked in `pre_call`, LiteLLM sends one fire-and-forget ingest payload wit
 | `guardrail_timeout` | — | `5` | Timeout in seconds |
 | `default_on` | — | `true` (recommended) | Enables the guardrail entry by default |
 
-## 7. Error Handling
+## 6. Error Handling
 
 | Scenario | `fail_closed` (default) | `fail_open` |
 |----------|------------------------|-------------|
