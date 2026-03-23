@@ -1,8 +1,18 @@
-# EU AI Act Compliance Guide for LiteLLM Deployers
+# EU AI Act Compliance Guide for LiteLLM Users
 
 LiteLLM is an AI gateway. Every LLM call in your stack passes through it. That makes it the natural enforcement point for EU AI Act compliance: logging, monitoring, and transparency controls belong at the gateway layer.
 
-This guide maps LiteLLM's existing features to regulatory requirements and identifies what deployers need to add.
+This guide maps LiteLLM's existing features to regulatory requirements and identifies what you need to add.
+
+## Are you a provider or a deployer?
+
+The EU AI Act distinguishes between two roles with different obligations:
+
+- **Provider** (Article 3(3)): The entity that develops or places a high-risk AI system on the market. If you are **building your own AI application** on top of LiteLLM and foundation model APIs, you are likely the provider. You carry the full Articles 9-21 obligations: risk management system, technical documentation, conformity assessment, CE marking, and post-market monitoring.
+
+- **Deployer** (Article 3(4)): The entity that uses a high-risk AI system under its authority, but did not build it. If you are **integrating a pre-built, third-party AI system** and using LiteLLM as the gateway, you are the deployer. Your obligations are narrower, primarily under Article 26: human oversight, logging retention, and monitoring.
+
+**Most LiteLLM users building custom applications are providers, not deployers.** This guide covers obligations relevant to both roles, noting where they differ. When in doubt, assume the heavier provider obligations — it is better to over-comply than under-comply.
 
 ## Is your system in scope?
 
@@ -20,7 +30,7 @@ If your use case does not fall under Annex III, the high-risk obligations (Artic
 
 ## Why the gateway layer matters
 
-For high-risk systems, the EU AI Act requires record-keeping (Article 12), transparency (Article 13), and human oversight (Article 14). These requirements apply to the deployed system, not to individual model providers.
+For high-risk systems, the EU AI Act requires record-keeping (Article 12), transparency (Article 13), and human oversight (Article 14). These requirements apply to you (the provider or deployer of the AI system), not to the foundation model APIs you route through. OpenAI, Anthropic, and Google have their own provider obligations for their models, but your system-level compliance is your responsibility.
 
 LiteLLM sits between your application and 100+ LLM providers. It already captures:
 - Model identifier per request
