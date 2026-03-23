@@ -72,30 +72,46 @@ def test_opus_4_6_model_pricing_and_capabilities():
             "has_long_context_pricing": True,
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
+            "input_cost_per_token_above_200k_tokens": 5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.5e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.25e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5e-07,
         },
         "claude-opus-4-6-20260205": {
             "provider": "anthropic",
             "has_long_context_pricing": True,
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
+            "input_cost_per_token_above_200k_tokens": 5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.5e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.25e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5e-07,
         },
         "anthropic.claude-opus-4-6-v1": {
             "provider": "bedrock_converse",
             "has_long_context_pricing": True,
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
+            "input_cost_per_token_above_200k_tokens": 5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.5e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.25e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5e-07,
         },
         "vertex_ai/claude-opus-4-6": {
             "provider": "vertex_ai-anthropic_models",
             "has_long_context_pricing": True,
             "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
+            "input_cost_per_token_above_200k_tokens": 5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.5e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.25e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5e-07,
         },
         "azure_ai/claude-opus-4-6": {
             "provider": "azure_ai",
             "has_long_context_pricing": False,
             "tool_use_system_prompt_tokens": 159,
-            "max_input_tokens": 200000,
+            "max_input_tokens": 1000000,
         },
     }
 
@@ -115,10 +131,10 @@ def test_opus_4_6_model_pricing_and_capabilities():
         assert info["cache_read_input_token_cost"] == 5e-07
 
         if config["has_long_context_pricing"]:
-            assert info["input_cost_per_token_above_200k_tokens"] == 1e-05
-            assert info["output_cost_per_token_above_200k_tokens"] == 3.75e-05
-            assert info["cache_creation_input_token_cost_above_200k_tokens"] == 1.25e-05
-            assert info["cache_read_input_token_cost_above_200k_tokens"] == 1e-06
+            assert info["input_cost_per_token_above_200k_tokens"] == config["input_cost_per_token_above_200k_tokens"]
+            assert info["output_cost_per_token_above_200k_tokens"] == config["output_cost_per_token_above_200k_tokens"]
+            assert info["cache_creation_input_token_cost_above_200k_tokens"] == config["cache_creation_input_token_cost_above_200k_tokens"]
+            assert info["cache_read_input_token_cost_above_200k_tokens"] == config["cache_read_input_token_cost_above_200k_tokens"]
 
         assert info["supports_assistant_prefill"] is False
         assert info["supports_function_calling"] is True
@@ -134,46 +150,47 @@ def test_opus_4_6_bedrock_regional_model_pricing():
     with open(json_path) as f:
         model_data = json.load(f)
 
+    # Bedrock does not surcharge for >200k tokens; above_200k prices equal base prices.
     expected_models = {
         "global.anthropic.claude-opus-4-6-v1": {
             "input_cost_per_token": 5e-06,
             "output_cost_per_token": 2.5e-05,
             "cache_creation_input_token_cost": 6.25e-06,
             "cache_read_input_token_cost": 5e-07,
-            "input_cost_per_token_above_200k_tokens": 1e-05,
-            "output_cost_per_token_above_200k_tokens": 3.75e-05,
-            "cache_creation_input_token_cost_above_200k_tokens": 1.25e-05,
-            "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+            "input_cost_per_token_above_200k_tokens": 5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.5e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.25e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5e-07,
         },
         "us.anthropic.claude-opus-4-6-v1": {
             "input_cost_per_token": 5.5e-06,
             "output_cost_per_token": 2.75e-05,
             "cache_creation_input_token_cost": 6.875e-06,
             "cache_read_input_token_cost": 5.5e-07,
-            "input_cost_per_token_above_200k_tokens": 1.1e-05,
-            "output_cost_per_token_above_200k_tokens": 4.125e-05,
-            "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
-            "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
+            "input_cost_per_token_above_200k_tokens": 5.5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.75e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.875e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5.5e-07,
         },
         "eu.anthropic.claude-opus-4-6-v1": {
             "input_cost_per_token": 5.5e-06,
             "output_cost_per_token": 2.75e-05,
             "cache_creation_input_token_cost": 6.875e-06,
             "cache_read_input_token_cost": 5.5e-07,
-            "input_cost_per_token_above_200k_tokens": 1.1e-05,
-            "output_cost_per_token_above_200k_tokens": 4.125e-05,
-            "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
-            "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
+            "input_cost_per_token_above_200k_tokens": 5.5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.75e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.875e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5.5e-07,
         },
         "au.anthropic.claude-opus-4-6-v1": {
             "input_cost_per_token": 5.5e-06,
             "output_cost_per_token": 2.75e-05,
             "cache_creation_input_token_cost": 6.875e-06,
             "cache_read_input_token_cost": 5.5e-07,
-            "input_cost_per_token_above_200k_tokens": 1.1e-05,
-            "output_cost_per_token_above_200k_tokens": 4.125e-05,
-            "cache_creation_input_token_cost_above_200k_tokens": 1.375e-05,
-            "cache_read_input_token_cost_above_200k_tokens": 1.1e-06,
+            "input_cost_per_token_above_200k_tokens": 5.5e-06,
+            "output_cost_per_token_above_200k_tokens": 2.75e-05,
+            "cache_creation_input_token_cost_above_200k_tokens": 6.875e-06,
+            "cache_read_input_token_cost_above_200k_tokens": 5.5e-07,
         },
     }
 
