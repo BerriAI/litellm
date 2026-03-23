@@ -222,7 +222,7 @@ function LoginPageContent() {
 
           {error && <Alert message={error} type="error" showIcon />}
 
-          <Form onFinish={handleSubmit} layout="vertical" requiredMark={true}>
+          <Form onFinish={handleSubmit} layout="vertical" requiredMark={false}>
             {uiConfig?.is_control_plane && workers.length > 0 && (
               <Form.Item label="Worker" style={{ marginBottom: 16 }}>
                 <Select

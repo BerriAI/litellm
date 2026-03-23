@@ -210,9 +210,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           </Select2>
         </Form.Item>
         <Form.Item label="Team" name="team_id">
-          <Select placeholder="Select Team" style={{ width: "100%" }}>
-            <TeamDropdown teams={availableTeams} />
-          </Select>
+          <TeamDropdown />
         </Form.Item>
 
         <Form.Item label="Metadata" name="metadata">
@@ -294,7 +292,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             name="team_id"
             help="If selected, user will be added as a 'user' role to the team."
           >
-            <TeamDropdown teams={availableTeams} />
+            <TeamDropdown />
           </Form.Item>
 
           <Form.Item
