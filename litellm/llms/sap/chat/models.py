@@ -24,7 +24,6 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
     raise ValueError("Content must be a string")
 
 
-
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
@@ -354,7 +353,9 @@ class MaskingProviderConfig(BaseModel):
         mask_grounding_input: A flag indicating whether to mask input to the grounding module.
     """
 
-    type_: Literal["sap_data_privacy_integration"] = Field(default="sap_data_privacy_integration", alias="type")
+    type_: Literal["sap_data_privacy_integration"] = Field(
+        default="sap_data_privacy_integration", alias="type"
+    )
     method: Literal["anonymization", "pseudonymization"]
     entities: list[Union[DPIStandardEntity, DPICustomEntity]]
     allowlist: Optional[list[str]] = None
@@ -544,12 +545,16 @@ class LlamaGuard38bFilterConfig(BaseModel):
 
 
 class AzureContentSafetyInputFilterConfig(BaseModel):
-    type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
+    type_: Literal["azure_content_safety"] = Field(
+        default="azure_content_safety", alias="type"
+    )
     config: Optional[AzureContentSafetyInput] = None
 
 
 class AzureContentSafetyOutputFilterConfig(BaseModel):
-    type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
+    type_: Literal["azure_content_safety"] = Field(
+        default="azure_content_safety", alias="type"
+    )
     config: Optional[AzureContentSafetyOutput] = None
 
 
@@ -661,7 +666,9 @@ class SAPDocumentTranslationInput(BaseModel):
         config: Configuration object for the translation module.
     """
 
-    type_: Literal["sap_document_translation"] = Field(default="sap_document_translation", alias="type")
+    type_: Literal["sap_document_translation"] = Field(
+        default="sap_document_translation", alias="type"
+    )
     translate_messages_history: Optional[bool] = None
     config: InputTranslationConfig
 
@@ -676,7 +683,9 @@ class SAPDocumentTranslationOutput(BaseModel):
         config: Configuration object for the translation module.
     """
 
-    type_: Literal["sap_document_translation"] = Field(default="sap_document_translation", alias="type")
+    type_: Literal["sap_document_translation"] = Field(
+        default="sap_document_translation", alias="type"
+    )
     config: OutputTranslationConfig
 
 
