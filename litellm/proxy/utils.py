@@ -2964,6 +2964,7 @@ class PrismaClient:
                             t.members_with_roles AS team_members_with_roles,
                             t.object_permission_id AS team_object_permission_id,
                             t.organization_id as org_id,
+                            p.project_alias AS project_alias,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
@@ -2981,6 +2982,7 @@ class PrismaClient:
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
                         LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
                         WHERE v.token = '{token}'

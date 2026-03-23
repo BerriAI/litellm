@@ -1364,6 +1364,7 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
+        reasoning_tokens_cost: float = 0.0,
         additional_costs: Optional[dict] = None,
         original_cost: Optional[float] = None,
         discount_percent: Optional[float] = None,
@@ -1395,6 +1396,9 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
+
+        if reasoning_tokens_cost > 0:
+            self.cost_breakdown["reasoning_tokens_cost"] = reasoning_tokens_cost
 
         # Store additional costs if provided (free-form dict for extensibility)
         if (
@@ -4747,6 +4751,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_project_id=None,
+            user_api_key_project_alias=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,

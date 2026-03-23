@@ -2488,6 +2488,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2776,6 +2777,7 @@ class CostBreakdown(TypedDict, total=False):
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )
+    reasoning_tokens_cost: float  # Cost of reasoning/thinking tokens (subset of output_cost)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     additional_costs: Dict[
