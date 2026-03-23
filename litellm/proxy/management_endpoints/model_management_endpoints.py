@@ -33,7 +33,6 @@ from litellm.proxy._types import (
     ProxyException,
     TeamModelAddRequest,
     TeamModelDeleteRequest,
-    UpdateTeamRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -42,7 +41,6 @@ from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     team_model_delete,
-    update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
