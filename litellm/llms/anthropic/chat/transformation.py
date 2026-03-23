@@ -1225,11 +1225,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
         else:
-            raise litellm.exceptions.BadRequestError(
+            raise litellm.BadRequestError(
                 message=(
-                    f"Unmapped reasoning effort: {reasoning_effort!r}. "
-                    f"Must be one of: 'minimal', 'low', 'medium', 'high', "
-                    f"'xhigh', 'max', 'none'."
+                    f"Invalid reasoning_effort value: '{reasoning_effort}'. "
+                    "Must be one of: 'minimal', 'low', 'medium', 'high', "
+                    "'xhigh', 'max', 'none'."
                 ),
                 model=model,
                 llm_provider=llm_provider,
