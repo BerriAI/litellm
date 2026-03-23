@@ -250,8 +250,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
@@ -264,8 +262,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
@@ -279,8 +275,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -293,8 +287,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -313,8 +305,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
@@ -331,8 +321,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
@@ -352,8 +340,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
     ]
 
     litellm_overhead_latency_metric = [
@@ -393,8 +379,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
@@ -409,8 +393,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
@@ -425,8 +407,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
@@ -440,8 +420,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
@@ -455,8 +433,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
@@ -494,8 +470,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -516,6 +490,21 @@ class PrometheusMetricLabels:
     litellm_team_budget_remaining_hours_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_remaining_org_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_max_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
     ]
 
     litellm_remaining_api_key_budget_metric = [
@@ -674,6 +663,15 @@ class PrometheusMetricLabels:
             and UserAPIKeyLabelNames.STREAM.value not in default_labels
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
+        # Conditionally add org labels to all per-request metrics
+        if litellm.prometheus_emit_org_labels is True:
+            for label in [
+                UserAPIKeyLabelNames.ORG_ID.value,
+                UserAPIKeyLabelNames.ORG_ALIAS.value,
+            ]:
+                if label not in default_labels:
+                    custom_labels.append(label)
 
         return default_labels + custom_labels
 
