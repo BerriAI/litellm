@@ -16,7 +16,7 @@ from litellm.llms.cloudflare.chat.transformation import (
     CloudflareChatConfig,
     CloudflareChatResponseIterator,
 )
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, Usage
 
 
 class TestCloudflareChatConfig:
@@ -236,6 +236,69 @@ class TestCloudflareChatConfig:
         assert result.usage.prompt_tokens == 5
         assert result.usage.completion_tokens == 3
         assert result.usage.total_tokens == 8
+
+
+    def test_transform_response_tool_calls(self):
+        """Test transform_response converts tool calls to proper types."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "result": {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"location": "London"}',
+                    }
+                ]
+            },
+            "success": True,
+        }
+        model_response = ModelResponse()
+        mock_encoding = MagicMock()
+
+        result = self.config.transform_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "weather?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        tool_call = result.choices[0].message.tool_calls[0]
+        assert isinstance(tool_call, ChatCompletionMessageToolCall)
+        assert tool_call.function.name == "get_weather"
+        assert tool_call.function.arguments == '{"location": "London"}'
+
+    def test_transform_response_null_result(self):
+        """Test transform_response handles null result without crashing."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "result": None,
+            "success": False,
+        }
+        model_response = ModelResponse()
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = []
+
+        with patch("litellm.utils.get_token_count", return_value=0):
+            result = self.config.transform_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=mock_encoding,
+            )
+
+        assert result.choices[0].message.content == ""
 
 
 class TestCloudflareChatResponseIterator:

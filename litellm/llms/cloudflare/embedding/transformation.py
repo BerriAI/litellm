@@ -75,7 +75,7 @@ class CloudflareEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "text": input,
+            "text": [input] if isinstance(input, str) else input,
             **optional_params,
         }
 

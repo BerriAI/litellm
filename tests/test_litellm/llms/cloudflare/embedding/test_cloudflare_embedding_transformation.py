@@ -38,17 +38,17 @@ class TestCloudflareEmbeddingConfig:
         assert result == optional_params
 
     def test_transform_embedding_request_string(self):
-        """Test transform request with string input."""
+        """Test transform request with string input normalizes to list."""
         result = self.config.transform_embedding_request(
             model=self.model,
             input="hello world",
             optional_params={},
             headers={},
         )
-        assert result["text"] == "hello world"
+        assert result["text"] == ["hello world"]
 
     def test_transform_embedding_request_list(self):
-        """Test transform request with list input."""
+        """Test transform request with list input keeps as list."""
         input_list = ["hello", "world"]
         result = self.config.transform_embedding_request(
             model=self.model,

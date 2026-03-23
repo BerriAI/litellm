@@ -77,7 +77,11 @@ class CloudflareImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
-            if k == "size" and isinstance(v, str) and "x" in v:
+            if k == "size" and isinstance(v, str) and "x" not in v:
+                raise ValueError(
+                    f"Invalid size format '{v}'. Expected 'WIDTHxHEIGHT', e.g. '1024x1024'."
+                )
+            elif k == "size" and isinstance(v, str) and "x" in v:
                 parts = v.split("x", 1)
                 try:
                     optional_params["width"] = int(parts[0])

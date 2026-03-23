@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.cloudflare.chat.transformation import CloudflareError
 from litellm.llms.cloudflare.image_generation.transformation import (
     CloudflareImageGenerationConfig,
 )
@@ -52,6 +53,16 @@ class TestCloudflareImageGenerationConfig:
         )
         assert result["num_images"] == 3
         assert "n" not in result
+
+    def test_map_openai_params_size_without_x_raises(self):
+        """Test that size without 'x' separator raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid size format"):
+            self.config.map_openai_params(
+                non_default_params={"size": "large"},
+                optional_params={},
+                model=self.model,
+                drop_params=False,
+            )
 
     def test_map_openai_params_unsupported_raises(self):
         """Test that unsupported param raises ValueError when drop_params=False."""
@@ -134,6 +145,30 @@ class TestCloudflareImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64-image-data-here"
+
+    def test_transform_image_generation_response_json_null_result(self):
+        """Test response raises error when JSON result is null."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "result": None,
+            "success": False,
+        }
+
+        model_response = ImageResponse(data=[])
+
+        with pytest.raises(CloudflareError, match="No image data"):
+            self.config.transform_image_generation_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
 
     def test_validate_environment(self):
         """Test that validate_environment sets correct headers."""

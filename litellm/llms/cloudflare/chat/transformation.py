@@ -14,8 +14,10 @@ from litellm.llms.base_llm.chat.transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    Function,
     GenericStreamingChunk,
     ModelResponse,
     Usage,
@@ -161,7 +163,17 @@ class CloudflareChatConfig(BaseConfig):
 
         tool_calls = result.get("tool_calls")
         if tool_calls:
-            model_response.choices[0].message.tool_calls = tool_calls  # type: ignore
+            model_response.choices[0].message.tool_calls = [  # type: ignore
+                ChatCompletionMessageToolCall(
+                    id=tc.get("id", f"call_{idx}"),
+                    type="function",
+                    function=Function(
+                        name=tc.get("name", ""),
+                        arguments=tc.get("arguments", ""),
+                    ),
+                )
+                for idx, tc in enumerate(tool_calls)
+            ]
             model_response.choices[0].finish_reason = "tool_calls"
         else:
             model_response.choices[0].message.content = result.get("response", "")  # type: ignore
