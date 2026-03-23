@@ -16,6 +16,7 @@ from typing import (
 )
 
 import httpx  # type: ignore
+from anyio import to_thread as anyio_to_thread
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -3018,8 +3019,9 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
-        elif isinstance(transformed_request, (str, bytes)) or isinstance(
-            transformed_request, io.IOBase
+        elif isinstance(transformed_request, (str, bytes)) or (
+            hasattr(transformed_request, "read")
+            and hasattr(transformed_request, "seek")
         ):
             # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
@@ -3189,19 +3191,34 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
-        elif isinstance(transformed_request, (str, bytes)) or isinstance(
-            transformed_request, io.IOBase
+        elif isinstance(transformed_request, (str, bytes)) or (
+            hasattr(transformed_request, "read")
+            and hasattr(transformed_request, "seek")
         ):
             # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
             if hasattr(transformed_request, "read") and hasattr(
                 transformed_request, "seek"
             ):
-                # Stream the IO object without loading it fully into memory
+                # Wrap sync IO in an async generator so disk reads are dispatched
+                # to a thread executor and do not block the event loop.
+                file_obj = transformed_request
+
+                async def _async_file_chunks(
+                    fp: Any, chunk_size: int = 65536
+                ) -> "AsyncIterator[bytes]":
+                    while True:
+                        chunk = await anyio_to_thread.run_sync(
+                            lambda: fp.read(chunk_size)
+                        )
+                        if not chunk:
+                            break
+                        yield chunk
+
                 async_upload_kwargs: Dict[str, Any] = {
                     "url": api_base,
                     "headers": headers,
-                    "content": transformed_request,
+                    "content": _async_file_chunks(file_obj),
                     "timeout": timeout,
                 }
             else:
