@@ -558,6 +558,126 @@ class TestUpdatePublicModelGroups:
             litellm.public_model_groups_links = original_value
 
 
+class TestTeamModelSiblingRouting:
+    """
+    Verify that sibling team deployments (same public model name, different
+    api_base) are all reachable through routing — no alias overwrite, no
+    collapse to a single deployment.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_model_aliases_written_for_team_models(self):
+        """
+        _add_team_model_to_db must NOT write model_aliases (which caused
+        the second sibling to overwrite the first). It should only call
+        team_model_add to register the public name on the team's models list.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _add_team_model_to_db,
+        )
+        from litellm.types.router import ModelInfo
+
+        team_id = "team_no_alias"
+        public_name = "gpt-4.1-mini"
+
+        mock_update_team = AsyncMock()
+
+        async def mock_add_model_to_db(model_params, user_api_key_dict, prisma_client):
+            return MagicMock(model_id=str(uuid.uuid4()))
+
+        mock_team_model_add = AsyncMock()
+
+        user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        prisma_client = MockPrismaClient(team_exists=True)
+
+        for api_base in ["https://eastus.example.com", "https://westus.example.com"]:
+            dep = Deployment(
+                model_name=public_name,
+                litellm_params=LiteLLM_Params(
+                    model="azure/gpt-4o-mini",
+                    api_key="key",
+                    api_base=api_base,
+                ),
+                model_info=ModelInfo(team_id=team_id),
+            )
+            with patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.update_team",
+                mock_update_team,
+            ), patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                side_effect=mock_add_model_to_db,
+            ), patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                mock_team_model_add,
+            ):
+                await _add_team_model_to_db(
+                    model_params=dep,
+                    user_api_key_dict=user,
+                    prisma_client=prisma_client,
+                )
+
+        mock_update_team.assert_not_called()
+        assert mock_team_model_add.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_router_finds_all_sibling_team_deployments(self):
+        """
+        When two team deployments share team_public_model_name="gpt-4.1-mini",
+        the router's _common_checks_available_deployment must return BOTH as
+        healthy_deployments (not collapse to one).
+        """
+        import litellm
+
+        team_id = "teamA"
+        public_name = "gpt-4.1-mini"
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": f"model_name_{team_id}_uuid1",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o-mini",
+                        "api_key": "key-1",
+                        "api_base": "https://eastus.openai.azure.com",
+                    },
+                    "model_info": {
+                        "team_id": team_id,
+                        "team_public_model_name": public_name,
+                    },
+                },
+                {
+                    "model_name": f"model_name_{team_id}_uuid2",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o-mini",
+                        "api_key": "key-2",
+                        "api_base": "https://westus.openai.azure.com",
+                    },
+                    "model_info": {
+                        "team_id": team_id,
+                        "team_public_model_name": public_name,
+                    },
+                },
+            ],
+        )
+
+        # map_team_model should return the public name (not an internal UUID)
+        result = router.map_team_model(public_name, team_id)
+        assert result == public_name
+
+        # _common_checks_available_deployment should return both deployments
+        model, healthy = router._common_checks_available_deployment(
+            model=public_name,
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+        )
+        assert isinstance(healthy, list)
+        assert len(healthy) == 2
+        api_bases = {d["litellm_params"]["api_base"] for d in healthy}
+        assert api_bases == {
+            "https://eastus.openai.azure.com",
+            "https://westus.openai.azure.com",
+        }
+
+
 class TestTeamModelUpdate:
     """Test team model update handles team_id consistently with model creation"""
 
@@ -604,7 +724,7 @@ class TestTeamModelUpdate:
 
             assert result.get("model_name", "").startswith("model_name_test_team_123_")
             assert "team_public_model_name" in str(result.get("model_info", ""))
-            mock_update_team.assert_called_once()
+            mock_update_team.assert_not_called()
             mock_team_model_add.assert_called_once()
 
     @pytest.mark.asyncio

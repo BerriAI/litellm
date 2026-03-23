@@ -5288,63 +5288,6 @@ class Router:
         if "fallback_depth" not in input_kwargs:
             input_kwargs["fallback_depth"] = 0
 
-        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
-        # Skip for error types that have their own dedicated fallback handlers
-        _skip_order_fallback = isinstance(
-            e,
-            (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
-        )
-        all_deployments = self._get_all_deployments(model_name=original_model_group)
-        _order_set: set = {
-            d.get("litellm_params", {}).get("order")
-            for d in all_deployments
-            if d.get("litellm_params", {}).get("order") is not None
-        }
-        order_values: list = sorted(_order_set)
-        if len(order_values) > 1 and not _skip_order_fallback:
-            # Determine which order levels have already been tried
-            current_target = kwargs.get("_target_order")
-            skip_up_to = (
-                current_target if current_target is not None else order_values[0]
-            )
-            # Build order-based fallback entries (skip already-tried levels)
-            order_fallback_entries: List = [
-                {"model": original_model_group, "_target_order": o}
-                for o in order_values
-                if o > skip_up_to
-            ]
-            # Get external fallbacks — handle both standard and non-standard formats
-            external_fallback_group: Optional[List] = None
-            if fallbacks is not None and model_group is not None:
-                if _check_non_standard_fallback_format(fallbacks=fallbacks):
-                    # Non-standard formats (e.g. ["claude-3-haiku"] or
-                    # [{"model": "...", "messages": [...]}]) are passed through directly
-                    external_fallback_group = fallbacks
-                else:
-                    external_fallback_group, generic_idx = get_fallback_model_group(
-                        fallbacks=fallbacks,
-                        model_group=cast(str, model_group),
-                    )
-                    if external_fallback_group is None and generic_idx is not None:
-                        external_fallback_group = fallbacks[generic_idx]["*"]
-            # Combined list: order fallbacks first, then external
-            combined_fallbacks = order_fallback_entries + (
-                external_fallback_group or []
-            )
-
-            if combined_fallbacks:
-                input_kwargs.update(
-                    {
-                        "fallback_model_group": combined_fallbacks,
-                        "original_model_group": original_model_group,
-                    }
-                )
-                response = await run_async_fallback(
-                    *args,
-                    **input_kwargs,
-                )
-                return response
-
         try:
             verbose_router_logger.info("Trying to fallback b/w models")
 
@@ -8218,7 +8161,6 @@ class Router:
             if model.get("model_info", {}).get("team_id") == team_id:
                 return model.get("model_name")
 
-        ## wildcard models
         return None
 
     def should_include_deployment(
@@ -8924,6 +8866,38 @@ class Router:
             model = _model_from_alias
 
         if model not in self.model_names:
+            # Check for team-specific deployments by team_public_model_name
+            if request_team_id is not None:
+                team_deployments = self._get_all_deployments(
+                    model_name=model, team_id=request_team_id
+                )
+                if team_deployments:
+                    candidate_details = []
+                    for deployment in team_deployments:
+                        deployment_info = deployment.get("model_info", {}) or {}
+                        deployment_params = deployment.get("litellm_params", {}) or {}
+                        candidate_details.append(
+                            {
+                                "model_name": deployment.get("model_name"),
+                                "model_id": deployment_info.get("id"),
+                                "team_public_model_name": deployment_info.get(
+                                    "team_public_model_name"
+                                ),
+                                "api_base": deployment_params.get("api_base"),
+                            }
+                        )
+                    verbose_router_logger.info(
+                        "🔥 routing_candidates_before_lb "
+                        f"model={model} count={len(team_deployments)} "
+                        f"candidates={candidate_details}"
+                    )
+                    if len(team_deployments) > 1:
+                        verbose_router_logger.info(
+                            "🔥 load_balancer_candidate_pool "
+                            f"model={model} candidate_count={len(team_deployments)}"
+                        )
+                    return model, team_deployments
+
             # check if provider/ specific wildcard routing use pattern matching
             pattern_deployments = self.pattern_router.get_deployments_by_pattern(
                 model=model,
@@ -8956,13 +8930,37 @@ class Router:
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = self._get_all_deployments(
-            model_name=model, team_id=request_team_id
-        )
+        healthy_deployments = self._get_all_deployments(model_name=model)
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = self._get_deployment_by_litellm_model(model=model)
+
+        if isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
+            candidate_details = []
+            for deployment in healthy_deployments:
+                deployment_info = deployment.get("model_info", {}) or {}
+                deployment_params = deployment.get("litellm_params", {}) or {}
+                candidate_details.append(
+                    {
+                        "model_name": deployment.get("model_name"),
+                        "model_id": deployment_info.get("id"),
+                        "team_public_model_name": deployment_info.get(
+                            "team_public_model_name"
+                        ),
+                        "api_base": deployment_params.get("api_base"),
+                    }
+                )
+            verbose_router_logger.info(
+                "🔥 routing_candidates_before_lb "
+                f"model={model} count={len(healthy_deployments)} "
+                f"candidates={candidate_details}"
+            )
+            if len(healthy_deployments) > 1:
+                verbose_router_logger.info(
+                    "🔥 load_balancer_candidate_pool "
+                    f"model={model} candidate_count={len(healthy_deployments)}"
+                )
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(
@@ -8979,9 +8977,7 @@ class Router:
                     )
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
-                    healthy_deployments = self._get_all_deployments(
-                        model_name=model, team_id=request_team_id
-                    )
+                    healthy_deployments = self._get_all_deployments(model_name=model)
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:

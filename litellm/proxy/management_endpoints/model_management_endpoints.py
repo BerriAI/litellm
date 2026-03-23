@@ -344,17 +344,6 @@ async def _add_team_model_to_db(
         prisma_client=prisma_client,
     )
 
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    # add model to team object
     await team_model_add(
         data=TeamModelAddRequest(
             team_id=_team_id,
@@ -490,8 +479,8 @@ async def _update_existing_team_model_assignment(
 
     # Update alias only if public name changed
     if old_public_name and public_model_name != old_public_name:
-        await update_team(
-            data=UpdateTeamRequest(
+        await team_model_add(
+            data=TeamModelAddRequest(
                 team_id=team_id,
                 model_aliases={public_model_name: db_model.model_name},
             ),
@@ -499,7 +488,6 @@ async def _update_existing_team_model_assignment(
             http_request=Request(scope={"type": "http"}),
         )
 
-    # Keep existing unique model_name
     patch_data.model_name = None
 
 
