@@ -1123,6 +1123,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     is_byok: bool = False
@@ -1671,6 +1672,7 @@ class NewTeamRequest(TeamBase):
         None  # allow user to set TPM limit for all team members
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2470,6 +2472,9 @@ class UserAPIKeyAuth(
         None  # Expanded created_by user when expand=user is used
     )
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
+    # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
+    jwt_claims: Optional[Dict] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2956,7 +2961,9 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
+AUDIT_ACTIONS = Literal[
+    "created", "updated", "deleted", "blocked", "unblocked", "rotated"
+]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -4267,7 +4274,7 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         ]
     ] = Field(
-        default=LitellmUserRoles.INTERNAL_USER,
+        default=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         description="Default role assigned to new users created",
     )
     max_budget: Optional[float] = Field(

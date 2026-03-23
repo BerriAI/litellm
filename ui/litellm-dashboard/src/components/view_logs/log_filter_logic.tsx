@@ -228,7 +228,7 @@ export function useLogFilterLogic({
   const filteredLogs: PaginatedResponse = useMemo(() => {
     if (hasBackendFilters) {
       // Prefer backend result if present; otherwise fall back to latest logs
-      if (backendFilteredLogs && backendFilteredLogs.data && backendFilteredLogs.data.length > 0) {
+      if (backendFilteredLogs && backendFilteredLogs.data) {
         return backendFilteredLogs;
       }
       return (

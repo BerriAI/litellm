@@ -199,7 +199,8 @@ def create_batch(  # noqa: PLR0915
         )
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=None,
             optional_params=optional_params.model_dump(),
@@ -207,7 +208,6 @@ def create_batch(  # noqa: PLR0915
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
                 **optional_params.model_dump(exclude_unset=True),
@@ -524,6 +524,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             optional_params.api_base
             or litellm.api_base
             or get_secret_str("ANTHROPIC_API_BASE")
+            or get_secret_str("ANTHROPIC_BASE_URL")
         )
         api_key = (
             optional_params.api_key
@@ -584,7 +585,8 @@ def retrieve_batch(
             **kwargs,
         )
         if litellm_logging_obj is not None:
-            litellm_logging_obj.update_environment_variables(
+            litellm_logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model=None,
                 user=None,
                 optional_params=optional_params.model_dump(),
@@ -883,7 +885,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -929,7 +931,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -1046,9 +1048,35 @@ def cancel_batch(
                 cancel_batch_data=_cancel_batch_request,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or None
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

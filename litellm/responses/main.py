@@ -37,6 +37,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    AllMessageValues,
     PromptObject,
     Reasoning,
     ResponseIncludable,
@@ -70,6 +71,13 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 base_llm_http_handler = BaseLLMHTTPHandler()
 litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandler()
 #################################################
+
+
+def _has_file_search_tool(tools: Optional[Any]) -> bool:
+    """Return True if any tool in the list has type 'file_search'."""
+    if not tools:
+        return False
+    return any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
 
 
 def mock_responses_api_response(
@@ -463,6 +471,53 @@ async def aresponses(
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
 
+        #########################################################
+        # ASYNC PROMPT MANAGEMENT
+        # Run the async hook here so async-only prompt loggers are honoured.
+        # Then pop prompt_id from kwargs so the sync responses() path does NOT
+        # re-run the hook (which would double-prepend template messages).
+        # Pass merged_optional_params via an internal kwarg so responses()
+        # can apply them to local_vars without re-invoking the hook.
+        #########################################################
+        litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+        prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+        prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+        original_model = model
+
+        if isinstance(
+            litellm_logging_obj, LiteLLMLoggingObj
+        ) and litellm_logging_obj.should_run_prompt_management_hooks(
+            prompt_id=prompt_id, non_default_params=kwargs
+        ):
+            if isinstance(input, str):
+                client_input: List[AllMessageValues] = [
+                    {"role": "user", "content": input}
+                ]
+            else:
+                client_input = [
+                    item  # type: ignore[misc]
+                    for item in input
+                    if isinstance(item, dict) and "role" in item
+                ]
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
+            input = cast(Union[str, ResponseInputParam], merged_input)
+            if model != original_model:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            kwargs.pop("prompt_id", None)
+            kwargs["_async_prompt_merged_params"] = merged_optional_params
+
         func = partial(
             responses,
             input=input,
@@ -529,6 +584,125 @@ async def aresponses(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def _apply_prompt_management_to_responses_call(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    custom_llm_provider: Optional[str],
+    litellm_logging_obj: Optional[LiteLLMLoggingObj],
+    kwargs: Dict[str, Any],
+    local_vars: Dict[str, Any],
+) -> tuple[Union[str, ResponseInputParam], str, Optional[str]]:
+    async_merged = kwargs.pop("_async_prompt_merged_params", None)
+    if async_merged is not None:
+        for key, value in async_merged.items():
+            local_vars[key] = value
+        return input, model, custom_llm_provider
+
+    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    original_model = model
+
+    if isinstance(input, str):
+        client_input: List[AllMessageValues] = [{"role": "user", "content": input}]
+    else:
+        client_input = [
+            item  # type: ignore[misc]
+            for item in input
+            if isinstance(item, dict) and "role" in item
+        ]
+
+    if isinstance(
+        litellm_logging_obj, LiteLLMLoggingObj
+    ) and litellm_logging_obj.should_run_prompt_management_hooks(
+        prompt_id=prompt_id, non_default_params=kwargs
+    ):
+        (
+            model,
+            merged_input,
+            merged_optional_params,
+        ) = litellm_logging_obj.get_chat_completion_prompt(
+            model=model,
+            messages=client_input,
+            non_default_params=kwargs,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
+        )
+        input = cast(Union[str, ResponseInputParam], merged_input)
+        local_vars["input"] = input
+        local_vars["model"] = model
+        if model != original_model:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            local_vars["custom_llm_provider"] = custom_llm_provider
+        for key, value in merged_optional_params.items():
+            local_vars[key] = value
+
+    return input, model, custom_llm_provider
+
+
+def _resolve_model_provider_for_responses(
+    model: str,
+    custom_llm_provider: Optional[str],
+    litellm_params: GenericLiteLLMParams,
+    local_vars: Dict[str, Any],
+) -> tuple[str, Optional[str]]:
+    (
+        model,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+    )
+    local_vars["custom_llm_provider"] = custom_llm_provider
+    if dynamic_api_key is not None:
+        litellm_params.api_key = dynamic_api_key
+    if dynamic_api_base is not None:
+        litellm_params.api_base = dynamic_api_base
+    return model, custom_llm_provider
+
+
+def _apply_managed_file_id_mapping(
+    input: Union[str, ResponseInputParam],
+    tools: Optional[Iterable[ToolParam]],
+    kwargs: Dict[str, Any],
+    local_vars: Dict[str, Any],
+) -> tuple[Union[str, ResponseInputParam], Optional[Iterable[ToolParam]]]:
+    model_file_id_mapping = kwargs.get("model_file_id_mapping")
+    model_info_id = (
+        kwargs.get("model_info", {}).get("id")
+        if isinstance(kwargs.get("model_info"), dict)
+        else None
+    )
+
+    input = cast(
+        Union[str, ResponseInputParam],
+        update_responses_input_with_model_file_ids(
+            input=input,
+            model_id=model_info_id,
+            model_file_id_mapping=model_file_id_mapping,
+        ),
+    )
+    local_vars["input"] = input
+
+    if tools:
+        tools = cast(
+            Optional[Iterable[ToolParam]],
+            update_responses_tools_with_model_file_ids(
+                tools=cast(Optional[List[Dict[str, Any]]], tools),
+                model_id=model_info_id,
+                model_file_id_mapping=model_file_id_mapping,
+            ),
+        )
+        local_vars["tools"] = tools
+
+    return input, tools
 
 
 @client
@@ -602,58 +776,34 @@ def responses(
                 mock_response=litellm_params.mock_response
             )
 
-        (
-            model,
-            custom_llm_provider,
-            dynamic_api_key,
-            dynamic_api_base,
-        ) = litellm.get_llm_provider(
+        model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
+            litellm_params=litellm_params,
+            local_vars=local_vars,
         )
 
-        # Update local_vars with detected provider (fixes #19782)
-        local_vars["custom_llm_provider"] = custom_llm_provider
-
-        # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
-        if dynamic_api_key is not None:
-            litellm_params.api_key = dynamic_api_key
-        if dynamic_api_base is not None:
-            litellm_params.api_base = dynamic_api_base
+        #########################################################
+        # PROMPT MANAGEMENT
+        # If aresponses() already ran the async hook, it pops prompt_id and
+        # passes the result via _async_prompt_merged_params — apply those
+        # directly and skip the sync hook to avoid double-merging.
+        #########################################################
+        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+            input=input,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_logging_obj=litellm_logging_obj,
+            kwargs=kwargs,
+            local_vars=local_vars,
+        )
 
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
-        model_file_id_mapping = kwargs.get("model_file_id_mapping")
-        model_info_id = (
-            kwargs.get("model_info", {}).get("id")
-            if isinstance(kwargs.get("model_info"), dict)
-            else None
+        input, tools = _apply_managed_file_id_mapping(
+            input=input, tools=tools, kwargs=kwargs, local_vars=local_vars
         )
-
-        input = cast(
-            Union[str, ResponseInputParam],
-            update_responses_input_with_model_file_ids(
-                input=input,
-                model_id=model_info_id,
-                model_file_id_mapping=model_file_id_mapping,
-            ),
-        )
-        local_vars["input"] = input
-
-        # Update tools with provider-specific file IDs if needed
-        if tools:
-            tools = cast(
-                Optional[Iterable[ToolParam]],
-                update_responses_tools_with_model_file_ids(
-                    tools=cast(Optional[List[Dict[str, Any]]], tools),
-                    model_id=model_info_id,
-                    model_file_id_mapping=model_file_id_mapping,
-                ),
-            )
-            local_vars["tools"] = tools
 
         #########################################################
         # Native MCP Responses API
@@ -692,12 +842,16 @@ def responses(
             return run_async_function(aresponses_api_with_mcp, **mcp_call_kwargs)
 
         # get provider config
-        responses_api_provider_config: Optional[
-            BaseResponsesAPIConfig
-        ] = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
-            provider=custom_llm_provider,
-        )
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig]
+        if custom_llm_provider is None:
+            responses_api_provider_config = None
+        else:
+            responses_api_provider_config = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=model,
+                    provider=custom_llm_provider,
+                )
+            )
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
@@ -714,6 +868,56 @@ def responses(
                 local_vars
             )
         )
+
+        if _has_file_search_tool(tools) and (
+            responses_api_provider_config is None
+            or not responses_api_provider_config.supports_native_file_search()
+        ):
+            from litellm.responses.file_search.emulated_handler import (
+                aresponses_with_emulated_file_search,
+            )
+
+            _internal_skip = {"litellm_call_id", "aresponses"}
+            emulated_kwargs = {
+                "include": include,
+                "instructions": instructions,
+                "max_output_tokens": max_output_tokens,
+                "prompt": prompt,
+                "metadata": metadata,
+                "parallel_tool_calls": parallel_tool_calls,
+                "previous_response_id": previous_response_id,
+                "reasoning": reasoning,
+                "store": store,
+                "background": background,
+                "stream": stream,
+                "temperature": temperature,
+                "text": text,
+                "tool_choice": tool_choice,
+                "top_p": top_p,
+                "truncation": truncation,
+                "user": user,
+                "service_tier": service_tier,
+                "safety_identifier": safety_identifier,
+                "text_format": text_format,
+                "allowed_openai_params": allowed_openai_params,
+                "extra_headers": extra_headers,
+                "extra_query": extra_query,
+                "extra_body": extra_body,
+                "timeout": timeout,
+                "custom_llm_provider": custom_llm_provider,
+                **{k: v for k, v in kwargs.items() if k not in _internal_skip},
+            }
+            if _is_async:
+                return aresponses_with_emulated_file_search(
+                    input=input, model=model, tools=tools, **emulated_kwargs
+                )
+            return run_async_function(
+                aresponses_with_emulated_file_search,
+                input=input,
+                model=model,
+                tools=tools,
+                **emulated_kwargs,
+            )
 
         if responses_api_provider_config is None:
             return litellm_completion_transformation_handler.response_api_handler(
@@ -738,11 +942,9 @@ def responses(
             )
         )
 
-        # Pre Call logging - preserve metadata for custom callbacks
-        # When called from completion bridge (codex models), metadata is in litellm_metadata
-        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
-
-        litellm_logging_obj.update_environment_variables(
+        # Pre Call logging
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(responses_api_request_params),
@@ -750,8 +952,6 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata_for_callbacks,
-                "litellm_metadata": kwargs.get("litellm_metadata", {}),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -762,6 +962,9 @@ def responses(
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
+
         response = base_llm_http_handler.response_api_handler(
             model=model,
             input=input,
@@ -927,7 +1130,8 @@ def delete_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1107,7 +1311,8 @@ def get_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1263,7 +1468,8 @@ def list_input_items(
 
         local_vars.update(kwargs)
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={"response_id": response_id},
             litellm_params={"litellm_call_id": litellm_call_id},
@@ -1422,7 +1628,8 @@ def cancel_responses(
         local_vars.update(kwargs)
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=None,
             optional_params={
                 "response_id": response_id,
@@ -1626,7 +1833,8 @@ def compact_responses(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=local_vars,
             model=model,
             optional_params=dict(responses_api_request_params),
             litellm_params={
@@ -1729,7 +1937,8 @@ async def _aresponses_websocket(
         api_key=api_key,
     )
 
-    litellm_logging_obj.update_environment_variables(
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
         model=model,
         user=user,
         optional_params={},

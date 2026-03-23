@@ -54,6 +54,7 @@ response = completion(
 - stream
 - tools
 - tool_choice
+- include_server_side_tool_invocations
 - functions
 - response_format
 - n
@@ -856,7 +857,112 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-### URL Context 
+### Context Circulation (Server-Side Tool Combination)
+
+Context circulation allows Gemini 3+ models to combine **built-in tools** (like Google Search) with **your custom functions** in the same request. Without it, Gemini returns an error if you try to use both.
+
+When enabled, Gemini can execute Google Search server-side, use those results to decide whether to call your custom functions, and return the full chain of reasoning.
+
+**How it works:**
+1. You pass `include_server_side_tool_invocations=True` along with both Google Search and your function tools
+2. Gemini executes server-side tools internally and returns `toolCall`/`toolResponse` parts alongside any `functionCall` parts
+3. LiteLLM extracts the server-side invocations into `provider_specific_fields["server_side_tool_invocations"]`
+4. On subsequent turns, include the full assistant message in your conversation history — LiteLLM re-injects the server-side parts automatically
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=[{"role": "user", "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting."}],
+    tools=[
+        {"type": "web_search_preview"},  # Google Search (server-side)
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_meeting",
+                "description": "Schedule a meeting",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                },
+            },
+        },
+    ],
+    include_server_side_tool_invocations=True,
+)
+
+msg = response.choices[0].message
+
+# Server-side tool results are in provider_specific_fields
+psf = msg.provider_specific_fields or {}
+for invocation in psf.get("server_side_tool_invocations", []):
+    print(invocation["tool_type"])  # e.g. "GOOGLE_SEARCH_WEB"
+    print(invocation["id"])
+    print(invocation["args"])       # e.g. {"queries": ["weather Buenos Aires"]}
+    print(invocation["response"])   # Search results from Google
+
+# For multi-turn: just append the full message to history
+messages.append(msg)
+messages.append({"role": "user", "content": "Thanks!"})
+# LiteLLM automatically re-injects the server-side parts + thought signatures
+response2 = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=messages,
+    tools=tools,
+    include_server_side_tool_invocations=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-3-flash",
+  "messages": [{"role": "user", "content": "What is the weather in Buenos Aires?"}],
+  "tools": [
+    {"type": "web_search_preview"},
+    {"type": "function", "function": {"name": "schedule_meeting", "description": "Schedule a meeting", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}}
+  ],
+  "include_server_side_tool_invocations": true
+}'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+- Context circulation requires **Gemini 3+** models
+- Server-side tool invocations (`toolCall`/`toolResponse`) are **not** included in `tool_calls` — they are in `provider_specific_fields["server_side_tool_invocations"]` because they were already executed by Google, not by your code
+- `thought_signatures` are automatically preserved alongside server-side invocations for multi-turn coherence
+
+:::
+
+### URL Context
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

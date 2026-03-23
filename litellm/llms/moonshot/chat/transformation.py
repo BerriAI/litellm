@@ -19,7 +19,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
 
     @overload
     def _transform_messages(
@@ -27,7 +28,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> List[AllMessageValues]:
+        ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -53,9 +55,13 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         if is_async:
-            return super()._transform_messages(messages=messages, model=model, is_async=True)
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=True
+            )
         else:
-            return super()._transform_messages(messages=messages, model=model, is_async=False)
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=False
+            )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -141,15 +147,19 @@ class MoonshotChatConfig(OpenAIGPTConfig):
                 optional_params["temperature"] = 0.3
         return optional_params
 
-    def fill_reasoning_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def fill_reasoning_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
         """
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
 
         For each such message that is missing the field:
-          1. Promote provider_specific_fields["reasoning_content"] if present and non-empty
+          1. Check if reasoning_content exists at the top level (for Pydantic models
+             that have the attribute but don't support 'in' operator)
+          2. Promote provider_specific_fields["reasoning_content"] if present and non-empty
              (this is where LiteLLM stores it from a previous response)
-          2. Otherwise inject a single space — the minimum value the API accepts
+          3. Otherwise inject a single space — the minimum value the API accepts
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
@@ -158,7 +168,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if (
                 msg.get("role") == "assistant"
                 and msg.get("tool_calls")
-                and "reasoning_content" not in msg
+                and not msg.get(
+                    "reasoning_content"
+                )  # Check using .get() which works for both dicts and Pydantic models
             ):
                 patched = dict(cast(dict, msg))
                 provider_fields = patched.get("provider_specific_fields") or {}
