@@ -8787,30 +8787,6 @@ class Router:
                     model_name=model, team_id=request_team_id
                 )
                 if team_deployments:
-                    candidate_details = []
-                    for deployment in team_deployments:
-                        deployment_info = deployment.get("model_info", {}) or {}
-                        deployment_params = deployment.get("litellm_params", {}) or {}
-                        candidate_details.append(
-                            {
-                                "model_name": deployment.get("model_name"),
-                                "model_id": deployment_info.get("id"),
-                                "team_public_model_name": deployment_info.get(
-                                    "team_public_model_name"
-                                ),
-                                "api_base": deployment_params.get("api_base"),
-                            }
-                        )
-                    verbose_router_logger.info(
-                        "🔥 routing_candidates_before_lb "
-                        f"model={model} count={len(team_deployments)} "
-                        f"candidates={candidate_details}"
-                    )
-                    if len(team_deployments) > 1:
-                        verbose_router_logger.info(
-                            "🔥 load_balancer_candidate_pool "
-                            f"model={model} candidate_count={len(team_deployments)}"
-                        )
                     return model, team_deployments
 
             # check if provider/ specific wildcard routing use pattern matching
@@ -8850,32 +8826,6 @@ class Router:
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = self._get_deployment_by_litellm_model(model=model)
-
-        if isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
-            candidate_details = []
-            for deployment in healthy_deployments:
-                deployment_info = deployment.get("model_info", {}) or {}
-                deployment_params = deployment.get("litellm_params", {}) or {}
-                candidate_details.append(
-                    {
-                        "model_name": deployment.get("model_name"),
-                        "model_id": deployment_info.get("id"),
-                        "team_public_model_name": deployment_info.get(
-                            "team_public_model_name"
-                        ),
-                        "api_base": deployment_params.get("api_base"),
-                    }
-                )
-            verbose_router_logger.info(
-                "🔥 routing_candidates_before_lb "
-                f"model={model} count={len(healthy_deployments)} "
-                f"candidates={candidate_details}"
-            )
-            if len(healthy_deployments) > 1:
-                verbose_router_logger.info(
-                    "🔥 load_balancer_candidate_pool "
-                    f"model={model} candidate_count={len(healthy_deployments)}"
-                )
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(
