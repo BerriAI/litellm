@@ -197,7 +197,8 @@ class AktoLogger(CustomLogger):
                 "status": "unhealthy",
                 "error_message": f"Akto returned status {response.status_code}",
             }
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning("Akto health check failed: %s", e)
             return {"status": "unhealthy", "error_message": "Akto health check failed"}
 
     # ── Logging callbacks ──
@@ -206,7 +207,11 @@ class AktoLogger(CustomLogger):
         try:
             data = self.extract_logging_data(kwargs)
             payload = self.build_akto_payload(data, response_obj=response_obj)
-            self.sync_http_handler.post(**self.request_kwargs(payload))
+            response = self.sync_http_handler.post(**self.request_kwargs(payload))
+            if response.status_code >= 400:
+                verbose_logger.warning(
+                    "Akto ingestion returned %s", response.status_code
+                )
         except Exception as e:
             verbose_logger.error("Akto logging error: %s", e)
 
@@ -214,7 +219,13 @@ class AktoLogger(CustomLogger):
         try:
             data = self.extract_logging_data(kwargs)
             payload = self.build_akto_payload(data, response_obj=response_obj)
-            await self.async_http_handler.post(**self.request_kwargs(payload))
+            response = await self.async_http_handler.post(
+                **self.request_kwargs(payload)
+            )
+            if response.status_code >= 400:
+                verbose_logger.warning(
+                    "Akto ingestion returned %s", response.status_code
+                )
         except Exception as e:
             verbose_logger.error("Akto logging error: %s", e)
 
@@ -237,7 +248,11 @@ class AktoLogger(CustomLogger):
             payload = self.build_akto_payload(
                 data, status_code=status, response_obj=response_obj
             )
-            self.sync_http_handler.post(**self.request_kwargs(payload))
+            response = self.sync_http_handler.post(**self.request_kwargs(payload))
+            if response.status_code >= 400:
+                verbose_logger.warning(
+                    "Akto ingestion returned %s", response.status_code
+                )
         except Exception as e:
             verbose_logger.error("Akto logging error (failure): %s", e)
 
@@ -248,6 +263,12 @@ class AktoLogger(CustomLogger):
             payload = self.build_akto_payload(
                 data, status_code=status, response_obj=response_obj
             )
-            await self.async_http_handler.post(**self.request_kwargs(payload))
+            response = await self.async_http_handler.post(
+                **self.request_kwargs(payload)
+            )
+            if response.status_code >= 400:
+                verbose_logger.warning(
+                    "Akto ingestion returned %s", response.status_code
+                )
         except Exception as e:
             verbose_logger.error("Akto logging error (failure): %s", e)

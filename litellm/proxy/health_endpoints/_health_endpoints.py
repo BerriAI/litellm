@@ -341,9 +341,10 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "message": "Mock LLM request made - check langfuse.",
             }
         elif service == "akto":
+            from litellm.litellm_core_utils.litellm_logging import aktoLogger as _akto
             from litellm.integrations.akto.akto_logger import AktoLogger
 
-            akto_logger = AktoLogger()
+            akto_logger = _akto if _akto is not None else AktoLogger()
             response = await akto_logger.async_health_check()
             return {
                 "status": response["status"],
@@ -353,7 +354,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                     else "Akto is healthy"
                 ),
             }
-        
+
         if service == "webhook":
             user_info = CallInfo(
                 token=user_api_key_dict.token or "",
