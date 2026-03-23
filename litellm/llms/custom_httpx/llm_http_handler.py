@@ -155,7 +155,7 @@ else:
 
 async def _async_file_chunks(
     fp: Any, chunk_size: int = 65536
-) -> "AsyncGenerator[bytes, None]":
+) -> AsyncGenerator[bytes, None]:
     """Async generator that reads a sync file-like object in chunks via a thread executor.
 
     Dispatches each blocking disk read to a thread pool via anyio so the async
