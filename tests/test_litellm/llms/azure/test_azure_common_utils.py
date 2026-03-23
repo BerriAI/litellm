@@ -1686,9 +1686,11 @@ def clear_azure_env(monkeypatch):
 def clear_provider_cache():
     """Clear the module-level credential cache before and after each test."""
     import litellm.llms.azure.credential_cache as cc
-    cc._provider_cache.clear()
+    with cc._cache_lock:
+        cc._provider_cache.clear()
     yield
-    cc._provider_cache.clear()
+    with cc._cache_lock:
+        cc._provider_cache.clear()
 
 
 def test_get_azure_ad_token_twice_entra_id_same_provider(clear_azure_env, clear_provider_cache):
@@ -1876,7 +1878,6 @@ def test_get_azure_ad_token_entra_id_provider_reconstructed_after_ttl_expiry(
     pytest.importorskip("cachetools")
     import time
 
-    import litellm.llms.azure.credential_cache as cc
     from cachetools import TTLCache
 
     from litellm.llms.azure.common_utils import get_azure_ad_token

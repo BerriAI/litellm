@@ -27,7 +27,9 @@ from typing import Any
 _CACHE_MAX_SIZE = 128
 _CACHE_TTL_SECONDS = 3600  # 1 hour
 
-# Deterministic HMAC key for cache keys (not secret, just provides HMAC entropy)
+# Deterministic HMAC key for cache keys — prevents raw credential strings from
+# appearing verbatim in heap dumps, but is NOT a secret value and does NOT
+# provide cryptographic confidentiality. Do not rely on this for security.
 _CREDENTIAL_CACHE_HMAC_KEY = hashlib.sha256(b"litellm-azure-credential-cache-v1").digest()
 
 _cache_lock = threading.Lock()
