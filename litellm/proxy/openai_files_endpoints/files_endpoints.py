@@ -446,6 +446,10 @@ async def create_file(  # noqa: PLR0915
         # Pass file.file (the underlying SpooledTemporaryFile / BytesIO) rather than
         # reading all bytes into memory — the IO object is fully compatible with
         # FileTypes and lets downstream providers stream the upload.
+        # Ensure pointer is at 0 before any code reads from file.file, so that
+        # subsequent seek-based operations (file_size, JSONL sniff, upload) start
+        # from the beginning of the file regardless of prior reads.
+        file.file.seek(0)
         file_data = (file.filename, file.file, file.content_type)
 
         ## check if model is a loadbalanced model

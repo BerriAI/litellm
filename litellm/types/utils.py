@@ -41,7 +41,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -3494,7 +3494,7 @@ class ExtractedFileData(TypedDict):
     content: Union[bytes, "IO[bytes]"]
     content_type: Optional[str]
     headers: Mapping[str, str]
-    file_size: Optional[int]
+    file_size: NotRequired[Optional[int]]
 
 
 class SpecialEnums(Enum):
