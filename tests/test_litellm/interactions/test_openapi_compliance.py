@@ -1,8 +1,11 @@
 """
 OpenAPI compliance tests for Google Interactions API.
 
-Validates that our SDK requests/responses match the OpenAPI spec at:
-https://ai.google.dev/static/api/interactions.openapi.json
+Validates that our SDK requests/responses match a checked-in snapshot of the
+Google Interactions OpenAPI spec.
+
+Snapshot refreshed from `https://ai.google.dev/static/api/interactions.openapi.json`
+on 2026-03-23.
 
 Run with: pytest tests/test_litellm/interactions/test_openapi_compliance.py -v
 """
@@ -16,7 +19,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from openapi_core import OpenAPI
 
-OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 OPENAPI_SPEC_SNAPSHOT = Path(__file__).resolve().parent / "google_interactions_openapi_snapshot.json"
 
 
