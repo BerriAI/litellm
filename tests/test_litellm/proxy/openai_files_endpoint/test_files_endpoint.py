@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import Any, Union
+from typing import Any
 from unittest.mock import ANY
 
 import pytest
@@ -24,7 +24,7 @@ from litellm.types.llms.openai import OpenAIFileObject
 client = TestClient(app)
 
 
-def _get_file_size(file_content: Union[bytes, Any]) -> int:
+def _get_file_size(file_content: Any) -> int:
     """Return file size without loading IO objects fully into memory."""
     if hasattr(file_content, "read") and hasattr(file_content, "seek"):
         pos = file_content.tell()
