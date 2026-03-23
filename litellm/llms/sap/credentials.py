@@ -272,7 +272,7 @@ def fetch_credentials(
     config = init_conf(profile)
 
     service_key = _parse_service_key_once(
-        service_key or litellm.sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+        service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR)
     )
     vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
@@ -330,6 +330,29 @@ def validate_credentials(
     cert_file_path: Optional[str] = None,
     key_file_path: Optional[str] = None,
 ):
+    """
+        Validate SAP AI Core credentials for completeness and consistency.
+
+        Args:
+            auth_url: OAuth2 token endpoint URL (required)
+            base_url: SAP AI Core API base URL (required)
+            client_id: OAuth2 client ID (required)
+            client_secret: OAuth2 client secret (for secret-based auth)
+            cert_str: PEM-encoded certificate string (for cert-based auth)
+            key_str: PEM-encoded private key string (for cert-based auth)
+            cert_file_path: Path to certificate file (for file-based cert auth)
+            key_file_path: Path to private key file (for file-based cert auth)
+
+        Raises:
+            ValueError: If required fields are missing or authentication mode is ambiguous.
+
+        Note:
+            - This function does NOT validate resource_group (resolved separately).
+            - Exactly one authentication method must be provided:
+              * client_secret, OR
+              * (cert_str AND key_str), OR
+              * (cert_file_path AND key_file_path)
+        """
     if not auth_url or not client_id or not base_url:
         raise ValueError(
             "SAP AI Core credentials not found. "
