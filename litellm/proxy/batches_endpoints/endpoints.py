@@ -427,8 +427,8 @@ async def retrieve_batch(  # noqa: PLR0915
                 await resolve_output_file_ids_to_unified(
                     response,
                     prisma_client,
-                    managed_files_obj=managed_files_obj,
-                    user_api_key_dict=user_api_key_dict,
+                    managed_files_obj,
+                    user_api_key_dict,
                 )
 
             asyncio.create_task(
@@ -548,8 +548,8 @@ async def retrieve_batch(  # noqa: PLR0915
             await resolve_output_file_ids_to_unified(
                 response,
                 prisma_client,
-                managed_files_obj=managed_files_obj,
-                user_api_key_dict=user_api_key_dict,
+                managed_files_obj,
+                user_api_key_dict,
             )
 
         ### ALERTING ###
@@ -947,8 +947,8 @@ async def cancel_batch(
             await resolve_output_file_ids_to_unified(
                 response,
                 prisma_client,
-                managed_files_obj=managed_files_obj,
-                user_api_key_dict=user_api_key_dict,
+                managed_files_obj,
+                user_api_key_dict,
             )
 
         ### ALERTING ###
