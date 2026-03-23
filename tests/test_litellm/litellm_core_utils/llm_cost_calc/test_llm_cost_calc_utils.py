@@ -41,7 +41,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 
 from litellm.types.utils import CacheCreationTokenDetails, Usage
-from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 def test_reasoning_tokens_no_price_set():
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
