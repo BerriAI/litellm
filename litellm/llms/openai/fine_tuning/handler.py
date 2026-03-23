@@ -7,7 +7,9 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import LiteLLMFineTuningJob
 
 
-def _normalize_fine_tuning_job_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_fine_tuning_job_dict(
+    data: Dict[str, Any], is_azure: bool = False
+) -> Dict[str, Any]:
     """
     Normalize Azure OpenAI FineTuningJob response to match OpenAI schema.
 
@@ -16,6 +18,9 @@ def _normalize_fine_tuning_job_dict(data: Dict[str, Any]) -> Dict[str, Any]:
     - result_files: null → []
     - status: "pending" → "queued"
     """
+    if not is_azure:
+        return data
+
     normalized = data.copy()
 
     if normalized.get("organization_id") is None:
@@ -30,9 +35,11 @@ def _normalize_fine_tuning_job_dict(data: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _litellm_fine_tuning_job_from_response(response: Any) -> LiteLLMFineTuningJob:
+def _litellm_fine_tuning_job_from_response(
+    response: Any, is_azure: bool = False
+) -> LiteLLMFineTuningJob:
     return LiteLLMFineTuningJob(
-        **_normalize_fine_tuning_job_dict(response.model_dump())
+        **_normalize_fine_tuning_job_dict(response.model_dump(), is_azure=is_azure)
     )
 
 

@@ -245,15 +245,6 @@ def create_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            # Azure requires trainingType (e.g. 1 = supervised). Omitting it yields a misleading
-            # "The specified base model does not support fine-tuning" error from the service.
-            if kwargs.get("trainingType") is None:
-                _eb = (
-                    kwargs.get("extra_body") or optional_params.get("extra_body") or {}
-                )
-                if not (isinstance(_eb, dict) and _eb.get("trainingType") is not None):
-                    kwargs["trainingType"] = 1
-
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
 
             api_version = (
