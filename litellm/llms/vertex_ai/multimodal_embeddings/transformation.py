@@ -203,7 +203,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
         if "outputDimensionality" in optional_params:
             request_data["parameters"] = {
-                "outputDimensionality": optional_params["outputDimensionality"]
+                "dimension": optional_params["outputDimensionality"]
             }
 
         return cast(dict, request_data)
