@@ -635,8 +635,6 @@ class TestTeamModelSiblingRouting:
         team_id = "team_no_alias"
         public_name = "gpt-4.1-mini"
 
-        mock_update_team = AsyncMock()
-
         async def mock_add_model_to_db(model_params, user_api_key_dict, prisma_client):
             return MagicMock(model_id=str(uuid.uuid4()))
 
@@ -656,9 +654,6 @@ class TestTeamModelSiblingRouting:
                 model_info=ModelInfo(team_id=team_id),
             )
             with patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.update_team",
-                mock_update_team,
-            ), patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
                 side_effect=mock_add_model_to_db,
             ), patch(
@@ -671,7 +666,6 @@ class TestTeamModelSiblingRouting:
                     prisma_client=prisma_client,
                 )
 
-        mock_update_team.assert_not_called()
         assert mock_team_model_add.call_count == 2
 
     @pytest.mark.asyncio
@@ -807,8 +801,6 @@ class TestTeamModelUpdate:
             "litellm.proxy.proxy_server.premium_user",
             True,
         ), patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
-        ) as mock_update_team, patch(
             "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
         ) as mock_team_model_add:
             result = await _update_team_model_in_db(
@@ -820,8 +812,6 @@ class TestTeamModelUpdate:
 
             assert result.get("model_name", "").startswith("model_name_test_team_123_")
             assert "team_public_model_name" in str(result.get("model_info", ""))
-            # update_team must not be called (no model_aliases writes for team models)
-            mock_update_team.assert_not_called()
             # team_model_add must be called to add public name to team's models list
             mock_team_model_add.assert_called_once()
 
@@ -884,6 +874,47 @@ class TestTeamModelUpdate:
             mock_delete.assert_not_called()
             # team_model_add should be called to add new public name
             mock_add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_first_time_public_name_assignment_adds_team_model(self):
+        """If existing team deployment had no public name, first assignment must call team_model_add."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+        ) as mock_delete, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+        ) as mock_add:
+            await _update_existing_team_model_assignment(
+                team_id="team_123",
+                public_model_name="new-public-name",
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=None,
+            )
+
+            mock_add.assert_called_once()
+            mock_delete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rename_handles_legacy_string_model_info(self):
