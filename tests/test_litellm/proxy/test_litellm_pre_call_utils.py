@@ -2240,3 +2240,49 @@ def test_resolve_non_dict_model_config_ignored():
         {"gpt-4": {"azure": {"litellm_credentials": "valid-cred"}}},
     )
     assert result == "valid-cred"
+
+
+def test_resolve_pre_alias_model_name_fallback():
+    """model_config keyed on pre-alias name should match after alias resolution."""
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
+    }
+    # Post-alias name doesn't match, but pre-alias does
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4-0613", team_config, None, pre_alias_model_name="gpt-4"
+    )
+    assert result == "team-gpt4"
+
+
+def test_resolve_post_alias_name_takes_priority():
+    """Post-alias (resolved) name should be tried before pre-alias name."""
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "pre-alias-cred"}},
+        "gpt-4o-team-1": {"azure": {"litellm_credentials": "post-alias-cred"}},
+    }
+    result = _resolve_credential_from_model_config(
+        "gpt-4o-team-1", team_config, None, pre_alias_model_name="gpt-4"
+    )
+    assert result == "post-alias-cred"
+
+
+def test_apply_overrides_with_alias(setup_test_credentials):
+    """Credential override should work when model name was changed by alias."""
+    # Simulate: user called "my-gpt4", alias resolved to "azure/gpt-4-custom"
+    # model_config is keyed on "my-gpt4" (the pre-alias name)
+    data = {"model": "azure/gpt-4-custom"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "my-gpt4": {"azure": {"litellm_credentials": "hotel-azure-eastus"}},
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        pre_alias_model_name="my-gpt4",
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"

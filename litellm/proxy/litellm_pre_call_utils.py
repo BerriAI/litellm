@@ -1240,6 +1240,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Save pre-alias model name for credential override lookup
+    _pre_alias_model = data.get("model")
+
     # Team Model Aliases
     _update_model_if_team_alias_exists(
         data=data,
@@ -1261,6 +1264,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
+        pre_alias_model_name=_pre_alias_model,
     )
 
     ## ENFORCED PARAMS CHECK
@@ -1344,6 +1348,7 @@ def _update_model_if_key_alias_exists(
 def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
+    pre_alias_model_name: Optional[str] = None,
 ) -> None:
     """
     Walk the model_config precedence chain in team/project metadata.
@@ -1379,6 +1384,7 @@ def _apply_credential_overrides_from_model_config(
         model_name=model_name,
         project_model_config=project_model_config,
         team_model_config=team_model_config,
+        pre_alias_model_name=pre_alias_model_name,
     )
 
     if not credential_name:
@@ -1408,26 +1414,35 @@ def _resolve_credential_from_model_config(
     model_name: str,
     project_model_config: Optional[dict],
     team_model_config: Optional[dict],
+    pre_alias_model_name: Optional[str] = None,
 ) -> Optional[str]:
     """
     Walk the precedence chain and return the first matching credential name.
 
     Checks (in order):
     1. project_model_config[model_name][provider] — project model-specific
-    2. project_model_config["defaultconfig"][provider] — project default
-    3. team_model_config[model_name][provider] — team model-specific
-    4. team_model_config["defaultconfig"][provider] — team default
+    2. project_model_config[pre_alias_model_name][provider] — project pre-alias
+    3. project_model_config["defaultconfig"][provider] — project default
+    4. team_model_config[model_name][provider] — team model-specific
+    5. team_model_config[pre_alias_model_name][provider] — team pre-alias
+    6. team_model_config["defaultconfig"][provider] — team default
     """
+    # Build the list of model names to try (post-alias first, then pre-alias)
+    model_names_to_try = [model_name]
+    if pre_alias_model_name and pre_alias_model_name != model_name:
+        model_names_to_try.append(pre_alias_model_name)
+
     for model_config in (project_model_config, team_model_config):
         if not model_config or not isinstance(model_config, dict):
             continue
 
-        # Model-specific check
-        model_entry = model_config.get(model_name)
-        if model_entry:
-            credential_name = _extract_credential_from_entry(model_entry)
-            if credential_name:
-                return credential_name
+        # Model-specific check (try resolved name, then pre-alias name)
+        for name in model_names_to_try:
+            model_entry = model_config.get(name)
+            if model_entry:
+                credential_name = _extract_credential_from_entry(model_entry)
+                if credential_name:
+                    return credential_name
 
         # Default check
         default_entry = model_config.get("defaultconfig")
