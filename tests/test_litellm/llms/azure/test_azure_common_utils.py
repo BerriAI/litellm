@@ -1902,6 +1902,9 @@ def test_get_azure_ad_token_entra_id_provider_reconstructed_after_ttl_expiry(
 
     tiny_ttl_cache = TTLCache(maxsize=128, ttl=0.001)
 
+    import threading
+    test_lock = threading.Lock()
+
     with (
         patch("litellm.llms.azure.common_utils._provider_cache", tiny_ttl_cache),
         patch("azure.identity.get_bearer_token_provider", side_effect=fake_gbtp_ttl),

@@ -13,10 +13,8 @@ Cache keys are tuples:
 where hmac uses HMAC-SHA256 with a module-level key to avoid storing plaintext
 credentials in cache keys.
 
-The cache is bounded (max 128 entries) with a 1-hour TTL and LRU eviction,
-using cachetools.TTLCache protected by a threading.Lock. All cache operations
-(reads and writes) must be performed while holding the lock to avoid corrupting
-TTLCache's internal heap structure under concurrent access.
+If cachetools is available, the cache is a TTLCache(maxsize=128, ttl=3600) protected
+by _cache_lock. Otherwise, it falls back to an unbounded dict with no TTL eviction.
 """
 
 import hashlib
