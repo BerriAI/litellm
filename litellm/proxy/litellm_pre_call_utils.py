@@ -37,6 +37,7 @@ from litellm.types.utils import (
 )
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+_STALE_TEAM_ALIAS_WARNING_KEYS: set[str] = set()
 
 
 if TYPE_CHECKING:
@@ -1320,16 +1321,28 @@ def _update_model_if_team_alias_exists(
         )
         # Check if the alias points to a team-scoped UUID name
         # (format: "model_name_{team_id}_{uuid}")
-        if enable_stale_alias_bypass and aliased_target.startswith(
+        is_stale_team_alias = aliased_target.startswith(
             f"model_name_{user_api_key_dict.team_id}_"
-        ):
+        )
+        if is_stale_team_alias and llm_router:
             # This is a stale alias from pre-PR deployments.
             # Check if current team deployments exist for the public name.
-            if llm_router:
-                key = (user_api_key_dict.team_id, _model)
-                if key in llm_router.team_model_to_deployment_indices:
+            key = (user_api_key_dict.team_id, _model)
+            if key in llm_router.team_model_to_deployment_indices:
+                if enable_stale_alias_bypass:
                     # Team deployments exist; skip stale alias
                     return
+                warning_key = f"{user_api_key_dict.team_id}:{_model}:{aliased_target}"
+                if warning_key not in _STALE_TEAM_ALIAS_WARNING_KEYS:
+                    _STALE_TEAM_ALIAS_WARNING_KEYS.add(warning_key)
+                    verbose_proxy_logger.warning(
+                        "Stale team model alias detected for model='%s', team_id='%s'. "
+                        "New sibling deployments may be unreachable. "
+                        "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
+                        "team-scoped sibling routing.",
+                        _model,
+                        user_api_key_dict.team_id,
+                    )
 
         data["model"] = aliased_target
     return
