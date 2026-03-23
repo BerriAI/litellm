@@ -42,26 +42,26 @@ $ litellm --config /path/to/config.yaml
 
 For each model, you can set `timeout` and `stream_timeout` under `litellm_params`:
 
-- **`timeout`** → maximum time for the *complete request*.  
-  Use this to cap the total end-to-end call duration.
+- **`timeout`** → maximum time for the *complete request*. Use this to cap the total end-to-end call duration.
 
-- **`stream_timeout`** → maximum time to wait for the next streamed read / chunk before timing out.  
-  Use this when a provider starts streaming and then stalls, or when a remote setup has long gaps between streamed chunks.
+- **`stream_timeout`** → timeout used for `stream=True` calls. With LiteLLM's default httpx client, this is how long LiteLLM waits for the next streamed read / chunk before timing out.
 
 If `stream_timeout` is not set, LiteLLM falls back to the normal `timeout` value.
 
 ### Practical rule of thumb
 
 - Use **`timeout`** to control how long the whole request is allowed to run.
-- Use **`stream_timeout`** to control how long LiteLLM waits between streamed chunks.
+- Use **`stream_timeout`** to control how quickly a stalled stream should fail.
 - If you are debugging socket read timeouts or mid-stream disconnects in a remote setup, start by setting **both** values to the same number.
 - Once the stream is stable, lower `stream_timeout` only if you want faster failover for stalled streams.
+- For quick local smoke tests, sub-second values can still be useful.
 
 ### Recommended starting values
 
 - **Remote / self-hosted streaming path** (`Open WebUI -> LiteLLM -> provider`, `OpenHands -> LiteLLM -> provider`, etc.): start with `timeout: 180` and `stream_timeout: 180`.
 - **Normal interactive streaming**: start with `timeout: 180-300` and `stream_timeout: 30-60`.
 - **Batch / non-streaming requests**: set `timeout`, and you can usually skip `stream_timeout`.
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -77,7 +77,7 @@ model_list = [{
         "api_version": os.getenv("AZURE_API_VERSION"),
         "api_base": os.getenv("AZURE_API_BASE"),
         "timeout": 300, # total request timeout
-        "stream_timeout": 60 # max gap between streamed chunks
+        "stream_timeout": 60 # stream=True timeout while waiting for next chunk
     }
 }]
 
@@ -105,7 +105,7 @@ model_list:
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: <your-key>
       timeout: 180                      # total request timeout (seconds)
-      stream_timeout: 60               # max gap between streamed chunks (seconds)
+      stream_timeout: 60                # stream=True timeout while waiting for next chunk (seconds)
       max_retries: 5
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -113,7 +113,7 @@ model_list:
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: 
       timeout: 180                      # total request timeout (seconds)
-      stream_timeout: 60               # max gap between streamed chunks (seconds)
+      stream_timeout: 60                # stream=True timeout while waiting for next chunk (seconds)
       max_retries: 5
 
 ```

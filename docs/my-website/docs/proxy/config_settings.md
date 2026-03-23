@@ -341,7 +341,7 @@ router_settings:
 | max_fallbacks | Optional[int] | The maximum number of fallbacks to try before exiting the call. Defaults to 5. |
 | default_litellm_params | Optional[dict] | The default litellm parameters to add to all requests (e.g. `temperature`, `max_tokens`). |
 | timeout | Optional[float] | The default timeout for a request. Default is 10 minutes. |
-| stream_timeout | Optional[float] | The default timeout between streamed reads / chunks. If not set, the normal `timeout` value is used. |
+| stream_timeout | Optional[float] | The default timeout used for `stream=True` calls. In practice this is the timeout between streamed reads / chunks. If not set, the normal `timeout` value is used. |
 | debug_level | Literal["DEBUG", "INFO"] | The debug level for the logging library in the router. Defaults to "INFO". |
 | client_ttl | int | Time-to-live for cached clients in seconds. Defaults to 3600. |
 | cache_kwargs | dict | Additional keyword arguments for the cache initialization. Use this for non-string Redis parameters that may fail when set via `REDIS_*` environment variables. |
