@@ -1252,14 +1252,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    verbose_proxy_logger.debug(
+        "[PROXY] returned data from litellm_pre_call_utils: %s", data
+    )
+
     # Team/Project credential overrides from model_config
+    # Placed after the debug log to avoid leaking credential secrets in logs
     _apply_credential_overrides_from_model_config(
         data=data,
         user_api_key_dict=user_api_key_dict,
-    )
-
-    verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
 
     ## ENFORCED PARAMS CHECK
@@ -1445,6 +1446,8 @@ def _extract_credential_from_entry(entry: dict) -> Optional[str]:
     Entry structure: {"azure": {"litellm_credentials": "name"}, ...}
     Returns the first credential name found across all provider keys.
     """
+    if not isinstance(entry, dict):
+        return None
     for provider_config in entry.values():
         if isinstance(provider_config, dict):
             credential_name = provider_config.get("litellm_credentials")
