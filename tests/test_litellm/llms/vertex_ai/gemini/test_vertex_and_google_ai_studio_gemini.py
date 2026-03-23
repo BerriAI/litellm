@@ -3759,6 +3759,88 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
     assert result.prompt_tokens_details.audio_tokens == 200
 
 
+def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
+    """Test promptTokensDetails with DOCUMENT modality for PDF inputs.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/24375
+
+    When a PDF is sent to Gemini, the API returns a DOCUMENT modality in
+    promptTokensDetails. These tokens should be mapped to text_tokens since
+    Gemini bills documents at the text token rate. Without this fix, DOCUMENT
+    tokens are silently dropped, causing cost undercounting.
+
+    Real Gemini response for a PDF input:
+        promptTokensDetails: [TEXT: 8, DOCUMENT: 774]
+        candidatesTokensDetails: [TEXT: 4]
+        thoughtsTokenCount: 92
+    """
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 782,
+        "candidatesTokenCount": 4,
+        "totalTokenCount": 878,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 8},
+            {"modality": "DOCUMENT", "tokenCount": 774},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 4},
+        ],
+        "thoughtsTokenCount": 92,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # Verify basic token counts
+    assert result.prompt_tokens == 782
+    assert result.completion_tokens == 96  # 4 candidates + 92 thinking
+    assert result.total_tokens == 878
+
+    # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
+    assert result.prompt_tokens_details is not None
+    assert result.prompt_tokens_details.text_tokens == 782, \
+        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+
+    # Verify completion token details
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 4
+    assert result.completion_tokens_details.reasoning_tokens == 92
+
+
+def test_vertex_ai_usage_metadata_with_document_tokens_cached():
+    """Test that cached DOCUMENT tokens are correctly subtracted from prompt text tokens."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 782,
+        "candidatesTokenCount": 4,
+        "totalTokenCount": 878,
+        "cachedContentTokenCount": 400,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 8},
+            {"modality": "DOCUMENT", "tokenCount": 774},
+        ],
+        "cacheTokensDetails": [
+            {"modality": "DOCUMENT", "tokenCount": 400},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 4},
+        ],
+        "thoughtsTokenCount": 92,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    # DOCUMENT cached tokens map to cached_text_tokens, so:
+    # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
+    assert result.prompt_tokens_details.text_tokens == 382, \
+        "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert result.prompt_tokens_details.cached_tokens == 400
+
+
 def test_async_streaming_uses_custom_client():
     """
     Test that user-specified async client is correctly passed to make_call
