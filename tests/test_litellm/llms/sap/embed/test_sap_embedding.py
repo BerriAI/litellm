@@ -1601,7 +1601,7 @@ async def test_sap_chat(
         if sync_mode:
             response = litellm.embedding(model=model, input=input)
         else:
-            response = await litellm.aembedding(model=model, input=input)
+            response = await litellm.aembedding(model=model, input=input, caching=False)
 
         assert response
         assert response.data[0]["embedding"]
