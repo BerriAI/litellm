@@ -84,7 +84,7 @@ class TestApplyToolsetScope:
     @pytest.mark.asyncio
     async def test_non_admin_no_object_permission_raises_403(self):
         """Non-admin key with object_permission=None is denied (no grants configured)."""
-        from fastapi import HTTPException
+        from starlette.exceptions import HTTPException
 
         from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
 

@@ -891,16 +891,27 @@ class MCPServerManager:
     ) -> Optional[Any]:
         """Return a toolset by name, cached in ``user_api_key_cache`` (Redis-backed
         ``DualCache`` in production) to avoid a DB hit on every routed request.
+
+        Serialisation note: the cache value is stored as a plain JSON-safe dict via
+        ``model_dump(mode="json")`` so that Redis round-trips correctly in multi-worker
+        deployments.  On a cache hit we reconstruct the ``MCPToolset`` Pydantic object
+        so callers can always use attribute access (e.g. ``toolset.toolset_id``).
         """
         from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
         from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
         cache_key = f"toolset_name:{toolset_name}"
         cached = await user_api_key_cache.async_get_cache(key=cache_key)
         if cached is not None:
             # Sentinel value used to cache "not found" so we don't re-query for
             # names that don't exist.
-            return None if cached == "__not_found__" else cached
+            if cached == "__not_found__":
+                return None
+            # Redis deserialises JSON back as a plain dict — reconstruct the model.
+            if isinstance(cached, dict):
+                return MCPToolset(**cached)
+            return cached
 
         from litellm.proxy._experimental.mcp_server.toolset_db import (
             get_mcp_toolset_by_name,
@@ -909,7 +920,11 @@ class MCPServerManager:
         toolset = await get_mcp_toolset_by_name(prisma_client, toolset_name)
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=toolset if toolset is not None else "__not_found__",
+            value=(
+                toolset.model_dump(mode="json")
+                if toolset is not None
+                else "__not_found__"
+            ),
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
         return toolset
