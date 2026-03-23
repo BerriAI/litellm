@@ -136,8 +136,8 @@ class TestVertexMultimodalEmbedding:
         result = self.config.process_openai_embedding_input(input_data)
         assert result == expected_output, f"Expected {expected_output}, but got {result}"
 
-    def test_dimensions_parameter_forwarded_as_output_dimensionality(self):
-        """Test that the dimensions parameter is forwarded as outputDimensionality
+    def test_dimensions_parameter_forwarded_as_dimension(self):
+        """Test that the dimensions parameter is forwarded as dimension
         in the request body parameters field.
 
         Fixes: https://github.com/BerriAI/litellm/issues/24392
