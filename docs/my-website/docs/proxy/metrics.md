@@ -2,7 +2,17 @@
 
 ## Custom Latency Buckets
 
-By default, LiteLLM uses a fixed set of histogram buckets for all latency metrics. You can override them with your own tuple of bucket boundaries.
+By default, LiteLLM uses a fixed set of histogram buckets for all latency metrics. You can override them to match your SLOs.
+
+**Proxy config (`litellm_settings`)**
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  prometheus_latency_buckets: [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, .inf]
+```
+
+**Python SDK**
 
 ```python
 import litellm
@@ -10,7 +20,7 @@ import litellm
 litellm.prometheus_latency_buckets = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, float("inf"))
 ```
 
-This applies to all histogram metrics:
+Applies to all histogram metrics:
 - `litellm_request_total_latency_metric`
 - `litellm_llm_api_latency_metric`
 - `litellm_llm_api_time_to_first_token_metric`
@@ -18,13 +28,23 @@ This applies to all histogram metrics:
 - `litellm_request_queue_time_seconds`
 - `litellm_guardrail_latency_seconds`
 
-> Set this **before** the Prometheus logger is initialized (i.e. before the proxy starts).
-
 ---
 
 ## Exclude Metrics
 
-Disable specific metrics entirely so they are never registered or emitted.
+Disable specific metrics entirely — they are replaced by no-ops and never registered in Prometheus.
+
+**Proxy config (`litellm_settings`)**
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  prometheus_exclude_metrics:
+    - litellm_overhead_latency_metric
+    - litellm_request_queue_time_seconds
+```
+
+**Python SDK**
 
 ```python
 import litellm
@@ -35,13 +55,24 @@ litellm.prometheus_exclude_metrics = [
 ]
 ```
 
-Any metric in this list is replaced by a no-op — no Prometheus series will be created for it.
-
 ---
 
 ## Exclude Labels
 
-Strip specific label dimensions from **all** metrics. Useful for reducing cardinality.
+Strip label dimensions from **all** metrics. Useful for reducing cardinality.
+
+**Proxy config (`litellm_settings`)**
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  prometheus_exclude_labels:
+    - end_user
+    - user_agent
+    - client_ip
+```
+
+**Python SDK**
 
 ```python
 import litellm
@@ -49,9 +80,7 @@ import litellm
 litellm.prometheus_exclude_labels = ["end_user", "user_agent", "client_ip"]
 ```
 
-The label will be removed from every metric that would normally carry it.
-
-> `prometheus_exclude_labels` is applied **after** any `prometheus_metrics_config` include-label filtering.
+> `prometheus_exclude_labels` is applied after any `prometheus_metrics_config` include-label filtering.
 
 ---
 
