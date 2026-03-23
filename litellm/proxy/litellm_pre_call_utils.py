@@ -8,8 +8,8 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
@@ -1391,9 +1391,9 @@ def _apply_credential_overrides_from_model_config(
         )
         return
 
-    # Apply credential overrides to request data
+    # Apply credential overrides only for keys not already in the request
     for key in ("api_base", "api_key", "api_version"):
-        if key in credential_values:
+        if key in credential_values and key not in data:
             data[key] = credential_values[key]
 
     verbose_proxy_logger.debug(
@@ -1418,7 +1418,7 @@ def _resolve_credential_from_model_config(
     4. team_model_config["defaultconfig"][provider] — team default
     """
     for model_config in (project_model_config, team_model_config):
-        if not model_config:
+        if not model_config or not isinstance(model_config, dict):
             continue
 
         # Model-specific check
