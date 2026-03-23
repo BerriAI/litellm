@@ -1385,8 +1385,13 @@ class Logging(LiteLLMLoggingBaseClass):
             input_cost=input_cost,
             output_cost=output_cost,
             total_cost=total_cost,
-            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
+
+        # Only include fields when they carry meaningful (non-zero) values
+        if cost_for_built_in_tools_cost_usd_dollar > 0:
+            self.cost_breakdown[
+                "tool_usage_cost"
+            ] = cost_for_built_in_tools_cost_usd_dollar
 
         if reasoning_tokens_cost > 0:
             self.cost_breakdown["reasoning_tokens_cost"] = reasoning_tokens_cost
@@ -1405,20 +1410,18 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             self.cost_breakdown["additional_costs"] = additional_costs
 
-        # Store discount information if provided
-        if original_cost is not None:
+        # Store discount/margin info only when actually applied (non-zero)
+        if original_cost is not None and discount_amount and discount_amount > 0:
             self.cost_breakdown["original_cost"] = original_cost
-        if discount_percent is not None:
+        if discount_percent is not None and discount_percent > 0:
             self.cost_breakdown["discount_percent"] = discount_percent
-        if discount_amount is not None:
+        if discount_amount is not None and discount_amount > 0:
             self.cost_breakdown["discount_amount"] = discount_amount
-
-        # Store margin information if provided
-        if margin_percent is not None:
+        if margin_percent is not None and margin_percent > 0:
             self.cost_breakdown["margin_percent"] = margin_percent
-        if margin_fixed_amount is not None:
+        if margin_fixed_amount is not None and margin_fixed_amount > 0:
             self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
-        if margin_total_amount is not None:
+        if margin_total_amount is not None and margin_total_amount > 0:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
     def _response_cost_calculator(
