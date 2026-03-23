@@ -3215,6 +3215,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Traceloop",
     )
 
+    akto: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="akto",
+        litellm_callback_params=[
+            "AKTO_DATA_INGESTION_API_BASE",
+            "AKTO_API_KEY",
+        ],
+        ui_callback_name="Akto",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """

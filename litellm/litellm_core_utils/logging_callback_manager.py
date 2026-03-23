@@ -77,9 +77,9 @@ class LoggingCallbackManager:
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
-        Special-cases 'dynamodb' and 'openmeter' as async callbacks.
+        Special-cases 'dynamodb', 'openmeter', and 'akto' as async callbacks.
         """
-        if isinstance(callback, str) and callback in ("dynamodb", "openmeter"):
+        if isinstance(callback, str) and callback in ("dynamodb", "openmeter", "akto"):
             self._safe_add_callback_to_list(
                 callback=callback, parent_list=litellm._async_success_callback
             )
