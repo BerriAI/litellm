@@ -8155,9 +8155,11 @@ class Router:
         ):
             return True
         elif model_name is not None and model["model_name"] == model_name:
+            model_team_id = (model.get("model_info") or {}).get("team_id")
             if (
                 team_id is None
-                or (model.get("model_info") or {}).get("team_id") == team_id
+                or model_team_id is None  # global deployment - accessible to all teams
+                or model_team_id == team_id
             ):
                 return True
         return False

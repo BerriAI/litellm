@@ -521,6 +521,16 @@ async def _update_existing_team_model_assignment(
                 and _get_team_public_model_name(d.model_info) == old_public_name
             ]
 
+        # Add new name first, then delete old name to prevent access loss on partial failure
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=team_id,
+                models=[public_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         if not other_deployments_with_old_name:
             await team_model_delete(
                 data=TeamModelDeleteRequest(
@@ -530,15 +540,6 @@ async def _update_existing_team_model_assignment(
                 http_request=Request(scope={"type": "http"}),
                 user_api_key_dict=user_api_key_dict,
             )
-
-        await team_model_add(
-            data=TeamModelAddRequest(
-                team_id=team_id,
-                models=[public_model_name],
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
-        )
 
     patch_data.model_name = None
 
