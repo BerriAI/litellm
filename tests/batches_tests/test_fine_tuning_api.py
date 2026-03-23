@@ -180,6 +180,34 @@ async def test_azure_create_fine_tune_jobs_async():
     pass
 
 
+def test_azure_trainingtype_defaults_to_one():
+    """
+    Azure requires trainingType in extra_body. When omitted, LiteLLM defaults it to 1.
+    """
+    from unittest.mock import MagicMock, patch
+    from litellm.fine_tuning.main import create_fine_tuning_job
+
+    with patch(
+        "litellm.fine_tuning.main.azure_fine_tuning_apis_instance.create_fine_tuning_job"
+    ) as mock_create:
+        mock_create.return_value = MagicMock(
+            id="ftjob-test", status="queued", model="gpt-4o-mini"
+        )
+
+        create_fine_tuning_job(
+            model="gpt-4o-mini",
+            training_file="file-test",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+        )
+
+        call_kwargs = mock_create.call_args[1]
+        create_data = call_kwargs["create_fine_tuning_job_data"]
+        assert "extra_body" in create_data
+        assert create_data["extra_body"].get("trainingType") == 1
+
+
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
     load_vertex_ai_credentials()
