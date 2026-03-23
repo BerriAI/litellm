@@ -288,8 +288,8 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
-@pytest.mark.asyncio
-async def test_vertex_transformation_field_casing():
+
+def test_vertex_transformation_field_casing():
     """
     Tests that structural fields are camelCased for Vertex AI,
     while user-defined logic (args, properties, labels) preserves snake_case.
@@ -297,12 +297,7 @@ async def test_vertex_transformation_field_casing():
     from litellm.llms.vertex_ai.gemini.transformation import _transform_part_to_httpx_format
 
     # 1. Test Multimodal field naming
-    part = {
-        "inline_data": {
-            "mime_type": "image/png",
-            "data": "base64data"
-        }
-    }
+    part = {"inline_data": {"mime_type": "image/png", "data": "base64data"}}
     transformed = _transform_part_to_httpx_format(part)
     assert "inlineData" in transformed
     assert transformed["inlineData"]["mimeType"] == "image/png"
@@ -311,13 +306,10 @@ async def test_vertex_transformation_field_casing():
     part = {
         "function_call": {
             "name": "my_func",
-            "args": {
-                "security_risk": "high",
-                "other_param": 123
-            }
+            "args": {"security_risk": "high", "other_param": 123},
         }
     }
-    transformed = _transform_part_to_httpx_format(part)
+    transformed = _transform_part_to_httpx_format(part, parent_key="functionCall")
     assert "functionCall" in transformed
     assert "args" in transformed["functionCall"]
     # Keys in args should NOT be camelCased
@@ -334,10 +326,13 @@ async def test_vertex_transformation_field_casing():
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "security_risk": {"type": "string", "mime_type": "text/plain"}
+                                "security_risk": {
+                                    "type": "string",
+                                    "mime_type": "text/plain",
+                                }
                             },
-                            "required": ["security_risk"]
-                        }
+                            "required": ["security_risk"],
+                        },
                     }
                 ]
             }
@@ -351,3 +346,21 @@ async def test_vertex_transformation_field_casing():
     assert "mimeType" in schema["properties"]["security_risk"]
     # 'required' list strings should stay snake_case
     assert "security_risk" in schema["required"]
+
+    # 4. Test response field preservation inside functionResponse
+    part = {
+        "function_response": {
+            "name": "my_func",
+            "response": {"output_field": "value"},
+        }
+    }
+    transformed = _transform_part_to_httpx_format(part)
+    assert "functionResponse" in transformed
+    assert "response" in transformed["functionResponse"]
+    assert "output_field" in transformed["functionResponse"]["response"]
+
+    # 5. Test response field preservation inside labels
+    part = {"labels": {"response": "user_value"}}
+    transformed = _transform_part_to_httpx_format(part)
+    assert "labels" in transformed
+    assert "response" in transformed["labels"]

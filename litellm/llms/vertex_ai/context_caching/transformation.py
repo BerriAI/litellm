@@ -169,7 +169,7 @@ def transform_openai_messages_to_gemini_context_caching(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    is_vertex_ai = custom_llm_provider != "gemini"
+    is_vertex_ai = custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]
 
     transformed_system_messages, new_messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
