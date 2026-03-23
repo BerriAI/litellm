@@ -62,12 +62,8 @@ def _make_prisma(
     prisma = MagicMock()
     prisma.db.litellm_tooltable = MagicMock()
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
-    prisma.db.litellm_tooltable.find_many = AsyncMock(
-        return_value=find_many_rows if find_many_rows is not None else []
-    )
-    prisma.db.litellm_tooltable.find_unique = AsyncMock(
-        return_value=find_unique_row
-    )
+    prisma.db.litellm_tooltable.find_many = AsyncMock(return_value=find_many_rows if find_many_rows is not None else [])
+    prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
     return prisma
 
 
@@ -163,9 +159,7 @@ async def test_get_tool_found():
     result = await get_tool(prisma, "my_tool")
     assert result is not None
     assert result.tool_name == "my_tool"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
@@ -184,9 +178,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
         updated_by="admin",
     )
     prisma = _make_prisma(find_unique_row=row)
-    result = await update_tool_policy(
-        prisma, "my_tool", updated_by="admin", input_policy="blocked"
-    )
+    result = await update_tool_policy(prisma, "my_tool", updated_by="admin", input_policy="blocked")
     assert result is not None
     assert result.input_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
@@ -194,9 +186,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
     assert call_kw["where"] == {"tool_name": "my_tool"}
     assert call_kw["data"]["update"]["input_policy"] == "blocked"
     assert call_kw["data"]["update"]["updated_by"] == "admin"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
@@ -211,9 +201,7 @@ async def test_get_tools_by_names_returns_policy_map():
         "tool_a": ("trusted", "untrusted"),
         "tool_b": ("blocked", "untrusted"),
     }
-    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(
-        where={"tool_name": {"in": ["tool_a", "tool_b"]}}
-    )
+    prisma.db.litellm_tooltable.find_many.assert_awaited_once_with(where={"tool_name": {"in": ["tool_a", "tool_b"]}})
 
 
 @pytest.mark.asyncio
@@ -263,7 +251,7 @@ async def test_tool_policy_registry_sync_and_get_effective_policies():
             _mock_perm_row("op-team-1", ["tool_c"]),
         ]
     )
-    registry = get_tool_policy_registry()
+    registry = ToolPolicyRegistry()
     await registry.sync_tool_policy_from_db(prisma)
     assert registry.is_initialized()
     # Key blocked: tool_a. Team blocked: tool_c. Global: tool_b blocked.
