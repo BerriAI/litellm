@@ -8258,6 +8258,10 @@ class Router:
                 # O(k) where k = team deployments for this model_name (typically 1-10)
                 for idx in indices:
                     model = self.model_list[idx]
+                    if not self.should_include_deployment(
+                        model_name=model_name, model=model, team_id=team_id
+                    ):
+                        continue
                     if model_alias is not None:
                         alias_model = model.copy()
                         alias_model["model_name"] = model_alias
