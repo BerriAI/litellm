@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
@@ -37,7 +38,9 @@ from litellm.types.utils import (
 )
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
-_STALE_TEAM_ALIAS_WARNING_KEYS: set[str] = set()
+# Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
+_MAX_STALE_ALIAS_WARNING_KEYS = 10_000
+_STALE_TEAM_ALIAS_WARNING_KEYS: OrderedDict[str, None] = OrderedDict()
 
 
 if TYPE_CHECKING:
@@ -1335,7 +1338,12 @@ def _update_model_if_team_alias_exists(
                     return
                 warning_key = f"{user_api_key_dict.team_id}:{_model}:{aliased_target}"
                 if warning_key not in _STALE_TEAM_ALIAS_WARNING_KEYS:
-                    _STALE_TEAM_ALIAS_WARNING_KEYS.add(warning_key)
+                    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
+                    while (
+                        len(_STALE_TEAM_ALIAS_WARNING_KEYS)
+                        > _MAX_STALE_ALIAS_WARNING_KEYS
+                    ):
+                        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
                     verbose_proxy_logger.warning(
                         "Stale team model alias detected for model='%s', team_id='%s'. "
                         "New sibling deployments may be unreachable. "
