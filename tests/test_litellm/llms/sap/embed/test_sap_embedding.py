@@ -1641,7 +1641,7 @@ async def test_sap_embedding_required_headers(
         route = respx_mock.post(f"{fake_deployment_url}/v2/embeddings")
         route.respond(json=sap_api_response)
 
-        response = await litellm.aembedding(model=model, input=input)
+        response = await litellm.aembedding(model=model, input=input, caching=False)
 
         # Verify the response is valid
         assert response
