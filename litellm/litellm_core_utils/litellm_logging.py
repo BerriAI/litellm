@@ -162,7 +162,6 @@ from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
-from ..integrations.akto.akto_logger import AktoLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
@@ -242,7 +241,6 @@ greenscaleLogger = None
 lunaryLogger = None
 supabaseClient = None
 deepevalLogger = None
-aktoLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -2389,26 +2387,6 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if callback == "akto" and is_sync_request:
-                        global aktoLogger
-                        if aktoLogger is None:
-                            aktoLogger = AktoLogger()
-                        if self.stream and complete_streaming_response is None:
-                            pass  # skip partial stream chunks
-                        else:
-                            if self.stream and complete_streaming_response:
-                                self.model_call_details[
-                                    "complete_response"
-                                ] = self.model_call_details.get(
-                                    "complete_streaming_response", {}
-                                )
-                                result = self.model_call_details["complete_response"]
-                            aktoLogger.log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
                     if (
                         isinstance(callback, CustomLogger)
                         and is_sync_request
@@ -2724,31 +2702,6 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                         )
 
-                if callback == "akto":
-                    global aktoLogger
-                    if aktoLogger is None:
-                        aktoLogger = AktoLogger()
-                    if self.stream is True:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
-                            await aktoLogger.async_log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "async_complete_streaming_response"
-                                ],
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
-                    else:
-                        await aktoLogger.async_log_success_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-
                 if isinstance(callback, CustomLogger):  # custom logger class
                     model_call_details: Dict = self.model_call_details
                     ##################################
@@ -3058,16 +3011,6 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose=print_verbose,
                             callback_func=callback,
                         )
-                    if callback == "akto" and is_sync_request:
-                        global aktoLogger
-                        if aktoLogger is None:
-                            aktoLogger = AktoLogger()
-                        aktoLogger.log_failure_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
                     if (
                         isinstance(callback, CustomLogger)
                         and is_sync_request
@@ -3193,16 +3136,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 if not should_run:
                     continue
-                if callback == "akto":
-                    global aktoLogger
-                    if aktoLogger is None:
-                        aktoLogger = AktoLogger()
-                    await aktoLogger.async_log_failure_event(
-                        kwargs=self.model_call_details,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
                         kwargs=self.model_call_details,
@@ -3619,7 +3552,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger, aktoLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -3709,9 +3642,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
-            elif callback == "akto":
-                aktoLogger = AktoLogger()
-                print_verbose("Initialized Akto Logger")
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
@@ -3757,6 +3687,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
         elif logging_integration == "akto":
+            from litellm.integrations.akto.akto_logger import AktoLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, AktoLogger):
                     return callback  # type: ignore
@@ -4405,6 +4337,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "openmeter":
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenMeterLogger):
+                    return callback
+        elif logging_integration == "akto":
+            from litellm.integrations.akto.akto_logger import AktoLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AktoLogger):
                     return callback
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
