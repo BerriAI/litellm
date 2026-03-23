@@ -917,6 +917,41 @@ class TestTeamModelUpdate:
             mock_delete.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_rename_with_prisma_none_clears_patch_model_name(self):
+        """Rename path must clear patch_data.model_name even when prisma is unavailable (P1)."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_existing_team_model_assignment,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team_123_uuid1",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4o-mini"),
+            model_info=ModelInfo(
+                team_id="team_123", team_public_model_name="old-public-name"
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="team_123"),
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        await _update_existing_team_model_assignment(
+            team_id="team_123",
+            public_model_name="new-public-name",
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=None,
+        )
+
+        assert patch_data.model_name is None
+
+    @pytest.mark.asyncio
     async def test_rename_handles_legacy_string_model_info(self):
         """Test rename path handles legacy string-encoded model_info rows without crashing."""
         from unittest.mock import MagicMock
