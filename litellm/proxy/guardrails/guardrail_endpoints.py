@@ -1973,8 +1973,16 @@ async def test_custom_code_guardrail(
         # Remove access to builtins to prevent escape
         exec_globals["__builtins__"] = {}
 
+        # Security note: exec() is used here intentionally to test admin-supplied
+        # guardrail code. Protected by RBAC (PROXY_ADMIN), regex + AST validation,
+        # and empty __builtins__.
+        verbose_proxy_logger.warning(
+            "Admin user testing custom guardrail code via exec() in restricted sandbox. "
+            f"User role: {user_api_key_dict.user_role}"
+        )
+
         try:
-            exec(compile(request.custom_code, "<guardrail>", "exec"), exec_globals)
+            exec(compile(request.custom_code, "<guardrail>", "exec"), exec_globals)  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,

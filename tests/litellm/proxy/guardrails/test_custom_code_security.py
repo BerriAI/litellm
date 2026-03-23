@@ -1,13 +1,16 @@
 import pytest
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
-    validate_custom_code,
     CustomCodeValidationError,
+    _validate_ast,
+    validate_custom_code,
 )
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
 
-# Phase 4.1: Test forbidden pattern validation
+# =============================================================================
+# Phase 4.1: Test forbidden pattern validation (regex layer)
+# =============================================================================
 
 
 def test_validate_custom_code_import_os():
@@ -56,7 +59,9 @@ def test_validate_custom_code_clean():
     validate_custom_code(code)
 
 
+# =============================================================================
 # Phase 4.2: Test __builtins__ restriction in execution
+# =============================================================================
 
 
 def test_custom_code_compile_valid():
@@ -92,3 +97,191 @@ async def test_custom_code_guardrail_apply():
 
 # The RBAC endpoint tests are harder to write right here, but the core security
 # validations are fully covered by the simple tests above.
+
+
+# =============================================================================
+# Phase 4.3: AST-based validation tests (defense-in-depth)
+# =============================================================================
+
+
+class TestASTValidation:
+    """Tests for AST-based security validation layer."""
+
+    def test_ast_blocks_import_statement(self):
+        code = "import os"
+        with pytest.raises(CustomCodeValidationError, match="import"):
+            _validate_ast(code)
+
+    def test_ast_blocks_from_import(self):
+        code = "from os import system"
+        with pytest.raises(CustomCodeValidationError, match="import"):
+            _validate_ast(code)
+
+    def test_ast_blocks_exec_call(self):
+        code = "def f():\n    exec('evil')"
+        with pytest.raises(CustomCodeValidationError, match="exec"):
+            _validate_ast(code)
+
+    def test_ast_blocks_eval_call(self):
+        code = "def f():\n    eval('evil')"
+        with pytest.raises(CustomCodeValidationError, match="eval"):
+            _validate_ast(code)
+
+    def test_ast_blocks_compile_call(self):
+        code = "def f():\n    compile('x', '', 'exec')"
+        with pytest.raises(CustomCodeValidationError, match="compile"):
+            _validate_ast(code)
+
+    def test_ast_blocks_open_call(self):
+        code = "def f():\n    open('/etc/passwd')"
+        with pytest.raises(CustomCodeValidationError, match="open"):
+            _validate_ast(code)
+
+    def test_ast_blocks_getattr_call(self):
+        code = "def f():\n    getattr(x, 'y')"
+        with pytest.raises(CustomCodeValidationError, match="getattr"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_class_attr(self):
+        code = "def f():\n    x = ''.__class__"
+        with pytest.raises(CustomCodeValidationError, match="__class__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_subclasses(self):
+        code = "def f():\n    x.__subclasses__()"
+        with pytest.raises(CustomCodeValidationError, match="__subclasses__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_globals(self):
+        code = "def f():\n    f.__globals__"
+        with pytest.raises(CustomCodeValidationError, match="__globals__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_builtins(self):
+        code = "def f():\n    x.__builtins__"
+        with pytest.raises(CustomCodeValidationError, match="__builtins__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_code(self):
+        code = "def f():\n    f.__code__"
+        with pytest.raises(CustomCodeValidationError, match="__code__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_mro(self):
+        code = "def f():\n    x.__mro__"
+        with pytest.raises(CustomCodeValidationError, match="__mro__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_bases(self):
+        code = "def f():\n    x.__bases__"
+        with pytest.raises(CustomCodeValidationError, match="__bases__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_dict(self):
+        code = "def f():\n    x.__dict__"
+        with pytest.raises(CustomCodeValidationError, match="__dict__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_global_statement(self):
+        code = "def f():\n    global x"
+        with pytest.raises(CustomCodeValidationError, match="global statement"):
+            _validate_ast(code)
+
+    def test_ast_blocks_type_call(self):
+        """type() can be used to dynamically create classes for sandbox escape."""
+        code = "def f():\n    type('X', (), {})"
+        with pytest.raises(CustomCodeValidationError, match="type"):
+            _validate_ast(code)
+
+    def test_ast_allows_safe_code(self):
+        """Valid guardrail code should pass AST validation."""
+        code = """
+def apply_guardrail(inputs, request_data, input_type):
+    for text in inputs["texts"]:
+        if regex_match(text, r"\\d{3}-\\d{2}-\\d{4}"):
+            return block("SSN detected")
+    return allow()
+"""
+        # Should not raise
+        _validate_ast(code)
+
+    def test_ast_allows_closures(self):
+        """Closures within guardrail code should be allowed."""
+        code = """
+def apply_guardrail(inputs, request_data, input_type):
+    def check(text):
+        return "bad" in text
+    for text in inputs["texts"]:
+        if check(text):
+            return block("Bad content")
+    return allow()
+"""
+        # Should not raise
+        _validate_ast(code)
+
+    def test_ast_allows_safe_builtins_in_primitives(self):
+        """len, str, int, etc. from primitives should be allowed."""
+        code = """
+def apply_guardrail(inputs, request_data, input_type):
+    count = len(inputs["texts"])
+    name = str(count)
+    return allow()
+"""
+        # Should not raise
+        _validate_ast(code)
+
+    def test_ast_handles_syntax_error_gracefully(self):
+        """Syntax errors should not cause AST validation to fail -- they'll be caught at compile time."""
+        code = "def f(\n"
+        # Should not raise (syntax errors are caught later during compile())
+        _validate_ast(code)
+
+
+class TestIntegrationRegexAndAST:
+    """Integration tests verifying both layers work together."""
+
+    def test_both_layers_block_import(self):
+        code = "import os\ndef apply_guardrail(i, r, t):\n    return allow()"
+        with pytest.raises(CustomCodeValidationError):
+            validate_custom_code(code)
+
+    def test_regex_catches_string_pattern_os_dot(self):
+        """Regex layer catches os. usage even without import."""
+        code = "def apply_guardrail(i, r, t):\n    os.system('ls')\n    return allow()"
+        with pytest.raises(CustomCodeValidationError, match="os module"):
+            validate_custom_code(code)
+
+    def test_ast_catches_dunder_chain_attack(self):
+        """AST catches the classic ().__class__.__bases__[0].__subclasses__() attack."""
+        # This bypasses some regex patterns due to chaining but AST catches each attribute
+        code = "def f():\n    x = ().__class__"
+        with pytest.raises(CustomCodeValidationError, match="__class__"):
+            validate_custom_code(code)
+
+    def test_clean_guardrail_passes_both_layers(self):
+        """A well-formed guardrail passes both validation layers."""
+        code = """
+def apply_guardrail(inputs, request_data, input_type):
+    for text in inputs["texts"]:
+        if contains(text, "secret"):
+            return block("Secret content detected")
+    return allow()
+"""
+        # Should not raise
+        validate_custom_code(code)
+
+    def test_async_guardrail_passes_both_layers(self):
+        """An async guardrail with http calls passes validation."""
+        code = """
+async def apply_guardrail(inputs, request_data, input_type):
+    for text in inputs["texts"]:
+        response = await http_post(
+            "https://api.example.com/check",
+            body={"text": text}
+        )
+        if response["success"] and response["body"].get("flagged"):
+            return block("Flagged by API")
+    return allow()
+"""
+        # Should not raise
+        validate_custom_code(code)

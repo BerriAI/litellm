@@ -153,8 +153,20 @@ class CustomCodeGuardrail(CustomGuardrail):
         # CRITICAL: Restrict __builtins__ to prevent sandbox escape
         exec_globals["__builtins__"] = {}
 
+        # Security note: exec() is used here intentionally to run admin-supplied
+        # guardrail code. This is protected by:
+        # 1. RBAC: Only PROXY_ADMIN users can configure custom code guardrails
+        # 2. Regex validation: validate_custom_code() blocks dangerous patterns
+        # 3. AST validation: _validate_ast() blocks dangerous constructs
+        # 4. Empty __builtins__: Prevents access to dangerous built-in functions
+        verbose_proxy_logger.warning(
+            "Executing custom guardrail code in restricted sandbox "
+            f"(guardrail='{self.guardrail_name}'). "
+            "This is an admin-only operation."
+        )
+
         # Execute the user code in the restricted environment
-        exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
+        exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)  # noqa: S102
 
         # Extract the apply_guardrail function
         if "apply_guardrail" not in exec_globals:
