@@ -195,7 +195,7 @@ Article 50 applies to **all AI systems that interact directly with users**, not 
 LiteLLM itself does not handle user-facing disclosure — it operates at the API gateway layer. Your application must implement the disclosure:
 
 ```python
-# Example: Add AI disclosure header to responses
+# Example: Add AI disclosure fields to your API response payload
 response = litellm.completion(model="gpt-4", messages=messages)
 
 # Your application layer adds the disclosure
