@@ -7095,6 +7095,24 @@ class Router:
             else:
                 del self.team_model_to_deployment_indices[key]
 
+    def _update_team_model_index(self, model: dict, idx: int) -> None:
+        """
+        Helper to update team_model_to_deployment_indices for a single deployment.
+
+        Parameters:
+        - model: dict - the deployment to index
+        - idx: int - the index in model_list
+        """
+        team_id = model.get("model_info", {}).get("team_id")
+        team_public_model_name = model.get("model_info", {}).get(
+            "team_public_model_name"
+        )
+        if team_id and team_public_model_name:
+            key = (team_id, team_public_model_name)
+            if key not in self.team_model_to_deployment_indices:
+                self.team_model_to_deployment_indices[key] = []
+            self.team_model_to_deployment_indices[key].append(idx)
+
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
     ) -> None:
@@ -7124,15 +7142,7 @@ class Router:
             self.model_name_to_deployment_indices[model_name].append(idx)
 
         # Update team_model index for O(1) team-scoped lookup
-        team_id = model.get("model_info", {}).get("team_id")
-        team_public_model_name = model.get("model_info", {}).get(
-            "team_public_model_name"
-        )
-        if team_id and team_public_model_name:
-            key = (team_id, team_public_model_name)
-            if key not in self.team_model_to_deployment_indices:
-                self.team_model_to_deployment_indices[key] = []
-            self.team_model_to_deployment_indices[key].append(idx)
+        self._update_team_model_index(model, idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -7973,15 +7983,7 @@ class Router:
                     self.model_name_to_deployment_indices[model_name] = []
                 self.model_name_to_deployment_indices[model_name].append(idx)
 
-            team_id = model.get("model_info", {}).get("team_id")
-            team_public_model_name = model.get("model_info", {}).get(
-                "team_public_model_name"
-            )
-            if team_id and team_public_model_name:
-                key = (team_id, team_public_model_name)
-                if key not in self.team_model_to_deployment_indices:
-                    self.team_model_to_deployment_indices[key] = []
-                self.team_model_to_deployment_indices[key].append(idx)
+            self._update_team_model_index(model, idx)
 
     def _build_model_id_to_deployment_index_map(self, model_list: list):
         """
