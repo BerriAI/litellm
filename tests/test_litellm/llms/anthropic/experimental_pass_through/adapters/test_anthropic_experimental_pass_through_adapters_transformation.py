@@ -2111,3 +2111,16 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+
+
+def test_translate_anthropic_tool_choice_none():
+    """
+    Regression test for issue #24443.
+
+    tool_choice={"type": "none"} should be translated to "none" for OpenAI format,
+    not raise a ValueError.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
+    assert result == "none"
