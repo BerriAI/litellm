@@ -919,7 +919,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
         )
 
         create_assistant_data = validate_azure_request_payload(create_assistant_data)
-        response = await azure_openai_client.beta.assistants.create(**create_assistant_data)
+        response = await azure_openai_client.beta.assistants.create(
+            **create_assistant_data
+        )
         return response
 
     def create_assistants(
@@ -986,7 +988,9 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        response = await azure_openai_client.beta.assistants.delete(
+            assistant_id=assistant_id
+        )
         return response
 
     def delete_assistant(

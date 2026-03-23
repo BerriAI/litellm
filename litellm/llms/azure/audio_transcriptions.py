@@ -143,15 +143,19 @@ class AzureAudioTranscription(AzureChatCompletion):
                 input=f"audio_file_{uuid.uuid4()}",
                 api_key=async_azure_client.api_key,
                 additional_args={
-                    "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
+                    "headers": {
+                        "Authorization": f"Bearer {async_azure_client.api_key}"
+                    },
                     "api_base": async_azure_client._base_url._uri_reference,
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
             )
 
-            raw_response = await async_azure_client.audio.transcriptions.with_raw_response.create(
-                **data, timeout=timeout
+            raw_response = (
+                await async_azure_client.audio.transcriptions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
             )  # type: ignore
 
             headers = dict(raw_response.headers)
@@ -169,7 +173,9 @@ class AzureAudioTranscription(AzureChatCompletion):
                 input=get_audio_file_name(audio_file),
                 api_key=api_key,
                 additional_args={
-                    "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
+                    "headers": {
+                        "Authorization": f"Bearer {async_azure_client.api_key}"
+                    },
                     "api_base": async_azure_client._base_url._uri_reference,
                     "atranscription": True,
                     "complete_input_dict": data,
