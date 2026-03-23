@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.health_check_utils import _create_health_check_response
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -29,6 +30,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
     _clean_endpoint_data,
+    _get_health_check_attempts,
+    _is_successful_health_check_result,
+    _resolve_health_check_mode,
+    _resolve_health_check_strategy,
+    _run_model_health_check,
+    _run_single_health_check_attempt,
     _update_litellm_params_for_health_check,
     perform_health_check,
     run_with_timeout,
@@ -109,6 +116,55 @@ def _resolve_os_environ_variables(params: dict) -> dict:
                     dst.append(item)
 
     return resolved_root
+
+
+async def _run_test_connection_attempt(
+    litellm_params: dict,
+    mode: Optional[
+        Literal[
+            "chat",
+            "completion",
+            "embedding",
+            "audio_speech",
+            "audio_transcription",
+            "image_generation",
+            "video_generation",
+            "batch",
+            "rerank",
+            "realtime",
+            "responses",
+            "ocr",
+        ]
+    ],
+    stream: bool,
+) -> dict:
+    """
+    Run a single UI test-connection attempt.
+
+    Some OpenAI-compatible relays only succeed on the real streamed chat path,
+    while ahealth_check() still behaves like a non-stream probe. For chat models
+    explicitly marked stream-only, use streamed acompletion() to mirror the
+    successful manual request path used by the user.
+    """
+    if mode == "chat" and stream is True:
+        response = await run_with_timeout(
+            litellm.acompletion(
+                **litellm_params,
+                stream=True,
+            ),
+            HEALTH_CHECK_TIMEOUT_SECONDS,
+        )
+        response_headers: dict = (
+            getattr(response, "_hidden_params", {}).get("headers", {}) or {}
+        )
+        return _create_health_check_response(response_headers)
+
+    return await _run_single_health_check_attempt(
+        litellm_params=litellm_params,
+        mode=mode,
+        stream=stream,
+        timeout=HEALTH_CHECK_TIMEOUT_SECONDS,
+    )
 
 
 def get_callback_identifier(callback):
@@ -805,6 +861,82 @@ async def _perform_health_check_and_save(
     }
 
 
+async def _perform_single_model_health_check_and_save(
+    deployment: dict,
+    details,
+    prisma_client,
+    start_time,
+    user_id,
+    model_id=None,
+):
+    litellm_params = copy.deepcopy(deployment["litellm_params"])
+    model_info = copy.deepcopy(deployment.get("model_info") or {})
+    health_check_mode = _resolve_health_check_mode(model_info)
+    timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+    effective_litellm_params = _update_litellm_params_for_health_check(
+        model_info=model_info,
+        litellm_params=litellm_params,
+    )
+
+    attempted_modes: list[str] = []
+    result: dict = {"error": "Health check did not run"}
+
+    for attempt_mode, stream in [("non_stream", False), ("stream", True)]:
+        attempted_modes.append(attempt_mode)
+        result = await _run_single_health_check_attempt(
+            litellm_params=copy.deepcopy(effective_litellm_params),
+            mode=health_check_mode,
+            stream=stream,
+            timeout=timeout,
+        )
+        if _is_successful_health_check_result(result):
+            result = {
+                **result,
+                "health_check_strategy": "non_stream_then_stream",
+                "health_check_attempted_modes": attempted_modes,
+                "health_check_result_mode": attempt_mode,
+            }
+            break
+    else:
+        result = {
+            **result,
+            "health_check_strategy": "non_stream_then_stream",
+            "health_check_attempted_modes": attempted_modes,
+            "health_check_result_mode": None,
+        }
+
+    if _is_successful_health_check_result(result):
+        healthy_endpoints = [_clean_endpoint_data({**effective_litellm_params, **result}, details)]
+        unhealthy_endpoints = []
+    else:
+        healthy_endpoints = []
+        unhealthy_endpoints = [
+            _clean_endpoint_data({**effective_litellm_params, **result}, details)
+        ]
+
+    if prisma_client is not None:
+        model_name_for_db = deployment.get("model_name")
+        if model_name_for_db is not None:
+            asyncio.create_task(
+                _save_health_check_to_db(
+                    prisma_client,
+                    model_name_for_db,
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    start_time,
+                    user_id,
+                    model_id=model_id,
+                )
+            )
+
+    return {
+        "healthy_endpoints": healthy_endpoints,
+        "unhealthy_endpoints": unhealthy_endpoints,
+        "healthy_count": len(healthy_endpoints),
+        "unhealthy_count": len(unhealthy_endpoints),
+    }
+
+
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -845,16 +977,26 @@ async def health_endpoint(
     )
 
     start_time = time.time()
+    selected_model_list = None
 
     # Handle model_id parameter - convert to model name for health check
     target_model = model
+    selected_deployment = None
     if model_id and not model:
         # Use get_deployment from router to find the model name
         if llm_router is not None:
             try:
                 deployment = llm_router.get_deployment(model_id=model_id)
                 if deployment is not None:
+                    selected_deployment = deployment.to_json(exclude_none=True)
                     target_model = deployment.model_name
+                    deployments = llm_router.get_model_list(model_name=target_model)
+                    if deployments:
+                        selected_model_list = [
+                            item
+                            for item in deployments
+                            if (item.get("model_info") or {}).get("id") == model_id
+                        ]
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -893,7 +1035,11 @@ async def health_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
-        _llm_model_list = copy.deepcopy(llm_model_list)
+        _llm_model_list = (
+            copy.deepcopy(selected_model_list)
+            if selected_model_list is not None
+            else copy.deepcopy(llm_model_list)
+        )
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
         if len(user_api_key_dict.models) > 0:
             pass
@@ -902,6 +1048,15 @@ async def health_endpoint(
         if use_background_health_checks:
             return health_check_results
         else:
+            if selected_deployment is not None:
+                return await _perform_single_model_health_check_and_save(
+                    deployment=selected_deployment,
+                    details=health_check_details,
+                    prisma_client=prisma_client,
+                    start_time=start_time,
+                    user_id=user_api_key_dict.user_id,
+                    model_id=model_id,
+                )
             return await _perform_health_check_and_save(
                 model_list=_llm_model_list,
                 target_model=target_model,
@@ -1511,6 +1666,7 @@ async def test_model_connection(
         # Get model name from litellm_params
         request_litellm_params = litellm_params or {}
         model_name = request_litellm_params.get("model")
+        deployment_model_info: dict = model_info or {}
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
@@ -1538,15 +1694,22 @@ async def test_model_connection(
                     config_litellm_params = dict(
                         deployments[0].get("litellm_params", {})
                     )
+                    deployment_model_info = dict(
+                        deployments[0].get("model_info", {}) or {}
+                    )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
                     "Proceeding with request params only."
                 )
 
+        merged_model_info = {**deployment_model_info, **(model_info or {})}
+
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
         merged_litellm_params = {**config_litellm_params, **request_litellm_params}
+        if config_litellm_params.get("model") is not None:
+            merged_litellm_params["model"] = config_litellm_params["model"]
 
         # Resolve os.environ/ environment variables in any remaining request params
         # This handles cases where user explicitly passes os.environ/ values to override config
@@ -1557,7 +1720,7 @@ async def test_model_connection(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=model_info,
+                model_info=merged_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1565,20 +1728,40 @@ async def test_model_connection(
         )
         # Include health_check_params if provided
         litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
+            model_info=merged_model_info,
             litellm_params=litellm_params,
         )
-        mode = mode or litellm_params.pop("mode", None)
-
-        result = await run_with_timeout(
-            litellm.ahealth_check(
-                model_params=litellm_params,
-                mode=mode,
-                prompt="test from litellm",
-                input=["test from litellm"],
-            ),
-            HEALTH_CHECK_TIMEOUT_SECONDS,
+        resolved_mode = mode or litellm_params.pop("mode", None)
+        health_check_mode = _resolve_health_check_mode(
+            {**merged_model_info, **({"mode": resolved_mode} if resolved_mode else {})}
         )
+        strategy = _resolve_health_check_strategy(merged_model_info)
+        attempts = _get_health_check_attempts(strategy)
+        attempted_modes: list[str] = []
+        result: dict = {"error": "Health check did not run"}
+
+        for attempt_mode, stream in attempts:
+            attempted_modes.append(attempt_mode)
+            result = await _run_test_connection_attempt(
+                litellm_params=litellm_params,
+                mode=health_check_mode,
+                stream=stream,
+            )
+            if _is_successful_health_check_result(result):
+                result = {
+                    **result,
+                    "health_check_strategy": strategy,
+                    "health_check_attempted_modes": attempted_modes,
+                    "health_check_result_mode": attempt_mode,
+                }
+                break
+        else:
+            result = {
+                **result,
+                "health_check_strategy": strategy,
+                "health_check_attempted_modes": attempted_modes,
+                "health_check_result_mode": None,
+            }
 
         # Clean the result for display
         cleaned_result = _clean_endpoint_data(

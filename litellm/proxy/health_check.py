@@ -6,7 +6,7 @@ import random
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import litellm
 
@@ -24,6 +24,30 @@ ILLEGAL_DISPLAY_PARAMS = [
 ]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
+HEALTH_CHECK_STRATEGY_NON_STREAM_ONLY = "non_stream_only"
+HEALTH_CHECK_STRATEGY_STREAM_ONLY = "stream_only"
+HEALTH_CHECK_STRATEGY_NON_STREAM_THEN_STREAM = "non_stream_then_stream"
+SUPPORTED_HEALTH_CHECK_STRATEGIES = {
+    HEALTH_CHECK_STRATEGY_NON_STREAM_ONLY,
+    HEALTH_CHECK_STRATEGY_STREAM_ONLY,
+    HEALTH_CHECK_STRATEGY_NON_STREAM_THEN_STREAM,
+}
+HealthCheckMode = Optional[
+    Literal[
+        "chat",
+        "completion",
+        "embedding",
+        "audio_speech",
+        "audio_transcription",
+        "image_generation",
+        "video_generation",
+        "batch",
+        "rerank",
+        "realtime",
+        "responses",
+        "ocr",
+    ]
+]
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -98,21 +122,143 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
+def _resolve_health_check_strategy(model_info: dict) -> str:
+    strategy = model_info.get("health_check_strategy")
+    if strategy in SUPPORTED_HEALTH_CHECK_STRATEGIES:
+        return strategy
+
+    health_check_stream = model_info.get("health_check_stream", None)
+    if health_check_stream is True:
+        return HEALTH_CHECK_STRATEGY_STREAM_ONLY
+    if health_check_stream is False:
+        return HEALTH_CHECK_STRATEGY_NON_STREAM_ONLY
+
+    return HEALTH_CHECK_STRATEGY_NON_STREAM_THEN_STREAM
+
+
+def _resolve_health_check_mode(model_info: dict) -> HealthCheckMode:
+    mode = model_info.get("mode", None)
+    if mode == "chat":
+        return "chat"
+    if mode == "completion":
+        return "completion"
+    if mode == "embedding":
+        return "embedding"
+    if mode == "audio_speech":
+        return "audio_speech"
+    if mode == "audio_transcription":
+        return "audio_transcription"
+    if mode == "image_generation":
+        return "image_generation"
+    if mode == "video_generation":
+        return "video_generation"
+    if mode == "batch":
+        return "batch"
+    if mode == "rerank":
+        return "rerank"
+    if mode == "realtime":
+        return "realtime"
+    if mode == "responses":
+        return "responses"
+    if mode == "ocr":
+        return "ocr"
+    return None
+
+
+def _get_health_check_attempts(strategy: str) -> list[tuple[str, bool]]:
+    if strategy == HEALTH_CHECK_STRATEGY_STREAM_ONLY:
+        return [("stream", True)]
+    if strategy == HEALTH_CHECK_STRATEGY_NON_STREAM_ONLY:
+        return [("non_stream", False)]
+    return [("non_stream", False), ("stream", True)]
+
+
+def _is_successful_health_check_result(result: object) -> bool:
+    return isinstance(result, dict) and "error" not in result
+
+
+def _add_health_check_metadata(
+    result: dict,
+    strategy: str,
+    attempt_mode: Optional[str],
+    attempted_modes: list[str],
+) -> dict:
+    return {
+        **result,
+        "health_check_strategy": strategy,
+        "health_check_attempted_modes": attempted_modes,
+        "health_check_result_mode": attempt_mode,
+    }
+
+
+async def _run_single_health_check_attempt(
+    litellm_params: dict,
+    mode: HealthCheckMode,
+    stream: bool,
+    timeout: float,
+) -> dict:
+    try:
+        return await run_with_timeout(
+            litellm.ahealth_check(
+                litellm_params,
+                mode=mode,
+                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
+                input=["test from litellm"],
+                stream=stream,
+            ),
+            timeout,
+        )
+    except Exception as exc:
+        return {"error": str(exc), "mode_error": str(exc)}
+
+
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info = model.get("model_info", {})
-    mode = model_info.get("mode", None)
+    mode = _resolve_health_check_mode(model_info)
     litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
 
-    return await run_with_timeout(
-        litellm.ahealth_check(
-            litellm_params,
+    strategy = _resolve_health_check_strategy(model_info)
+    attempts = _get_health_check_attempts(strategy)
+    attempted_modes: list[str] = []
+    last_result: dict = {"error": "Health check did not run"}
+    start_time = time.monotonic()
+
+    for attempt_mode, stream in attempts:
+        attempted_modes.append(attempt_mode)
+        elapsed = time.monotonic() - start_time
+        remaining_timeout = timeout - elapsed
+
+        if remaining_timeout <= 0:
+            last_result = {
+                "error": "Timeout exceeded",
+                "mode_error": "Timeout exceeded before fallback completed",
+            }
+            break
+
+        result = await _run_single_health_check_attempt(
+            litellm_params=litellm_params,
             mode=mode,
-            prompt=DEFAULT_HEALTH_CHECK_PROMPT,
-            input=["test from litellm"],
-        ),
-        timeout,
+            stream=stream,
+            timeout=remaining_timeout,
+        )
+
+        if _is_successful_health_check_result(result):
+            return _add_health_check_metadata(
+                result=result,
+                strategy=strategy,
+                attempt_mode=attempt_mode,
+                attempted_modes=attempted_modes,
+            )
+
+        last_result = result
+
+    return _add_health_check_metadata(
+        result=last_result,
+        strategy=strategy,
+        attempt_mode=None,
+        attempted_modes=attempted_modes,
     )
 
 
