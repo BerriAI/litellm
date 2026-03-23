@@ -8781,7 +8781,9 @@ class Router:
             model = _model_from_alias
 
         if model not in self.model_names:
-            # Check for team-specific deployments by team_public_model_name
+            # Check for team-specific deployments by team_public_model_name.
+            # This intentionally takes priority over team pattern routers below,
+            # so that named team deployments shadow wildcard/pattern routes.
             if request_team_id is not None:
                 team_deployments = self._get_all_deployments(
                     model_name=model, team_id=request_team_id
