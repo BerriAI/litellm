@@ -288,3 +288,66 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+@pytest.mark.asyncio
+async def test_vertex_transformation_field_casing():
+    """
+    Tests that structural fields are camelCased for Vertex AI,
+    while user-defined logic (args, properties, labels) preserves snake_case.
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _transform_part_to_httpx_format
+
+    # 1. Test Multimodal field naming
+    part = {
+        "inline_data": {
+            "mime_type": "image/png",
+            "data": "base64data"
+        }
+    }
+    transformed = _transform_part_to_httpx_format(part)
+    assert "inlineData" in transformed
+    assert transformed["inlineData"]["mimeType"] == "image/png"
+
+    # 2. Test functionCall with args preservation
+    part = {
+        "function_call": {
+            "name": "my_func",
+            "args": {
+                "security_risk": "high",
+                "other_param": 123
+            }
+        }
+    }
+    transformed = _transform_part_to_httpx_format(part)
+    assert "functionCall" in transformed
+    assert "args" in transformed["functionCall"]
+    # Keys in args should NOT be camelCased
+    assert "security_risk" in transformed["functionCall"]["args"]
+    assert "other_param" in transformed["functionCall"]["args"]
+
+    # 3. Test tools with functionDeclarations and parameters schema preservation
+    part = {
+        "tools": [
+            {
+                "function_declarations": [
+                    {
+                        "name": "my_func",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "security_risk": {"type": "string", "mime_type": "text/plain"}
+                            },
+                            "required": ["security_risk"]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    transformed = _transform_part_to_httpx_format(part)
+    schema = transformed["tools"][0]["functionDeclarations"][0]["parameters"]
+    # Property name should stay snake_case
+    assert "security_risk" in schema["properties"]
+    # Internal schema keyword 'mime_type' should become 'mimeType'
+    assert "mimeType" in schema["properties"]["security_risk"]
+    # 'required' list strings should stay snake_case
+    assert "security_risk" in schema["required"]

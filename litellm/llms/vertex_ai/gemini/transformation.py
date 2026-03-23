@@ -243,6 +243,42 @@ def _camel_to_snake(camel_str: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
 
 
+def _transform_part_to_httpx_format(part: dict) -> dict:
+    """
+    Recursively transform a Gemini part (PartType) to HttpxPartType (camelCase)
+    Required for Vertex AI REST API.
+    Google AI Studio REST API uses snake_case, so this is only for Vertex AI.
+    """
+    new_part = {}
+    for k, v in part.items():
+        # Handle exceptions for keys that should not be camelCased or have special mapping
+        # These are user-defined keys that should be preserved.
+        if k in ["args", "response", "properties", "labels"] and isinstance(v, dict):
+            camel_k = _snake_to_camel(k)
+            if k == "properties":
+                # 'properties' values are Schema objects, so they SHOULD be transformed recursively
+                new_part[camel_k] = {
+                    pk: _transform_part_to_httpx_format(pv) if isinstance(pv, dict) else pv
+                    for pk, pv in v.items()
+                }
+            else:
+                # 'args', 'response', 'labels' keys are user-defined and should NOT be transformed
+                new_part[camel_k] = v
+            continue
+
+        camel_k = _snake_to_camel(k)
+        if isinstance(v, dict):
+            new_part[camel_k] = _transform_part_to_httpx_format(v)
+        elif isinstance(v, list):
+            new_part[camel_k] = [
+                _transform_part_to_httpx_format(i) if isinstance(i, dict) else i
+                for i in v
+            ]
+        else:
+            new_part[camel_k] = v
+    return new_part
+
+
 def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
     """
     Get the equivalent key from available keys, checking both camelCase and snake_case variants
@@ -770,6 +806,8 @@ def _transform_request_body(  # noqa: PLR0915
     except Exception as e:
         raise e
 
+    if custom_llm_provider != LlmProviders.GEMINI:
+        return _transform_part_to_httpx_format(data)  # type: ignore
     return data
 
 
