@@ -8,6 +8,12 @@ from litellm.types.utils import LiteLLMFineTuningJob
 
 _AZURE_STATUS_MAP = {
     "pending": "queued",
+    "notRunning": "queued",
+    "running": "running",
+    "succeeded": "succeeded",
+    "failed": "failed",
+    "canceled": "cancelled",
+    "canceling": "cancelled",
 }
 
 

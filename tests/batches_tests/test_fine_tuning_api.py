@@ -616,11 +616,11 @@ async def test_mock_openai_retrieve_fine_tune_job():
 @pytest.mark.asyncio
 async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
     """Test that Azure-specific parameters are passed through extra_body"""
-    from openai import AsyncAzureOpenAI
     from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
     from openai.types.fine_tuning.fine_tuning_job import Hyperparameters as OAIHyperparameters
+    from litellm.types.utils import LiteLLMFineTuningJob
 
-    mock_response = FineTuningJob(
+    mock_response = LiteLLMFineTuningJob(
         id="ft-azure-123",
         model="gpt-4.1-mini-2025-04-14",
         created_at=1677610602,
@@ -634,8 +634,11 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
         result_files=[],
     )
 
+    async def mock_async_create(*args, **kwargs):
+        return mock_response
+
     with patch("litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job") as mock_create:
-        mock_create.return_value = mock_response
+        mock_create.return_value = mock_async_create()
 
         response = await litellm.acreate_fine_tuning_job(
             model="gpt-4.1-mini-2025-04-14",

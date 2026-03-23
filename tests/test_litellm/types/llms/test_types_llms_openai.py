@@ -438,3 +438,18 @@ def test_normalize_fine_tuning_job_dict_openai_unchanged():
     data = {"organization_id": None, "result_files": None, "status": "pending"}
     out = _normalize_fine_tuning_job_dict(data, is_azure=False)
     assert out is data
+
+
+def test_openai_file_object_accepts_pending_status():
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    file_obj = OpenAIFileObject(
+        id="file-123",
+        bytes=1024,
+        created_at=1677610602,
+        filename="train.jsonl",
+        object="file",
+        purpose="fine-tune",
+        status="pending",
+    )
+    assert file_obj.status == "pending"
