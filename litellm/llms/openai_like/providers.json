@@ -105,6 +105,7 @@
   "rapid_mlx": {
     "base_url": "http://localhost:8000/v1",
     "api_key_env": "RAPID_MLX_API_KEY",
-    "default_api_key": "not-needed"
+    "default_api_key": "not-needed",
+    "api_base_env": "RAPID_MLX_API_BASE"
   }
 }
