@@ -1903,6 +1903,13 @@ def test_extract_credential_from_entry_non_dict_value():
     assert _extract_credential_from_entry(entry) is None
 
 
+def test_extract_credential_from_entry_non_dict_entry():
+    """Non-dict entry (e.g. string) should return None, not crash."""
+    assert _extract_credential_from_entry("my-cred-name") is None
+    assert _extract_credential_from_entry(["a", "list"]) is None
+    assert _extract_credential_from_entry(42) is None
+
+
 # --- Unit tests for _resolve_credential_from_model_config ---
 
 
