@@ -1742,45 +1742,40 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     # Add a provider-specific field to test __pydantic_extra__ preservation
     corrupted_chunk.sap_extra_field = "sap-value"
 
-    try:
-        # Use a DIFFERENT object as the target model_response
-        fresh_model_response = ModelResponseStream(
-            id="fresh",
-            created=1742056047,
-            model="sap-ai-core/test-model",
-            object="chat.completion.chunk",
-            choices=[
-                StreamingChoices(
-                    finish_reason=None,
-                    index=0,
-                    delta=Delta(content="test content", role="assistant"),
-                )
-            ],
-        )
+    # Use a DIFFERENT object as the target model_response
+    fresh_model_response = ModelResponseStream(
+        id="fresh",
+        created=1742056047,
+        model="sap-ai-core/test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="test content", role="assistant"),
+            )
+        ],
+    )
 
-        # Verify fresh_model_response.model_dump() still works normally
-        # (proves instance-level mock doesn't affect other instances)
-        assert callable(fresh_model_response.model_dump)
-        test_dump = fresh_model_response.model_dump()
-        assert isinstance(test_dump, dict)
+    # Verify fresh_model_response.model_dump() still works normally
+    # (proves subclass approach doesn't affect other instances)
+    assert callable(fresh_model_response.model_dump)
+    test_dump = fresh_model_response.model_dump()
+    assert isinstance(test_dump, dict)
 
-        # Process the chunk through return_processed_chunk_logic which calls model_dump
-        result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
-            completion_obj={"content": "test content"},
-            response_obj={"original_chunk": corrupted_chunk},  # source of extra attrs
-            model_response=fresh_model_response,  # target (different object)
-        )
+    # Process the chunk through return_processed_chunk_logic which calls model_dump
+    result = initialized_custom_stream_wrapper.return_processed_chunk_logic(
+        completion_obj={"content": "test content"},
+        response_obj={"original_chunk": corrupted_chunk},  # source of extra attrs
+        model_response=fresh_model_response,  # target (different object)
+    )
 
-        # Should not raise TypeError and should successfully process the chunk
-        assert result is not None
-        assert result.choices[0].delta.content == "test content"
+    # Should not raise TypeError and should successfully process the chunk
+    assert result is not None
+    assert result.choices[0].delta.content == "test content"
 
-        # Now this assertion is meaningful: it verifies the attribute was actually COPIED
-        assert getattr(result, "sap_extra_field", None) == "sap-value"
-
-    finally:
-        # No cleanup needed - subclass approach doesn't mutate shared state
-        pass
+    # Now this assertion is meaningful: it verifies the attribute was actually COPIED
+    assert getattr(result, "sap_extra_field", None) == "sap-value"
 
     # Verify that result can still be serialized (model_dump method is not corrupted)
     result_dict = result.model_dump()
