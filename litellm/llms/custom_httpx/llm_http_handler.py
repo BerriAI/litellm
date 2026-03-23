@@ -2986,7 +2986,7 @@ class BaseLLMHTTPHandler:
                     "headers": transformed_request["upload_request"]["headers"],
                     "timeout": timeout,
                 }
-                if isinstance(upload_data, io.IOBase):
+                if hasattr(upload_data, "read") and hasattr(upload_data, "seek"):
                     upload_kwargs["content"] = upload_data
                 else:
                     upload_kwargs["data"] = upload_data
@@ -3023,7 +3023,9 @@ class BaseLLMHTTPHandler:
         ):
             # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
-            if isinstance(transformed_request, io.IOBase):
+            if hasattr(transformed_request, "read") and hasattr(
+                transformed_request, "seek"
+            ):
                 # Stream the IO object without loading it fully into memory
                 upload_kwargs: Dict[str, Any] = {
                     "url": api_base,
@@ -3154,7 +3156,7 @@ class BaseLLMHTTPHandler:
                     "headers": transformed_request["upload_request"]["headers"],
                     "timeout": timeout,
                 }
-                if isinstance(upload_data, io.IOBase):
+                if hasattr(upload_data, "read") and hasattr(upload_data, "seek"):
                     async_upload_kwargs["content"] = upload_data
                 else:
                     async_upload_kwargs["data"] = upload_data
@@ -3192,7 +3194,9 @@ class BaseLLMHTTPHandler:
         ):
             # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
-            if isinstance(transformed_request, io.IOBase):
+            if hasattr(transformed_request, "read") and hasattr(
+                transformed_request, "seek"
+            ):
                 # Stream the IO object without loading it fully into memory
                 async_upload_kwargs: Dict[str, Any] = {
                     "url": api_base,

@@ -2,12 +2,12 @@
 Common utility functions used for translating messages across providers
 """
 
-import io
 import mimetypes
 import re
 from os import PathLike
 from pathlib import Path
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Dict,
@@ -718,19 +718,19 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
                 filename = Path(str(file_content)).name
         with open(file_content, "rb") as f:
             content = f.read()
-    elif isinstance(file_content, io.IOBase):
-        # If it's a file-like object, keep it as-is to avoid loading the entire
-        # file into memory.  Callers that need bytes can call .read() themselves;
-        # callers streaming the data to an HTTP request should pass the object
-        # directly so the transfer is chunked.
-        if not filename and hasattr(file_content, "name"):
-            filename = Path(file_content.name).name
+    elif hasattr(file_content, "read") and hasattr(file_content, "seek"):
+        # Duck-type check covers io.IOBase subclasses AND SpooledTemporaryFile on
+        # Python < 3.11 (which does not inherit from io.IOBase but is still
+        # file-like).  Keep as-is to avoid loading the entire file into memory.
+        file_like = cast(IO[bytes], file_content)
+        if not filename and hasattr(file_like, "name"):
+            filename = Path(file_like.name).name
 
         # Compute file size via seek/tell so providers that need Content-Length
         # (e.g. Gemini resumable upload) don't have to load all bytes.
-        file_content.seek(0, 2)
-        file_size: int = file_content.tell()
-        file_content.seek(0)
+        file_like.seek(0, 2)
+        file_size: int = file_like.tell()
+        file_like.seek(0)
 
         return ExtractedFileData(
             filename=filename,

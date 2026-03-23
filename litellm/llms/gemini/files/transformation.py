@@ -126,7 +126,13 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         # Get file size — prefer the pre-computed value (available when content is
         # an IO[bytes] object so we didn't have to load all bytes into memory).
-        file_size = extracted_data.get("file_size") or len(extracted_data["content"])  # type: ignore[arg-type]
+        # Use explicit `is not None` to avoid treating a 0-byte file as falsy.
+        _precomputed = extracted_data.get("file_size")
+        file_size = (
+            _precomputed
+            if _precomputed is not None
+            else len(extracted_data["content"])  # type: ignore[arg-type]
+        )
 
         # Step 1: Initial resumable upload request
         headers = {
