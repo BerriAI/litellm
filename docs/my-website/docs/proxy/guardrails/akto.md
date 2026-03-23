@@ -69,11 +69,11 @@ Request → LiteLLM → Akto guardrail check (pre_call, awaited)
 |-----------|-------------|---------|-------------|
 | `akto_base_url` | `AKTO_GUARDRAIL_API_BASE` | *required* | Akto Guardrail API Base URL |
 | `akto_api_key` | `AKTO_API_KEY` | *required* | API key (sent as `Authorization` header) |
-| `akto_account_id` | `AKTO_ACCOUNT_ID` | `1000000` | Akto account id included in payload |
-| `akto_vxlan_id` | `AKTO_VXLAN_ID` | `0` | Akto vxlan id included in payload |
 | `unreachable_fallback` | — | `fail_closed` | `fail_open` or `fail_closed` |
 | `guardrail_timeout` | — | `5` | Timeout in seconds |
 | `default_on` | — | `true` (recommended) | Enables the guardrail entry by default |
+| — | `AKTO_ACCOUNT_ID` | `1000000` | Akto account id (env-var only) |
+| — | `AKTO_VXLAN_ID` | `0` | Akto vxlan id (env-var only) |
 
 ## 6. Error Handling
 
