@@ -179,10 +179,11 @@ class LiteLLM_Proxy_MCP_Handler:
                         if toolset is not None:
                             # Access control: only allow if the key explicitly grants this toolset.
                             if user_api_key_auth is not None:
-                                is_admin = (
-                                    getattr(user_api_key_auth, "user_role", None)
-                                    == "proxy_admin"
+                                from litellm.proxy.management_endpoints.common_utils import (
+                                    _user_has_admin_view,
                                 )
+
+                                is_admin = _user_has_admin_view(user_api_key_auth)
                                 if not is_admin:
                                     op = user_api_key_auth.object_permission
                                     granted = (
@@ -190,9 +191,11 @@ class LiteLLM_Proxy_MCP_Handler:
                                         if op
                                         else None
                                     )
+                                    # None means no grants configured → deny (consistent with
+                                    # fetch_mcp_toolsets which returns [] for unconfigured keys)
                                     if (
-                                        granted is not None
-                                        and toolset.toolset_id not in granted
+                                        granted is None
+                                        or toolset.toolset_id not in granted
                                     ):
                                         verbose_logger.debug(
                                             f"Key does not have access to toolset '{name}', skipping."

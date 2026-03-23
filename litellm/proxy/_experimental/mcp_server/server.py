@@ -2430,14 +2430,18 @@ if MCP_AVAILABLE:
         or set to a list that omits this toolset).  Admin keys always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
         # Access control: non-admin keys must have this toolset in their grant list.
-        is_admin = getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+        # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
+        is_admin = _user_has_admin_view(user_api_key_auth)
         if not is_admin:
             op = user_api_key_auth.object_permission
             granted = getattr(op, "mcp_toolsets", None) if op else None
-            # granted=None → no restriction (allow); granted=[] or list without toolset_id → deny
-            if granted is not None and toolset_id not in granted:
+            # granted=None → key has no explicit toolset grants → deny (same semantics as
+            # fetch_mcp_toolsets which returns [] for non-admin keys with no grants configured).
+            # granted=[] or list without toolset_id → also deny.
+            if granted is None or toolset_id not in granted:
                 raise HTTPException(
                     status_code=403,
                     detail=f"API key does not have access to toolset '{toolset_id}'.",
