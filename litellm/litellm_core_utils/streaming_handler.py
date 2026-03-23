@@ -57,6 +57,22 @@ IMAGE_ATTRIBUTE = "images"
 TOOL_CALLS_ATTRIBUTE = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE = "function_call"
 
+_SYNC_ITER_EXHAUSTED = object()
+
+
+def _next_sync_or_exhausted(it: Any) -> Any:
+    """
+    Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
+
+    asyncio.to_thread re-raises thread exceptions inside a coroutine, where PEP 479
+    converts StopIteration to RuntimeError before any except clause can catch it.
+    Returning a sentinel instead keeps StopIteration out of the coroutine boundary.
+    """
+    try:
+        return next(it)
+    except StopIteration:
+        return _SYNC_ITER_EXHAUSTED
+
 
 def is_async_iterable(obj: Any) -> bool:
     """
@@ -2128,7 +2144,9 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        if chunk is _SYNC_ITER_EXHAUSTED:
+                            raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
@@ -2188,22 +2206,36 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
+                _deferred_cb = getattr(
+                    self.logging_obj,
+                    "_on_deferred_stream_complete",
+                    None,
+                )
+                if _deferred_cb is not None:
+                    # Proxy has post-call guardrails — let the closure
+                    # run guardrails on the assembled response, then
+                    # fire logging with guardrail_information populated.
+                    self.logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    asyncio.create_task(
+                        _deferred_cb(complete_streaming_response, cache_hit)
+                    )
+                else:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+                    executor.submit(
+                        self.logging_obj.success_handler,
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                     )
-                )
-
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:

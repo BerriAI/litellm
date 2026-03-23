@@ -12,6 +12,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Type,
@@ -316,6 +317,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "audio",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -1119,6 +1121,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
+            elif param == "include_server_side_tool_invocations" and value is True:
+                optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
@@ -1359,6 +1363,67 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if signature is not None:
                 signatures.append(signature)
         return signatures if signatures else None
+
+    @staticmethod
+    def _extract_server_side_tool_invocations(
+        parts: List[HttpxPartType],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Extract server-side tool invocations (toolCall/toolResponse) from parts.
+
+        These are returned by Gemini when context circulation is enabled
+        (includeServerSideToolInvocations=true). They represent tools executed
+        server-side (e.g. Google Search) and must be circulated back in
+        subsequent turns for multi-turn coherence.
+
+        Returns:
+            List of server-side invocation dicts if any found, None otherwise.
+        """
+        invocations: List[Dict[str, Any]] = []
+        # Index toolCalls by id so we can pair them with responses
+        tool_calls_by_id: Dict[str, Dict[str, Any]] = {}
+        tool_responses_by_id: Dict[str, Dict[str, Any]] = {}
+
+        for part in parts:
+            if "toolCall" in part:
+                tc = part["toolCall"]
+                entry: Dict[str, Any] = {
+                    "tool_type": tc.get("toolType"),
+                    "id": tc.get("id"),
+                    "args": tc.get("args"),
+                }
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                tool_calls_by_id[tc.get("id", "")] = entry
+
+            elif "toolResponse" in part:
+                tr = part["toolResponse"]
+                entry = {
+                    "id": tr.get("id"),
+                    "tool_type": tr.get("toolType"),
+                    "response": tr.get("response"),
+                }
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                tool_responses_by_id[tr.get("id", "")] = entry
+
+        # Merge calls with their responses
+        for call_id, call_entry in tool_calls_by_id.items():
+            merged = dict(call_entry)
+            resp = tool_responses_by_id.pop(call_id, None)
+            if resp is not None:
+                merged["response"] = resp.get("response")
+                # Keep response signature if call didn't have one
+                if "thought_signature" not in merged and "thought_signature" in resp:
+                    merged["thought_signature"] = resp["thought_signature"]
+            invocations.append(merged)
+
+        # Any orphan responses (shouldn't happen, but be safe)
+        for resp_id, resp_entry in tool_responses_by_id.items():
+            invocations.append(resp_entry)
+
+        return invocations if invocations else None
 
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -1632,6 +1697,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_tokens: Optional[int] = None
         response_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         usage_metadata = completion_response["usageMetadata"]
+
+        def _get_token_count(detail: Mapping[str, Any]) -> int:
+            raw_token_count = detail.get("tokenCount", detail.get("token_count", 0))
+            return raw_token_count if isinstance(raw_token_count, int) else 0
+
         if "cachedContentTokenCount" in usage_metadata:
             cached_tokens = usage_metadata["cachedContentTokenCount"]
 
@@ -1641,10 +1711,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "responseTokensDetails" in usage_metadata:
             response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["responseTokensDetails"]:
-                if detail["modality"] == "TEXT":
-                    response_tokens_details.text_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "AUDIO":
-                    response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
+                modality = str(detail.get("modality", "")).upper()
+                token_count = _get_token_count(detail)
+                if modality == "TEXT":
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
+                    ) + token_count
+                elif modality == "AUDIO":
+                    response_tokens_details.audio_tokens = (
+                        response_tokens_details.audio_tokens or 0
+                    ) + token_count
 
         #########################################################
 
@@ -1653,16 +1729,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
             for detail in usage_metadata["candidatesTokensDetails"]:
-                modality = detail.get("modality")
-                token_count = detail.get("tokenCount", 0)
+                modality = str(detail.get("modality", "")).upper()
+                token_count = _get_token_count(detail)
                 if modality == "TEXT":
-                    response_tokens_details.text_tokens = token_count
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
+                    ) + token_count
                 elif modality == "AUDIO":
-                    response_tokens_details.audio_tokens = token_count
+                    response_tokens_details.audio_tokens = (
+                        response_tokens_details.audio_tokens or 0
+                    ) + token_count
                 elif modality == "IMAGE":
-                    response_tokens_details.image_tokens = token_count
+                    response_tokens_details.image_tokens = (
+                        response_tokens_details.image_tokens or 0
+                    ) + token_count
                 elif modality == "VIDEO":
-                    response_tokens_details.video_tokens = token_count
+                    response_tokens_details.video_tokens = (
+                        response_tokens_details.video_tokens or 0
+                    ) + token_count
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
         # candidatesTokenCount includes all modalities, so: text = total - (image + audio + video)
@@ -1686,14 +1770,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## Parse promptTokensDetails (total tokens by modality, includes cached + non-cached)
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
-                if detail["modality"] == "AUDIO":
-                    prompt_audio_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "TEXT":
-                    prompt_text_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "IMAGE":
-                    prompt_image_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "VIDEO":
-                    prompt_video_tokens = detail.get("tokenCount", 0)
+                modality = str(detail.get("modality", "")).upper()
+                token_count = _get_token_count(detail)
+                if modality == "AUDIO":
+                    prompt_audio_tokens = (prompt_audio_tokens or 0) + token_count
+                elif modality == "TEXT":
+                    prompt_text_tokens = (prompt_text_tokens or 0) + token_count
+                elif modality == "IMAGE":
+                    prompt_image_tokens = (prompt_image_tokens or 0) + token_count
+                elif modality == "VIDEO":
+                    prompt_video_tokens = (prompt_video_tokens or 0) + token_count
 
         ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
         ## When explicit caching is used, Gemini provides this field to show which modalities were cached
@@ -1704,14 +1790,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         if "cacheTokensDetails" in usage_metadata:
             for detail in usage_metadata["cacheTokensDetails"]:
-                if detail["modality"] == "AUDIO":
-                    cached_audio_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "TEXT":
-                    cached_text_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "IMAGE":
-                    cached_image_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "VIDEO":
-                    cached_video_tokens = detail.get("tokenCount", 0)
+                modality = str(detail.get("modality", "")).upper()
+                token_count = _get_token_count(detail)
+                if modality == "AUDIO":
+                    cached_audio_tokens = (cached_audio_tokens or 0) + token_count
+                elif modality == "TEXT":
+                    cached_text_tokens = (cached_text_tokens or 0) + token_count
+                elif modality == "IMAGE":
+                    cached_image_tokens = (cached_image_tokens or 0) + token_count
+                elif modality == "VIDEO":
+                    cached_video_tokens = (cached_video_tokens or 0) + token_count
 
         ## Calculate non-cached tokens by subtracting cached from total (per modality)
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
@@ -2018,6 +2106,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
         reasoning_content: Optional[str] = None
         thought_signatures: Optional[Any] = None
+        server_side_tool_invocations: Optional[List[Dict[str, Any]]] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -2064,6 +2153,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Extract thoughtSignatures from parts (can exist without thought: true)
                 thought_signatures = (
                     VertexGeminiConfig()._extract_thought_signatures_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
+                )
+
+                # Extract server-side tool invocations (context circulation)
+                server_side_tool_invocations = (
+                    VertexGeminiConfig._extract_server_side_tool_invocations(
                         parts=candidate["content"]["parts"]
                     )
                 )
@@ -2138,6 +2234,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if "provider_specific_fields" not in chat_completion_message:
                     chat_completion_message["provider_specific_fields"] = {}
                 chat_completion_message["provider_specific_fields"]["thought_signatures"] = thought_signatures  # type: ignore
+
+            # Store server-side tool invocations in provider_specific_fields
+            if server_side_tool_invocations is not None:
+                if "provider_specific_fields" not in chat_completion_message:
+                    chat_completion_message["provider_specific_fields"] = {}
+                chat_completion_message["provider_specific_fields"]["server_side_tool_invocations"] = server_side_tool_invocations  # type: ignore
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
@@ -3000,6 +3102,16 @@ class ModelResponseIterator:
                                 enhancements=None,
                             )
                             model_response.choices.append(choice)
+
+                # Also handle the case where the final chunk has empty
+                # content (e.g. text:"") WITH finishReason. In this case
+                # _process_candidates DOES create a choice, but maps
+                # finishReason="STOP" to "stop" because the current chunk
+                # has no tool_calls. Override if we saw tool_calls earlier.
+                if self.has_seen_tool_calls:
+                    for choice in model_response.choices:
+                        if choice.finish_reason == "stop":
+                            choice.finish_reason = "tool_calls"
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
