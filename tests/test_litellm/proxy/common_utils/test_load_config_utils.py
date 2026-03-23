@@ -70,6 +70,7 @@ class TestGetFileContentsFromS3:
         # Verify S3 client was created with correct credentials
         mock_boto3_client.assert_called_once_with(
             "s3",
+            endpoint_url=None,
             aws_access_key_id="test_access_key",
             aws_secret_access_key="test_secret_key",
             aws_session_token="test_token"
@@ -86,5 +87,42 @@ class TestGetFileContentsFromS3:
         
         # Verify yaml.safe_load was called with the decoded content
         mock_yaml_load.assert_called_once_with(yaml_content)
+
+    @patch.dict('os.environ', {'LITELLM_CONFIG_BUCKET_ENDPOINT_URL': 'https://minio.example.com'})
+    @patch('boto3.client')
+    @patch('litellm.main.bedrock_converse_chat_completion')
+    @patch('yaml.safe_load')
+    def test_get_file_contents_from_s3_with_endpoint_url(
+        self, mock_yaml_load, mock_bedrock, mock_boto3_client
+    ):
+        """
+        Test that get_file_contents_from_s3 passes endpoint_url from
+        LITELLM_CONFIG_BUCKET_ENDPOINT_URL env var to boto3 client.
+        """
+        mock_credentials = MagicMock()
+        mock_credentials.access_key = "test_access_key"
+        mock_credentials.secret_key = "test_secret_key"
+        mock_credentials.token = "test_token"
+        mock_bedrock.get_credentials.return_value = mock_credentials
+
+        mock_s3_client = MagicMock()
+        mock_boto3_client.return_value = mock_s3_client
+
+        yaml_content = "model_list: []"
+        mock_response_body = MagicMock()
+        mock_response_body.read.return_value = yaml_content.encode('utf-8')
+        mock_s3_client.get_object.return_value = {'Body': mock_response_body}
+        mock_yaml_load.return_value = {'model_list': []}
+
+        result = get_file_contents_from_s3("test-bucket", "config.yaml")
+
+        assert result == {'model_list': []}
+        mock_boto3_client.assert_called_once_with(
+            "s3",
+            endpoint_url="https://minio.example.com",
+            aws_access_key_id="test_access_key",
+            aws_secret_access_key="test_secret_key",
+            aws_session_token="test_token"
+        )
 
 
