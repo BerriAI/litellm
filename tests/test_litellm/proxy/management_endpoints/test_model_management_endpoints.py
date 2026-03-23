@@ -756,5 +756,87 @@ class TestModelInfoEndpoint:
             )
 
             assert result["id"] == "team-model-1"
-            assert result["object"] == "model" 
+            assert result["object"] == "model"
             assert result["owned_by"] == "custom"
+
+
+class TestUpdateDbModelEncryption:
+    """Tests for update_db_model - specifically the encryption behavior of litellm_params."""
+
+    def test_update_db_model_does_not_encrypt_custom_llm_provider(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/24437
+
+        When updating a model via the Admin UI (PATCH /model/{model_id}/update),
+        custom_llm_provider should NOT be encrypted because it's a provider identifier
+        (e.g. 'openrouter'), not a secret credential.
+
+        Previously, all litellm_params values were encrypted unconditionally, which
+        caused custom_llm_provider='openrouter' to be stored as a long base64-encoded
+        string. This made the model disappear from the UI model list because the
+        provider lookup (which reads raw DB values) no longer matched.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import ModelInfo
+        import json
+
+        # Track which values were encrypted and which were not
+        encrypted_values: list = []
+        original_encrypt = __import__(
+            "litellm.proxy.common_utils.encrypt_decrypt_utils",
+            fromlist=["encrypt_value_helper"]
+        ).encrypt_value_helper
+
+        def track_encrypt(value):
+            encrypted_values.append(value)
+            return original_encrypt(value)
+
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+            side_effect=track_encrypt,
+        ):
+            db_model = Deployment(
+                model_name="openrouter/x-ai/grok-4",
+                litellm_params=LiteLLM_Params(
+                    model="openrouter/x-ai/grok-4",
+                    custom_llm_provider="openrouter",
+                    api_key="sk-test-key",
+                ),
+                model_info=ModelInfo(),
+            )
+
+            patch_data = updateDeployment(
+                litellm_params=LiteLLM_Params(
+                    model="openrouter/x-ai/grok-4",
+                    custom_llm_provider="openrouter",
+                ),
+            )
+
+            result = update_db_model(db_model, patch_data)
+
+        # Parse the resulting litellm_params
+        litellm_params = json.loads(result["litellm_params"])
+
+        # custom_llm_provider must NOT be encrypted - it should be the plain string 'openrouter'
+        assert litellm_params["custom_llm_provider"] == "openrouter", (
+            f"custom_llm_provider should be 'openrouter', got: {litellm_params['custom_llm_provider']}"
+        )
+
+        # api_key SHOULD have been encrypted
+        # We can't easily check the encrypted value without the master key,
+        # but we can verify it's NOT the original 'sk-test-key'
+        assert litellm_params["api_key"] != "sk-test-key", (
+            "api_key should have been encrypted"
+        )
+
+        # Verify 'openrouter' was NOT passed to encrypt_value_helper
+        assert "openrouter" not in encrypted_values, (
+            f"'openrouter' was encrypted but should not have been. "
+            f"Encrypted values: {encrypted_values}"
+        )
+
+        # Verify 'sk-test-key' WAS passed to encrypt_value_helper
+        assert "sk-test-key" in encrypted_values, (
+            f"'sk-test-key' was NOT encrypted but should have been. "
+            f"Encrypted values: {encrypted_values}"
+        )

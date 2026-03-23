@@ -101,13 +101,14 @@ def update_db_model(
 
     # update litellm params
     if updated_patch.litellm_params:
-        # Encrypt any sensitive values
-        encrypted_params = {
-            k: encrypt_value_helper(v)
-            for k, v in updated_patch.litellm_params.model_dump(
-                exclude_none=True
-            ).items()
-        }
+        # Encrypt any sensitive values, but not provider identifiers like custom_llm_provider
+        non_sensitive_keys = {"custom_llm_provider"}
+        encrypted_params = {}
+        for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items():
+            if k in non_sensitive_keys:
+                encrypted_params[k] = v
+            else:
+                encrypted_params[k] = encrypt_value_helper(v)
 
         merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
 
