@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    MANAGED_OBJECT_CLEANUP_BATCH_SIZE,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -34,24 +35,38 @@ class CheckResponsesCost:
 
     async def _cleanup_stale_managed_objects(self) -> None:
         """
-        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
-        in non-terminal states as 'stale_expired'. These will never complete and
-        should not be polled.
+        Mark up to MANAGED_OBJECT_CLEANUP_BATCH_SIZE stale response objects as
+        'stale_expired' per poll cycle.
+
+        We fetch IDs first then update by PK to avoid a full-table-scan UPDATE
+        that would lock 336K+ rows and trigger P2028 transaction timeouts.
+        The table has no index on (file_purpose, status, created_at), so an
+        unbounded update_many causes a sequential scan with massive row locking.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+        terminal = ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]
+
+        stale_rows = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "response",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {"not_in": terminal},
                 "created_at": {"lt": cutoff},
             },
+            select={"id": True},
+            take=MANAGED_OBJECT_CLEANUP_BATCH_SIZE,
+        )
+        if not stale_rows:
+            return
+
+        stale_ids = [row.id for row in stale_rows]
+        await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={"id": {"in": stale_ids}},
             data={"status": "stale_expired"},
         )
-        if result > 0:
-            verbose_proxy_logger.warning(
-                f"CheckResponsesCost: marked {result} stale managed objects "
-                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
-            )
+        verbose_proxy_logger.warning(
+            f"CheckResponsesCost: marked {len(stale_ids)} stale managed objects "
+            f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+        )
 
     async def check_responses_cost(self):
         """

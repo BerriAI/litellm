@@ -1356,6 +1356,11 @@ MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
     1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 )
+# Max rows to mark stale per poll cycle. One batch per cycle keeps DB load bounded
+# and avoids a full-table-scan UPDATE that would lock 336K+ rows at once.
+MANAGED_OBJECT_CLEANUP_BATCH_SIZE = max(
+    1, int(os.getenv("MANAGED_OBJECT_CLEANUP_BATCH_SIZE", 1000))
+)
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
 # installations with large numbers of stale managed objects).
