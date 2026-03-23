@@ -46,7 +46,11 @@ from litellm.types.utils import (
 )
 
 from ..exceptions import OpenAIError
-from .core_helpers import map_finish_reason, process_response_headers, safe_model_dump
+from .core_helpers import (
+    map_finish_reason,
+    process_response_headers,
+    safe_model_dump,
+)
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
