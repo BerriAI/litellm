@@ -479,6 +479,10 @@ async def _update_existing_team_model_assignment(
                 "prisma_client not initialized; skipping old public name cleanup to preserve sibling deployments"
             )
         else:
+            # Query DB for all deployments in this team, then filter by public name.
+            # Note: Prisma's JSON filtering doesn't support compound AND conditions
+            # across multiple JSON paths, so we filter team_public_model_name in Python.
+            # For most teams (typically <100 deployments), this is acceptable.
             response = await prisma_client.db.litellm_proxymodeltable.find_many(
                 where={
                     "model_info": {
