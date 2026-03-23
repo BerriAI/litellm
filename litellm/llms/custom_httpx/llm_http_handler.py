@@ -1,3 +1,4 @@
+import io
 import json
 import ssl
 from typing import (
@@ -2972,15 +2973,25 @@ class BaseLLMHTTPHandler:
                 if not upload_url:
                     raise ValueError("Failed to get upload URL from initial request")
 
-                # Step 2: Upload the actual file
+                # Step 2: Upload the actual file.
+                # Use `content=` when the data is a file-like object so httpx
+                # streams the bytes in chunks rather than buffering them all at
+                # once.  Fall back to `data=` for plain bytes/str payloads.
                 upload_method = (
                     transformed_request["upload_request"].get("method", "POST").lower()
                 )
+                upload_data = transformed_request["upload_request"]["data"]
+                upload_kwargs: Dict[str, Any] = {
+                    "url": upload_url,
+                    "headers": transformed_request["upload_request"]["headers"],
+                    "timeout": timeout,
+                }
+                if isinstance(upload_data, io.IOBase):
+                    upload_kwargs["content"] = upload_data
+                else:
+                    upload_kwargs["data"] = upload_data
                 upload_response = getattr(sync_httpx_client, upload_method)(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
+                    **upload_kwargs
                 )
 
                 # Store initial response for transformation
@@ -3007,30 +3018,32 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
-        elif isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
+        elif isinstance(transformed_request, (str, bytes)) or isinstance(
+            transformed_request, io.IOBase
         ):
-            # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
-            # Use the HTTP method specified by the provider config
+            # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
+            if isinstance(transformed_request, io.IOBase):
+                # Stream the IO object without loading it fully into memory
+                upload_kwargs: Dict[str, Any] = {
+                    "url": api_base,
+                    "headers": headers,
+                    "content": transformed_request,
+                    "timeout": timeout,
+                }
+            else:
+                if isinstance(transformed_request, bytes):
+                    transformed_request = transformed_request.decode("utf-8")
+                upload_kwargs = {
+                    "url": api_base,
+                    "headers": headers,
+                    "data": transformed_request,
+                    "timeout": timeout,
+                }
             if http_method == "PUT":
-                upload_response = sync_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+                upload_response = sync_httpx_client.put(**upload_kwargs)
             else:  # Default to POST
-                upload_response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+                upload_response = sync_httpx_client.post(**upload_kwargs)
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
@@ -3129,15 +3142,24 @@ class BaseLLMHTTPHandler:
                 if not upload_url:
                     raise ValueError("Failed to get upload URL from initial request")
 
-                # Step 2: Upload the actual file
+                # Step 2: Upload the actual file.
+                # Use `content=` when the data is a file-like object so httpx
+                # streams the bytes in chunks rather than buffering them at once.
                 upload_method = (
                     transformed_request["upload_request"].get("method", "POST").lower()
                 )
+                upload_data = transformed_request["upload_request"]["data"]
+                async_upload_kwargs: Dict[str, Any] = {
+                    "url": upload_url,
+                    "headers": transformed_request["upload_request"]["headers"],
+                    "timeout": timeout,
+                }
+                if isinstance(upload_data, io.IOBase):
+                    async_upload_kwargs["content"] = upload_data
+                else:
+                    async_upload_kwargs["data"] = upload_data
                 upload_response = await getattr(async_httpx_client, upload_method)(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
+                    **async_upload_kwargs
                 )
 
                 # Store initial response for transformation
@@ -3165,28 +3187,30 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
-        elif isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
+        elif isinstance(transformed_request, (str, bytes)) or isinstance(
+            transformed_request, io.IOBase
         ):
-            # Handle traditional file uploads
-            # Note: transformed_request can be bytes (for binary files like PDFs)
-            # or str (for text files like JSONL). httpx handles both correctly.
-            # Use the HTTP method specified by the provider config
+            # Handle traditional file uploads (str, bytes, or IO[bytes] for streaming)
             http_method = provider_config.file_upload_http_method.upper()
+            if isinstance(transformed_request, io.IOBase):
+                # Stream the IO object without loading it fully into memory
+                async_upload_kwargs: Dict[str, Any] = {
+                    "url": api_base,
+                    "headers": headers,
+                    "content": transformed_request,
+                    "timeout": timeout,
+                }
+            else:
+                async_upload_kwargs = {
+                    "url": api_base,
+                    "headers": headers,
+                    "data": transformed_request,
+                    "timeout": timeout,
+                }
             if http_method == "PUT":
-                upload_response = await async_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+                upload_response = await async_httpx_client.put(**async_upload_kwargs)
             else:  # Default to POST
-                upload_response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+                upload_response = await async_httpx_client.post(**async_upload_kwargs)
         elif isinstance(transformed_request, dict) and "file" in transformed_request:
             # Handle multipart form-data uploads (e.g., Anthropic Files API)
             # The dict contains tuples suitable for httpx's `files` parameter
@@ -4495,9 +4519,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4613,9 +4637,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = (
                             await callback.async_run_chat_completion_agentic_loop(
                                 tools=tool_calls,
@@ -5099,7 +5123,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5311,7 +5338,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5551,7 +5581,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
