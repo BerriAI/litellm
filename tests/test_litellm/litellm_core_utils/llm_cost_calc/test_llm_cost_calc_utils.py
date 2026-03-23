@@ -1435,6 +1435,7 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
     )
     assert completion_cost == pytest.approx(expected_completion_cost)
 
+
 def test_character_count_billing_does_not_fill_prompt_token_gap():
     """
     Regression: when character_count pricing is active, gaps between
