@@ -499,36 +499,37 @@ async def _update_existing_team_model_assignment(
     if old_public_name and public_model_name != old_public_name:
         if prisma_client is None:
             verbose_proxy_logger.warning(
-                "prisma_client not initialized; skipping old public name cleanup to preserve sibling deployments"
+                "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
             )
-        else:
-            response = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where={
-                    "model_info": {
-                        "path": ["team_id"],
-                        "equals": team_id,
-                    }
-                }
-            )
-            if not response:
-                other_deployments_with_old_name = []
-            else:
-                other_deployments_with_old_name = [
-                    d
-                    for d in response
-                    if d.model_name != db_model.model_name
-                    and _get_team_public_model_name(d.model_info) == old_public_name
-                ]
+            return
 
-            if not other_deployments_with_old_name:
-                await team_model_delete(
-                    data=TeamModelDeleteRequest(
-                        team_id=team_id,
-                        models=[old_public_name],
-                    ),
-                    http_request=Request(scope={"type": "http"}),
-                    user_api_key_dict=user_api_key_dict,
-                )
+        response = await prisma_client.db.litellm_proxymodeltable.find_many(
+            where={
+                "model_info": {
+                    "path": ["team_id"],
+                    "equals": team_id,
+                }
+            }
+        )
+        if not response:
+            other_deployments_with_old_name = []
+        else:
+            other_deployments_with_old_name = [
+                d
+                for d in response
+                if d.model_name != db_model.model_name
+                and _get_team_public_model_name(d.model_info) == old_public_name
+            ]
+
+        if not other_deployments_with_old_name:
+            await team_model_delete(
+                data=TeamModelDeleteRequest(
+                    team_id=team_id,
+                    models=[old_public_name],
+                ),
+                http_request=Request(scope={"type": "http"}),
+                user_api_key_dict=user_api_key_dict,
+            )
 
         await team_model_add(
             data=TeamModelAddRequest(
