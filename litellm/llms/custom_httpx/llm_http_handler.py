@@ -8,6 +8,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -151,6 +152,23 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _sync_file_chunks(fp: Any, chunk_size: int = 65536) -> Iterator[bytes]:
+    """Sync generator that reads a file-like object in explicit fixed-size chunks.
+
+    Passing an IO object directly as ``content=`` to httpx's **sync** client causes
+    httpx to wrap it in an ``IteratorByteStream`` that uses Python's built-in file
+    iteration (``__iter__`` / ``readline``).  For binary files with few or no newline
+    bytes (PDFs, images, etc.) a single ``readline()`` call reads the entire file as
+    one chunk, defeating the streaming intent.  Using this generator instead forces
+    fixed-size reads regardless of file content.
+    """
+    while True:
+        chunk = fp.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
 
 
 async def _async_file_chunks(
@@ -3004,7 +3022,10 @@ class BaseLLMHTTPHandler:
                     "timeout": timeout,
                 }
                 if hasattr(upload_data, "read") and hasattr(upload_data, "seek"):
-                    upload_kwargs["content"] = upload_data
+                    # Use explicit fixed-size chunks so httpx does not fall back to
+                    # Python's line-based __iter__ (which reads entire binary files as
+                    # one chunk when there are few newlines).
+                    upload_kwargs["content"] = _sync_file_chunks(upload_data)
                 else:
                     upload_kwargs["data"] = upload_data
                 upload_response = getattr(sync_httpx_client, upload_method)(
@@ -3044,11 +3065,13 @@ class BaseLLMHTTPHandler:
             if hasattr(transformed_request, "read") and hasattr(
                 transformed_request, "seek"
             ):
-                # Stream the IO object without loading it fully into memory
+                # Use explicit fixed-size chunks so httpx does not fall back to
+                # Python's line-based __iter__ (which reads entire binary files as
+                # one chunk when there are few newlines).
                 upload_kwargs: Dict[str, Any] = {
                     "url": api_base,
                     "headers": headers,
-                    "content": transformed_request,
+                    "content": _sync_file_chunks(transformed_request),
                     "timeout": timeout,
                 }
             else:
