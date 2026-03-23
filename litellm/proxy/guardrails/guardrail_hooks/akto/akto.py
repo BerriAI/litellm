@@ -4,6 +4,7 @@ Mode:
   - pre_call: Validates request against Akto guardrails, blocks if flagged.
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -64,6 +65,7 @@ class AktoGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
+        self.background_tasks: set = set()
 
         self.akto_base_url = (
             akto_base_url or os.environ.get("AKTO_GUARDRAIL_API_BASE", "")
@@ -90,6 +92,30 @@ class AktoGuardrail(CustomGuardrail):
             GuardrailEventHooks.pre_call,
         ]
         super().__init__(**kwargs)
+
+    # ── Helpers ──
+
+    def schedule(self, coro) -> None:
+        """Schedule a fire-and-forget background task"""
+        task = asyncio.create_task(coro)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+
+    async def ingest_blocked_request(self, payload: dict) -> None:
+        """Fire-and-forget: ingest a blocked request to Akto for audit."""
+        try:
+            await self.async_handler.post(
+                url=f"{self.akto_base_url}{HTTP_PROXY_PATH}",
+                data=json.dumps(payload),
+                params={"akto_connector": AKTO_CONNECTOR_NAME, "ingest_data": "true"},
+                headers={
+                    "content-type": "application/json",
+                    "Authorization": self.akto_api_key,
+                },
+                timeout=self.guardrail_timeout,
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Akto blocked-request ingest error: %s", e)
 
     # ── Payload builders ──
 
@@ -338,6 +364,16 @@ class AktoGuardrail(CustomGuardrail):
             )
 
         if not allowed:
+            blocked_payload = self.build_akto_payload(
+                inputs, request_data, status_code=403
+            )
+            blocked_payload["responsePayload"] = json.dumps(
+                {"x-blocked-by": "Akto Proxy", "reason": reason}
+            )
+            blocked_payload["responseHeaders"] = json.dumps(
+                {"content-type": "application/json"}
+            )
+            self.schedule(self.ingest_blocked_request(blocked_payload))
             detail = (
                 f"Blocked by Akto Guardrails: {reason}"
                 if reason
