@@ -8149,12 +8149,16 @@ class Router:
         """
         if (
             team_id is not None
-            and model["model_info"].get("team_id") == team_id
-            and model_name == model["model_info"].get("team_public_model_name")
+            and (model.get("model_info") or {}).get("team_id") == team_id
+            and model_name
+            == (model.get("model_info") or {}).get("team_public_model_name")
         ):
             return True
         elif model_name is not None and model["model_name"] == model_name:
-            if team_id is None or model["model_info"].get("team_id") == team_id:
+            if (
+                team_id is None
+                or (model.get("model_info") or {}).get("team_id") == team_id
+            ):
                 return True
         return False
 
