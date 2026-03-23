@@ -46,7 +46,11 @@ from litellm.types.utils import (
 )
 
 from ..exceptions import OpenAIError
-from .core_helpers import map_finish_reason, process_response_headers
+from .core_helpers import (
+    map_finish_reason,
+    process_response_headers,
+    safe_model_dump,
+)
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -56,6 +60,22 @@ AUDIO_ATTRIBUTE = "audio"
 IMAGE_ATTRIBUTE = "images"
 TOOL_CALLS_ATTRIBUTE = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE = "function_call"
+
+_SYNC_ITER_EXHAUSTED = object()
+
+
+def _next_sync_or_exhausted(it: Any) -> Any:
+    """
+    Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
+
+    asyncio.to_thread re-raises thread exceptions inside a coroutine, where PEP 479
+    converts StopIteration to RuntimeError before any except clause can catch it.
+    Returning a sentinel instead keeps StopIteration out of the coroutine boundary.
+    """
+    try:
+        return next(it)
+    except StopIteration:
+        return _SYNC_ITER_EXHAUSTED
 
 
 def is_async_iterable(obj: Any) -> bool:
@@ -111,9 +131,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1500,9 +1520,9 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1859,26 +1879,7 @@ class CustomStreamWrapper:
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
                         # Convert the object to a dictionary
-                        try:
-                            obj_dict = response.model_dump()
-                        except TypeError as e:
-                            if "MockValSer" not in str(e):
-                                raise
-                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            verbose_logger.warning(
-                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
-                                "Upgrading pydantic may resolve this. Error: %s", e
-                            )
-                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
-                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
-                            obj_dict = {
-                                k: v
-                                for k, v in {
-                                    **dict(response.__dict__),
-                                    **(getattr(response, '__pydantic_extra__', None) or {}),
-                                }.items()
-                                if not k.startswith('_')
-                            }
+                        obj_dict = safe_model_dump(response)
 
                         # Remove an attribute (e.g., 'attr2')
                         if "usage" in obj_dict:
@@ -2066,26 +2067,7 @@ class CustomStreamWrapper:
 
                         # Strip usage from the outgoing chunk so it's not sent twice
                         # (once in the chunk, once in _hidden_params).
-                        try:
-                            obj_dict = processed_chunk.model_dump()
-                        except TypeError as e:
-                            if "MockValSer" not in str(e):
-                                raise
-                            # Fallback for Pydantic MockValSer bug (pydantic issue #7713)
-                            verbose_logger.warning(
-                                "Pydantic MockValSer bug detected (pydantic issue #7713); falling back to __dict__ extraction. "
-                                "Upgrading pydantic may resolve this. Error: %s", e
-                            )
-                            # Merge __dict__ with __pydantic_extra__ to preserve dynamically-added provider fields
-                            # Filter out underscore-prefixed private attributes to match model_dump() behavior
-                            obj_dict = {
-                                k: v
-                                for k, v in {
-                                    **dict(processed_chunk.__dict__),
-                                    **(getattr(processed_chunk, '__pydantic_extra__', None) or {}),
-                                }.items()
-                                if not k.startswith('_')
-                            }
+                        obj_dict = safe_model_dump(processed_chunk)
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
@@ -2128,7 +2110,9 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        if chunk is _SYNC_ITER_EXHAUSTED:
+                            raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
@@ -2188,22 +2172,36 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
+                _deferred_cb = getattr(
+                    self.logging_obj,
+                    "_on_deferred_stream_complete",
+                    None,
+                )
+                if _deferred_cb is not None:
+                    # Proxy has post-call guardrails — let the closure
+                    # run guardrails on the assembled response, then
+                    # fire logging with guardrail_information populated.
+                    self.logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
+                    asyncio.create_task(
+                        _deferred_cb(complete_streaming_response, cache_hit)
+                    )
+                else:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+                    executor.submit(
+                        self.logging_obj.success_handler,
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                     )
-                )
-
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:
