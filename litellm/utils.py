@@ -3909,6 +3909,17 @@ def get_optional_params(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
     )
 
+    # When drop_params=True, treat an empty tools list as a droppable parameter.
+    # An empty list ([]) passes the `v != default_param_values[k]` check (since
+    # the default is None), so it ends up in non_default_params and gets forwarded
+    # to the provider, where many providers reject it with a validation error
+    # (e.g. "[] is too short").  Removing it here is consistent with the intent
+    # of drop_params: silently strip parameters that would cause the call to fail.
+    if (drop_params is True or litellm.drop_params is True) and non_default_params.get(
+        "tools"
+    ) == []:
+        non_default_params.pop("tools", None)
+
     def _check_valid_arg(supported_params: List[str]):
         """
         Check if the params passed to completion() are supported by the provider

@@ -3679,3 +3679,49 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_drop_params_drops_empty_tools_list():
+    """When drop_params=True, an empty tools=[] should be removed from
+    optional_params and not forwarded to the provider.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24378.
+    """
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        tools=[],  # empty list – should be dropped
+        drop_params=True,
+    )
+
+    assert "tools" not in optional_params, (
+        "Empty tools list should be dropped when drop_params=True, "
+        f"but got: {optional_params}"
+    )
+
+
+def test_drop_params_keeps_non_empty_tools_list():
+    """drop_params=True must NOT remove a non-empty tools list."""
+    from litellm.utils import get_optional_params
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        tools=[tool],
+        drop_params=True,
+    )
+
+    assert "tools" in optional_params, (
+        "Non-empty tools list must NOT be dropped"
+    )
