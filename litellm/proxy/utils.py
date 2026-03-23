@@ -1898,9 +1898,9 @@ class ProxyLogging:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details[
-                    "call_type"
-                ] = normalized_call_type
+                litellm_logging_obj.model_call_details["call_type"] = (
+                    normalized_call_type
+                )
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
@@ -4576,10 +4576,13 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
+                        all_user_ids = set(end_user_list_transactions.keys())
+                        if end_user_budget_updates is not None:
+                            all_user_ids.update(end_user_budget_updates.keys())
+                        for end_user_id in all_user_ids:
+                            response_cost = end_user_list_transactions.get(
+                                end_user_id, 0.0
+                            )
                             if litellm.max_end_user_budget is not None:
                                 pass
                             create_data = {

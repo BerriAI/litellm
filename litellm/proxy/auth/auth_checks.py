@@ -419,9 +419,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -844,7 +844,9 @@ async def get_default_end_user_budget(
         verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
         return None
 
+
 # (removed _persist_end_user_budget_id - now handled via batched SpendUpdateQueue)
+
 
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
@@ -860,6 +862,7 @@ async def _apply_default_budget_to_end_user(
         end_user_obj: The end user object to potentially apply default budget to
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving data
+        proxy_logging_obj: Optional proxy logging object for persisting budget_id
         parent_otel_span: Optional OpenTelemetry span for tracing
 
     Returns:

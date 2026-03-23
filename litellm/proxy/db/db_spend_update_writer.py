@@ -1124,6 +1124,9 @@ class DBSpendUpdateWriter:
         if (
             end_user_list_transactions is not None
             and len(end_user_list_transactions.keys()) > 0
+        ) or (
+            end_user_budget_updates is not None
+            and len(end_user_budget_updates.keys()) > 0
         ):
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
@@ -1621,14 +1624,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_read_input_tokens"
-                                    ] = transaction.get("cache_read_input_tokens", 0)
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
+                                    )
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_creation_input_tokens"
-                                    ] = transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:
