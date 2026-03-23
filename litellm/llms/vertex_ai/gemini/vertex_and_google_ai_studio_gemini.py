@@ -3001,6 +3001,23 @@ class ModelResponseIterator:
                             )
                             model_response.choices.append(choice)
 
+                # Handle the case where Gemini returns content: {"role": "model"} with
+                # no "parts" (e.g., gemini-2.5-flash-lite with finishReason: STOP and
+                # empty content). _process_candidates creates a choice for this candidate
+                # because "content" IS present, but it sets finish_reason="stop" without
+                # knowing about tool_calls seen in earlier streaming chunks.
+                # Per the OpenAI spec, finish_reason must be "tool_calls" when the model
+                # previously called a tool.
+                if self.has_seen_tool_calls and model_response.choices:
+                    for choice in model_response.choices:
+                        if (
+                            hasattr(choice, "finish_reason")
+                            and choice.finish_reason == "stop"
+                            and hasattr(choice, "delta")
+                            and (choice.delta is None or not choice.delta.tool_calls)
+                        ):
+                            choice.finish_reason = "tool_calls"
+
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore

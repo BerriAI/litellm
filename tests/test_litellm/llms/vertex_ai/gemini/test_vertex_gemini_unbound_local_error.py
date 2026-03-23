@@ -1,38 +1,104 @@
+"""
+Tests for Gemini responses where content is present but "parts" is missing.
+
+Gemini can return content: {"role": "model"} with no "parts" field when
+finishReason is STOP. This is a known Gemini quirk (e.g. gemini-2.5-flash-lite
+in long-running agentic tasks).
+
+LiteLLM must handle this gracefully: return a valid response with
+content=None and finish_reason="stop" rather than raising an exception.
+
+Ref: https://github.com/BerriAI/litellm/issues/24442
+"""
+
 import pytest
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+import litellm
 from litellm import ModelResponse
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+)
+
+
+def test_process_candidates_empty_content_no_parts_returns_valid_response():
+    """
+    When a candidate has content: {"role": "model"} with no "parts",
+    _process_candidates must not raise and must produce a choice with
+    content=None and finish_reason="stop".
+    """
+    candidates = [
+        {
+            "content": {
+                "role": "model"
+                # "parts" intentionally absent — the Gemini quirk under test
+            },
+            "finishReason": "STOP",
+            "index": 0,
+        }
+    ]
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    assert len(model_response.choices) == 1
+    choice = model_response.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content is None
+
+
+def test_process_candidates_empty_content_no_parts_no_finish_reason():
+    """
+    When a candidate has content: {"role": "model"} with no "parts" and
+    no finishReason, _process_candidates must not raise and must produce
+    a choice with content=None.
+    """
+    candidates = [
+        {
+            "content": {"role": "model"},
+            "index": 0,
+        }
+    ]
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    assert len(model_response.choices) == 1
+    choice = model_response.choices[0]
+    assert choice.message.content is None
+
 
 def test_process_candidates_unbound_local_error_fix():
-    # Setup
+    """
+    Regression test: _process_candidates must not raise UnboundLocalError
+    when content is present but "parts" is missing.
+    """
     candidates = [
         {
             "content": {
                 "role": "model"
                 # "parts" is missing intentionally to trigger the issue
             },
-            "finishReason": "STOP"
+            "finishReason": "STOP",
         }
     ]
     model_response = ModelResponse()
-    
-    # Execution
-    try:
-        VertexGeminiConfig._process_candidates(
-            _candidates=candidates,
-            model_response=model_response,
-            standard_optional_params={},
-            cumulative_tool_call_index=0
-        )
-    except UnboundLocalError as e:
-        pytest.fail(f"UnboundLocalError raised: {e}")
-    except Exception as e:
-        # Other exceptions might be okay if they are not UnboundLocalError, 
-        # but ideally it should pass without error or raise a specific error if parts are required.
-        # However, the goal is to verify thought_signatures doesn't crash.
-        pass
 
-    # Verify that we didn't crash with UnboundLocalError
-
-if __name__ == "__main__":
-    test_process_candidates_unbound_local_error_fix()
-    print("Test passed!")
+    # Must not raise UnboundLocalError
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
