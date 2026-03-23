@@ -15,6 +15,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.responses.format_mapping import (
+    finish_reason_to_status,
+    normalize_provider_specific_fields,
+    text_format_to_response_format,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -1462,29 +1467,7 @@ class LiteLLMCompletionResponsesConfig:
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
-                provider_specific_fields: Optional[Dict] = None
-                if hasattr(tool, "provider_specific_fields") and getattr(
-                    tool, "provider_specific_fields", None
-                ):
-                    provider_specific_fields = getattr(tool, "provider_specific_fields")
-                    if not isinstance(provider_specific_fields, dict):
-                        provider_specific_fields = (
-                            dict(provider_specific_fields)  # type: ignore
-                            if hasattr(provider_specific_fields, "__dict__")
-                            else {}
-                        )
-                elif hasattr(
-                    function_definition, "provider_specific_fields"
-                ) and getattr(function_definition, "provider_specific_fields", None):
-                    provider_specific_fields = getattr(
-                        function_definition, "provider_specific_fields"
-                    )
-                    if not isinstance(provider_specific_fields, dict):
-                        provider_specific_fields = (
-                            dict(provider_specific_fields)  # type: ignore
-                            if hasattr(provider_specific_fields, "__dict__")
-                            else {}
-                        )
+                provider_specific_fields = normalize_provider_specific_fields(tool) or normalize_provider_specific_fields(function_definition)
 
                 output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                     name=function_definition.name or "",
@@ -1506,29 +1489,8 @@ class LiteLLMCompletionResponsesConfig:
     def _map_chat_completion_finish_reason_to_responses_status(
         finish_reason: Optional[str],
     ) -> ResponsesAPIStatus:
-        """
-        Map chat completion finish_reason to responses API status.
-
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
-        Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
-
-        Args:
-            finish_reason: The finish_reason from a chat completion response
-
-        Returns:
-            The corresponding responses API status value (one of ResponsesAPIStatus)
-        """
-        if finish_reason is None:
-            return "completed"
-
-        # Map finish reasons to status
-        if finish_reason in ["stop", "tool_calls", "function_call"]:
-            return "completed"
-        elif finish_reason in ["length", "content_filter"]:
-            return "incomplete"
-        else:
-            # Default to completed for unknown finish reasons
-            return "completed"
+        """Map chat completion finish_reason to responses API status."""
+        return finish_reason_to_status(finish_reason)
 
     @staticmethod
     def convert_response_function_tool_call_to_chat_completion_tool_call(
@@ -1545,28 +1507,7 @@ class LiteLLMCompletionResponsesConfig:
         Returns:
             Dictionary in ChatCompletionToolCallChunk format
         """
-        # Extract provider_specific_fields if present
-        provider_specific_fields = getattr(
-            tool_call_item, "provider_specific_fields", None
-        )
-        if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-            provider_specific_fields = (
-                dict(provider_specific_fields)
-                if hasattr(provider_specific_fields, "__dict__")
-                else {}
-            )
-        elif hasattr(tool_call_item, "get") and callable(tool_call_item.get):  # type: ignore
-            provider_fields = tool_call_item.get("provider_specific_fields")  # type: ignore
-            if provider_fields:
-                provider_specific_fields = (
-                    provider_fields
-                    if isinstance(provider_fields, dict)
-                    else (
-                        dict(provider_fields)  # type: ignore
-                        if hasattr(provider_fields, "__dict__")
-                        else {}
-                    )
-                )
+        provider_specific_fields = normalize_provider_specific_fields(tool_call_item)
 
         function_dict: Dict[str, Any] = {
             "name": tool_call_item.name,
@@ -2048,143 +1989,14 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_usage_to_responses_usage(
         chat_completion_response: Union[ModelResponse, Usage],
     ) -> ResponseAPIUsage:
-        if isinstance(chat_completion_response, ModelResponse):
-            usage: Optional[Usage] = getattr(chat_completion_response, "usage", None)
-        else:
-            usage = chat_completion_response
-        if usage is None:
-            return ResponseAPIUsage(
-                input_tokens=0,
-                output_tokens=0,
-                total_tokens=0,
-            )
+        """Transform Chat Completions Usage to ResponseAPIUsage."""
+        from litellm.responses.format_mapping import chat_usage_to_response_api_usage
 
-        response_usage = ResponseAPIUsage(
-            input_tokens=usage.prompt_tokens,
-            output_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens,
-        )
-
-        # Preserve cost field if it exists (for streaming usage with cost calculation)
-        if hasattr(usage, "cost") and usage.cost is not None:
-            setattr(response_usage, "cost", usage.cost)
-
-        # Translate prompt_tokens_details to input_tokens_details
-        if (
-            hasattr(usage, "prompt_tokens_details")
-            and usage.prompt_tokens_details is not None
-        ):
-            prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, int] = {}
-
-            if (
-                hasattr(prompt_details, "cached_tokens")
-                and prompt_details.cached_tokens is not None
-            ):
-                input_details_dict["cached_tokens"] = prompt_details.cached_tokens
-            else:
-                input_details_dict["cached_tokens"] = 0
-
-            if (
-                hasattr(prompt_details, "text_tokens")
-                and prompt_details.text_tokens is not None
-            ):
-                input_details_dict["text_tokens"] = prompt_details.text_tokens
-
-            if (
-                hasattr(prompt_details, "audio_tokens")
-                and prompt_details.audio_tokens is not None
-            ):
-                input_details_dict["audio_tokens"] = prompt_details.audio_tokens
-
-            if input_details_dict:
-                response_usage.input_tokens_details = InputTokensDetails(
-                    **input_details_dict
-                )
-
-        # Translate completion_tokens_details to output_tokens_details
-        if (
-            hasattr(usage, "completion_tokens_details")
-            and usage.completion_tokens_details is not None
-        ):
-            completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, int] = {}
-            if (
-                hasattr(completion_details, "reasoning_tokens")
-                and completion_details.reasoning_tokens is not None
-            ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
-            else:
-                output_details_dict["reasoning_tokens"] = 0
-
-            if (
-                hasattr(completion_details, "text_tokens")
-                and completion_details.text_tokens is not None
-            ):
-                output_details_dict["text_tokens"] = completion_details.text_tokens
-
-            if (
-                hasattr(completion_details, "image_tokens")
-                and completion_details.image_tokens is not None
-            ):
-                output_details_dict["image_tokens"] = completion_details.image_tokens
-
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(
-                    **output_details_dict
-                )
-
-        return response_usage
+        return chat_usage_to_response_api_usage(chat_completion_response)
 
     @staticmethod
     def _transform_text_format_to_response_format(
         text_param: Union[Dict[str, Any], Any],
     ) -> Optional[Dict[str, Any]]:
-        """
-        Transform Responses API text.format parameter to Chat Completion response_format parameter.
-
-        Responses API text parameter structure:
-        {
-            "format": {
-                "type": "json_schema",
-                "name": "schema_name",
-                "schema": {...},
-                "strict": True
-            }
-        }
-
-        Chat Completion response_format structure:
-        {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "schema_name",
-                "schema": {...},
-                "strict": True
-            }
-        }
-        """
-        if not text_param:
-            return None
-
-        if isinstance(text_param, dict):
-            format_param = text_param.get("format")
-            if format_param and isinstance(format_param, dict):
-                format_type = format_param.get("type")
-
-                if format_type == "json_schema":
-                    return {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": format_param.get("name", "response_schema"),
-                            "schema": format_param.get("schema", {}),
-                            "strict": format_param.get("strict", False),
-                        },
-                    }
-                elif format_type == "json_object":
-                    return {"type": "json_object"}
-                elif format_type == "text":
-                    return None
-
-        return None
+        """Transform Responses API text.format to Chat Completion response_format."""
+        return text_format_to_response_format(text_param)

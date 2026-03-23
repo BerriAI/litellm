@@ -651,76 +651,7 @@ class ResponseAPILoggingUtils:
     def _transform_response_api_usage_to_chat_usage(
         usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
-        """
-        Transforms ResponseAPIUsage or ImageUsage to a Usage object.
+        """Transform ResponseAPIUsage to Chat Completions Usage."""
+        from litellm.responses.format_mapping import response_api_usage_to_chat_usage
 
-        Both have the same spec with input_tokens, output_tokens, and
-        input_tokens_details (text_tokens, image_tokens).
-        """
-        if usage_input is None:
-            return Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
-        response_api_usage: ResponseAPIUsage
-        if isinstance(usage_input, dict):
-            total_tokens = usage_input.get("total_tokens")
-            if total_tokens is None:
-                input_tokens = usage_input.get("input_tokens")
-                output_tokens = usage_input.get("output_tokens")
-                if input_tokens is not None and output_tokens is not None:
-                    total_tokens = input_tokens + output_tokens
-                    usage_input["total_tokens"] = total_tokens
-            response_api_usage = ResponseAPIUsage(**usage_input)
-        else:
-            response_api_usage = usage_input
-        prompt_tokens: int = response_api_usage.input_tokens or 0
-        completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
-        if response_api_usage.input_tokens_details:
-            if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    **response_api_usage.input_tokens_details
-                )
-            else:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=getattr(
-                        response_api_usage.input_tokens_details, "cached_tokens", None
-                    ),
-                    audio_tokens=getattr(
-                        response_api_usage.input_tokens_details, "audio_tokens", None
-                    ),
-                    text_tokens=getattr(
-                        response_api_usage.input_tokens_details, "text_tokens", None
-                    ),
-                    image_tokens=getattr(
-                        response_api_usage.input_tokens_details, "image_tokens", None
-                    ),
-                )
-        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        output_tokens_details = getattr(
-            response_api_usage, "output_tokens_details", None
-        )
-        if output_tokens_details:
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    output_tokens_details, "reasoning_tokens", None
-                ),
-                image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                text_tokens=getattr(output_tokens_details, "text_tokens", None),
-            )
-
-        chat_usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            prompt_tokens_details=prompt_tokens_details,
-            completion_tokens_details=completion_tokens_details,
-        )
-
-        # Preserve cost attribute if it exists on ResponseAPIUsage
-        if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:
-            setattr(chat_usage, "cost", response_api_usage.cost)
-
-        return chat_usage
+        return response_api_usage_to_chat_usage(usage_input)
