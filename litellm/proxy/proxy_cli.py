@@ -281,9 +281,7 @@ class ProxyInitializationHelpers:
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
-            gunicorn_options["max_requests_jitter"] = (
-                max_requests_before_restart_jitter
-            )
+            gunicorn_options["max_requests_jitter"] = max_requests_before_restart_jitter
 
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
@@ -956,9 +954,9 @@ def run_server(  # noqa: PLR0915
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
-            uvicorn_args["limit_max_requests_jitter"] = (
-                max_requests_before_restart_jitter
-            )
+            uvicorn_args[
+                "limit_max_requests_jitter"
+            ] = max_requests_before_restart_jitter
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
