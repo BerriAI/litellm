@@ -1310,12 +1310,11 @@ def _update_model_if_team_alias_exists(
 
         # Skip alias rewrite if this model resolves to team-specific deployments
         # (team models use team_public_model_name, not model_aliases)
-        if (
-            llm_router
-            and user_api_key_dict.team_id
-            and llm_router.map_team_model(_model, user_api_key_dict.team_id) is not None
-        ):
-            return
+        # Use O(1) index lookup instead of map_team_model to avoid O(n) scan
+        if llm_router and user_api_key_dict.team_id:
+            key = (user_api_key_dict.team_id, _model)
+            if key in llm_router.team_model_to_deployment_indices:
+                return
 
         data["model"] = user_api_key_dict.team_model_aliases[_model]
     return
