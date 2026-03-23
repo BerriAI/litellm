@@ -1302,6 +1302,17 @@ def _update_model_if_team_alias_exists(
         and user_api_key_dict.team_model_aliases
         and _model in user_api_key_dict.team_model_aliases
     ):
+        from litellm.proxy.proxy_server import llm_router
+
+        # Skip alias rewrite if this model resolves to team-specific deployments
+        # (team models use team_public_model_name, not model_aliases)
+        if (
+            llm_router
+            and user_api_key_dict.team_id
+            and llm_router.map_team_model(_model, user_api_key_dict.team_id) is not None
+        ):
+            return
+
         data["model"] = user_api_key_dict.team_model_aliases[_model]
     return
 
