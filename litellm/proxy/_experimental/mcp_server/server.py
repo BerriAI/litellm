@@ -2417,10 +2417,25 @@ if MCP_AVAILABLE:
         Restrict a key's MCP permissions to a single toolset.
 
         When a request arrives via /toolset/{name}/mcp we override the key's
-        object_permission so that only the toolset's tools are visible,
-        regardless of what the key's normal permissions are.
+        object_permission so that only the toolset's tools are visible.
+
+        Raises HTTPException(403) if the key has an explicit toolset grant list
+        that does not include toolset_id (i.e. mcp_toolsets is set but empty,
+        or set to a list that omits this toolset).  Admin keys always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        # Access control: non-admin keys must have this toolset in their grant list.
+        is_admin = getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+        if not is_admin:
+            op = user_api_key_auth.object_permission
+            granted = getattr(op, "mcp_toolsets", None) if op else None
+            # granted=None → no restriction (allow); granted=[] or list without toolset_id → deny
+            if granted is not None and toolset_id not in granted:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"API key does not have access to toolset '{toolset_id}'.",
+                )
 
         tool_permissions = (
             await global_mcp_server_manager.resolve_toolset_tool_permissions(

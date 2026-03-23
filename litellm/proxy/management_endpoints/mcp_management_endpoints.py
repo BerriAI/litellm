@@ -2072,7 +2072,17 @@ if MCP_AVAILABLE:
         touched_by = (
             litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
-        result = await create_mcp_toolset(prisma_client, payload, touched_by)
+        try:
+            result = await create_mcp_toolset(prisma_client, payload, touched_by)
+        except Exception as e:
+            if "UniqueViolationError" in type(e).__name__ or "unique" in str(e).lower():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": f"A toolset named '{payload.toolset_name}' already exists."
+                    },
+                )
+            raise
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2092,20 +2102,16 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        # Admins with no explicit restriction see all toolsets
-        if _user_has_admin_view(user_api_key_dict):
-            op = user_api_key_dict.object_permission
-            if op is None or getattr(op, "mcp_toolsets", None) is None:
-                return await list_mcp_toolsets(prisma_client)
-
+        is_admin = _user_has_admin_view(user_api_key_dict)
         op = user_api_key_dict.object_permission
-        # Distinguish None (field absent = no restriction) from [] (explicitly empty = zero allowed).
+        # mcp_toolsets=None means the field was never set.
+        # For admins: None → no restriction → return all.
+        # For non-admins: None → no toolsets explicitly granted → return nothing.
         raw_toolsets = getattr(op, "mcp_toolsets", None) if op else None
-        # raw_toolsets is None  → field not set → no restriction, return all
-        # raw_toolsets is []    → explicitly empty → return nothing
-        # raw_toolsets is [ids] → return only those
         if raw_toolsets is None:
-            return await list_mcp_toolsets(prisma_client)
+            if is_admin:
+                return await list_mcp_toolsets(prisma_client)
+            return []
         if not raw_toolsets:
             return []
         return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
@@ -2122,6 +2128,15 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
+        # Non-admin keys may only fetch toolsets they've been explicitly granted.
+        if not _user_has_admin_view(user_api_key_dict):
+            op = user_api_key_dict.object_permission
+            granted = getattr(op, "mcp_toolsets", None) if op else None
+            if granted is None or toolset_id not in granted:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "API key does not have access to this toolset."},
+                )
         toolset = await get_mcp_toolset(prisma_client, toolset_id)
         if toolset is None:
             raise HTTPException(
