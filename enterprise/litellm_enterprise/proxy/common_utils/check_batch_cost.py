@@ -305,15 +305,6 @@ class CheckBatchCost:
                 else:
                     content_bytes = _file_content  # type: ignore[assignment]
 
-                # Record output file size
-                if prom_logger and content_bytes:
-                    prom_logger.record_managed_file_size(
-                        size_bytes=len(content_bytes),
-                        purpose="batch",
-                        file_type="output",
-                        model=model_id,
-                    )
-
                 file_content_as_dict = _get_file_content_as_dictionary(
                     content_bytes  # type: ignore[arg-type]
                 )
@@ -335,6 +326,15 @@ class CheckBatchCost:
                     model=litellm_model_name,
                     custom_llm_provider=custom_llm_provider,
                 )
+
+                # Record output file size (after model_name is resolved for label consistency)
+                if prom_logger and content_bytes:
+                    prom_logger.record_managed_file_size(
+                        size_bytes=len(content_bytes),
+                        purpose="batch",
+                        file_type="output",
+                        model=model_name,
+                    )
 
                 try:
                     # Pass deployment model_info so custom batch pricing
