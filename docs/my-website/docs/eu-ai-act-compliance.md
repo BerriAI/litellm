@@ -189,8 +189,8 @@ LiteLLM provides the **logging and hook infrastructure** to build human oversigh
 Article 50 applies to **all AI systems that interact directly with users**, not just high-risk systems. If your LiteLLM deployment powers a chatbot, virtual assistant, or any interface where a user communicates with AI-generated responses, you must:
 
 1. **Inform users they are interacting with an AI system** — before or at the start of the interaction
-2. **Mark AI-generated content** — if the system generates text, audio, images, or video that could be mistaken for human-created content, it must be machine-readable as AI-generated (Article 50(2))
-3. **Disclose deepfakes** — if the system generates or manipulates content depicting real people or events, this must be disclosed (Article 50(4))
+2. **Mark AI-generated content** — if you are the *provider* of an AI system generating synthetic text, audio, images, or video, you must ensure outputs are machine-readable as AI-generated (Article 50(2)). If you are a deployer using a third-party model, this obligation rests with your model provider (e.g., OpenAI, Anthropic).
+3. **Disclose deepfakes** — if you deploy a system that generates or manipulates content depicting real people or events, this must be disclosed to the end user (Article 50(4)). This applies to both providers and deployers.
 
 LiteLLM itself does not handle user-facing disclosure — it operates at the API gateway layer. Your application must implement the disclosure:
 
