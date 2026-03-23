@@ -364,6 +364,54 @@ async def test_fail_closed_on_unreachable():
     assert "localhost" not in exc_info.value.detail
 
 
+@pytest.mark.asyncio
+async def test_fail_open_on_http_error():
+    """Non-200 from Akto (e.g. 401, 429) is caught via raise_for_status() and handled as fail_open."""
+    g = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        unreachable_fallback="fail_open",
+        guardrail_name="http-error-test",
+        event_hook="pre_call",
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 429
+    mock_request = MagicMock()
+    g.async_handler.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "Too Many Requests", request=mock_request, response=mock_response
+        )
+    )
+
+    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
+    result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    assert result.get("texts") == ["test"]
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_on_http_error():
+    """Non-200 from Akto (e.g. 401, 429) is caught via raise_for_status() and handled as fail_closed."""
+    g = AktoGuardrail(
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        unreachable_fallback="fail_closed",
+        guardrail_name="http-error-test",
+        event_hook="pre_call",
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 401
+    mock_request = MagicMock()
+    g.async_handler.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "Unauthorized", request=mock_request, response=mock_response
+        )
+    )
+
+    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
+    with pytest.raises(HTTPException) as exc_info:
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    assert exc_info.value.status_code == 503
+
 
 # ---------------------------------------------------------------------------
 #  Helper method tests
