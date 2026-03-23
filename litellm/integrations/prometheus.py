@@ -1441,6 +1441,9 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
+        user_api_key_org_id = standard_logging_payload["metadata"].get(
+            "user_api_key_org_id"
+        )
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
@@ -1456,6 +1459,10 @@ class PrometheusLogger(CustomLogger):
                 ),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
+            await self._set_org_budget_metrics_after_api_request(
+                org_id=user_api_key_org_id,
+                response_cost=0,
+            )
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
