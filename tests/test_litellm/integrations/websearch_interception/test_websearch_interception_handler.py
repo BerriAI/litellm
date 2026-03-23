@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -273,3 +273,54 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+@pytest.mark.asyncio
+async def test_execute_search_forwards_metadata_to_asearch():
+    """Test that _execute_search forwards metadata to litellm.asearch().
+
+    When the proxy handles a web search interception, the original request's
+    metadata (API key, user, team, etc.) must be forwarded to the search call
+    so that spend tracking callbacks can attribute the search cost correctly.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    fake_metadata = {
+        "user_api_key_hash": "hashed-key-123",
+        "user_api_key_user_id": "user-456",
+        "user_api_key_team_id": "team-789",
+    }
+
+    mock_search_response = Mock()
+    mock_search_response.results = [
+        Mock(title="Result 1", url="https://example.com", snippet="A snippet")
+    ]
+
+    with patch("litellm.asearch", new_callable=AsyncMock, return_value=mock_search_response):
+        import litellm
+
+        await logger._execute_search("test query", metadata=fake_metadata)
+
+        litellm.asearch.assert_called_once()
+        call_kwargs = litellm.asearch.call_args
+        assert call_kwargs.kwargs.get("metadata") == fake_metadata
+
+
+@pytest.mark.asyncio
+async def test_execute_search_omits_metadata_when_none():
+    """Test that _execute_search does not pass metadata when it is None."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    mock_search_response = Mock()
+    mock_search_response.results = [
+        Mock(title="Result 1", url="https://example.com", snippet="A snippet")
+    ]
+
+    with patch("litellm.asearch", new_callable=AsyncMock, return_value=mock_search_response):
+        import litellm
+
+        await logger._execute_search("test query")
+
+        litellm.asearch.assert_called_once()
+        call_kwargs = litellm.asearch.call_args
+        assert "metadata" not in call_kwargs.kwargs
