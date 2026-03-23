@@ -480,6 +480,95 @@ class TestProxyInitializationHelpers:
             assert call_args[1]["limit_max_requests"] == 1000
             assert call_args[1]["limit_max_requests_jitter"] == 50
 
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server")
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_run_gunicorn_passes_max_requests_and_jitter(
+        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_run_gunicorn
+    ):
+        """CLI --run_gunicorn threads max_requests and jitter into _run_gunicorn_server."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        clean_env = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                [
+                    "--local",
+                    "--run_gunicorn",
+                    "--max_requests_before_restart",
+                    "900",
+                    "--max_requests_before_restart_jitter",
+                    "75",
+                ],
+            )
+
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_not_called()
+            mock_run_gunicorn.assert_called_once()
+            g_kwargs = mock_run_gunicorn.call_args[1]
+            assert g_kwargs["max_requests_before_restart"] == 900
+            assert g_kwargs["max_requests_before_restart_jitter"] == 75
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_options_include_max_requests_jitter(self):
+        """_run_gunicorn_server puts max_requests_jitter in options passed to gunicorn."""
+        pytest.importorskip("gunicorn")
+
+        captured: dict = {}
+
+        def capture_run(self):
+            captured["options"] = dict(self.options)
+
+        mock_app = MagicMock()
+        with patch("gunicorn.app.base.BaseApplication.run", capture_run):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4010,
+                app=mock_app,
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=1000,
+                max_requests_before_restart_jitter=50,
+            )
+
+        assert captured["options"]["max_requests"] == 1000
+        assert captured["options"]["max_requests_jitter"] == 50
+
+
+
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
         """Test the construct_database_url_from_env_vars function with various scenarios"""
