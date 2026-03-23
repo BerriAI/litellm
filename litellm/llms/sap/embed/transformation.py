@@ -164,13 +164,16 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
-        if optional_params.get("timeout", None) is not None:
-            model_dict["timeout"] = optional_params.get("timeout")
-        if optional_params.get("max_retries", None) is not None:
-            model_dict["max_retries"] = optional_params.get("max_retries")
+        timeout = optional_params.get("timeout", None)
+        if timeout is not None:
+            model_dict["timeout"] = timeout
+        max_retries = optional_params.get("max_retries", None)
+        if max_retries is not None:
+            model_dict["max_retries"] = max_retries
         input_dict = {"text": input}
-        if optional_params.get("type"):
-            input_dict["type"] = optional_params.get("type")
+        input_type = optional_params.get("type")
+        if input_type is not None:
+            input_dict["type"] = input_type
         masking = optional_params.get("masking")
         masking = {"masking": masking} if masking is not None else {}
         body = {

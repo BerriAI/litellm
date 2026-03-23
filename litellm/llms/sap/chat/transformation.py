@@ -211,18 +211,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
-        # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
-        # LangChain agents pass strict=true at top level, which fails for GPT models
-        # Anthropic models accept strict, so preserve it for them
-        if model.startswith("gpt") and "strict" in optional_params:
-            optional_params.pop("strict")
-
         def _build_prompt_module(
             *,
             model_name: str,
             template_messages: List[Dict[str, str]],
             params: dict,
         ) -> dict:
+            # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
+            # LangChain agents pass strict=true at top level, which fails for GPT models
+            # Anthropic models accept strict, so preserve it for them
+            if model.startswith("gpt") and "strict" in optional_params:
+                optional_params.pop("strict")
+
             model_version = params.pop("model_version", "latest")
 
             tools_ = params.pop("tools", [])
