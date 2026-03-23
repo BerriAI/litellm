@@ -212,17 +212,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
         # Always-block keywords are checked after exceptions (exceptions take precedence)
         self.always_block_category_keywords: Dict[
             str, Tuple[str, str, ContentFilterAction]
         ] = {}
         # Store conditional categories (identifier_words + block_words)
-        self.conditional_categories: Dict[
-            str, Dict[str, Any]
-        ] = {}  # category_name -> {identifier_words, block_words, action, severity}
+        self.conditional_categories: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # category_name -> {identifier_words, block_words, action, severity}
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None

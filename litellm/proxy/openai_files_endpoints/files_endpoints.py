@@ -363,10 +363,10 @@ async def create_file(  # noqa: PLR0915
         expires_after: Optional[FileExpiresAfter] = None
         form_data_raw = await request.form()
         form_data_dict: Dict[str, Any] = dict(form_data_raw)
-        extracted_litellm_metadata: Optional[
-            Dict[str, Any]
-        ] = extract_nested_form_metadata(
-            form_data=form_data_dict, prefix="litellm_metadata["
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = (
+            extract_nested_form_metadata(
+                form_data=form_data_dict, prefix="litellm_metadata["
+            )
         )
         expires_after_anchor = form_data_raw.get("expires_after[anchor]")
         expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")

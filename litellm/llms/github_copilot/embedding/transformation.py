@@ -6,6 +6,7 @@ This module provides the configuration for GitHub Copilot's Embedding API.
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Optional
 
 import httpx

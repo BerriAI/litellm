@@ -6,7 +6,7 @@ The actual skill logic is in litellm/llms/litellm_proxy/skills/.
 
 Usage:
     from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
-    
+
     # Register hook in proxy
     litellm.callbacks.append(SkillsInjectionHook())
 """

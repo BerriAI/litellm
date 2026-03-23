@@ -1,6 +1,7 @@
 """
 Response Polling Handler for Background Responses with Cache
 """
+
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional

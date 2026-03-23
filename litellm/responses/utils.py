@@ -346,10 +346,10 @@ class ResponsesAPIRequestUtils:
 
                 if encrypted_content and isinstance(encrypted_content, str):
                     # Always wrap encrypted_content with model_id for redundancy
-                    item[
-                        "encrypted_content"
-                    ] = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                        encrypted_content, model_id
+                    item["encrypted_content"] = (
+                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                            encrypted_content, model_id
+                        )
                     )
                     # Also encode the ID if present
                     if item_id and isinstance(item_id, str):

@@ -566,7 +566,9 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_name: str
     status: str  # pending_review | active | rejected
     team_id: Optional[str] = None
-    team_guardrail: bool = False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
+    team_guardrail: bool = (
+        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
+    )
     litellm_params: Optional[Dict[str, Any]] = None
     guardrail_info: Optional[Dict[str, Any]] = None
     submitted_by_user_id: Optional[str] = None
@@ -661,9 +663,9 @@ async def register_guardrail(
     guardrail_info = dict(request.guardrail_info or {})
     guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
     guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
-    guardrail_info[
-        "team_guardrail"
-    ] = True  # Mark as team submission for filtering/display
+    guardrail_info["team_guardrail"] = (
+        True  # Mark as team submission for filtering/display
+    )
     guardrail_info_str = safe_dumps(guardrail_info)
 
     try:
@@ -1806,9 +1808,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -2081,10 +2083,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(

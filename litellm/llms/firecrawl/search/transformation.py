@@ -3,6 +3,7 @@ Calls Firecrawl's /search endpoint to search the web.
 
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

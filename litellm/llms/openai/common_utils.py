@@ -201,7 +201,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_openai_client_initialization_param_fields(
-        client_type: Literal["openai", "azure"]
+        client_type: Literal["openai", "azure"],
     ) -> Tuple[str, ...]:
         """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
@@ -227,9 +227,9 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config
-                if isinstance(ssl_config, ssl.SSLContext)
-                else None,
+                ssl_context=(
+                    ssl_config if isinstance(ssl_config, ssl.SSLContext) else None
+                ),
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 shared_session=shared_session,
             ),

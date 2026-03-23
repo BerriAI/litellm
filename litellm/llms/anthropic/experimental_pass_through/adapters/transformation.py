@@ -550,9 +550,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -595,12 +595,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                         function_chunk.get("provider_specific_fields")
                                         or {}
                                     )
-                                    provider_specific_fields[
-                                        "thought_signature"
-                                    ] = signature
-                                    function_chunk[
-                                        "provider_specific_fields"
-                                    ] = provider_specific_fields
+                                    provider_specific_fields["thought_signature"] = (
+                                        signature
+                                    )
+                                    function_chunk["provider_specific_fields"] = (
+                                        provider_specific_fields
+                                    )
 
                                 tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
@@ -663,7 +663,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -1334,9 +1334,9 @@ class LiteLLMAnthropicMessagesAdapter:
             hasattr(usage, "_cache_creation_input_tokens")
             and usage._cache_creation_input_tokens > 0
         ):
-            anthropic_usage[
-                "cache_creation_input_tokens"
-            ] = usage._cache_creation_input_tokens
+            anthropic_usage["cache_creation_input_tokens"] = (
+                usage._cache_creation_input_tokens
+            )
         if cached_tokens > 0:
             anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
@@ -1513,9 +1513,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
                     and litellm_usage_chunk._cache_creation_input_tokens > 0
                 ):
-                    usage_delta[
-                        "cache_creation_input_tokens"
-                    ] = litellm_usage_chunk._cache_creation_input_tokens
+                    usage_delta["cache_creation_input_tokens"] = (
+                        litellm_usage_chunk._cache_creation_input_tokens
+                    )
                 if cached_tokens > 0:
                     usage_delta["cache_read_input_tokens"] = cached_tokens
             else:

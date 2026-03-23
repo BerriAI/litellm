@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI /v1/embeddings format to Azure AI Cohere's /v1/embed. 
+Transformation logic from OpenAI /v1/embeddings format to Azure AI Cohere's /v1/embed.
 
 Why separate file? Make it easy to see how transformation works
 

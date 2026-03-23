@@ -3,6 +3,7 @@ Payloads for Datadog LLM Observability Service (LLMObs)
 
 API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
 """
+
 from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import TypedDict

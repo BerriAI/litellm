@@ -24,8 +24,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         print("LiteLLM_VerificationTokenView Exists!")  # noqa
     except Exception:
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw(
-            """
+        await db.execute_raw("""
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT 
                 v.*, 
@@ -35,8 +34,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
                 t.rpm_limit AS team_rpm_limit
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-            """
-        )
+            """)
 
         print("LiteLLM_VerificationTokenView Created!")  # noqa
 

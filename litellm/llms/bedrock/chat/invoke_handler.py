@@ -199,11 +199,13 @@ async def make_call(
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                ),
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -293,11 +295,13 @@ def make_sync_call(
     try:
         if client is None:
             client = _get_httpx_client(
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                )
             )
 
         response = client.post(
@@ -547,9 +551,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -882,9 +886,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if self.is_claude_messages_api_model(model):

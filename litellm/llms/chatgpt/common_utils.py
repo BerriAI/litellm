@@ -1,6 +1,7 @@
 """
 Constants and helpers for ChatGPT subscription OAuth.
 """
+
 import os
 import platform
 from typing import Any, Optional, Union

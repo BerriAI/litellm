@@ -159,9 +159,9 @@ class CBFTransformer:
         # CloudZero CBF format with proper column names
         cbf_record = {
             # Required CBF fields
-            "time/usage_start": usage_date.isoformat()
-            if usage_date
-            else None,  # Required: ISO-formatted UTC datetime
+            "time/usage_start": (
+                usage_date.isoformat() if usage_date else None
+            ),  # Required: ISO-formatted UTC datetime
             "cost/cost": float(row.get("spend", 0.0)),  # Required: billed cost
             "resource/id": resource_id,  # CZRN (CloudZero Resource Name)
             # Usage metrics for token consumption
@@ -182,9 +182,9 @@ class CBFTransformer:
 
         # Add CZRN components that don't have direct CBF column mappings as resource tags
         cbf_record["resource/tag:provider"] = provider  # CZRN provider component
-        cbf_record[
-            "resource/tag:model"
-        ] = cloud_local_id  # CZRN cloud-local-id component (model)
+        cbf_record["resource/tag:model"] = (
+            cloud_local_id  # CZRN cloud-local-id component (model)
+        )
 
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():

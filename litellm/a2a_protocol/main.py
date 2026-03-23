@@ -120,9 +120,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details[
-            "custom_llm_provider"
-        ] = custom_llm_provider
+        litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+            custom_llm_provider
+        )
 
     return agent_name
 

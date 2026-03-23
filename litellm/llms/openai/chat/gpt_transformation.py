@@ -370,10 +370,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         List[OpenAIMessageContentListBlock], message_content
                     )
                     for i, content_item in enumerate(message_content_types):
-                        message_content_types[
-                            i
-                        ] = await self._async_transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item),
+                        message_content_types[i] = (
+                            await self._async_transform_content_item(
+                                cast(OpenAIMessageContentListBlock, content_item),
+                            )
                         )
             return messages
 

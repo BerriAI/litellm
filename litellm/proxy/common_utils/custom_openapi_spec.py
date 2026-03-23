@@ -324,7 +324,7 @@ class CustomOpenAPISpec:
 
     @staticmethod
     def add_chat_completion_request_schema(
-        openapi_schema: Dict[str, Any]
+        openapi_schema: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Add ProxyChatCompletionRequest schema to chat completion endpoints for documentation.
@@ -380,7 +380,7 @@ class CustomOpenAPISpec:
 
     @staticmethod
     def add_responses_api_request_schema(
-        openapi_schema: Dict[str, Any]
+        openapi_schema: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Add ResponsesAPIRequestParams schema to responses API endpoints for documentation.
@@ -410,7 +410,7 @@ class CustomOpenAPISpec:
 
     @staticmethod
     def add_llm_api_request_schema_body(
-        openapi_schema: Dict[str, Any]
+        openapi_schema: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Add LLM API request schema bodies to OpenAPI specification for documentation.

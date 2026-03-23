@@ -424,17 +424,17 @@ if MCP_AVAILABLE:
             inherited_credentials["scopes"] = existing_server.scopes
         # AWS SigV4 fields
         if existing_server.aws_access_key_id:
-            inherited_credentials[
-                "aws_access_key_id"
-            ] = existing_server.aws_access_key_id
+            inherited_credentials["aws_access_key_id"] = (
+                existing_server.aws_access_key_id
+            )
         if existing_server.aws_secret_access_key:
-            inherited_credentials[
-                "aws_secret_access_key"
-            ] = existing_server.aws_secret_access_key
+            inherited_credentials["aws_secret_access_key"] = (
+                existing_server.aws_secret_access_key
+            )
         if existing_server.aws_session_token:
-            inherited_credentials[
-                "aws_session_token"
-            ] = existing_server.aws_session_token
+            inherited_credentials["aws_session_token"] = (
+                existing_server.aws_session_token
+            )
         if existing_server.aws_region_name:
             inherited_credentials["aws_region_name"] = existing_server.aws_region_name
         if existing_server.aws_service_name:

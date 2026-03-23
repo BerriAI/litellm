@@ -14,7 +14,6 @@ from ...openai_like.chat.transformation import OpenAIGPTConfig
 
 from ..utils import SnowflakeBaseConfig
 
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 

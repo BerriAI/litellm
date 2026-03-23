@@ -3,6 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
+
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
@@ -612,16 +613,14 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             contents.append(ContentType(role="user", parts=tool_call_responses))
 
         if len(contents) == 0:
-            verbose_logger.warning(
-                """
+            verbose_logger.warning("""
                 No contents in messages. Contents are required. See
                 https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#request-body.
                 If the original request did not comply to OpenAI API requirements it should have failed by now,
                 but LiteLLM does not check for missing messages.
                 Setting an empty content to prevent an 400 error.
                 Relevant Issue - https://github.com/BerriAI/litellm/issues/9733
-                """
-            )
+                """)
             contents.append(ContentType(role="user", parts=[PartType(text=" ")]))
         return contents
     except Exception as e:

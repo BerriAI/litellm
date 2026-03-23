@@ -188,10 +188,10 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[
-                                        float
-                                    ] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
+                                    cost: Optional[float] = (
+                                        self.logging_obj._response_cost_calculator(
+                                            result=response_obj
+                                        )
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
@@ -1034,7 +1034,7 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: Dict[str, Any]
+        completed_event: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """
         Convert the output items in a ``response.completed`` event into

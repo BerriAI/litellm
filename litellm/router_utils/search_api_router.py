@@ -121,9 +121,9 @@ class SearchAPIRouter:
                 )
 
             # Set up kwargs for the fallback system
-            kwargs[
-                "model"
-            ] = search_tool_name  # Use model field for compatibility with fallback system
+            kwargs["model"] = (
+                search_tool_name  # Use model field for compatibility with fallback system
+            )
             kwargs["original_generic_function"] = original_function
             # Bind router_instance to the helper method using partial
             kwargs["original_function"] = partial(

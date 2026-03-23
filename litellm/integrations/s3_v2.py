@@ -1,8 +1,8 @@
 """
 s3 Bucket Logging Integration
 
-async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3 
-async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3 
+async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
+async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
 NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
 """
 
@@ -578,9 +578,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             signed_headers = dict(aws_request.headers.items())
 
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify}
-                if self.s3_verify is not None
-                else None
+                params=(
+                    {"ssl_verify": self.s3_verify}
+                    if self.s3_verify is not None
+                    else None
+                )
             )
             # Make the request
             response = httpx_client.put(url, data=json_string, headers=signed_headers)

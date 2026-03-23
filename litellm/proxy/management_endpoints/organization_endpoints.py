@@ -726,20 +726,20 @@ async def info_organization(organization_id: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response: Optional[
-        LiteLLM_OrganizationTableWithMembers
-    ] = await prisma_client.db.litellm_organizationtable.find_unique(
-        where={"organization_id": organization_id},
-        include={
-            "litellm_budget_table": True,
-            "members": {
-                "include": {
-                    "user": True,
-                }
+    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id},
+            include={
+                "litellm_budget_table": True,
+                "members": {
+                    "include": {
+                        "user": True,
+                    }
+                },
+                "teams": True,
+                "object_permission": True,
             },
-            "teams": True,
-            "object_permission": True,
-        },
+        )
     )
 
     if response is None:
@@ -1035,16 +1035,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[
-            BaseModel
-        ] = await prisma_client.db.litellm_organizationmembership.find_unique(
-            where={
-                "user_id_organization_id": {
-                    "user_id": data.user_id,
-                    "organization_id": data.organization_id,
-                }
-            },
-            include={"litellm_budget_table": True},
+        final_organization_membership: Optional[BaseModel] = (
+            await prisma_client.db.litellm_organizationmembership.find_unique(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                include={"litellm_budget_table": True},
+            )
         )
 
         if final_organization_membership is None:

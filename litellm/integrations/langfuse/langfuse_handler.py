@@ -86,9 +86,7 @@ class LangFuseHandler:
         if globalLangfuseLogger is not None:
             return globalLangfuseLogger
 
-        credentials_dict: Dict[
-            str, Any
-        ] = (
+        credentials_dict: Dict[str, Any] = (
             {}
         )  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(

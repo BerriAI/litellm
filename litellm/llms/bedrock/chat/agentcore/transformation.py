@@ -877,9 +877,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 )
             parsed = self._parse_json_response(response_json)
 
-            async def _json_as_async_stream() -> AsyncGenerator[
-                ModelResponseStream, None
-            ]:
+            async def _json_as_async_stream() -> (
+                AsyncGenerator[ModelResponseStream, None]
+            ):
                 # Content chunk
                 content_chunk = ModelResponseStream(
                     id=f"chatcmpl-{uuid.uuid4()}",
