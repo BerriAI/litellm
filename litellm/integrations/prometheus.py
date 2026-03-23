@@ -1624,6 +1624,8 @@ class PrometheusLogger(CustomLogger):
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
+                org_id=user_api_key_dict.org_id if litellm.prometheus_emit_org_labels else None,
+                org_alias=user_api_key_dict.organization_alias if litellm.prometheus_emit_org_labels else None,
                 requested_model=request_data.get("model", ""),
                 status_code=str(status_code),
                 exception_status=str(status_code),
