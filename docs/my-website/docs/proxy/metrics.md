@@ -4,20 +4,10 @@
 
 By default, LiteLLM uses a fixed set of histogram buckets for all latency metrics. You can override them to match your SLOs.
 
-**Proxy config (`litellm_settings`)**
-
 ```yaml
 litellm_settings:
   success_callback: ["prometheus"]
   prometheus_latency_buckets: [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, .inf]
-```
-
-**Python SDK**
-
-```python
-import litellm
-
-litellm.prometheus_latency_buckets = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, float("inf"))
 ```
 
 Applies to all histogram metrics:
@@ -34,8 +24,6 @@ Applies to all histogram metrics:
 
 Disable specific metrics entirely — they are replaced by no-ops and never registered in Prometheus.
 
-**Proxy config (`litellm_settings`)**
-
 ```yaml
 litellm_settings:
   success_callback: ["prometheus"]
@@ -44,24 +32,11 @@ litellm_settings:
     - litellm_request_queue_time_seconds
 ```
 
-**Python SDK**
-
-```python
-import litellm
-
-litellm.prometheus_exclude_metrics = [
-    "litellm_overhead_latency_metric",
-    "litellm_request_queue_time_seconds",
-]
-```
-
 ---
 
 ## Exclude Labels
 
 Strip label dimensions from **all** metrics. Useful for reducing cardinality.
-
-**Proxy config (`litellm_settings`)**
 
 ```yaml
 litellm_settings:
@@ -70,14 +45,6 @@ litellm_settings:
     - end_user
     - user_agent
     - client_ip
-```
-
-**Python SDK**
-
-```python
-import litellm
-
-litellm.prometheus_exclude_labels = ["end_user", "user_agent", "client_ip"]
 ```
 
 > `prometheus_exclude_labels` is applied after any `prometheus_metrics_config` include-label filtering.
@@ -91,7 +58,7 @@ litellm.prometheus_exclude_labels = ["end_user", "user_agent", "client_ip"]
 curl -X GET "http://0.0.0.0:4000/daily_metrics" -H "Authorization: Bearer sk-1234"
 ```
 
-## Response format 
+## Response format
 ```json
 [
     daily_spend = [
