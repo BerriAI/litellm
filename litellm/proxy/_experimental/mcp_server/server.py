@@ -9,7 +9,6 @@ import contextlib
 import time
 import traceback
 import uuid
-from contextvars import ContextVar
 from datetime import datetime
 from typing import (
     Any,
@@ -38,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_active_toolset_id
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -56,13 +56,6 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
-
-# ContextVar holding the active toolset ID when a request arrives via
-# /toolset/{name}/mcp or /{name}/mcp (toolset fallback).  Set server-side
-# in proxy_server.py route handlers; never read from client-supplied headers.
-_mcp_active_toolset_id: ContextVar[Optional[str]] = ContextVar(
-    "_mcp_active_toolset_id", default=None
-)
 
 # Short-lived in-memory cache for BYOK credentials.
 # Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).

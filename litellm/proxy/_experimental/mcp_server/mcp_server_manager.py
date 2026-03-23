@@ -793,14 +793,15 @@ class MCPServerManager:
             )
             combined_servers = set(allowed_mcp_servers)
             # Only skip allow_all_keys servers when the request is inside a toolset
-            # scope.  _apply_toolset_scope marks this by setting mcp_toolsets=[].
-            # For regular keys (mcp_toolsets=None) or keys with configured toolsets
-            # (mcp_toolsets=[...non-empty...]), allow_all_keys servers must still be
-            # included to preserve backward-compatible behavior.
-            op = user_api_key_auth.object_permission if user_api_key_auth else None
-            in_toolset_scope = (
-                op is not None and op.mcp_servers is not None and op.mcp_toolsets == []
+            # scope.  toolset_mcp_route / dynamic_mcp_route set _mcp_active_toolset_id
+            # before calling the handler — that ContextVar is the reliable signal.
+            # Using op.mcp_toolsets==[] would false-positive on DB-default rows where
+            # Postgres initialises the column to ARRAY[]::TEXT[].
+            from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: PLC0415
+                _mcp_active_toolset_id,
             )
+
+            in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
 
