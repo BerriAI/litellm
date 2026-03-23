@@ -81,15 +81,23 @@ async def update_mcp_toolset(
     prisma_client: PrismaClient,
     data: UpdateMCPToolsetRequest,
     touched_by: str,
-) -> MCPToolset:
+) -> Optional[MCPToolset]:
     data_dict = data.model_dump(exclude_none=True, exclude={"toolset_id"})
     if "tools" in data_dict:
         data_dict["tools"] = json.dumps(data_dict["tools"])
     data_dict["updated_by"] = touched_by
-    row = await prisma_client.db.litellm_mcptoolsettable.update(
-        where={"toolset_id": data.toolset_id},
-        data=data_dict,
-    )
+    try:
+        row = await prisma_client.db.litellm_mcptoolsettable.update(
+            where={"toolset_id": data.toolset_id},
+            data=data_dict,
+        )
+    except Exception as e:
+        if (
+            "RecordNotFoundError" in type(e).__name__
+            or "record was not found" in str(e).lower()
+        ):
+            return None
+        raise
     return _toolset_from_row(row)
 
 

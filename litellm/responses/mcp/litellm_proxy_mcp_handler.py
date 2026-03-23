@@ -216,12 +216,16 @@ class LiteLLM_Proxy_MCP_Handler:
                         toolset_ids=resolved_toolset_ids
                     )
                 )
-                server_ids = list(tool_permissions.keys())
+                # Union toolset server IDs with direct servers the user also requested,
+                # so explicitly-selected servers aren't dropped by downstream permission filtering.
+                all_server_ids = list(
+                    set(tool_permissions.keys()) | set(resolved_mcp_servers)
+                )
                 existing_op = user_api_key_auth.object_permission
                 if existing_op is not None:
                     updated_op = existing_op.model_copy(
                         update={
-                            "mcp_servers": server_ids,
+                            "mcp_servers": all_server_ids,
                             "mcp_tool_permissions": tool_permissions,
                             "mcp_toolsets": [],
                             "mcp_access_groups": [],
@@ -230,7 +234,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 else:
                     updated_op = LiteLLM_ObjectPermissionTable(
                         object_permission_id="toolset-scope",
-                        mcp_servers=server_ids,
+                        mcp_servers=all_server_ids,
                         mcp_tool_permissions=tool_permissions,
                     )
                 user_api_key_auth = user_api_key_auth.model_copy(
