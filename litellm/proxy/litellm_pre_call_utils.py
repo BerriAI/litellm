@@ -1364,7 +1364,7 @@ def _apply_credential_overrides_from_model_config(
     6. Deployment default (no action needed)
     """
     # Respect clientside credentials — highest precedence
-    if data.get("api_base") or data.get("api_key"):
+    if data.get("api_base") is not None or data.get("api_key") is not None:
         return
 
     model_name = data.get("model")
@@ -1393,7 +1393,7 @@ def _apply_credential_overrides_from_model_config(
     credential_values = CredentialAccessor.get_credential_values(credential_name)
     if not credential_values:
         verbose_proxy_logger.warning(
-            "model_config references credential '%s' but it was not found",
+            "model_config references credential '%s' but it was not found or has no values",
             credential_name,
         )
         return
