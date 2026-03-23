@@ -3058,6 +3058,16 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose=print_verbose,
                             callback_func=callback,
                         )
+                    if callback == "akto" and is_sync_request:
+                        global aktoLogger
+                        if aktoLogger is None:
+                            aktoLogger = AktoLogger()
+                        aktoLogger.log_failure_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                     if (
                         isinstance(callback, CustomLogger)
                         and is_sync_request
@@ -3183,6 +3193,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 if not should_run:
                     continue
+                if callback == "akto":
+                    global aktoLogger
+                    if aktoLogger is None:
+                        aktoLogger = AktoLogger()
+                    await aktoLogger.async_log_failure_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
                         kwargs=self.model_call_details,

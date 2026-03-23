@@ -99,7 +99,11 @@ class LoggingCallbackManager:
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
         """
-        if not isinstance(callback, str) and self._is_async_callable(callback):
+        if isinstance(callback, str) and callback in ("akto",):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_failure_callback
+            )
+        elif not isinstance(callback, str) and self._is_async_callable(callback):
             self._safe_add_callback_to_list(
                 callback=callback, parent_list=litellm._async_failure_callback
             )

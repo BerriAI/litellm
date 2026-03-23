@@ -9,8 +9,6 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
-
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -224,7 +222,11 @@ class AktoLogger(CustomLogger):
     def get_failure_status_code(kwargs: dict) -> int:
         """Return the appropriate status code for a failed request."""
         exc = kwargs.get("exception")
-        if isinstance(exc, HTTPException):
+        if (
+            exc is not None
+            and hasattr(exc, "status_code")
+            and isinstance(exc.status_code, int)
+        ):
             return exc.status_code
         return 500
 
