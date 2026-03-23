@@ -15,6 +15,8 @@ _AZURE_STATUS_MAP = {
     "canceled": "cancelled",
     "canceling": "cancelled",
 }
+# Note: Azure's "canceling" (in-progress) is mapped to "cancelled" (terminal)
+# because LiteLLMFineTuningJob schema has no intermediate cancellation state.
 
 
 def _normalize_fine_tuning_job_dict(
