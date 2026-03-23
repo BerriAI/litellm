@@ -280,14 +280,11 @@ class AktoGuardrail(CustomGuardrail):
 
     @staticmethod
     def handle_guardrail_response(response: httpx.Response) -> Tuple[bool, str]:
-        """Parse the Akto guardrail response. Returns (allowed, reason)."""
-        if response.status_code != 200:
-            verbose_proxy_logger.error("Akto returned HTTP %d", response.status_code)
-            raise httpx.HTTPStatusError(
-                f"Akto returned unexpected status {response.status_code}",
-                request=response.request,
-                response=response,
-            )
+        """Parse the Akto guardrail response. Returns (allowed, reason).
+
+        Note: Non-200 responses are already raised as httpx.HTTPStatusError
+        by AsyncHTTPHandler.post() before reaching this method.
+        """
         try:
             result = response.json()
         except (json.JSONDecodeError, ValueError) as e:
@@ -332,8 +329,9 @@ class AktoGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            verbose_proxy_logger.error("Akto error (status=%s): %s", status, e)
             if self.unreachable_fallback == "fail_open":
-                verbose_proxy_logger.critical("Akto unreachable (fail-open): %s", e)
                 return inputs
             raise HTTPException(
                 status_code=503, detail="Akto guardrail service unreachable"

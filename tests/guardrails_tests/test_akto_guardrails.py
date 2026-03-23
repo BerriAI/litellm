@@ -248,13 +248,6 @@ def test_handle_guardrail_response_non_dict():
     assert allowed is True
 
 
-def test_handle_guardrail_response_error_status():
-    mock_resp = MagicMock(spec=httpx.Response)
-    mock_resp.status_code = 500
-    mock_resp.request = MagicMock()
-    with pytest.raises(httpx.HTTPStatusError):
-        AktoGuardrail.handle_guardrail_response(mock_resp)
-
 
 def test_handle_guardrail_response_non_json_body():
     mock_resp = MagicMock(spec=httpx.Response)
