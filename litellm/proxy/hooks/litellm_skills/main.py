@@ -145,34 +145,36 @@ class SkillsInjectionHook(CustomLogger):
                     f"'litellm_skill_' (gateway skill) or 'skill_' (Anthropic native).",
                 )
 
-        if len(litellm_skills) > 0:
+        # When the request comes through /v1/messages (anthropic_messages),
+        # we must inject into the top-level 'system' param because
+        # anthropic_messages() has separate 'messages' and 'system' params.
+        use_anthropic_format = call_type == "anthropic_messages"
 
-            # When the request comes through /v1/messages (anthropic_messages),
-            # we must inject into the top-level 'system' param because
-            # anthropic_messages() has separate 'messages' and 'system' params.
-            use_anthropic_format = call_type == "anthropic_messages"
+        if litellm_skills and applicator.supports_native_skills(provider):
+            # Native skills path: convert to tools + system prompt
+            data = self._process_for_messages_api(
+                data=data,
+                litellm_skills=litellm_skills,
+                use_anthropic_format=use_anthropic_format,
+            )
+        elif litellm_skills:
+            # Non-native path: inject into system prompt only
+            skill_contents = []
+            for skill in litellm_skills:
+                content = applicator._format_skill_content(skill)
+                if content:
+                    skill_contents.append(content)
 
-            if applicator.supports_native_skills(provider):
-                # Native skills path: convert to tools + system prompt
-                data = self._process_for_messages_api(
-                    data=data,
-                    litellm_skills=litellm_skills,
-                    use_anthropic_format=use_anthropic_format,
+            if skill_contents:
+                data = self.prompt_handler.inject_skill_content_to_messages(
+                    data, skill_contents, use_anthropic_format=use_anthropic_format
                 )
-            else:
-                # Non-native path: inject into system prompt only
-                skill_contents = []
-                for skill in litellm_skills:
-                    content = applicator._format_skill_content(skill)
-                    if content:
-                        skill_contents.append(content)
 
-                if skill_contents:
-                    data = self.prompt_handler.inject_skill_content_to_messages(
-                        data, skill_contents, use_anthropic_format=use_anthropic_format
-                    )
-                # Remove container (not supported by underlying providers)
-                data.pop("container", None)
+        # Rebuild container: keep only native Anthropic skills
+        if anthropic_skills:
+            data["container"] = {"skills": anthropic_skills}
+        else:
+            data.pop("container", None)
 
         return data
 
