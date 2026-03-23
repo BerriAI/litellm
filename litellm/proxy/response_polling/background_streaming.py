@@ -65,7 +65,9 @@ async def background_streaming_task(  # noqa: PLR0915
         # Create processor
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        # Make streaming request
+        # Make streaming request.
+        # Pre-call checks (rate limits, guardrails, budget) were already run
+        # before polling ID creation, so skip them here to avoid double-counting.
         response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
@@ -83,6 +85,7 @@ async def background_streaming_task(  # noqa: PLR0915
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            skip_pre_call_logic=True,
         )
 
         # Process streaming response following OpenAI events format

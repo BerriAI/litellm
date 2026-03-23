@@ -119,6 +119,35 @@ async def responses_api(
             f"Starting background response with polling for model={data.get('model')}"
         )
 
+        # Run pre-call checks (rate limits, guardrails, budget) BEFORE creating
+        # polling ID. This ensures rate-limited requests get a synchronous 429
+        # instead of a polling ID that immediately fails in the background task.
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+        try:
+            data, _logging_obj = await processor.common_processing_pre_call_logic(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=None,
+                route_type="aresponses",
+                llm_router=llm_router,
+            )
+        except Exception as e:
+            raise await processor._handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
+
         # Initialize polling handler with configured TTL (from global config)
         polling_handler = ResponsePollingHandler(
             redis_cache=redis_usage_cache,
@@ -134,7 +163,9 @@ async def responses_api(
             request_data=data,
         )
 
-        # Start background task to stream and update cache
+        # Start background task to stream and update cache.
+        # Pass pre-processed data so the background task skips pre-call logic
+        # (rate limits, guardrails already checked above).
         asyncio.create_task(
             background_streaming_task(
                 polling_id=polling_id,

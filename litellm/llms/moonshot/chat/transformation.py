@@ -168,7 +168,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if (
                 msg.get("role") == "assistant"
                 and msg.get("tool_calls")
-                and not msg.get("reasoning_content")  # Check using .get() which works for both dicts and Pydantic models
+                and not msg.get(
+                    "reasoning_content"
+                )  # Check using .get() which works for both dicts and Pydantic models
             ):
                 patched = dict(cast(dict, msg))
                 provider_fields = patched.get("provider_specific_fields") or {}

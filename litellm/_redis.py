@@ -222,8 +222,12 @@ def _get_redis_client_logic(**env_overrides):
         "REDIS_CLUSTER_NODES"
     )
 
+    # If startup_nodes resolved to None (not set by kwarg or env), remove the key
+    # entirely so callers can rely on key presence as a reliable cluster-mode signal.
     if _startup_nodes is not None and isinstance(_startup_nodes, str):
         redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
+    elif _startup_nodes is None:
+        redis_kwargs.pop("startup_nodes", None)
 
     _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
         "REDIS_SENTINEL_NODES"
@@ -273,10 +277,14 @@ def _get_redis_client_logic(**env_overrides):
             redis_kwargs["ssl_ca_certs"] = _gcp_ssl_ca_certs
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        redis_kwargs.pop("host", None)
-        redis_kwargs.pop("port", None)
-        redis_kwargs.pop("db", None)
-        redis_kwargs.pop("password", None)
+        # Only strip host/port/db/password when not routing to a cluster.
+        # When startup_nodes is also present the cluster path takes priority and
+        # needs the password for authentication.
+        if not redis_kwargs.get("startup_nodes"):
+            redis_kwargs.pop("host", None)
+            redis_kwargs.pop("port", None)
+            redis_kwargs.pop("db", None)
+            redis_kwargs.pop("password", None)
     elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
         pass
     elif (
@@ -368,6 +376,10 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+
+    if "startup_nodes" in redis_kwargs:
+        return init_redis_cluster(redis_kwargs)
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs()
         url_kwargs = {}
@@ -376,9 +388,6 @@ def get_redis_client(**env_overrides):
                 url_kwargs[arg] = redis_kwargs[arg]
 
         return redis.Redis.from_url(**url_kwargs)
-
-    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
-        return init_redis_cluster(redis_kwargs)
 
     # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
@@ -392,21 +401,6 @@ def get_redis_async_client(
     **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
-    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        if connection_pool is not None:
-            return async_redis.Redis(connection_pool=connection_pool)
-        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
-        url_kwargs = {}
-        for arg in redis_kwargs:
-            if arg in args:
-                url_kwargs[arg] = redis_kwargs[arg]
-            else:
-                verbose_logger.debug(
-                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
-                        arg
-                    )
-                )
-        return async_redis.Redis.from_url(**url_kwargs)
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -469,6 +463,22 @@ def get_redis_async_client(
 
         return cluster_client
 
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        if connection_pool is not None:
+            return async_redis.Redis(connection_pool=connection_pool)
+        args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+        url_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                url_kwargs[arg] = redis_kwargs[arg]
+            else:
+                verbose_logger.debug(
+                    "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
+                        arg
+                    )
+                )
+        return async_redis.Redis.from_url(**url_kwargs)
+
     # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
@@ -482,9 +492,15 @@ def get_redis_async_client(
     )
 
 
-def get_redis_connection_pool(**env_overrides):
+def get_redis_connection_pool(
+    **env_overrides,
+) -> Optional[async_redis.BlockingConnectionPool]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
+
+    if "startup_nodes" in redis_kwargs:
+        return None
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         pool_kwargs = {
             "timeout": REDIS_CONNECTION_POOL_TIMEOUT,
@@ -504,7 +520,6 @@ def get_redis_connection_pool(**env_overrides):
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
-    redis_kwargs.pop("startup_nodes", None)
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )

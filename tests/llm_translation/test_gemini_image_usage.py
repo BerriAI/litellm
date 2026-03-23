@@ -4,9 +4,11 @@ Test for Gemini image generation usage metadata extraction.
 This test verifies the fix for issue #18323 where image_generation() 
 was returning usage=0 while completion() returned proper token usage.
 """
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 import litellm
+from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.types.utils import ImageResponse, ImageObject, ImageUsage
 
 
@@ -211,3 +213,56 @@ def test_gemini_imagen_models_no_usage_extraction():
         
         # For Imagen models, we don't extract usage from the predictions format
         # This test just ensures we don't crash
+
+
+def test_gemini_image_generation_accumulates_multiple_image_prompt_token_details():
+    """
+    Regression test: promptTokensDetails can include multiple IMAGE entries.
+    These must be accumulated instead of overwritten.
+    """
+    previous_local_model_cost_map = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    previous_model_cost = litellm.model_cost
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        model = "gemini/gemini-3-pro-image-preview"
+        config = GoogleImageGenConfig()
+
+        usage_metadata = {
+            "promptTokenCount": 200,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 200,
+            "promptTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 10},
+                {"modality": "IMAGE", "tokenCount": 90},
+                {"modality": "IMAGE", "tokenCount": 100},
+            ],
+        }
+
+        parsed_usage = config._transform_image_usage(usage_metadata)
+        image_response = ImageResponse(
+            data=[ImageObject(b64_json="fake_image_data")],
+            usage=parsed_usage,
+        )
+
+        observed_cost = litellm.completion_cost(
+            completion_response=image_response,
+            model=model,
+            custom_llm_provider="gemini",
+        )
+
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+        expected_image_tokens = 190
+        expected_total_prompt_tokens = 200
+        expected_prompt_cost = expected_total_prompt_tokens * model_info["input_cost_per_token"]
+
+        assert parsed_usage.input_tokens_details.image_tokens == expected_image_tokens
+        assert parsed_usage.input_tokens_details.text_tokens == 10
+        assert observed_cost == pytest.approx(expected_prompt_cost, rel=1e-12)
+    finally:
+        if previous_local_model_cost_map is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = previous_local_model_cost_map
+        litellm.model_cost = previous_model_cost

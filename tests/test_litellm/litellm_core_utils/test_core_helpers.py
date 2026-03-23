@@ -73,6 +73,9 @@ class TestMapFinishReasonAnthropic:
     def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
+    def test_refusal(self):
+        assert map_finish_reason("refusal") == "content_filter"
+
 
 class TestMapFinishReasonGemini:
     @pytest.mark.parametrize(

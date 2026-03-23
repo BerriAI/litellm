@@ -32,7 +32,6 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -86,10 +85,10 @@ class TestHasPostCallGuardrails:
         with patch("litellm.callbacks", [PostCallGuardrail()]):
             assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is True
 
-    def test_returns_true_for_event_hook_none(self):
-        """event_hook=None means 'all events', including post_call."""
+    def test_returns_false_for_event_hook_none(self):
+        """event_hook=None is not an explicit post_call registration for deferral."""
         with patch("litellm.callbacks", [AllEventsGuardrail()]):
-            assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is True
+            assert ProxyBaseLLMRequestProcessing._has_post_call_guardrails() is False
 
     def test_returns_false_for_pre_call_only(self):
         with patch("litellm.callbacks", [PreCallGuardrail()]):
@@ -112,7 +111,10 @@ class TestHasPostCallGuardrails:
                 super().__init__(
                     guardrail_name="list-post",
                     default_on=True,
-                    event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
                 )
 
         with patch("litellm.callbacks", [ListGuardrail()]):
@@ -418,7 +420,9 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
 
         assert guardrail_called is True, "Guardrail hook should be called"
-        assert logger_called is False, "Non-guardrail logger should NOT be called by closure"
+        assert (
+            logger_called is False
+        ), "Non-guardrail logger should NOT be called by closure"
 
     @pytest.mark.asyncio
     async def test_closure_passes_guardrail_modified_response_to_logging(self):
@@ -463,8 +467,9 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert logged_response is modified_response, \
-            "Logging must receive the guardrail-modified response"
+        assert (
+            logged_response is modified_response
+        ), "Logging must receive the guardrail-modified response"
 
     @pytest.mark.asyncio
     async def test_closure_logs_even_on_guardrail_exception(self):
@@ -511,11 +516,13 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert logging_called is True, \
-            "Logging must fire even when guardrail raises HTTPException"
-        assert mock_logging_obj.model_call_details["metadata"].get(
-            "guardrail_blocked"
-        ) is True, "guardrail_blocked must be set for HTTPException"
+        assert (
+            logging_called is True
+        ), "Logging must fire even when guardrail raises HTTPException"
+        assert (
+            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
+            is True
+        ), "guardrail_blocked must be set for HTTPException"
 
     @pytest.mark.asyncio
     async def test_transient_error_does_not_set_guardrail_blocked(self):
@@ -556,9 +563,10 @@ class TestDeferredStreamingClosure:
 
         await asyncio.sleep(0)
 
-        assert mock_logging_obj.model_call_details["metadata"].get(
-            "guardrail_blocked"
-        ) is not True, "guardrail_blocked must NOT be set for transient errors"
+        assert (
+            mock_logging_obj.model_call_details["metadata"].get("guardrail_blocked")
+            is not True
+        ), "guardrail_blocked must NOT be set for transient errors"
 
     @pytest.mark.asyncio
     async def test_production_closure_integration(self):
@@ -620,10 +628,10 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        assert hook_called is True, \
-            "Production closure must call guardrail hook"
-        assert logged_response is modified_response, \
-            "Production closure must pass guardrail-modified response to logging"
+        assert hook_called is True, "Production closure must call guardrail hook"
+        assert (
+            logged_response is modified_response
+        ), "Production closure must pass guardrail-modified response to logging"
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_path_uses_unified_guardrail(self):
@@ -686,10 +694,12 @@ class TestDeferredStreamingClosure:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-        assert unified_hook_called is True, \
-            "apply_guardrail guardrails must be dispatched through UnifiedLLMGuardrails"
-        assert logged_response is not None, \
-            "Logging must fire after unified guardrail path"
+        assert (
+            unified_hook_called is True
+        ), "apply_guardrail guardrails must be dispatched through UnifiedLLMGuardrails"
+        assert (
+            logged_response is not None
+        ), "Logging must fire after unified guardrail path"
 
     @pytest.mark.asyncio
     async def test_hooks_receive_merged_guardrail_data(self):
@@ -742,11 +752,10 @@ class TestDeferredStreamingClosure:
             merged["_merged_marker"] = True
             return merged
 
-        with patch("litellm.callbacks", [guardrail]), \
-             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
-                side_effect=mock_merge,
-             ):
+        with patch("litellm.callbacks", [guardrail]), patch(
+            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            side_effect=mock_merge,
+        ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                 captured_data=captured_data,
                 captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
@@ -756,8 +765,9 @@ class TestDeferredStreamingClosure:
             )
 
         assert hook_received_data is not None, "Guardrail hook must be called"
-        assert hook_received_data.get("_merged_marker") is True, \
-            "Hook must receive guardrail_data (merged), not original captured_data"
+        assert (
+            hook_received_data.get("_merged_marker") is True
+        ), "Hook must receive guardrail_data (merged), not original captured_data"
         assert "model-guardrail" in hook_received_data.get("metadata", {}).get(
             "guardrails", []
         ), "Hook data must contain model-level guardrails"
@@ -773,6 +783,7 @@ class TestDeferredStreamingClosure:
         be silently skipped at execution time if captured_data (unmerged) were
         passed instead of guardrail_data (merged)."""
         import copy
+
         from litellm.types.utils import GenericGuardrailAPIInputs
 
         unified_received_data = None
@@ -812,6 +823,7 @@ class TestDeferredStreamingClosure:
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
             UnifiedLLMGuardrails,
         )
+
         original_unified_hook = UnifiedLLMGuardrails.async_post_call_success_hook
 
         async def tracking_unified_hook(self, user_api_key_dict, data, response):
@@ -819,16 +831,14 @@ class TestDeferredStreamingClosure:
             unified_received_data = data
             return response
 
-        with patch("litellm.callbacks", [guardrail]), \
-             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
-                side_effect=mock_merge,
-             ), \
-             patch.object(
-                UnifiedLLMGuardrails,
-                "async_post_call_success_hook",
-                tracking_unified_hook,
-             ):
+        with patch("litellm.callbacks", [guardrail]), patch(
+            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            side_effect=mock_merge,
+        ), patch.object(
+            UnifiedLLMGuardrails,
+            "async_post_call_success_hook",
+            tracking_unified_hook,
+        ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                 captured_data=captured_data,
                 captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
@@ -837,14 +847,15 @@ class TestDeferredStreamingClosure:
                 cache_hit=False,
             )
 
-        assert unified_received_data is not None, \
-            "UnifiedLLMGuardrails must be called for apply_guardrail guardrails"
-        assert unified_received_data.get("_merged_marker") is True, \
-            "UnifiedLLMGuardrails must receive guardrail_data (merged), not captured_data"
-        assert "model-apply-guardrail" in unified_received_data.get(
-            "metadata", {}
-        ).get("guardrails", []), \
-            "UnifiedLLMGuardrails data must contain model-level guardrails"
+        assert (
+            unified_received_data is not None
+        ), "UnifiedLLMGuardrails must be called for apply_guardrail guardrails"
+        assert (
+            unified_received_data.get("_merged_marker") is True
+        ), "UnifiedLLMGuardrails must receive guardrail_data (merged), not captured_data"
+        assert "model-apply-guardrail" in unified_received_data.get("metadata", {}).get(
+            "guardrails", []
+        ), "UnifiedLLMGuardrails data must contain model-level guardrails"
 
     @pytest.mark.asyncio
     async def test_multiple_guardrails_all_receive_merged_data(self):
@@ -887,11 +898,10 @@ class TestDeferredStreamingClosure:
             merged["_merged_marker"] = True
             return merged
 
-        with patch("litellm.callbacks", [guardrail_a, guardrail_b]), \
-             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
-                side_effect=mock_merge,
-             ):
+        with patch("litellm.callbacks", [guardrail_a, guardrail_b]), patch(
+            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            side_effect=mock_merge,
+        ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                 captured_data=captured_data,
                 captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
@@ -901,10 +911,10 @@ class TestDeferredStreamingClosure:
             )
 
         for name in ("guardrail-a", "guardrail-b"):
-            assert name in received_data_per_guardrail, \
-                f"{name} must be called"
-            assert received_data_per_guardrail[name].get("_merged_marker") is True, \
-                f"{name} must receive guardrail_data (merged), not captured_data"
+            assert name in received_data_per_guardrail, f"{name} must be called"
+            assert (
+                received_data_per_guardrail[name].get("_merged_marker") is True
+            ), f"{name} must receive guardrail_data (merged), not captured_data"
 
     @pytest.mark.asyncio
     async def test_logging_fires_even_if_guardrail_init_raises(self):
@@ -940,5 +950,6 @@ class TestDeferredStreamingClosure:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert logging_called is True, \
-            "Logging must fire even when guardrail initialization raises"
+        assert (
+            logging_called is True
+        ), "Logging must fire even when guardrail initialization raises"

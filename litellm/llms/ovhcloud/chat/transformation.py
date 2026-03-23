@@ -28,9 +28,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         """
         supports_function_calling: Optional[bool] = None
         try:
-            model_info = _get_model_info_helper(
-                model, custom_llm_provider="ovhcloud"
-            )
+            model_info = _get_model_info_helper(model, custom_llm_provider="ovhcloud")
             supports_function_calling = model_info.get(
                 "supports_function_calling", None
             )
