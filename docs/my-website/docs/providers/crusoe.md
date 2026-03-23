@@ -147,21 +147,31 @@ model_list:
 
 ## Custom API Base
 
-```python showLineNumbers title="Custom API Base"
+**Option 1: Environment variable**
+
+```python showLineNumbers title="Custom API Base via env var"
 import os
-import litellm
 from litellm import completion
 
-# Using environment variable
 os.environ["CRUSOE_API_BASE"] = "https://custom.crusoecloud.com/v1"
 os.environ["CRUSOE_API_KEY"] = ""  # your API key
 
-# Or pass directly
+response = completion(
+    model="crusoe/meta-llama/Llama-3.3-70B-Instruct",
+    messages=[{"content": "Hello!", "role": "user"}],
+)
+```
+
+**Option 2: Pass directly**
+
+```python showLineNumbers title="Custom API Base via parameter"
+from litellm import completion
+
 response = completion(
     model="crusoe/meta-llama/Llama-3.3-70B-Instruct",
     messages=[{"content": "Hello!", "role": "user"}],
     api_base="https://custom.crusoecloud.com/v1",
-    api_key="your-api-key"
+    api_key="your-api-key",
 )
 ```
 
