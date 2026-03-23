@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -441,7 +442,13 @@ def update_messages_with_model_file_ids(
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if file_object_file_field is None:
+                            raise litellm.BadRequestError(
+                                message="Content block has type='file' but is missing the required 'file' field",
+                                model=None,
+                                llm_provider=None,
+                            )
                         file_id = file_object_file_field.get("file_id")
                         format = file_object_file_field.get(
                             "format", get_format_from_file_id(file_id)
@@ -1049,7 +1056,13 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if file_object_file_field is None:
+                            raise litellm.BadRequestError(
+                                message="Content block has type='file' but is missing the required 'file' field",
+                                model=None,
+                                llm_provider=None,
+                            )
                         file_id = file_object_file_field.get("file_id")
                         if file_id:
                             file_ids.append(file_id)
@@ -1107,9 +1120,16 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_id = message["file"].get("file_id")
-    file_data = message["file"].get("file_data")
-    format = message["file"].get("format")
+    file_sub = message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider=None,
+        )
+    file_id = file_sub.get("file_id")
+    file_data = file_sub.get("file_data")
+    format = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(
