@@ -573,6 +573,11 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
             assert "org_id" not in labels, f"{metric} should not have org_id"
             assert "org_alias" not in labels, f"{metric} should not have org_alias"
 
+        # org_id in custom_prometheus_metadata_labels must not produce duplicate labels
+        litellm.custom_prometheus_metadata_labels = ["org_id"]
+        labels = PrometheusMetricLabels.get_labels("litellm_requests_metric")
+        assert labels.count("org_id") == 1
+
         # Flag OFF — org labels not in metric schema, absent from label dict entirely
         litellm.prometheus_emit_org_labels = False
         prometheus_logger.litellm_requests_metric.reset_mock()
@@ -583,3 +588,4 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         assert label_kwargs["team"] == "team-abc"
     finally:
         litellm.prometheus_emit_org_labels = False
+        litellm.custom_prometheus_metadata_labels = []
