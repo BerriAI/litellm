@@ -196,6 +196,7 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: Optional[int] = None,
+        max_requests_before_restart_jitter: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -279,6 +280,10 @@ class ProxyInitializationHelpers:
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
+        if max_requests_before_restart_jitter is not None:
+            gunicorn_options["max_requests_jitter"] = (
+                max_requests_before_restart_jitter
+            )
 
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
@@ -571,6 +576,13 @@ class ProxyInitializationHelpers:
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 @click.option(
+    "--max_requests_before_restart_jitter",
+    default=None,
+    type=int,
+    help="Random upper bound for extra requests before worker restart (uvicorn: limit_max_requests_jitter, gunicorn: max_requests_jitter)",
+    envvar="MAX_REQUESTS_BEFORE_RESTART_JITTER",
+)
+@click.option(
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
@@ -617,6 +629,7 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
     max_requests_before_restart,
+    max_requests_before_restart_jitter,
     enforce_prisma_migration_check: bool,
 ):
     if setup:
@@ -942,6 +955,10 @@ def run_server(  # noqa: PLR0915
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
+        if max_requests_before_restart_jitter is not None:
+            uvicorn_args["limit_max_requests_jitter"] = (
+                max_requests_before_restart_jitter
+            )
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -967,6 +984,7 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
+                max_requests_before_restart_jitter=max_requests_before_restart_jitter,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(
