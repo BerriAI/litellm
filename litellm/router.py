@@ -8256,6 +8256,12 @@ class Router:
         if team_id specified, only return team-specific models
 
         Optimized with O(1) index lookup instead of O(n) linear scan.
+
+        Note: when team_id is provided, O(1) lookup in
+        `team_model_to_deployment_indices` only applies when `model_name` is the
+        team public model name. If a caller passes an internal deployment model
+        name (for example, `model_name_<team_id>_<uuid>`), this method falls back
+        to the standard model-name index / scan path.
         """
         returned_models: List[DeploymentTypedDict] = []
 
