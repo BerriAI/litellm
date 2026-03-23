@@ -13396,6 +13396,60 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+# Dynamic MCP health routes - handle /{mcp_server_name}/health
+@app.api_route(
+    "/{mcp_server_name}/health",
+    methods=["GET", "HEAD"],
+)
+async def dynamic_mcp_health_route(mcp_server_name: str, request: Request):
+    """Handle health check passthrough for MCP servers like /github_mcp/health"""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+        mcp_server_name, client_ip=client_ip
+    )
+    if mcp_server is None:
+        raise HTTPException(
+            status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
+        )
+
+    if not mcp_server.url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"MCP server '{mcp_server_name}' has no URL configured",
+        )
+
+    try:
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        health_url = mcp_server.url.rstrip("/") + "/health"
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        upstream_response = await client.get(health_url)
+
+        from starlette.responses import Response
+
+        return Response(
+            content=upstream_response.content,
+            status_code=upstream_response.status_code,
+            headers=dict(upstream_response.headers),
+            media_type=upstream_response.headers.get(
+                "content-type", "application/json"
+            ),
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling health check for MCP server '{mcp_server_name}': {str(e)}"
+        )
+        raise HTTPException(status_code=502, detail=f"Health check failed: {str(e)}")
+
+
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
