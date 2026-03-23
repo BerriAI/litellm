@@ -251,6 +251,7 @@ vi.mock("@ant-design/icons", async () => {
     UserOutlined: Icon,
     DownOutlined: Icon,
     RightOutlined: Icon,
+    ExportOutlined: Icon,
     LoadingOutlined,
   };
 });

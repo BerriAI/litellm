@@ -146,7 +146,8 @@ def create(
         )
         create_request["file_id"] = file_id
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -279,7 +280,8 @@ def list(
             VectorStoreFileRequestUtils.get_list_query_params(local_vars)
         )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id, **list_query},
             litellm_params={
@@ -387,7 +389,8 @@ def retrieve(
                 f"Vector store file retrieve is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -498,7 +501,8 @@ def retrieve_content(
                 f"Vector store file content retrieve is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -619,7 +623,8 @@ def update(
         )
         update_request["attributes"] = attributes
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,
@@ -733,7 +738,8 @@ def delete(
                 f"Vector store file delete is not supported for {custom_llm_provider}"
             )
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=None,
             optional_params={
                 "vector_store_id": vector_store_id,

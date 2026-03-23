@@ -3,6 +3,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -26,10 +27,9 @@ async def test_openai_realtime_direct_call_no_intent():
     Note: This test may be skipped on transient connection failures since it depends
     on external OpenAI API availability.
     """
-    import websockets
     import asyncio
     import json
-    
+
     class RealTimeWebSocketClient:
         def __init__(self):
             self.messages_sent = []
@@ -39,10 +39,10 @@ async def test_openai_realtime_direct_call_no_intent():
             self._receive_called = False
             self.close_code = None
             self.close_reason = None
-            
+
         async def accept(self):
             pass
-            
+
         async def send_text(self, message):
             self.messages_sent.append(message)
             try:
@@ -50,10 +50,10 @@ async def test_openai_realtime_direct_call_no_intent():
                     message_str = message.decode('utf-8')
                 else:
                     message_str = message
-                    
+
                 msg_data = json.loads(message_str)
                 msg_type = msg_data.get('type', 'unknown')
-                
+
                 if msg_type == "error":
                     error_info = msg_data.get('error', {})
                     error_code = error_info.get('code', 'unknown')
@@ -61,7 +61,7 @@ async def test_openai_realtime_direct_call_no_intent():
                     # Don't fail on error, just record it - some errors are expected
                     self.messages_received.append(msg_data)
                     return
-                
+
                 if msg_type == "session.created" and not self.received_session_created:
                     self.messages_received.append(msg_data)
                     self.received_session_created = True
@@ -69,44 +69,44 @@ async def test_openai_realtime_direct_call_no_intent():
             except (json.JSONDecodeError, UnicodeDecodeError):
                 # Non-JSON messages are acceptable
                 pass
-            
+
         async def receive_text(self):
             if not self._receive_called:
                 self._receive_called = True
                 max_wait = 60.0
                 check_interval = 0.1
                 waited = 0.0
-                
+
                 while waited < max_wait:
                     if self.connection_successful:
                         break
                     await asyncio.sleep(check_interval)
                     waited += check_interval
-                
+
                 if not self.connection_successful:
                     await asyncio.sleep(3.0)
-            
-            raise websockets.exceptions.ConnectionClosed(None, None)
-            
+
+            raise ConnectionClosedOK(None, None)
+
         async def close(self, code=1000, reason=""):
             self.close_code = code
             self.close_reason = reason
-            
+
         @property
         def headers(self):
             return {}
 
     websocket_client = RealTimeWebSocketClient()
     caught_exception = None
-    
+
     try:
         await litellm._arealtime(
-            model="gpt-4o-realtime-preview-2024-10-01",
+            model="openai/gpt-4o-realtime-preview-2024-10-01",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
             timeout=60
         )
-    except websockets.exceptions.ConnectionClosed:
+    except (ConnectionClosedOK, ConnectionClosedError):
         pass
     except Exception as e:
         caught_exception = e
@@ -153,10 +153,9 @@ async def test_openai_realtime_direct_call_with_intent():
     Note: This test may be skipped on transient connection failures since it depends
     on external OpenAI API availability.
     """
-    import websockets
     import asyncio
     import json
-    
+
     class RealTimeWebSocketClient:
         def __init__(self):
             self.messages_sent = []
@@ -186,7 +185,7 @@ async def test_openai_realtime_direct_call_with_intent():
                     error_info = msg_data.get('error', {})
                     error_code = error_info.get('code', 'unknown')
                     error_message = error_info.get('message', 'unknown')
-                    
+
                     if error_code == "invalid_intent":
                         self.intent_error_received = {
                             'code': error_code,
@@ -203,7 +202,7 @@ async def test_openai_realtime_direct_call_with_intent():
             except (json.JSONDecodeError, UnicodeDecodeError):
                 # Non-JSON messages are acceptable
                 pass
-            
+
         async def receive_text(self):
             if not self._receive_called:
                 self._receive_called = True
@@ -220,7 +219,7 @@ async def test_openai_realtime_direct_call_with_intent():
                 if not self.connection_successful:
                     await asyncio.sleep(3.0)
 
-            raise websockets.exceptions.ConnectionClosed(None, None)
+            raise ConnectionClosedOK(None, None)
 
         async def close(self, code=1000, reason=""):
             self.close_code = code
@@ -232,21 +231,21 @@ async def test_openai_realtime_direct_call_with_intent():
 
     websocket_client = RealTimeWebSocketClient()
     caught_exception = None
-    
+
     query_params: RealtimeQueryParams = {
-        "model": "gpt-4o-realtime-preview-2024-10-01",
+        "model": "openai/gpt-4o-realtime-preview-2024-10-01",
         "intent": "chat"
     }
-    
+
     try:
         await litellm._arealtime(
-            model="gpt-4o-realtime-preview-2024-10-01",
+            model="openai/gpt-4o-realtime-preview-2024-10-01",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
             query_params=query_params,
             timeout=60
         )
-    except websockets.exceptions.ConnectionClosed:
+    except (ConnectionClosedOK, ConnectionClosedError):
         pass
     except Exception as e:
         caught_exception = e

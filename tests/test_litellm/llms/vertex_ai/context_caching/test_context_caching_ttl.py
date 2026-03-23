@@ -211,7 +211,7 @@ class TestTransformationWithTTL:
         vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
             custom_llm_provider=custom_llm_provider,
@@ -223,9 +223,9 @@ class TestTransformationWithTTL:
         assert result["ttl"] == "3600s"
 
         if custom_llm_provider == "gemini":
-            assert result["model"] == "models/gemini-1.5-pro"
+            assert result["model"] == "models/gemini-2.5-pro"
         else:
-            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-2.5-pro"
         
 
         assert result["displayName"] == "test-cache-key"
@@ -250,7 +250,7 @@ class TestTransformationWithTTL:
         vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
-            model="gemini-1.5-pro", 
+            model="gemini-2.5-pro", 
             messages=messages,
             cache_key="test-cache-key",
             custom_llm_provider=custom_llm_provider,
@@ -261,9 +261,9 @@ class TestTransformationWithTTL:
         assert "ttl" not in result
 
         if custom_llm_provider == "gemini":
-            assert result["model"] == "models/gemini-1.5-pro"
+            assert result["model"] == "models/gemini-2.5-pro"
         else:
-            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-2.5-pro"
         
         assert result["displayName"] == "test-cache-key"
     
@@ -286,7 +286,7 @@ class TestTransformationWithTTL:
         vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             messages=messages, 
             cache_key="test-cache-key",
             custom_llm_provider=custom_llm_provider,
@@ -297,9 +297,9 @@ class TestTransformationWithTTL:
         assert "ttl" not in result
 
         if custom_llm_provider == "gemini":
-            assert result["model"] == "models/gemini-1.5-pro"
+            assert result["model"] == "models/gemini-2.5-pro"
         else:
-            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-2.5-pro"
         
         assert result["displayName"] == "test-cache-key"
     
@@ -332,7 +332,7 @@ class TestTransformationWithTTL:
         vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
-            model="gemini-1.5-pro",
+            model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
             custom_llm_provider=custom_llm_provider,
@@ -345,9 +345,9 @@ class TestTransformationWithTTL:
         assert "system_instruction" in result
         
         if custom_llm_provider == "gemini":
-            assert result["model"] == "models/gemini-1.5-pro"
+            assert result["model"] == "models/gemini-2.5-pro"
         else:
-            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-2.5-pro"
         
         assert result["displayName"] == "test-cache-key"
 

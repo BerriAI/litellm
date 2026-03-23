@@ -624,6 +624,53 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Vertex AI Veo.")
 
+    def transform_video_create_character_request(
+        self, name, video, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
+
+    def transform_video_create_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
+
+    def transform_video_get_character_request(
+        self, character_id, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError("video get character is not supported for Vertex AI")
+
+    def transform_video_get_character_response(self, raw_response, logging_obj):
+        raise NotImplementedError("video get character is not supported for Vertex AI")
+
+    def transform_video_edit_request(
+        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+    ):
+        raise NotImplementedError("video edit is not supported for Vertex AI")
+
+    def transform_video_edit_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video edit is not supported for Vertex AI")
+
+    def transform_video_extension_request(
+        self,
+        prompt,
+        video_id,
+        seconds,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+    ):
+        raise NotImplementedError("video extension is not supported for Vertex AI")
+
+    def transform_video_extension_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
+        raise NotImplementedError("video extension is not supported for Vertex AI")
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

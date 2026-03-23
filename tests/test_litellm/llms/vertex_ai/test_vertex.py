@@ -55,33 +55,30 @@ def test_completion_pydantic_obj_2():
         ],
         "generationConfig": {
             "response_mime_type": "application/json",
-            "response_schema": {
+            "response_json_schema": {
+                "$defs": {
+                    "CalendarEvent": {
+                        "properties": {
+                            "name": {"title": "Name", "type": "string"},
+                            "date": {"title": "Date", "type": "string"},
+                            "participants": {
+                                "items": {"type": "string"},
+                                "title": "Participants",
+                                "type": "array",
+                            },
+                        },
+                        "required": ["name", "date", "participants"],
+                        "title": "CalendarEvent",
+                        "type": "object",
+                    }
+                },
                 "properties": {
                     "events": {
-                        "items": {
-                            "properties": {
-                                "name": {"title": "Name", "type": "string"},
-                                "date": {"title": "Date", "type": "string"},
-                                "participants": {
-                                    "items": {"type": "string"},
-                                    "title": "Participants",
-                                    "type": "array",
-                                },
-                            },
-                            "propertyOrdering": [
-                                "name",
-                                "date",
-                                "participants",
-                            ],
-                            "required": ["name", "date", "participants"],
-                            "title": "CalendarEvent",
-                            "type": "object",
-                        },
+                        "items": {"$ref": "#/$defs/CalendarEvent"},
                         "title": "Events",
                         "type": "array",
                     }
                 },
-                "propertyOrdering": ["events"],
                 "required": ["events"],
                 "title": "EventsList",
                 "type": "object",
@@ -93,7 +90,7 @@ def test_completion_pydantic_obj_2():
         mock_post.return_value = expected_request_body
         try:
             response = litellm.completion(
-                model="gemini/gemini-1.5-pro",
+                model="gemini/gemini-2.5-flash",
                 messages=messages,
                 response_format=EventsList,
                 client=client,
