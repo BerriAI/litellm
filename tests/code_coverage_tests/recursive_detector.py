@@ -8,6 +8,7 @@ IGNORE_FUNCTIONS = [
     "filter_schema_fields",
     "text_completion",
     "_check_for_os_environ_vars",
+    "_resolve_os_environ_refs",  # bounded by YAML general_settings nesting (dict/list walk only).
     "clean_message",
     "unpack_defs",
     "convert_anyof_null_to_nullable",  # has a set max depth

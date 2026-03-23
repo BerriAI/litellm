@@ -162,7 +162,7 @@ def _resolve_os_environ_refs(config: dict) -> dict:
         if isinstance(value, dict):
             config[key] = _resolve_os_environ_refs(value)
         elif isinstance(value, list):
-            resolved_list = []
+            resolved_list: list[Any] = []
             for item in value:
                 if isinstance(item, dict):
                     resolved_list.append(_resolve_os_environ_refs(item))
@@ -814,6 +814,11 @@ def run_server(  # noqa: PLR0915
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
 ):
+    if isinstance(config, str):
+        stripped_config = config.strip()
+        if stripped_config == "" or stripped_config.lower() == "none":
+            config = None
+
     if setup:
         from litellm.setup_wizard import run_setup_wizard
 
