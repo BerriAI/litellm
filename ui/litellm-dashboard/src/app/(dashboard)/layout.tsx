@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
+import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
+import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -22,7 +23,18 @@ function withBase(path: string): string {
 }
 /** -------------------------------- */
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+/**
+ * Pages that have been migrated to path-based routing under (dashboard)/.
+ * When the leftnav triggers one of these, navigate to the path route instead
+ * of the legacy query-param root page.
+ *
+ * Key = legacy page id used in leftnav, Value = route segment under (dashboard)/
+ */
+const MIGRATED_PAGES: Record<string, string> = {
+  "api-reference": "api-reference",
+};
+
+function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
@@ -31,10 +43,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return searchParams.get("page") || "api-keys";
   });
 
-  const updatePage = (newPage: string) => {
-    const newSearchParams = new URLSearchParams(searchParams);
-    newSearchParams.set("page", newPage);
-    router.push(withBase(`/?${newSearchParams.toString()}`)); // always under BASE
+  const handleSetPage = (newPage: string) => {
+    // If the page has been migrated to path routing, navigate there
+    const migratedRoute = MIGRATED_PAGES[newPage];
+    if (migratedRoute) {
+      router.push(withBase(migratedRoute));
+      setPage(newPage);
+      return;
+    }
+
+    // Otherwise, navigate back to the legacy root page with query params
+    router.push(withBase(`?page=${newPage}`));
     setPage(newPage);
   };
 
@@ -56,16 +75,31 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           userRole={userRole}
           premiumUser={premiumUser}
           proxySettings={undefined}
-          setProxySettings={() => {}}
+          setProxySettings={() => { }}
           accessToken={accessToken}
+          isDarkMode={false}
+          toggleDarkMode={() => { }}
         />
+        <DebugWarningBanner />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
-            <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
+            <SidebarProvider
+              setPage={handleSetPage}
+              defaultSelectedKey={page}
+              sidebarCollapsed={sidebarCollapsed}
+            />
           </div>
           <main className="flex-1">{children}</main>
         </div>
       </div>
     </ThemeProvider>
+  );
+}
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+      <LayoutContent>{children}</LayoutContent>
+    </Suspense>
   );
 }

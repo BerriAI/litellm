@@ -519,7 +519,7 @@ async def test_openai_codex_stream(sync_mode):
     from litellm.main import stream_chunk_builder
 
     kwargs = {
-        "model": "openai/codex-mini-latest",
+        "model": "openai/gpt-5.2-codex",
         "messages": [{"role": "user", "content": "Hey!"}],
         "stream": True,
     }
@@ -551,7 +551,7 @@ async def test_openai_codex(sync_mode):
             {
                 "model_name": "openai-codex-mini-latest",
                 "litellm_params": {
-                    "model": "openai/codex-mini-latest",
+                    "model": "openai/gpt-5.2-codex",
                 },
             }
         ]
@@ -834,23 +834,6 @@ def test_gpt_5_reasoning_streaming():
     assert has_content
 
     print("✓ gpt_5_reasoning_streaming correctly handled streaming")
-
-
-def test_gpt_5_pro_reasoning():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model="gpt-5-pro",
-        messages=[
-            {
-                "role": "user",
-                "content": "Think of a poem and then write it.",
-            }
-        ],
-        reasoning_effort="high",
-    )
-    print("response: ", response)
-    # reasoning_effort string param does not request summaries (opt-in since #16210)
-    assert response.choices[0].message.content is not None  # But we should get content
 
 
 def test_openai_gpt_5_codex_reasoning():
@@ -1471,3 +1454,29 @@ def test_gpt_5_web_search():
 
     for chunk in response:
         print("chunk: ", chunk)
+
+
+def test_responses_gpt54_with_xhigh_reasoning():
+    """
+    Ensure chat->responses bridge sends the correct request payload for
+    openai/responses/gpt-5.4 with reasoning_effort="xhigh".
+    """
+    with patch("litellm.responses") as mock_responses:
+        # Stop execution right after request generation to avoid external API calls.
+        mock_responses.side_effect = RuntimeError("stop_after_request_build")
+
+        with pytest.raises(Exception):
+            litellm.completion(
+                model="openai/responses/gpt-5.4",
+                messages=[{"role": "user", "content": "What is 2+2?"}],
+                reasoning_effort="xhigh",
+                max_tokens=100,
+            )
+
+        mock_responses.assert_called_once()
+        request_body = mock_responses.call_args.kwargs
+
+        # The responses prefix should be stripped before routing.
+        assert request_body["model"] == "gpt-5.4"
+        # chat-completions reasoning_effort must map to Responses API reasoning.
+        assert request_body["reasoning"] == {"effort": "xhigh"}

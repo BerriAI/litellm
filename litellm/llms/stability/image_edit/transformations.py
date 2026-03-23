@@ -14,11 +14,11 @@ from httpx._types import RequestFiles
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
     STABILITY_EDIT_ENDPOINTS,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import get_model_info
 
@@ -40,9 +40,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
     DEFAULT_BASE_URL: str = "https://api.stability.ai"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         """
         Return list of OpenAI params supported by Stability AI.
 
@@ -52,7 +50,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             "n",  # Number of images (Stability always returns 1, we can loop)
             "size",  # Maps to aspect_ratio
             "response_format",  # b64_json or url (Stability only returns b64)
-            "mask"  
+            "mask",
         ]
 
     def map_openai_params(
@@ -170,8 +168,8 @@ class StabilityImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -186,12 +184,18 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
         data: Dict[str, Any] = {
-            "prompt": prompt,
             "output_format": "png",  # Default to PNG
         }
+
+        # Add prompt only if provided (some Stability endpoints don't require it)
+        if prompt is not None and prompt != "":
+            data["prompt"] = prompt
         # Handle image parameter - could be a single file or list
         image_file = image[0] if isinstance(image, list) else image  # type: ignore
-        files: Dict[str, Any] = {"image": image_file}
+        files: Dict[str, Any] = {}
+        if image is not None:
+            image_file = image[0] if isinstance(image, list) else image  # type: ignore
+            files["image"] = image_file
 
         # Add optional params (already mapped in map_openai_params)
         for key, value in image_edit_optional_request_params.items():  # type: ignore
@@ -235,7 +239,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "select_prompt",
                 "control_strength",
                 "composition_fidelity",
-                "change_strength"
+                "change_strength",
             ]:
                 data[key] = value  # type: ignore
 
@@ -304,7 +308,9 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         model_info = get_model_info(model, custom_llm_provider="stability")
         cost_per_image = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
+            model_response._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ] = float(cost_per_image)
         return model_response
 
     def use_multipart_form_data(self) -> bool:

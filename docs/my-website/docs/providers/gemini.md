@@ -15,6 +15,17 @@ import TabItem from '@theme/TabItem';
 
 <br />
 
+:::tip Gemini API vs Vertex AI
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix.
+
+Models without a prefix default to Vertex AI which requires full GCP authentication.
+:::
 
 ## API Keys
 
@@ -43,6 +54,7 @@ response = completion(
 - stream
 - tools
 - tool_choice
+- include_server_side_tool_invocations
 - functions
 - response_format
 - n
@@ -845,7 +857,112 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-### URL Context 
+### Context Circulation (Server-Side Tool Combination)
+
+Context circulation allows Gemini 3+ models to combine **built-in tools** (like Google Search) with **your custom functions** in the same request. Without it, Gemini returns an error if you try to use both.
+
+When enabled, Gemini can execute Google Search server-side, use those results to decide whether to call your custom functions, and return the full chain of reasoning.
+
+**How it works:**
+1. You pass `include_server_side_tool_invocations=True` along with both Google Search and your function tools
+2. Gemini executes server-side tools internally and returns `toolCall`/`toolResponse` parts alongside any `functionCall` parts
+3. LiteLLM extracts the server-side invocations into `provider_specific_fields["server_side_tool_invocations"]`
+4. On subsequent turns, include the full assistant message in your conversation history — LiteLLM re-injects the server-side parts automatically
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=[{"role": "user", "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting."}],
+    tools=[
+        {"type": "web_search_preview"},  # Google Search (server-side)
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_meeting",
+                "description": "Schedule a meeting",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                },
+            },
+        },
+    ],
+    include_server_side_tool_invocations=True,
+)
+
+msg = response.choices[0].message
+
+# Server-side tool results are in provider_specific_fields
+psf = msg.provider_specific_fields or {}
+for invocation in psf.get("server_side_tool_invocations", []):
+    print(invocation["tool_type"])  # e.g. "GOOGLE_SEARCH_WEB"
+    print(invocation["id"])
+    print(invocation["args"])       # e.g. {"queries": ["weather Buenos Aires"]}
+    print(invocation["response"])   # Search results from Google
+
+# For multi-turn: just append the full message to history
+messages.append(msg)
+messages.append({"role": "user", "content": "Thanks!"})
+# LiteLLM automatically re-injects the server-side parts + thought signatures
+response2 = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=messages,
+    tools=tools,
+    include_server_side_tool_invocations=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-3-flash",
+  "messages": [{"role": "user", "content": "What is the weather in Buenos Aires?"}],
+  "tools": [
+    {"type": "web_search_preview"},
+    {"type": "function", "function": {"name": "schedule_meeting", "description": "Schedule a meeting", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}}
+  ],
+  "include_server_side_tool_invocations": true
+}'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+- Context circulation requires **Gemini 3+** models
+- Server-side tool invocations (`toolCall`/`toolResponse`) are **not** included in `tool_calls` — they are in `provider_specific_fields["server_side_tool_invocations"]` because they were already executed by Google, not by your code
+- `thought_signatures` are automatically preserved alongside server-side invocations for multi-turn coherence
+
+:::
+
+### URL Context
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1182,6 +1299,8 @@ When responding to Computer Use tool calls, include the URL and screenshot:
 | `"unspecified"` | `ENVIRONMENT_UNSPECIFIED` |
 | `ENVIRONMENT_BROWSER` | `ENVIRONMENT_BROWSER` (passed through) |
 | `ENVIRONMENT_UNSPECIFIED` | `ENVIRONMENT_UNSPECIFIED` (passed through) |
+
+
 
 
 
@@ -1547,16 +1666,26 @@ LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Image in local storage - ./localimage.jpeg
 
-## Image Resolution Control (Gemini 3+)
+## Media Resolution Control (Images & Videos)
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images in your request.
+LiteLLM supports OpenAI's `detail` parameter for specifying the image resolution when using Gemini models. The behavior differs between Gemini versions:
+
+| Gemini Version | Resolution Control | Behavior |
+|----------------|-------------------|----------|
+| Gemini 3+ | Per-part | Each image/video can have its own `detail` setting |
+| Gemini 2.x (2.0, 2.5) | Global | The highest `detail` from all images is applied globally via `mediaResolution` in `generationConfig` |
 
 **Supported `detail` values:**
-- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
-- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"low"` - Maps to `MEDIA_RESOLUTION_LOW` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `MEDIA_RESOLUTION_MEDIUM`
+- `"high"` - Maps to `MEDIA_RESOLUTION_HIGH` (1120 tokens for images)
+- `"ultra_high"` - Maps to `MEDIA_RESOLUTION_ULTRA_HIGH`
 - `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
 
-**Usage Example:**
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="images" label="Images">
 
 ```python
 from litellm import completion
@@ -1587,15 +1716,201 @@ messages = [
     }
 ]
 
+# Works with both Gemini 2.x and 3+
+response = completion(
+    model="gemini/gemini-2.5-flash",  # or gemini-3-pro-preview
+    messages=messages,
+)
+```
+
+</TabItem>
+<TabItem value="videos" label="Videos with Files">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "gs://my-bucket/video.mp4",
+                    "format": "video/mp4",
+                    "detail": "high"  # High resolution for detailed video analysis
+                }
+            }
+        ]
+    }
+]
+
 response = completion(
     model="gemini/gemini-3-pro-preview",
     messages=messages,
 )
 ```
 
+</TabItem>
+</Tabs>
+
 :::info
-**Per-Part Resolution:** Each image in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature is only available for Gemini 3+ models.
+**Gemini 3+ Per-Part Resolution:** Each image or video can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This works with both `image_url` and `file` content types.
+
+**Gemini 2.x Global Resolution:** When multiple images have different `detail` values, LiteLLM uses the highest resolution found and applies it globally via `mediaResolution` in `generationConfig` (e.g., if one image has `"low"` and another has `"high"`, all images will use `"high"`).
 :::
+
+## Video Metadata Control
+
+For Gemini 3+ models, LiteLLM supports fine-grained video processing control through the `video_metadata` field. This allows you to specify frame extraction rates and time ranges for video analysis.
+
+**Supported `video_metadata` parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `fps` | Number | Frame extraction rate (frames per second) | `5` |
+| `start_offset` | String | Start time for video clip processing | `"10s"` |
+| `end_offset` | String | End time for video clip processing | `"60s"` |
+
+:::note
+**Field Name Conversion:** LiteLLM automatically converts snake_case field names to camelCase for the Gemini API:
+- `start_offset` → `startOffset`
+- `end_offset` → `endOffset`
+- `fps` remains unchanged
+:::
+
+:::warning
+- **Gemini 3+ Only:** This feature is only available for Gemini 3.0 and newer models
+- **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
+- **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
+:::
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="basic" label="Basic Video Metadata">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://my-bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "fps": 5,               # Extract 5 frames per second
+                            "start_offset": "10s",  # Start from 10 seconds
+                            "end_offset": "60s"     # End at 60 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="combined" label="Combined with Detail">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Provide detailed analysis of this video segment"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/presentation.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",  # High resolution for detailed analysis
+                        "video_metadata": {
+                            "fps": 10,              # Extract 10 frames per second
+                            "start_offset": "30s",  # Start from 30 seconds
+                            "end_offset": "90s"     # End at 90 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-3-pro
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Analyze this video clip"},
+          {
+            "type": "file",
+            "file": {
+              "file_id": "gs://my-bucket/video.mp4",
+              "format": "video/mp4",
+              "detail": "high",
+              "video_metadata": {
+                "fps": 5,
+                "start_offset": "10s",
+                "end_offset": "60s"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Sample Usage
 ```python
@@ -1639,6 +1954,57 @@ content = response.get('choices', [{}])[0].get('message', {}).get('content')
 
 # Print the result
 print(content)
+```
+
+## gemini-robotics-er-1.5-preview Usage
+
+```python
+from litellm import api_base
+from openai import OpenAI
+import os
+import base64
+
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-12345")
+base64_image = base64.b64encode(open("closeup-object-on-table-many-260nw-1216144471.webp", "rb").read()).decode()
+
+import json
+import re
+tools = [{"codeExecution": {}}] 
+response = client.chat.completions.create(
+    model="gemini/gemini-robotics-er-1.5-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Point to no more than 10 items in the image. The label returned should be an identifying name for the object detected. The answer should follow the json format: [{\"point\": [y, x], \"label\": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                }
+            ]
+        }
+    ],
+    tools=tools
+)
+
+# Extract JSON from markdown code block if present
+content = response.choices[0].message.content
+# Look for triple-backtick JSON block
+match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+if match:
+    json_str = match.group(1)
+else:
+    json_str = content
+
+try:
+    data = json.loads(json_str)
+    print(json.dumps(data, indent=2))
+except Exception as e:
+    print("Error parsing response as JSON:", e)
+    print("Response content:", content)
 ```
 
 ## Usage - PDF / Videos / etc. Files
@@ -1789,6 +2155,7 @@ response = litellm.completion(
 | gemini-2.0-flash-lite-preview-02-05	     | `completion(model='gemini/gemini-2.0-flash-lite-preview-02-05', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-lite-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-lite-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-3.1-flash-lite-preview     | `completion(model='gemini/gemini-3.1-flash-lite-preview', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-latest     | `completion(model='gemini/gemini-flash-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-lite-latest     | `completion(model='gemini/gemini-flash-lite-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 

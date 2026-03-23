@@ -16,12 +16,22 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_messages_for_spend_logs_payload,
+    _get_proxy_server_request_for_spend_logs_payload,
+    _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
+    _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
+    _is_master_key,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
 from litellm.types.utils import (
@@ -55,7 +65,7 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - (start_chars + end_chars)
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -81,7 +91,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["outer"]["inner"]["text"]) == expected_length
@@ -106,7 +116,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["items"][0]["text"]) == expected_length
@@ -146,7 +156,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -154,6 +164,21 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert sanitized["nested"]["list"][0] == "short"
     assert len(sanitized["nested"]["list"][1]) == expected_length
     assert len(sanitized["nested"]["dict"]["key"]) == expected_length
+
+
+def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    override_max = max(MAX_STRING_LENGTH_PROMPT_IN_DB + 1000, 6000)
+    test_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+
+    # Simulate config-loaded env var being set after module import.
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(override_max))
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload({"text": test_string})
+    assert sanitized["text"] == test_string
 
 
 def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
@@ -245,6 +270,75 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
+def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns messages
+    for realtime calls when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    realtime_messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather today?"},
+    ]
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": realtime_messages,
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    parsed = json.loads(result)
+    assert len(parsed) == 2
+    assert parsed[0]["role"] == "system"
+    assert parsed[0]["content"] == "You are a helpful assistant."
+    assert parsed[1]["role"] == "user"
+    assert parsed[1]["content"] == "What is the weather today?"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for realtime calls
+    when store_prompts_in_spend_logs is False.
+    """
+    mock_should_store.return_value = False
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
+    calls even when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "acompletion",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
 def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_store):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
@@ -305,6 +399,78 @@ def test_get_response_for_spend_logs_payload_truncates_large_embedding(mock_shou
     assert len(truncated_value) < len(large_embedding)
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_value
     assert parsed["data"][0]["other_field"] == "value"
+
+
+def test_truncation_includes_db_safeguard_note():
+    """
+    Test that truncated content includes the DB safeguard note explaining
+    that full data is available in OTEL/other logging integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    large_error = "Error: " + "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 1000)
+    request_body = {"error_trace": large_error}
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    truncated = sanitized["error_trace"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated
+    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in truncated
+    assert "DB storage safeguard" in truncated
+    assert "logging callbacks" in truncated.lower() or "logging integrations" in truncated.lower() or "logging callbacks" in truncated
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_response_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when response is truncated before DB storage, an info log is emitted
+    noting that full data is available in OTEL/other integrations.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_text = "B" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"data": [{"content": large_text}]}},
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_response_for_spend_logs_payload(payload)
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "response was truncated" in log_msg
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_request_body_truncation_logs_info_message(mock_should_store):
+    """
+    Test that when request body is truncated before DB storage, an info log is emitted.
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    mock_should_store.return_value = True
+    large_prompt = "C" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": large_prompt}]}
+        }
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
+    ) as mock_logger:
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={}, litellm_params=litellm_params, kwargs={}
+        )
+        mock_logger.info.assert_called_once()
+        log_msg = mock_logger.info.call_args[0][0]
+        assert "request body was truncated" in log_msg
 
 
 def test_safe_dumps_handles_circular_references():
@@ -850,3 +1016,456 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
         metadata.get("litellm_overhead_time_ms") is None
     ), "litellm_overhead_time_ms should be None when overhead is not provided"
 
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_enabled(
+    mock_should_store,
+):
+    """
+    Test that both request body and response are redacted when turn_off_message_logging is enabled.
+    """
+    mock_should_store.return_value = True
+
+    # Test request redaction
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+            }
+        }
+    }
+    metadata = {}
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["model"] == "gpt-4"
+
+    # Test response redaction - use dict response to verify redaction
+    response_dict = {
+        "id": "test-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "secret response"},
+            }
+        ],
+        "model": "gpt-4",
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": response_dict},
+    )
+
+    response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    # When redaction is enabled and response is a dict (not ModelResponse),
+    # perform_redaction redacts content in-place within the choices structure
+    parsed_response = json.loads(response_result)
+    assert parsed_response["choices"][0]["message"]["content"] == "redacted-by-litellm"
+    assert parsed_response["choices"][0]["message"]["role"] == "assistant"
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
+    mock_get_secret_bool,
+):
+    """
+    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    case-insensitive string values for store_prompts_in_spend_logs in general_settings.
+    """
+    # Test case-insensitive string "true" variations
+    for true_value in ["true", "TRUE", "True", "TrUe"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+            mock_get_secret_bool.return_value = False  # Ensure env var is False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True for '{true_value}', got {result}"
+    
+    # Test boolean True
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, f"Expected True for boolean True, got {result}"
+    
+    # Test that non-true values fall back to environment variable
+    for false_value in [False, None, "false", "FALSE", "False", "anything"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+            # When env var is True, should return True
+            mock_get_secret_bool.return_value = True
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
+            
+            # When env var is False, should return False
+            mock_get_secret_bool.return_value = False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
+    
+    # Test when general_settings doesn't have the key at all
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        mock_get_secret_bool.return_value = True
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, "Expected True (from env var) when key missing, got False"
+        
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is False, "Expected False (from env var) when key missing, got True"
+
+
+def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
+    """
+    When standard_logging_payload is None (e.g. guardrail blocks before LLM call),
+    guardrail_information should fall back to reading from metadata's
+    standard_logging_guardrail_information field.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_provider": "litellm",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+    metadata = {
+        "user_api_key": "test-key",
+        "standard_logging_guardrail_information": guardrail_info,
+    }
+
+    result = _get_spend_logs_metadata(
+        metadata=metadata,
+        guardrail_information=None,
+    )
+    # When guardrail_information param is None, should NOT fall back
+    # (the caller is responsible for passing it)
+    assert result["guardrail_information"] is None
+
+
+def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
+    """
+    When a guardrail blocks a request before the LLM call, the standard_logging_object
+    is not set on request_data. In this case, get_logging_payload should still include
+    guardrail_information from the metadata.
+
+    This is the bug fix for: guardrail failures not showing GuardrailViewer in the UI.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_provider": "litellm",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+    # Simulate request_data as it looks when a guardrail blocks before LLM call
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {},
+        },
+        # No "standard_logging_object" key - this is the failure case
+    }
+
+    with patch("litellm.proxy.proxy_server.master_key", "sk-master"):
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj={},
+                start_time=datetime.datetime.now(tz=timezone.utc),
+                end_time=datetime.datetime.now(tz=timezone.utc),
+            )
+
+    metadata_result = json.loads(payload["metadata"])
+    assert metadata_result["guardrail_information"] == guardrail_info
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_includes_retry_info_in_spend_logs_metadata():
+    """
+    Test that retry info (attempted_retries, max_retries) from metadata
+    is included in the spend logs metadata JSON.
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "attempted_retries": 2,
+                "max_retries": 3,
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-retry-123",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-retry",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_retries") == 2
+    ), f"Expected attempted_retries=2, got {metadata.get('attempted_retries')}"
+    assert (
+        metadata.get("max_retries") == 3
+    ), f"Expected max_retries=3, got {metadata.get('max_retries')}"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_handles_missing_retry_info_gracefully():
+    """
+    Test that retry fields are None when not present in metadata (backward compatibility).
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-no-retry-456",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-no-retry",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_retries") is None
+    ), "attempted_retries should be None when not provided"
+    assert (
+        metadata.get("max_retries") is None
+    ), "max_retries should be None when not provided"
+
+
+def test_get_request_duration_ms_normal():
+    """Test that request duration is correctly computed in milliseconds."""
+    start = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime.datetime(2025, 1, 1, 0, 0, 2, 500000, tzinfo=timezone.utc)  # 2.5s later
+    result = _get_request_duration_ms(start, end)
+    assert result == 2500
+
+
+def test_get_request_duration_ms_sub_millisecond():
+    """Test that sub-millisecond durations are truncated to int."""
+    start = datetime.datetime(2025, 1, 1, 0, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime.datetime(2025, 1, 1, 0, 0, 0, 500, tzinfo=timezone.utc)  # 0.5ms
+    result = _get_request_duration_ms(start, end)
+    assert result == 0
+
+
+def test_get_request_duration_ms_zero():
+    """Test that identical start and end times produce 0."""
+    t = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    result = _get_request_duration_ms(t, t)
+    assert result == 0
+
+
+def test_get_logging_payload_includes_request_duration_ms():
+    """Test that get_logging_payload populates request_duration_ms."""
+    start_time = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end_time = datetime.datetime(2025, 1, 1, 0, 0, 3, tzinfo=timezone.utc)  # 3s later
+
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_params": {"api_base": "https://api.openai.com"},
+        "standard_logging_object": None,
+    }
+    response_obj = {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+    with patch("litellm.proxy.proxy_server.master_key", None), \
+         patch("litellm.proxy.proxy_server.general_settings", {}):
+        payload = get_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    assert payload["request_duration_ms"] == 3000
+
+
+class TestIsMasterKey:
+    """Tests for _is_master_key handling None inputs without raising TypeError."""
+
+    def test_none_api_key_returns_false(self):
+        """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
+        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+
+    def test_none_master_key_returns_false(self):
+        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+
+    def test_both_none_returns_false(self):
+        assert _is_master_key(api_key=None, _master_key=None) is False
+
+    def test_matching_key_returns_true(self):
+        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+
+    def test_non_matching_key_returns_false(self):
+        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+
+    def test_hashed_key_returns_true(self):
+        from litellm.proxy.utils import hash_token
+
+        master = "sk-master-key-123"
+        hashed = hash_token(master)
+        assert _is_master_key(api_key=hashed, _master_key=master) is True

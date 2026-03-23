@@ -3,7 +3,8 @@ import { useCloudZeroExport } from "@/app/(dashboard)/hooks/cloudzero/useCloudZe
 import { useCloudZeroDeleteSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { Alert, Button, Card, Descriptions, Divider, message, Popconfirm, Tag } from "antd";
+import { Alert, Button, Card, Descriptions, Divider, Popconfirm, Tag } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { CheckCircle, Edit, Play, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import CloudZeroUpdateModal from "./CloudZeroUpdateModal";
@@ -30,10 +31,10 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       { limit: 10 },
       {
         onSuccess: (data) => {
-          message.success("Dry run completed successfully");
+          MessageManager.success("Dry run completed successfully");
         },
         onError: (error) => {
-          message.error(error?.message || "Failed to perform dry run");
+          MessageManager.error(error?.message || "Failed to perform dry run");
         },
       },
     );
@@ -48,10 +49,10 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       { operation: "replace_hourly" },
       {
         onSuccess: () => {
-          message.success("Data successfully exported to CloudZero");
+          MessageManager.success("Data successfully exported to CloudZero");
         },
         onError: (error) => {
-          message.error(error?.message || "Failed to export data");
+          MessageManager.error(error?.message || "Failed to export data");
         },
       },
     );
@@ -79,12 +80,12 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
 
     deleteMutation.mutate(undefined, {
       onSuccess: () => {
-        message.success("CloudZero integration deleted successfully");
+        MessageManager.success("CloudZero integration deleted successfully");
         setIsDeleteModalOpen(false);
         onSettingsUpdated();
       },
       onError: (error) => {
-        message.error(error?.message || "Failed to delete CloudZero integration");
+        MessageManager.error(error?.message || "Failed to delete CloudZero integration");
       },
     });
   };
@@ -134,10 +135,14 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
             }}
           >
             <Descriptions.Item label="API Key (Redacted)">
-              <span className="font-mono text-gray-600">{settings.api_key_masked}</span>
+              <span className="font-mono text-gray-600">
+                {settings.api_key_masked || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Connection ID">
-              <span className="font-mono text-gray-600">{settings.connection_id}</span>
+              <span className="font-mono text-gray-600">
+                {settings.connection_id || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Timezone">
               {settings.timezone || <span className="text-gray-400 italic">Default (UTC)</span>}

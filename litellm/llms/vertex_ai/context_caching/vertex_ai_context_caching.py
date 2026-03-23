@@ -4,13 +4,16 @@ import httpx
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm._logging import verbose_logger
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.utils import is_prompt_caching_valid_prompt
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     VertexAICachedContentResponseObject,
@@ -26,6 +29,8 @@ from .transformation import (
 local_cache_obj = Cache(
     type=LiteLLMCacheType.LOCAL
 )  # only used for calling 'get_cache_key' function
+
+MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -46,6 +51,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -76,7 +82,6 @@ class ContextCachingEndpoints(VertexBase):
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
 
-
         return self._check_custom_proxy(
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -85,10 +90,12 @@ class ContextCachingEndpoints(VertexBase):
             stream=None,
             auth_header=auth_header,
             url=url,
-            model=None,
+            model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1",
+            vertex_api_version="v1beta1"
+            if custom_llm_provider == "vertex_ai_beta"
+            else "v1",
         )
 
     def check_cache(
@@ -103,6 +110,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -115,51 +123,72 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        _, url = self._get_token_and_url_context_caching(
+        _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
-        try:
-            ## LOGGING
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={
-                    "complete_input_dict": {},
-                    "api_base": url,
-                    "headers": headers,
-                },
-            )
 
-            resp = client.get(url=url, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
+        page_token: Optional[str] = None
+
+        # Iterate through all pages
+        for _ in range(MAX_PAGINATION_PAGES):
+            # Build URL with pagination token if present
+            if page_token:
+                separator = "&" if "?" in base_url else "?"
+                url = f"{base_url}{separator}pageToken={page_token}"
+            else:
+                url = base_url
+
+            try:
+                ## LOGGING
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": url,
+                        "headers": headers,
+                    },
+                )
+
+                resp = client.get(url=url, headers=headers)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    return None
+                raise VertexAIError(
+                    status_code=e.response.status_code, message=e.response.text
+                )
+            except Exception as e:
+                raise VertexAIError(status_code=500, message=str(e))
+
+            raw_response = resp.json()
+            logging_obj.post_call(original_response=raw_response)
+
+            if "cachedContents" not in raw_response:
                 return None
-            raise VertexAIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
-        except Exception as e:
-            raise VertexAIError(status_code=500, message=str(e))
-        raw_response = resp.json()
-        logging_obj.post_call(original_response=raw_response)
 
-        if "cachedContents" not in raw_response:
-            return None
+            all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
-        all_cached_items = CachedContentListAllResponseBody(**raw_response)
+            if "cachedContents" not in all_cached_items:
+                return None
 
-        if "cachedContents" not in all_cached_items:
-            return None
+            # Check current page for matching cache_key
+            for cached_item in all_cached_items["cachedContents"]:
+                display_name = cached_item.get("displayName")
+                if display_name is not None and display_name == cache_key:
+                    return cached_item.get("name")
 
-        for cached_item in all_cached_items["cachedContents"]:
-            display_name = cached_item.get("displayName")
-            if display_name is not None and display_name == cache_key:
-                return cached_item.get("name")
+            # Check if there are more pages
+            page_token = all_cached_items.get("nextPageToken")
+            if not page_token:
+                # No more pages, cache not found
+                break
 
         return None
 
@@ -174,7 +203,8 @@ class ContextCachingEndpoints(VertexBase):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_auth_header: Optional[str]
+        vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -187,51 +217,72 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        _, url = self._get_token_and_url_context_caching(
+        _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
-        try:
-            ## LOGGING
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={
-                    "complete_input_dict": {},
-                    "api_base": url,
-                    "headers": headers,
-                },
-            )
 
-            resp = await client.get(url=url, headers=headers)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
+        page_token: Optional[str] = None
+
+        # Iterate through all pages
+        for _ in range(MAX_PAGINATION_PAGES):
+            # Build URL with pagination token if present
+            if page_token:
+                separator = "&" if "?" in base_url else "?"
+                url = f"{base_url}{separator}pageToken={page_token}"
+            else:
+                url = base_url
+
+            try:
+                ## LOGGING
+                logging_obj.pre_call(
+                    input="",
+                    api_key="",
+                    additional_args={
+                        "complete_input_dict": {},
+                        "api_base": url,
+                        "headers": headers,
+                    },
+                )
+
+                resp = await client.get(url=url, headers=headers)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    return None
+                raise VertexAIError(
+                    status_code=e.response.status_code, message=e.response.text
+                )
+            except Exception as e:
+                raise VertexAIError(status_code=500, message=str(e))
+
+            raw_response = resp.json()
+            logging_obj.post_call(original_response=raw_response)
+
+            if "cachedContents" not in raw_response:
                 return None
-            raise VertexAIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
-        except Exception as e:
-            raise VertexAIError(status_code=500, message=str(e))
-        raw_response = resp.json()
-        logging_obj.post_call(original_response=raw_response)
 
-        if "cachedContents" not in raw_response:
-            return None
+            all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
-        all_cached_items = CachedContentListAllResponseBody(**raw_response)
+            if "cachedContents" not in all_cached_items:
+                return None
 
-        if "cachedContents" not in all_cached_items:
-            return None
+            # Check current page for matching cache_key
+            for cached_item in all_cached_items["cachedContents"]:
+                display_name = cached_item.get("displayName")
+                if display_name is not None and display_name == cache_key:
+                    return cached_item.get("name")
 
-        for cached_item in all_cached_items["cachedContents"]:
-            display_name = cached_item.get("displayName")
-            if display_name is not None and display_name == cache_key:
-                return cached_item.get("name")
+            # Check if there are more pages
+            page_token = all_cached_items.get("nextPageToken")
+            if not page_token:
+                # No more pages, cache not found
+                break
 
         return None
 
@@ -272,6 +323,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
         tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
@@ -281,7 +346,8 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
@@ -304,7 +370,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools
+            messages=cached_messages, tools=tools, model=model
         )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
@@ -316,7 +382,8 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
         if google_cache_name:
             return non_cached_messages, optional_params, google_cache_name
@@ -404,6 +471,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
         tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
@@ -413,7 +494,8 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
@@ -433,7 +515,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools
+            messages=cached_messages, tools=tools, model=model
         )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
@@ -445,7 +527,8 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         if google_cache_name:

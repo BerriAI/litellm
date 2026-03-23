@@ -6,6 +6,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
+from litellm.types.responses.main import OutputCodeInterpreterCall
 
 
 def test_redacted_thinking_content_block_delta():
@@ -473,21 +474,28 @@ def test_partial_json_chunk_accumulation():
         streaming_response=MagicMock(), sync_stream=True, json_mode=False
     )
 
-    # Simulate a complete JSON chunk being split into two parts
     partial_chunk_1 = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel'
     partial_chunk_2 = 'lo"}}'
 
     # First partial chunk should return None (still accumulating)
     result1 = iterator._parse_sse_data(f"data:{partial_chunk_1}")
     assert result1 is None, "First partial chunk should return None while accumulating"
-    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
-    assert iterator.accumulated_json == partial_chunk_1, "Should have accumulated first part"
+    assert (
+        iterator.chunk_type == "accumulated_json"
+    ), "Should switch to accumulated_json mode"
+    assert (
+        iterator.accumulated_json == partial_chunk_1
+    ), "Should have accumulated first part"
 
     # Second partial chunk should complete the JSON and return a parsed result
     result2 = iterator._parse_sse_data(f"data:{partial_chunk_2}")
     assert result2 is not None, "Second chunk should return parsed result"
-    assert iterator.accumulated_json == "", "Buffer should be cleared after successful parse"
-    assert result2.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
+    assert (
+        iterator.accumulated_json == ""
+    ), "Buffer should be cleared after successful parse"
+    assert (
+        result2.choices[0].delta.content == "Hello"
+    ), f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
 
 
 def test_complete_json_chunk_no_accumulation():
@@ -504,7 +512,9 @@ def test_complete_json_chunk_no_accumulation():
     assert result is not None, "Complete chunk should return parsed result immediately"
     assert iterator.chunk_type == "valid_json", "Should remain in valid_json mode"
     assert iterator.accumulated_json == "", "Buffer should remain empty"
-    assert result.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result.choices[0].delta.content}'"
+    assert (
+        result.choices[0].delta.content == "Hello"
+    ), f"Expected 'Hello', got '{result.choices[0].delta.content}'"
 
 
 def test_multiple_partial_chunks_accumulation():
@@ -621,7 +631,9 @@ def test_web_search_tool_result_no_extra_tool_calls():
     # Should have exactly 2 tool calls:
     # 1. From content_block_start (server_tool_use) with id and name
     # 2. From content_block_delta with the actual query
-    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert (
+        len(tool_calls_emitted) == 2
+    ), f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
 
     # First tool call should have the id and name
     assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
@@ -723,7 +735,10 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
         {
             "type": "content_block_delta",
             "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"query": "otter facts"}'},
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"query": "otter facts"}',
+            },
         },
         # 4. content_block_stop for server_tool_use
         {"type": "content_block_stop", "index": 0},
@@ -781,10 +796,176 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
     ), "First result title should match"
 
 
+def test_web_fetch_tool_result_captured_in_provider_specific_fields():
+    """
+    Test that web_fetch_tool_result content is captured in provider_specific_fields.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/18137
+    where streaming with Anthropic web fetch wasn't capturing web_fetch_tool_result
+    blocks, causing multi-turn conversations to fail.
+
+    The web_fetch_tool_result content comes ALL AT ONCE in content_block_start,
+    not in deltas, so we need to capture it there.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate the streaming sequence with web_fetch_tool_result
+    chunks = [
+        # 1. message_start
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # 2. server_tool_use block starts (web_fetch)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "web_fetch",
+            },
+        },
+        # 3. input_json_delta with the url
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"url": "https://example.com"}',
+            },
+        },
+        # 4. content_block_stop for server_tool_use
+        {"type": "content_block_stop", "index": 0},
+        # 5. web_fetch_tool_result block starts - THIS IS WHERE THE RESULTS ARE
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com",
+                    "retrieved_at": "2025-12-16T19:28:29.758000+00:00",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Hello World",
+                        },
+                        "title": "Example Page",
+                    },
+                },
+            },
+        },
+        # 6. content_block_stop for web_fetch_tool_result
+        {"type": "content_block_stop", "index": 1},
+    ]
+
+    web_search_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if (
+            parsed.choices
+            and parsed.choices[0].delta.provider_specific_fields
+            and "web_search_results" in parsed.choices[0].delta.provider_specific_fields
+        ):
+            web_search_results = parsed.choices[0].delta.provider_specific_fields[
+                "web_search_results"
+            ]
+
+    # Verify web_fetch_tool_result was captured (stored in web_search_results list)
+    assert web_search_results is not None, "web_search_results should be captured"
+    assert len(web_search_results) == 1, "Should have 1 web_fetch_tool_result block"
+    assert (
+        web_search_results[0]["type"] == "web_fetch_tool_result"
+    ), "Block type should be web_fetch_tool_result"
+    assert (
+        web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
+    ), "tool_use_id should match"
+    assert (
+        web_search_results[0]["content"]["url"] == "https://example.com"
+    ), "URL should match"
+    assert (
+        web_search_results[0]["content"]["content"]["title"] == "Example Page"
+    ), "Title should match"
+
+
+def test_web_fetch_tool_result_no_extra_tool_calls():
+    """
+    Test that web_fetch_tool_result blocks don't emit tool call chunks.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/18137
+    where streaming with Anthropic web fetch was causing issues with tool call arguments.
+
+    The issue was that web_fetch_tool_result blocks have input_json_delta events with {}
+    that were incorrectly being converted to tool calls.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # to verify it doesn't emit tool calls
+    chunks = [
+        # 1. web_fetch_tool_result block starts
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": {
+                    "type": "web_fetch_result",
+                    "url": "https://example.com",
+                    "retrieved_at": "2025-12-16T19:28:29.758000+00:00",
+                    "content": {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "Hello World",
+                        },
+                        "title": "Example Page",
+                    },
+                },
+            },
+        },
+        # 2. input_json_delta with {} - this should NOT emit a tool call
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        # 3. content_block_stop for web_fetch_tool_result
+        {"type": "content_block_stop", "index": 1},
+    ]
+
+    tool_call_count = 0
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices and parsed.choices[0].delta.tool_calls:
+            tool_call_count += 1
+
+    # Should have 0 tool calls - web_fetch_tool_result should not emit tool calls
+    assert (
+        tool_call_count == 0
+    ), f"Expected 0 tool calls, got {tool_call_count}. web_fetch_tool_result should not emit tool calls"
+
+
 def test_container_in_provider_specific_fields_streaming():
     """
     Test that container is captured in provider_specific_fields for streaming responses.
-    
+
     When container with skills is used, the container field should be present in
     the provider_specific_fields of the message_delta chunk.
     """
@@ -863,7 +1044,9 @@ def test_container_in_provider_specific_fields_streaming():
             ]
 
     # Verify container was captured
-    assert container_field is not None, "container should be captured in provider_specific_fields"
+    assert (
+        container_field is not None
+    ), "container should be captured in provider_specific_fields"
     assert (
         container_field["id"] == "container_011CW9hA9zpZ8xD3bjjShy4p"
     ), "container id should match"
@@ -871,18 +1054,14 @@ def test_container_in_provider_specific_fields_streaming():
         container_field["expires_at"] == "2025-12-16T04:57:16.913181Z"
     ), "expires_at should match"
     assert len(container_field["skills"]) == 1, "Should have 1 skill"
-    assert (
-        container_field["skills"][0]["skill_id"] == "pptx"
-    ), "skill_id should be pptx"
-    assert (
-        container_field["skills"][0]["version"] == "20251013"
-    ), "version should match"
+    assert container_field["skills"][0]["skill_id"] == "pptx", "skill_id should be pptx"
+    assert container_field["skills"][0]["version"] == "20251013", "version should match"
 
 
 def test_container_in_provider_specific_fields_non_streaming():
     """
     Test that container is captured in provider_specific_fields for non-streaming responses.
-    
+
     When container with skills is used in non-streaming, the container field should be
     present in the provider_specific_fields of the response.
     """
@@ -944,7 +1123,7 @@ def test_container_in_provider_specific_fields_non_streaming():
 def test_container_absent_when_not_provided():
     """
     Test that container is not added to provider_specific_fields when not provided.
-    
+
     This ensures we don't add empty or None container fields.
     """
     iterator = ModelResponseIterator(
@@ -971,3 +1150,434 @@ def test_container_absent_when_not_provided():
         assert (
             "container" not in model_response.choices[0].delta.provider_specific_fields
         ), "container should not be present when not provided in delta"
+
+
+def test_streaming_code_execution_produces_code_interpreter_results():
+    """
+    Test that bash_code_execution_tool_result content blocks in streaming
+    produce code_interpreter_results in provider_specific_fields, so the
+    Responses API layer can use them without Anthropic-specific knowledge.
+    """
+
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "text",
+                "text": "",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Running code..."},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC",
+                "name": "bash_code_execution",
+                "input": {"command": "echo hello"},
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01ABC",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    found_code_interpreter_results = False
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            found_code_interpreter_results = True
+            results = psf["code_interpreter_results"]
+            assert len(results) == 1
+            assert isinstance(results[0], OutputCodeInterpreterCall)
+            assert results[0].type == "code_interpreter_call"
+            assert results[0].id == "srvtoolu_01ABC"
+            assert results[0].code == "echo hello"
+            assert results[0].outputs is not None
+            assert len(results[0].outputs) == 1
+            assert results[0].outputs[0].logs == "hello\n"
+
+    assert found_code_interpreter_results, (
+        "code_interpreter_results should appear in provider_specific_fields "
+        "when bash_code_execution_tool_result is streamed"
+    )
+
+
+def test_streaming_multiple_code_executions_no_duplicates():
+    """
+    Test that multiple code executions in a single streaming response emit
+    cumulative code_interpreter_results on each chunk (matching stream_chunk_builder's
+    "last value wins" contract).  The final emission must contain ALL results.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        # First code execution
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "bash_code_execution",
+                "input": {"command": "echo first"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "first\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        # Second code execution
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01BBB",
+                "name": "bash_code_execution",
+                "input": {"command": "echo second"},
+            },
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "content_block_start",
+            "index": 3,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01BBB",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "second\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 3},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # Collect each emission of code_interpreter_results
+    emissions = []
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            emissions.append(psf["code_interpreter_results"])
+
+    # Should have 2 emissions (one per tool_result block)
+    assert len(emissions) == 2, f"Expected 2 emissions, got {len(emissions)}"
+
+    # First emission: cumulative list with 1 result
+    assert len(emissions[0]) == 1
+    assert emissions[0][0].id == "srvtoolu_01AAA"
+    assert emissions[0][0].code == "echo first"
+    assert emissions[0][0].outputs[0].logs == "first\n"
+
+    # Second (final) emission: cumulative list with BOTH results
+    # This is what stream_chunk_builder will pick as "last value wins"
+    assert len(emissions[1]) == 2, (
+        f"Expected final emission to have 2 results, got {len(emissions[1])}. "
+        f"IDs: {[r.id for r in emissions[1]]}"
+    )
+    assert emissions[1][0].id == "srvtoolu_01AAA"
+    assert emissions[1][0].code == "echo first"
+    assert emissions[1][0].outputs[0].logs == "first\n"
+    assert emissions[1][1].id == "srvtoolu_01BBB"
+    assert emissions[1][1].code == "echo second"
+    assert emissions[1][1].outputs[0].logs == "second\n"
+
+
+def test_streaming_code_execution_input_assembled_from_deltas():
+    """
+    In real Anthropic streaming, content_block_start for server_tool_use has
+    input: {}.  The actual input arrives via input_json_delta deltas and must
+    be assembled at content_block_stop so the code field is populated.
+
+    This test uses realistic chunk shapes (empty input in start, partial JSON
+    in deltas) to exercise the input assembly path.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        # server_tool_use with empty input (real streaming behaviour)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "code_execution",
+                "input": {},
+            },
+        },
+        # Input arrives via deltas, split across two chunks
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"comma',
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": 'nd": "echo hello"}',
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # Tool result
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # The code field must contain the assembled input, not be empty
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert code_results[0].code == "echo hello"
+    assert code_results[0].outputs[0].logs == "hello\n"
+
+
+def test_empty_output_produces_null_outputs():
+    """
+    When both stdout and stderr are empty, outputs should be None
+    (matching OpenAI's native behavior) rather than [{logs: ""}].
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "bash_code_execution",
+                "input": {"command": "true"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    assert code_results is not None, "No code_interpreter_results emitted"
+    assert len(code_results) == 1
+    assert code_results[0].id == "srvtoolu_01AAA"
+    assert (
+        code_results[0].outputs is None
+    ), f"Expected outputs=None for empty execution, got {code_results[0].outputs}"
+
+
+def test_non_bash_tool_result_skipped():
+    """
+    Tool result types other than bash_code_execution_tool_result (e.g.
+    text_editor_code_execution_tool_result) should be skipped and NOT
+    produce code_interpreter_call items.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01XYZ",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01AAA",
+                "name": "text_editor",
+                "input": {"command": "view", "path": "/tmp/test.py"},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # text_editor result — should NOT become a code_interpreter_call
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01AAA",
+                "content": [
+                    {"type": "text", "text": "file contents here"},
+                ],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    code_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        psf = None
+        if parsed.choices and parsed.choices[0].delta:
+            psf = getattr(parsed.choices[0].delta, "provider_specific_fields", None)
+        if psf and "code_interpreter_results" in psf:
+            code_results = psf["code_interpreter_results"]
+
+    # code_interpreter_results should be emitted but empty (no bash results)
+    assert (
+        code_results is not None
+    ), "Expected code_interpreter_results key to be emitted"
+    assert (
+        len(code_results) == 0
+    ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"

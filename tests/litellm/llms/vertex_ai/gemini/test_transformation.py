@@ -7,6 +7,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 from litellm.llms.vertex_ai.gemini import transformation
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.types.llms import openai
 from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
@@ -226,3 +227,64 @@ async def test__transform_request_body_image_config_with_image_size():
     assert "imageConfig" in rb["generationConfig"]
     assert rb["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9"
     assert rb["generationConfig"]["imageConfig"]["imageSize"] == "4K"
+
+
+def test_map_function_google_search_snake_case():
+    """
+    Test that google_search tool (snake_case) is properly mapped to googleSearch.
+    Fixes issue where tools=[{"google_search": {}}] was being stripped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test snake_case google_search
+    tools = [{"google_search": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+
+
+def test_map_function_google_search_camel_case():
+    """
+    Test that googleSearch tool (camelCase) still works.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    # Test camelCase googleSearch
+    tools = [{"googleSearch": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+
+
+def test_map_function_google_search_retrieval_snake_case():
+    """
+    Test that google_search_retrieval tool (snake_case) is properly mapped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = [{"google_search_retrieval": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "googleSearchRetrieval" in result[0]
+
+
+def test_map_function_enterprise_web_search_snake_case():
+    """
+    Test that enterprise_web_search tool (snake_case) is properly mapped.
+    """
+    config = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = [{"enterprise_web_search": {}}]
+    result = config._map_function(tools, optional_params)
+
+    assert len(result) == 1
+    assert "enterpriseWebSearch" in result[0]

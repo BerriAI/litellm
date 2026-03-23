@@ -69,6 +69,67 @@ router_settings:
   redis_port: 1992
 ```
 
+## Enforce Model Rate Limits
+
+Strictly enforce RPM/TPM limits set on deployments. When limits are exceeded, requests are blocked **before** reaching the LLM provider with a `429 Too Many Requests` error.
+
+:::info
+By default, `rpm` and `tpm` values are only used for **routing decisions** (picking deployments with capacity). With `enforce_model_rate_limits`, they become **hard limits**.
+:::
+
+### Quick Start
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 60     # 60 requests per minute
+    tpm: 90000  # 90k tokens per minute
+
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits  # 👈 Enables strict enforcement
+```
+
+### How It Works
+
+| Limit Type | Enforcement | Accuracy |
+|------------|-------------|----------|
+| **RPM** | Hard limit - blocked at exact threshold | 100% accurate |
+| **TPM** | Best-effort - may slightly exceed | Blocked when already over limit |
+
+**Why TPM is best-effort:** Token count is unknown until the LLM responds. TPM is checked before each request (blocks if already over), and tracked after (adds actual tokens used).
+
+### Error Response
+
+```json
+{
+  "error": {
+    "message": "Model rate limit exceeded. RPM limit=60, current usage=60",
+    "type": "rate_limit_error",
+    "code": 429
+  }
+}
+```
+
+Response includes `retry-after: 60` header.
+
+### Multi-Instance Deployment
+
+For multiple LiteLLM proxy instances, add Redis to share rate limit state:
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits
+  redis_host: redis.example.com
+  redis_port: 6379
+  redis_password: your-password
+```
+
+
 :::info
 Detailed information about [routing strategies can be found here](../routing)
 :::
@@ -264,7 +325,14 @@ model_list:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
       order: 2  # 👈 Used when order=1 is unavailable
+
+router_settings:
+  enable_pre_call_checks: true  # 👈 Required for 'order' to work
 ```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
+:::
 
 If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
 
@@ -279,3 +347,36 @@ If `order=1` deployment is unavailable (e.g., rate-limited), the router falls ba
 - **Higher throughput**: More requests handled simultaneously across deployments
 - **Improved reliability**: If one deployment fails, traffic automatically routes to healthy ones
 - **Better resource utilization**: Load spread evenly across all available deployments
+
+## Special Considerations for Responses API
+
+When load balancing OpenAI's Responses API across deployments with **different API keys** (e.g., different Azure regions or organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the originating API key.
+
+**Solution:** Use the `encrypted_content_affinity` pre-call check (requires LiteLLM >= 1.82.3) to automatically route follow-up requests containing encrypted items to the correct deployment:
+
+```yaml
+model_list:
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://eastus.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_EASTUS
+    model_info:
+      id: "deployment-eastus"
+  
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://westeurope.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_WESTEUROPE
+    model_info:
+      id: "deployment-westeurope"
+
+router_settings:
+  optional_pre_call_checks:
+    - encrypted_content_affinity  # 👈 Prevents invalid_encrypted_content errors
+```
+
+This ensures requests containing encrypted content are routed to the deployment that created them, while other requests continue to load balance normally.
+
+**[Learn more about Encrypted Content Affinity →](../response_api.md#encrypted-content-affinity-multi-region-load-balancing)**

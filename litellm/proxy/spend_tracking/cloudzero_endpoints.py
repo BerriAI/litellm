@@ -69,7 +69,7 @@ async def _get_cloudzero_settings():
     Retrieve CloudZero settings from the database with decrypted API key.
 
     Returns:
-        dict: CloudZero settings with decrypted API key
+        dict: CloudZero settings with decrypted API key, or empty dict if not configured
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -82,10 +82,16 @@ async def _get_cloudzero_settings():
     cloudzero_config = await prisma_client.db.litellm_config.find_first(
         where={"param_name": "cloudzero_settings"}
     )
-    if cloudzero_config is None:
+    if cloudzero_config is None or cloudzero_config.param_value is None:
         return {}
 
-    settings = dict(cloudzero_config.param_value)
+    # Handle both dict and JSON string cases
+    if isinstance(cloudzero_config.param_value, dict):
+        settings = cloudzero_config.param_value
+    elif isinstance(cloudzero_config.param_value, str):
+        settings = json.loads(cloudzero_config.param_value)
+    else:
+        settings = dict(cloudzero_config.param_value)
 
     # Decrypt the API key
     encrypted_api_key = settings.get("api_key")
@@ -119,6 +125,7 @@ async def get_cloudzero_settings(
 
     Returns the current CloudZero configuration with the API key masked for security.
     Only the first 4 and last 4 characters of the API key are shown.
+    Returns null/empty values when settings are not configured (consistent with other settings endpoints).
 
     Only admin users can view CloudZero settings.
     """
@@ -133,22 +140,27 @@ async def get_cloudzero_settings(
         # Get CloudZero settings using the accessor method
         settings = await _get_cloudzero_settings()
 
+        # If settings are empty, return null/empty values (consistent with other endpoints)
+        if not settings:
+            return CloudZeroSettingsView(
+                api_key_masked=None,
+                connection_id=None,
+                timezone=None,
+                status=None,
+            )
+
         # Use SensitiveDataMasker to mask the API key
         masked_settings = _sensitive_masker.mask_dict(settings)
 
         return CloudZeroSettingsView(
-            api_key_masked=masked_settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
+            api_key_masked=masked_settings.get("api_key"),
+            connection_id=settings.get("connection_id"),
+            timezone=settings.get("timezone"),
             status="configured",
         )
 
     except HTTPException as e:
-        if e.status_code == 400:
-            # Settings not configured
-            raise HTTPException(
-                status_code=404, detail={"error": "CloudZero settings not configured"}
-            )
+        # Re-raise HTTPExceptions as-is
         raise e
     except Exception as e:
         verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {str(e)}")
@@ -291,6 +303,7 @@ def is_cloudzero_setup_in_config() -> bool:
         bool: True if CloudZero is configured, False otherwise
     """
     import litellm
+
     return "cloudzero" in litellm.callbacks
 
 
@@ -300,7 +313,7 @@ async def is_cloudzero_setup() -> bool:
 
     CloudZero is considered setup if:
     - CloudZero is configured in config.yaml callbacks, OR
-    - CloudZero environment variables are set, OR  
+    - CloudZero environment variables are set, OR
     - CloudZero settings exist in the database
 
     Returns:
@@ -310,11 +323,11 @@ async def is_cloudzero_setup() -> bool:
         # Check config.yaml/environment variables first
         if is_cloudzero_setup_in_config():
             return True
-            
+
         # Check database as fallback
         if await is_cloudzero_setup_in_db():
             return True
-            
+
         return False
 
     except Exception as e:
@@ -413,9 +426,7 @@ async def cloudzero_dry_run_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
-        dry_run_result = await logger.dry_run_export_usage_data(
-            limit=request.limit
-        )
+        dry_run_result = await logger.dry_run_export_usage_data(limit=request.limit)
 
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
 
@@ -458,7 +469,6 @@ async def cloudzero_export(
     Only admin users can perform CloudZero exports.
     """
 
-
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -488,10 +498,10 @@ async def cloudzero_export(
         verbose_proxy_logger.info("CloudZero export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero export completed successfully", 
+            message="CloudZero export completed successfully",
             status="success",
             dry_run_data=None,
-            summary=None
+            summary=None,
         )
 
     except Exception as e:
