@@ -492,21 +492,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
-    litellm_remaining_org_budget_metric = [
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
-    ]
-
-    litellm_org_max_budget_metric = [
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
-    ]
-
-    litellm_org_budget_remaining_hours_metric = [
-        UserAPIKeyLabelNames.ORG_ID.value,
-        UserAPIKeyLabelNames.ORG_ALIAS.value,
-    ]
-
     litellm_remaining_api_key_budget_metric = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -664,8 +649,11 @@ class PrometheusMetricLabels:
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
-        # Conditionally add org labels to all per-request metrics
-        if litellm.prometheus_emit_org_labels is True:
+        # Conditionally add org labels to metrics that already carry team context
+        if (
+            litellm.prometheus_emit_org_labels is True
+            and UserAPIKeyLabelNames.TEAM.value in default_labels
+        ):
             for label in [
                 UserAPIKeyLabelNames.ORG_ID.value,
                 UserAPIKeyLabelNames.ORG_ALIAS.value,

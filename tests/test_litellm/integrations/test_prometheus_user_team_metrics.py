@@ -556,20 +556,29 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         enum_values=enum_values,
     )
 
-    # Flag ON — org labels included in metric schema and values passed through
-    litellm.prometheus_emit_org_labels = True
-    prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
-    label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
-    assert label_kwargs["org_id"] == "org-abc"
-    assert label_kwargs["org_alias"] == "my-org"
-    assert label_kwargs["team"] == "team-abc"
-    assert label_kwargs["user"] == "user-1"
+    try:
+        # Flag ON — org labels included in metric schema and values passed through
+        litellm.prometheus_emit_org_labels = True
+        prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
+        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
+        assert label_kwargs["org_id"] == "org-abc"
+        assert label_kwargs["org_alias"] == "my-org"
+        assert label_kwargs["team"] == "team-abc"
+        assert label_kwargs["user"] == "user-1"
 
-    # Flag OFF — org labels not in metric schema, absent from label dict entirely
-    litellm.prometheus_emit_org_labels = False
-    prometheus_logger.litellm_requests_metric.reset_mock()
-    prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
-    label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
-    assert "org_id" not in label_kwargs
-    assert "org_alias" not in label_kwargs
-    assert label_kwargs["team"] == "team-abc"
+        # Metrics without team context must NOT get org labels even when flag is on
+        from litellm.types.integrations.prometheus import PrometheusMetricLabels
+        budget_labels = PrometheusMetricLabels.get_labels("litellm_remaining_api_key_budget_metric")
+        assert "org_id" not in budget_labels
+        assert "org_alias" not in budget_labels
+
+        # Flag OFF — org labels not in metric schema, absent from label dict entirely
+        litellm.prometheus_emit_org_labels = False
+        prometheus_logger.litellm_requests_metric.reset_mock()
+        prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
+        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
+        assert "org_id" not in label_kwargs
+        assert "org_alias" not in label_kwargs
+        assert label_kwargs["team"] == "team-abc"
+    finally:
+        litellm.prometheus_emit_org_labels = False
