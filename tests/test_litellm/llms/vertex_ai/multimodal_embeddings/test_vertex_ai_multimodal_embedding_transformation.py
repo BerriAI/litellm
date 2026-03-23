@@ -156,7 +156,7 @@ class TestVertexMultimodalEmbedding:
             headers={},
         )
         assert "parameters" in request, "Request should contain 'parameters' field"
-        assert request["parameters"]["outputDimensionality"] == 128
+        assert request["parameters"]["dimension"] == 128
 
     def test_no_parameters_field_when_dimensions_not_set(self):
         """Test that no parameters field is added when dimensions is not set."""
