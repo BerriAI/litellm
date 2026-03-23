@@ -52,15 +52,15 @@ graph LR
     LiteLLM -->|routed request| Anthropic([Anthropic API])
     LiteLLM -->|routed request| OpenAI([OpenAI API])
     LiteLLM -->|routed request| Google([Google GenAI])
-    LiteLLM -->|routed request| Bedrock{{AWS Bedrock}}
-    LiteLLM -->|routed request| VertexAI{{GCP Vertex AI}}
-    LiteLLM -->|routed request| Azure{{Azure OpenAI}}
+    LiteLLM -->|routed request| Bedrock([AWS Bedrock])
+    LiteLLM -->|routed request| VertexAI([GCP Vertex AI])
+    LiteLLM -->|routed request| Azure([Azure OpenAI])
     Anthropic -->|response| LiteLLM
     OpenAI -->|response| LiteLLM
     Google -->|response| LiteLLM
-    Bedrock -->|response| LiteLLM
-    VertexAI -->|response| LiteLLM
-    Azure -->|response| LiteLLM
+    Bedrock  -->|response| LiteLLM
+    VertexAI  -->|response| LiteLLM
+    Azure  -->|response| LiteLLM
     LiteLLM -->|response| APP
 
     classDef processor fill:#60a5fa,stroke:#1e40af,color:#000
@@ -140,19 +140,20 @@ What you need to add:
 
 ## Article 14: Human oversight
 
-LiteLLM's guardrails feature provides a foundation for human oversight:
+Article 14 requires high-risk AI systems to be designed so that natural persons can effectively oversee them: interpret outputs, decide not to use them, and intervene or halt the system. This means human actors in the loop, not automated controls.
 
-| Guardrails Feature | Article 14 Mapping |
-|-------------------|-------------------|
-| Content moderation | Pre-response filtering for harmful content |
-| Rate limiting | Prevents runaway AI usage |
-| Budget controls | Cost caps per user/team/organization |
-| Model access controls | Restricts which models specific users can access |
+LiteLLM's guardrails (content moderation, rate limiting, budget controls, model access controls) are **automated technical controls** that fall under Articles 9 (risk management) and 15 (accuracy/robustness). They are useful infrastructure, but they do not satisfy Article 14 on their own.
 
-What you need to add:
-- Escalation procedures when guardrails trigger
-- Human review pipeline for high-stakes decisions
-- Override mechanism to halt AI responses
+What you need to build for Article 14 compliance:
+
+| Requirement | What it means | LiteLLM foundation |
+|-------------|---------------|-------------------|
+| Human interpretation of outputs | A person can review what the AI produced before it acts | Logged responses via callbacks |
+| Decision not to use output | A person can reject an AI recommendation | Requires your application layer |
+| Intervention / halt | A person can stop the system mid-operation | Guardrails trigger points can route to human review |
+| Escalation procedures | When automated filters flag content, a human reviews | Callback hooks available; escalation logic is yours |
+
+LiteLLM provides the **logging and hook infrastructure** to build human oversight on top of. The oversight logic itself — review queues, approval workflows, kill switches — lives in your application layer.
 
 ## GDPR considerations
 
