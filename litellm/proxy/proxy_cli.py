@@ -88,7 +88,7 @@ class ProxyInitializationHelpers:
             api_base = test
         else:
             raise ValueError("Invalid test value")
-        client = openai.OpenAI(api_key="My API Key", base_url=api_base)
+        client = openai.OpenAI(api_key="My API Key", base_url=api_base, timeout=60.0)
 
         response = client.chat.completions.create(
             model=request_model,
