@@ -466,7 +466,7 @@ async def _update_existing_team_model_assignment(
     db_model: Deployment,
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
+    prisma_client: Optional[PrismaClient],
 ) -> None:
     """Update an existing team model if the public name changed."""
     old_public_name = (
