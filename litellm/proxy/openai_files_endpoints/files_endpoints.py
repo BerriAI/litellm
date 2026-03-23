@@ -452,8 +452,20 @@ async def create_file(  # noqa: PLR0915
         router_model: Optional[str] = None
         is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
-            # Read only the first line to detect the model; seek back afterwards.
-            first_line_bytes = file.file.read(4096)
+            # Read the first complete JSONL line for model detection.
+            # Read in 4096-byte chunks until we find a newline, capping at 1 MB
+            # to avoid loading the entire file for pathologically long lines.
+            _FIRST_LINE_MAX = 1024 * 1024  # 1 MB
+            first_line_bytes = b""
+            while len(first_line_bytes) < _FIRST_LINE_MAX:
+                chunk = file.file.read(4096)
+                if not chunk:
+                    break
+                newline_pos = chunk.find(b"\n")
+                if newline_pos != -1:
+                    first_line_bytes += chunk[:newline_pos]
+                    break
+                first_line_bytes += chunk
             file.file.seek(0)
             json_obj = get_first_json_object(file_content_bytes=first_line_bytes)
             if json_obj:

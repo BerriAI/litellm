@@ -152,6 +152,21 @@ else:
     LiteLLMLoggingObj = Any
 
 
+async def _async_file_chunks(
+    fp: Any, chunk_size: int = 65536
+) -> "AsyncIterator[bytes]":
+    """Async generator that reads a sync file-like object in chunks via a thread executor.
+
+    Dispatches each blocking disk read to a thread pool via anyio so the async
+    event loop is never stalled waiting for I/O.
+    """
+    while True:
+        chunk = await anyio_to_thread.run_sync(lambda: fp.read(chunk_size))
+        if not chunk:
+            break
+        yield chunk
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -3159,7 +3174,9 @@ class BaseLLMHTTPHandler:
                     "timeout": timeout,
                 }
                 if hasattr(upload_data, "read") and hasattr(upload_data, "seek"):
-                    async_upload_kwargs["content"] = upload_data
+                    # Wrap sync IO in the async generator so disk reads are
+                    # dispatched to a thread executor and do not block the loop.
+                    async_upload_kwargs["content"] = _async_file_chunks(upload_data)
                 else:
                     async_upload_kwargs["data"] = upload_data
                 upload_response = await getattr(async_httpx_client, upload_method)(
@@ -3202,23 +3219,10 @@ class BaseLLMHTTPHandler:
             ):
                 # Wrap sync IO in an async generator so disk reads are dispatched
                 # to a thread executor and do not block the event loop.
-                file_obj = transformed_request
-
-                async def _async_file_chunks(
-                    fp: Any, chunk_size: int = 65536
-                ) -> "AsyncIterator[bytes]":
-                    while True:
-                        chunk = await anyio_to_thread.run_sync(
-                            lambda: fp.read(chunk_size)
-                        )
-                        if not chunk:
-                            break
-                        yield chunk
-
                 async_upload_kwargs: Dict[str, Any] = {
                     "url": api_base,
                     "headers": headers,
-                    "content": _async_file_chunks(file_obj),
+                    "content": _async_file_chunks(transformed_request),
                     "timeout": timeout,
                 }
             else:
