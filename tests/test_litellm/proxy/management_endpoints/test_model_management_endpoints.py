@@ -46,8 +46,15 @@ class MockPrismaClient:
             )
         return None
 
+    async def find_many(self, where):
+        return []
+
     @property
     def litellm_teamtable(self):
+        return self
+
+    @property
+    def litellm_proxymodeltable(self):
         return self
 
 
@@ -730,7 +737,9 @@ class TestTeamModelUpdate:
 
             assert result.get("model_name", "").startswith("model_name_test_team_123_")
             assert "team_public_model_name" in str(result.get("model_info", ""))
+            # update_team must not be called (no model_aliases writes for team models)
             mock_update_team.assert_not_called()
+            # team_model_add must be called to add public name to team's models list
             mock_team_model_add.assert_called_once()
 
     @pytest.mark.asyncio
