@@ -106,3 +106,18 @@ def test_partial_credentials_missing_auth_url(monkeypatch):
 
     with pytest.raises(ValueError, match="SAP AI Core credentials not found."):
         sap_credentials.validate_credentials(**creds)
+
+def test_credentials_without_authentication_mode(monkeypatch):
+    _prep_env(monkeypatch)
+
+    # Set all required fields but no authentication mode (no client_secret, no certs)
+    monkeypatch.setenv("AICORE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AICORE_AUTH_URL", "test-auth-url")
+    monkeypatch.setenv("AICORE_BASE_URL", "test-base-url")
+
+    creds = sap_credentials.fetch_credentials()
+    creds.pop('resource_group')
+
+    # validate_credentials should raise because no authentication mode is provided
+    with pytest.raises(ValueError, match="SAP AI Core credentials are incomplete."):
+        sap_credentials.validate_credentials(**creds)

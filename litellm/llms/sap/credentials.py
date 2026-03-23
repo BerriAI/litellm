@@ -286,8 +286,7 @@ def fetch_credentials(
 
     resource_group = resolve_resource_group(sources)
 
-    if resource_group is not None:
-        credentials["resource_group"] = resource_group
+    credentials["resource_group"] = resource_group
 
     if "cert_url" in credentials:
         credentials["auth_url"] = credentials.pop("cert_url")
@@ -313,8 +312,8 @@ def validate_credentials(
 
     modes = [
         bool(client_secret),
-        (cert_str is not None and key_str is not None),
-        (cert_file_path is not None and key_file_path is not None),
+        bool(cert_str) and bool(key_str),
+        bool(cert_file_path) and bool(key_file_path),
     ]
     if sum(bool(m) for m in modes) != 1:
         raise ValueError(
