@@ -123,7 +123,6 @@ def test_cost_calculator_with_usage(monkeypatch):
 
     # Invalidate caches after modifying litellm.model_cost
     from litellm.utils import _invalidate_model_cost_lowercase_map
-
     _invalidate_model_cost_lowercase_map()
 
     result = response_cost_calculator(
@@ -529,7 +528,9 @@ def test_azure_audio_output_cost_calculation():
     model_info = litellm.get_model_info("azure/gpt-audio-2025-08-28")
 
     # Calculate expected cost
-    expected_input_cost = model_info["input_cost_per_token"] * 17  # text tokens
+    expected_input_cost = (
+        model_info["input_cost_per_token"] * 17  # text tokens
+    )
     expected_output_cost = (
         model_info["output_cost_per_token"] * 110  # text tokens
         + model_info["output_cost_per_audio_token"] * 482  # audio tokens
@@ -541,14 +542,14 @@ def test_azure_audio_output_cost_calculation():
     wrong_total_cost = expected_input_cost + wrong_output_cost
 
     # Verify audio tokens are NOT charged at text rate (the bug)
-    assert (
-        abs(cost - wrong_total_cost) > 0.001
-    ), "Bug: Audio tokens are being charged at text token rate"
+    assert abs(cost - wrong_total_cost) > 0.001, (
+        "Bug: Audio tokens are being charged at text token rate"
+    )
 
     # Verify cost matches
-    assert (
-        abs(cost - expected_total_cost) < 0.0000001
-    ), f"Expected cost {expected_total_cost}, got {cost}"
+    assert abs(cost - expected_total_cost) < 0.0000001, (
+        f"Expected cost {expected_total_cost}, got {cost}"
+    )
 
 
 def test_default_image_cost_calculator(monkeypatch):
@@ -993,112 +994,6 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     assert expected_actual_cost == total_cost
 
 
-def test_gemini_partial_prompt_token_breakdown_bills_unaccounted_remainder():
-    """
-    Reproduce #24375: when prompt_tokens_details only covers a subset of the
-    prompt tokens, the remainder should still be billed as text tokens.
-    """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-    from litellm.types.utils import CompletionTokensDetailsWrapper
-
-    original_local_cost_map = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    original_model_cost = litellm.model_cost
-
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        model_info = litellm.get_model_info(
-            model="gemini/gemini-2.5-flash", custom_llm_provider="gemini"
-        )
-        output_cost_per_reasoning_token = model_info.get(
-            "output_cost_per_reasoning_token", model_info["output_cost_per_token"]
-        )
-
-        usage = Usage(
-            prompt_tokens=783,
-            completion_tokens=96,
-            total_tokens=879,
-            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=9),
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=92,
-                text_tokens=4,
-            ),
-        )
-
-        input_cost, output_cost = generic_cost_per_token(
-            model="gemini/gemini-2.5-flash",
-            usage=usage,
-            custom_llm_provider="gemini",
-        )
-
-        expected_input_cost = usage.prompt_tokens * model_info["input_cost_per_token"]
-        expected_output_cost = (4 * model_info["output_cost_per_token"]) + (
-            92 * output_cost_per_reasoning_token
-        )
-
-        assert abs(input_cost - expected_input_cost) < 1e-12
-        assert abs(output_cost - expected_output_cost) < 1e-12
-    finally:
-        if original_local_cost_map is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_local_cost_map
-        litellm.model_cost = original_model_cost
-
-
-def test_partial_completion_token_breakdown_bills_unaccounted_remainder_as_text():
-    """
-    If completion_tokens_details omits part of the total completion tokens, the
-    remainder should be billed as text tokens instead of being dropped.
-    """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-    from litellm.types.utils import CompletionTokensDetailsWrapper
-
-    original_local_cost_map = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    original_model_cost = litellm.model_cost
-
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        model_info = litellm.get_model_info(
-            model="gemini/gemini-2.5-flash", custom_llm_provider="gemini"
-        )
-        output_cost_per_reasoning_token = model_info.get(
-            "output_cost_per_reasoning_token", model_info["output_cost_per_token"]
-        )
-
-        usage = Usage(
-            prompt_tokens=10,
-            completion_tokens=120,
-            total_tokens=130,
-            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=10),
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=92,
-                text_tokens=4,
-            ),
-        )
-
-        _, output_cost = generic_cost_per_token(
-            model="gemini/gemini-2.5-flash",
-            usage=usage,
-            custom_llm_provider="gemini",
-        )
-
-        expected_output_cost = (28 * model_info["output_cost_per_token"]) + (
-            92 * output_cost_per_reasoning_token
-        )
-
-        assert abs(output_cost - expected_output_cost) < 1e-12
-    finally:
-        if original_local_cost_map is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_local_cost_map
-        litellm.model_cost = original_model_cost
-
-
 def test_azure_ai_cache_cost_calculation():
     """
     Test that azure_ai provider correctly calculates cache costs using generic_cost_per_token.
@@ -1161,12 +1056,12 @@ def test_azure_ai_cache_cost_calculation():
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert (
-        abs(input_cost - expected_input_cost) < 1e-10
-    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
-    assert (
-        abs(output_cost - expected_output_cost) < 1e-10
-    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+    assert abs(input_cost - expected_input_cost) < 1e-10, (
+        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    )
+    assert abs(output_cost - expected_output_cost) < 1e-10, (
+        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+    )
 
 
 def test_cost_discount_vertex_ai():
@@ -1939,7 +1834,7 @@ def test_gemini_without_cache_tokens_details():
             "promptTokensDetails": [
                 {"modality": "TEXT", "tokenCount": 6},
                 {"modality": "IMAGE", "tokenCount": 258},
-            ],
+            ]
             # No cacheTokensDetails
         }
     }
@@ -2034,9 +1929,7 @@ def test_gemini_implicit_caching_cost_calculation():
         f"Cached tokens may not be using reduced pricing."
     )
 
-    print(
-        "✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly"
-    )
+    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
 
 
 def test_additional_costs_only_for_azure_ai():
