@@ -217,9 +217,29 @@ def test_json_formatter_includes_logger_field():
     )
     output = formatter.format(record)
     obj = json.loads(output)
-    assert "logger" in obj, "'logger' field missing from JSON log output"
-    assert obj["logger"].endswith(":123"), (
-        f"Expected logger field to end with ':123', got {obj['logger']!r}"
+    assert obj["logger"] == "proxy_server.py:123", (
+        f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
+    )
+
+
+def test_json_formatter_extra_component_not_overwritten():
+    """
+    User-supplied extra={"component": "..."} must not be silently dropped.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM Proxy",
+        level=logging.INFO,
+        pathname="proxy_server.py",
+        lineno=1,
+        msg="event",
+        args=(),
+        exc_info=None,
+    )
+    record.component = "auth-service"
+    obj = json.loads(formatter.format(record))
+    assert obj["component"] == "auth-service", (
+        f"User-supplied component was overwritten, got {obj['component']!r}"
     )
 
 

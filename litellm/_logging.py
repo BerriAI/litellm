@@ -195,8 +195,6 @@ class JsonFormatter(Formatter):
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
-            "component": record.name,
-            "logger": f"{record.filename}:{record.lineno}",
         }
 
         # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties
@@ -212,6 +210,12 @@ class JsonFormatter(Formatter):
         for key, value in record.__dict__.items():
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
+
+        # Set component/logger only if not already supplied via extra={...}
+        if "component" not in json_record:
+            json_record["component"] = record.name
+        if "logger" not in json_record:
+            json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(
