@@ -177,7 +177,7 @@ async def create_or_get_user_key(
     users = await internal_user_endpoints.get_users(
         user_email=org_email,
         role=None,
-        user_ids=None,
+        user_ids=user_id,
         sso_user_ids=None,
         team=None,
         page=1,
