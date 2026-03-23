@@ -331,7 +331,7 @@ model LiteLLM_MCPToolsetTable {
   tools        Json     @default("[]") // [{server_id: string, tool_name: string}]
   created_at   DateTime @default(now())
   created_by   String?
-  updated_at   DateTime @updatedAt
+  updated_at   DateTime @default(now()) @updatedAt
   updated_by   String?
 }
 

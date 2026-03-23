@@ -59,7 +59,8 @@ class TestApplyToolsetScope:
         assert op.mcp_tool_permissions == toolset_perms
 
     @pytest.mark.asyncio
-    async def test_creates_object_permission_when_none(self):
+    async def test_admin_creates_object_permission_when_none(self):
+        """Admin key with object_permission=None can access any toolset."""
         from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
 
         toolset_perms = {"server-a": ["tool1"]}
@@ -68,13 +69,29 @@ class TestApplyToolsetScope:
             "global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
-            auth = UserAPIKeyAuth(api_key="sk-test", object_permission=None)
+            auth = UserAPIKeyAuth(
+                api_key="sk-test",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                object_permission=None,
+            )
             result = await _apply_toolset_scope(auth, "toolset-123")
 
         op = result.object_permission
         assert op is not None
         assert op.mcp_servers == ["server-a"]
         assert op.mcp_tool_permissions == toolset_perms
+
+    @pytest.mark.asyncio
+    async def test_non_admin_no_object_permission_raises_403(self):
+        """Non-admin key with object_permission=None is denied (no grants configured)."""
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        auth = UserAPIKeyAuth(api_key="sk-test", object_permission=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await _apply_toolset_scope(auth, "toolset-123")
+        assert exc_info.value.status_code == 403
 
 
 class TestFetchMCPToolsetsAccess:
