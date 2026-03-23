@@ -466,6 +466,8 @@ class Router:
         # Initialize model name to deployment indices mapping for O(1) lookups
         # Maps model_name -> list of indices in model_list
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
+        # Maps (team_id, team_public_model_name) -> list of indices in model_list
+        self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
 
         if model_list is not None:
             # set_model_list will build indices automatically
@@ -6757,6 +6759,7 @@ class Router:
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
+        self.team_model_to_deployment_indices = {}  # Reset the team_model index
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -7072,6 +7075,26 @@ class Router:
             else:
                 del self.model_name_to_deployment_indices[model_name]
 
+        # Update team_model_to_deployment_indices
+        for key, indices in list(self.team_model_to_deployment_indices.items()):
+            # Remove the deleted index
+            if removal_idx in indices:
+                indices.remove(removal_idx)
+
+            # Decrement all indices greater than removal_idx
+            updated_indices = []
+            for idx in indices:
+                if idx > removal_idx:
+                    updated_indices.append(idx - 1)
+                else:
+                    updated_indices.append(idx)
+
+            # Update or remove the entry
+            if len(updated_indices) > 0:
+                self.team_model_to_deployment_indices[key] = updated_indices
+            else:
+                del self.team_model_to_deployment_indices[key]
+
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
     ) -> None:
@@ -7099,6 +7122,17 @@ class Router:
             if model_name not in self.model_name_to_deployment_indices:
                 self.model_name_to_deployment_indices[model_name] = []
             self.model_name_to_deployment_indices[model_name].append(idx)
+
+        # Update team_model index for O(1) team-scoped lookup
+        team_id = model.get("model_info", {}).get("team_id")
+        team_public_model_name = model.get("model_info", {}).get(
+            "team_public_model_name"
+        )
+        if team_id and team_public_model_name:
+            key = (team_id, team_public_model_name)
+            if key not in self.team_model_to_deployment_indices:
+                self.team_model_to_deployment_indices[key] = []
+            self.team_model_to_deployment_indices[key].append(idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -7930,6 +7964,7 @@ class Router:
         instead of O(n) linear scan through the entire model_list.
         """
         self.model_name_to_deployment_indices.clear()
+        self.team_model_to_deployment_indices.clear()
 
         for idx, model in enumerate(model_list):
             model_name = model.get("model_name")
@@ -7937,6 +7972,16 @@ class Router:
                 if model_name not in self.model_name_to_deployment_indices:
                     self.model_name_to_deployment_indices[model_name] = []
                 self.model_name_to_deployment_indices[model_name].append(idx)
+
+            team_id = model.get("model_info", {}).get("team_id")
+            team_public_model_name = model.get("model_info", {}).get(
+                "team_public_model_name"
+            )
+            if team_id and team_public_model_name:
+                key = (team_id, team_public_model_name)
+                if key not in self.team_model_to_deployment_indices:
+                    self.team_model_to_deployment_indices[key] = []
+                self.team_model_to_deployment_indices[key].append(idx)
 
     def _build_model_id_to_deployment_index_map(self, model_list: list):
         """
@@ -8121,6 +8166,22 @@ class Router:
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         returned_models: List[DeploymentTypedDict] = []
+
+        # O(1) lookup in team_model index when team_id is provided
+        if team_id is not None:
+            key = (team_id, model_name)
+            if key in self.team_model_to_deployment_indices:
+                indices = self.team_model_to_deployment_indices[key]
+                # O(k) where k = team deployments for this model_name (typically 1-10)
+                for idx in indices:
+                    model = self.model_list[idx]
+                    if model_alias is not None:
+                        alias_model = model.copy()
+                        alias_model["model_name"] = model_alias
+                        returned_models.append(alias_model)
+                    else:
+                        returned_models.append(model)
+                return returned_models
 
         # O(1) lookup in model_name index
         if model_name in self.model_name_to_deployment_indices:
