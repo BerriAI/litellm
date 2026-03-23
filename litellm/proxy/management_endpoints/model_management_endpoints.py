@@ -13,13 +13,13 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -322,9 +322,13 @@ async def _add_team_model_to_db(
     """
     If 'team_id' is provided,
 
-    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
-    - store the model in the db with the unique 'model_name'
-    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
+    - generate a deterministic 'model_name' for the model (e.g. 'model_name_{team_id}_{public_name}')
+    - store the model in the db with this shared group name
+    - store a team model alias mapping {"public_name": "model_name_{team_id}_{public_name}"}
+
+    Using a deterministic name (not UUID) ensures sibling deployments for the
+    same public model share a model_name, so the router treats them as a single
+    candidate pool for load balancing and failover.
     """
     _team_id = model_params.model_info.team_id
     if _team_id is None:
@@ -333,9 +337,9 @@ async def _add_team_model_to_db(
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
 
-    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
+    group_model_name = f"model_name_{_team_id}_{original_model_name}"
 
-    model_params.model_name = unique_model_name
+    model_params.model_name = group_model_name
 
     ## CREATE MODEL IN DB ##
     model_response = await _add_model_to_db(
@@ -348,7 +352,7 @@ async def _add_team_model_to_db(
     await update_team(
         data=UpdateTeamRequest(
             team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
+            model_aliases={original_model_name: group_model_name},
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
@@ -453,14 +457,14 @@ async def _setup_new_team_model_assignment(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Set up a new team model with unique name, alias, and team membership."""
-    unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
-    patch_data.model_name = unique_model_name
+    """Set up a new team model with deterministic name, alias, and team membership."""
+    group_model_name = f"model_name_{team_id}_{public_model_name}"
+    patch_data.model_name = group_model_name
 
     await update_team(
         data=UpdateTeamRequest(
             team_id=team_id,
-            model_aliases={public_model_name: unique_model_name},
+            model_aliases={public_model_name: group_model_name},
         ),
         user_api_key_dict=user_api_key_dict,
         http_request=Request(scope={"type": "http"}),
