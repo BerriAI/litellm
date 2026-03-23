@@ -7,13 +7,13 @@ import redis
 import redis.asyncio as async_redis
 
 from litellm._redis import (
-    GCPIAMCredentialProvider,
     _get_redis_cluster_kwargs,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
+from litellm._redis_credential_provider import GCPIAMCredentialProvider
 
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -336,7 +336,8 @@ def test_gcp_iam_credential_provider_get_credentials():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis._generate_gcp_iam_access_token", return_value="tok-1"
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        return_value="tok-1",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
         creds = provider.get_credentials()
@@ -351,7 +352,8 @@ def test_gcp_iam_credential_provider_regenerates_token_on_each_call():
     tokens = ["tok-1", "tok-2", "tok-3"]
 
     with patch(
-        "litellm._redis._generate_gcp_iam_access_token", side_effect=tokens
+        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        side_effect=tokens,
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
         results = [provider.get_credentials() for _ in range(3)]
