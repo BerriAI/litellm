@@ -1505,10 +1505,10 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
  
     model_info = litellm.model_cost["gemini-2.5-pro"]
     expected_prompt_cost = (
-        50 * model_info["input_cost_per_token"]
+        50 * model_info.get("input_cost_per_token", 0)
         + 12.0 * model_info.get("input_cost_per_video_per_second", 0)
     )
-    expected_completion_cost = 10 * model_info["output_cost_per_token"]
+    expected_completion_cost = 10 * model_info.get("output_cost_per_token", 0)
  
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
