@@ -182,12 +182,6 @@ class MCPServerManager:
         }
         """
 
-        # Toolset caches are now stored in user_api_key_cache (Redis-backed DualCache
-        # in production) so entries are shared across workers.  These attributes are
-        # kept as empty stubs so existing callers don't AttributeError during tests.
-        self._toolset_perm_cache: Dict[str, Tuple[Dict[str, List[str]], float]] = {}
-        self._toolset_name_cache: Dict[str, Tuple[Optional[Any], float]] = {}
-
     def get_registry(self) -> Dict[str, MCPServer]:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
@@ -885,8 +879,10 @@ class MCPServerManager:
                 ]
             for k in keys_to_remove:
                 cache_dict.pop(k, None)
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_logger.warning(
+                f"invalidate_toolset_cache: failed to evict in-memory entries: {e}"
+            )
 
     async def get_toolset_by_name_cached(
         self,
