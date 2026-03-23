@@ -105,7 +105,11 @@ def test_cache_init_creates_redis_cache_without_cluster_config(
     Ensures backward compatibility: without REDIS_CLUSTER_NODES or
     redis_startup_nodes, the standard RedisCache is still used.
     """
+    import litellm
     from litellm.caching.caching import Cache
+
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
 
     monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
     monkeypatch.setenv("REDIS_HOST", "localhost")
