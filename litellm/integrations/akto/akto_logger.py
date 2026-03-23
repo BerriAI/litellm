@@ -234,7 +234,9 @@ class AktoLogger(CustomLogger):
         try:
             data = self.extract_logging_data(kwargs)
             status = self.get_failure_status_code(kwargs)
-            payload = self.build_akto_payload(data, status_code=status)
+            payload = self.build_akto_payload(
+                data, status_code=status, response_obj=response_obj
+            )
             self.sync_http_handler.post(**self.request_kwargs(payload))
         except Exception as e:
             verbose_logger.error("Akto logging error (failure): %s", e)
@@ -243,7 +245,9 @@ class AktoLogger(CustomLogger):
         try:
             data = self.extract_logging_data(kwargs)
             status = self.get_failure_status_code(kwargs)
-            payload = self.build_akto_payload(data, status_code=status)
+            payload = self.build_akto_payload(
+                data, status_code=status, response_obj=response_obj
+            )
             await self.async_http_handler.post(**self.request_kwargs(payload))
         except Exception as e:
             verbose_logger.error("Akto logging error (failure): %s", e)
