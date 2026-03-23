@@ -288,3 +288,40 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+def test_get_assistant_content_message_null_text():
+    """
+    Test that get_assistant_content_message handles parts with text=null
+    without raising AttributeError. Regression for GitHub issue #24385.
+
+    Gemini image generation responses may include parts with {"text": null},
+    which caused AttributeError: 'NoneType' object has no attribute 'startswith'.
+    """
+    config = VertexGeminiConfig()
+
+    # Parts where text is explicitly null (as returned by Gemini image-gen responses)
+    parts = [
+        {"text": None},  # null text - should not cause AttributeError
+        {"text": "Hello world"},  # normal text part
+    ]
+
+    content, reasoning = config.get_assistant_content_message(parts=parts)
+
+    # null text part should be skipped; normal text should be included
+    assert content == "Hello world"
+    assert reasoning is None
+
+
+def test_get_assistant_content_message_all_null_text():
+    """
+    Test that get_assistant_content_message returns None
+    when all parts have text=null.
+    """
+    config = VertexGeminiConfig()
+
+    parts = [{"text": None}, {"text": None}]
+
+    content, reasoning = config.get_assistant_content_message(parts=parts)
+
+    assert content is None
+    assert reasoning is None

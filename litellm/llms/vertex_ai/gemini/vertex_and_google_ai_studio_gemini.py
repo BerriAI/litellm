@@ -1271,7 +1271,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         for part in parts:
             _content_str = ""
-            if "text" in part:
+            if "text" in part and part.get("text") is not None:
                 text_content = part["text"]
                 # Check if text content is audio data URI - if so, exclude from text content
                 if text_content.startswith("data:audio") and ";base64," in text_content:
@@ -1379,7 +1379,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Optional[ChatCompletionAudioResponse]:
         """Extract audio response from parts if present"""
         for part in parts:
-            if "text" in part:
+            if "text" in part and part.get("text") is not None:
                 text_content = part["text"]
                 # Check if text content contains audio data URI
                 if text_content.startswith("data:audio") and ";base64," in text_content:
