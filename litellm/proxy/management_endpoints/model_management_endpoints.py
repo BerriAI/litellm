@@ -32,6 +32,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamModelAddRequest,
+    TeamModelDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -40,6 +41,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helpe
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
+    team_model_delete,
     update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
@@ -344,14 +346,15 @@ async def _add_team_model_to_db(
         prisma_client=prisma_client,
     )
 
-    await team_model_add(
-        data=TeamModelAddRequest(
-            team_id=_team_id,
-            models=[original_model_name],
-        ),
-        http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if original_model_name:
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=_team_id,
+                models=[original_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
 
     return model_response
 
@@ -469,6 +472,14 @@ async def _update_existing_team_model_assignment(
     )
 
     if old_public_name and public_model_name != old_public_name:
+        await team_model_delete(
+            data=TeamModelDeleteRequest(
+                team_id=team_id,
+                models=[old_public_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
         await team_model_add(
             data=TeamModelAddRequest(
                 team_id=team_id,
