@@ -719,17 +719,32 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
-        # If it's a file-like object
-        # Try to get filename from file handle if not already set
+        # If it's a file-like object, keep it as-is to avoid loading the entire
+        # file into memory.  Callers that need bytes can call .read() themselves;
+        # callers streaming the data to an HTTP request should pass the object
+        # directly so the transfer is chunked.
         if not filename and hasattr(file_content, "name"):
             filename = Path(file_content.name).name
 
-        content = file_content.read()
-
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        # Reset file pointer to beginning
+        # Compute file size via seek/tell so providers that need Content-Length
+        # (e.g. Gemini resumable upload) don't have to load all bytes.
+        file_content.seek(0, 2)
+        file_size: int = file_content.tell()
         file_content.seek(0)
+
+        return ExtractedFileData(
+            filename=filename,
+            content=file_content,  # type: ignore[typeddict-item]
+            content_type=content_type
+            or (
+                mimetypes.guess_type(filename)[0]
+                if filename
+                else "application/octet-stream"
+            )
+            or "application/octet-stream",
+            headers=file_headers,
+            file_size=file_size,
+        )
     elif isinstance(file_content, bytes):
         content = file_content
     else:
@@ -748,6 +763,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
         content=content,
         content_type=content_type,
         headers=file_headers,
+        file_size=len(content),
     )
 
 
