@@ -127,16 +127,19 @@ def test_init_from_env():
 
 
 def test_init_defaults():
-    g = AktoGuardrail(
-        akto_base_url="http://localhost:9090",
-        akto_api_key="test-token",
-        guardrail_name="default-test",
-        event_hook="pre_call",
-    )
-    assert g.unreachable_fallback == "fail_closed"
-    assert g.guardrail_timeout == 5
-    assert g.akto_account_id == "1000000"
-    assert g.akto_vxlan_id == "0"
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("AKTO_ACCOUNT_ID", None)
+        os.environ.pop("AKTO_VXLAN_ID", None)
+        g = AktoGuardrail(
+            akto_base_url="http://localhost:9090",
+            akto_api_key="test-token",
+            guardrail_name="default-test",
+            event_hook="pre_call",
+        )
+        assert g.unreachable_fallback == "fail_closed"
+        assert g.guardrail_timeout == 5
+        assert g.akto_account_id == "1000000"
+        assert g.akto_vxlan_id == "0"
 
 
 # ── Payload ──
@@ -357,6 +360,8 @@ async def test_fail_closed_on_unreachable():
     with pytest.raises(HTTPException) as exc_info:
         await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Akto guardrail service unreachable"
+    assert "localhost" not in exc_info.value.detail
 
 
 
