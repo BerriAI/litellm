@@ -8070,20 +8070,23 @@ class Router:
 
     def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
         """
-        Map a team model name to a team-specific model name.
+        Check if team_model_name resolves to team-specific deployments.
+
+        Returns the public model name (unchanged) so the router can find all
+        sibling deployments via team_id filtering, instead of collapsing to a
+        single internal model_name.
 
         Returns:
-        - deployment id: str - the deployment id of the team-specific model
-        - None: if no team-specific model name is found
+        - str: the team_model_name if team deployments exist for this team
+        - None: if no team-specific model is found
         """
         models = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
             return None
         for model in models:
             if model.get("model_info", {}).get("team_id") == team_id:
-                return model.get("model_name")
+                return team_model_name
 
-        ## wildcard models
         return None
 
     def should_include_deployment(
@@ -8778,6 +8781,38 @@ class Router:
             model = _model_from_alias
 
         if model not in self.model_names:
+            # Check for team-specific deployments by team_public_model_name
+            if request_team_id is not None:
+                team_deployments = self._get_all_deployments(
+                    model_name=model, team_id=request_team_id
+                )
+                if team_deployments:
+                    candidate_details = []
+                    for deployment in team_deployments:
+                        deployment_info = deployment.get("model_info", {}) or {}
+                        deployment_params = deployment.get("litellm_params", {}) or {}
+                        candidate_details.append(
+                            {
+                                "model_name": deployment.get("model_name"),
+                                "model_id": deployment_info.get("id"),
+                                "team_public_model_name": deployment_info.get(
+                                    "team_public_model_name"
+                                ),
+                                "api_base": deployment_params.get("api_base"),
+                            }
+                        )
+                    verbose_router_logger.info(
+                        "🔥 routing_candidates_before_lb "
+                        f"model={model} count={len(team_deployments)} "
+                        f"candidates={candidate_details}"
+                    )
+                    if len(team_deployments) > 1:
+                        verbose_router_logger.info(
+                            "🔥 load_balancer_candidate_pool "
+                            f"model={model} candidate_count={len(team_deployments)}"
+                        )
+                    return model, team_deployments
+
             # check if provider/ specific wildcard routing use pattern matching
             pattern_deployments = self.pattern_router.get_deployments_by_pattern(
                 model=model,
@@ -8815,6 +8850,32 @@ class Router:
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = self._get_deployment_by_litellm_model(model=model)
+
+        if isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
+            candidate_details = []
+            for deployment in healthy_deployments:
+                deployment_info = deployment.get("model_info", {}) or {}
+                deployment_params = deployment.get("litellm_params", {}) or {}
+                candidate_details.append(
+                    {
+                        "model_name": deployment.get("model_name"),
+                        "model_id": deployment_info.get("id"),
+                        "team_public_model_name": deployment_info.get(
+                            "team_public_model_name"
+                        ),
+                        "api_base": deployment_params.get("api_base"),
+                    }
+                )
+            verbose_router_logger.info(
+                "🔥 routing_candidates_before_lb "
+                f"model={model} count={len(healthy_deployments)} "
+                f"candidates={candidate_details}"
+            )
+            if len(healthy_deployments) > 1:
+                verbose_router_logger.info(
+                    "🔥 load_balancer_candidate_pool "
+                    f"model={model} candidate_count={len(healthy_deployments)}"
+                )
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(

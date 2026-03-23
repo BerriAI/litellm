@@ -322,13 +322,9 @@ async def _add_team_model_to_db(
     """
     If 'team_id' is provided,
 
-    - generate a deterministic 'model_name' for the model (e.g. 'model_name_{team_id}_{public_name}')
-    - store the model in the db with this shared group name
-    - store a team model alias mapping {"public_name": "model_name_{team_id}_{public_name}"}
-
-    Using a deterministic name (not UUID) ensures sibling deployments for the
-    same public model share a model_name, so the router treats them as a single
-    candidate pool for load balancing and failover.
+    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
+    - store the model in the db with the unique 'model_name'
+    - add the public model name to the team's allowed models list
     """
     _team_id = model_params.model_info.team_id
     if _team_id is None:
@@ -337,9 +333,9 @@ async def _add_team_model_to_db(
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
 
-    group_model_name = f"model_name_{_team_id}_{original_model_name}"
+    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
 
-    model_params.model_name = group_model_name
+    model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
     model_response = await _add_model_to_db(
@@ -348,17 +344,6 @@ async def _add_team_model_to_db(
         prisma_client=prisma_client,
     )
 
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: group_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    # add model to team object
     await team_model_add(
         data=TeamModelAddRequest(
             team_id=_team_id,
@@ -457,18 +442,9 @@ async def _setup_new_team_model_assignment(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Set up a new team model with deterministic name, alias, and team membership."""
-    group_model_name = f"model_name_{team_id}_{public_model_name}"
-    patch_data.model_name = group_model_name
-
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=team_id,
-            model_aliases={public_model_name: group_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
+    """Set up a new team model with unique name and team membership."""
+    unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
+    patch_data.model_name = unique_model_name
 
     await team_model_add(
         data=TeamModelAddRequest(
@@ -492,18 +468,16 @@ async def _update_existing_team_model_assignment(
         db_model.model_info.team_public_model_name if db_model.model_info else None
     )
 
-    # Update alias only if public name changed
     if old_public_name and public_model_name != old_public_name:
-        await update_team(
-            data=UpdateTeamRequest(
+        await team_model_add(
+            data=TeamModelAddRequest(
                 team_id=team_id,
-                model_aliases={public_model_name: db_model.model_name},
+                models=[public_model_name],
             ),
-            user_api_key_dict=user_api_key_dict,
             http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
         )
 
-    # Keep existing unique model_name
     patch_data.model_name = None
 
 
