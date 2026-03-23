@@ -67,7 +67,7 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
 
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
-@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+@patch.object(RedisCache, "_setup_health_pings")
 def test_cache_init_creates_cluster_cache_from_env_var(mock_health, mock_get_client, mock_get_pool, monkeypatch):
     """
     Test that Cache() creates RedisClusterCache when REDIS_CLUSTER_NODES env var is set.
@@ -75,8 +75,11 @@ def test_cache_init_creates_cluster_cache_from_env_var(mock_health, mock_get_cli
     Regression test for https://github.com/BerriAI/litellm/issues/22748
     """
     from litellm.caching.caching import Cache
+    import litellm
 
     startup_nodes = [{"host": "127.0.0.1", "port": "7001"}]
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
     monkeypatch.setenv("REDIS_CLUSTER_NODES", json.dumps(startup_nodes))
     monkeypatch.delenv("REDIS_HOST", raising=False)
     monkeypatch.delenv("REDIS_PORT", raising=False)
@@ -92,7 +95,7 @@ def test_cache_init_creates_cluster_cache_from_env_var(mock_health, mock_get_cli
 
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
-@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+@patch.object(RedisCache, "_setup_health_pings")
 def test_cache_init_creates_redis_cache_without_cluster_config(
     mock_health, mock_get_client, mock_get_pool, monkeypatch
 ):
@@ -154,11 +157,11 @@ def test_router_create_redis_cache_cluster_detection(startup_nodes, env_var, exp
 
     Regression test for https://github.com/BerriAI/litellm/issues/22748
     """
-    from litellm import Router
     import litellm
+    from litellm import Router
 
-    litellm.secret_manager_client = None
-    litellm._key_management_settings = None
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
 
     cache_config = dict(
         host="mockhost",
