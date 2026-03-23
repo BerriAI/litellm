@@ -93,7 +93,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             with open(str(file_content), "rb") as f:
                 content = f.read()
         elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
+            # Seek to start so a second call (e.g. from transform_create_file_request)
+            # reads the full content even if the pointer has already advanced.
+            if hasattr(file_content, "seek"):
+                file_content.seek(0)
             content = file_content.read()
 
         # Ensure content is string
@@ -393,9 +396,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         elif hasattr(extracted_file_data_content, "read") and hasattr(
             extracted_file_data_content, "seek"
         ):
-            # IO[bytes] path (e.g. SpooledTemporaryFile from FastAPI UploadFile)
+            # IO[bytes] path (e.g. SpooledTemporaryFile from FastAPI UploadFile).
+            # seek(0) is already called inside _get_content_from_openai_file, but we
+            # handle this branch directly to surface a clear error for binary uploads.
             extracted_file_data_content.seek(0)
-            file_content = extracted_file_data_content.read().decode("utf-8")
+            raw = extracted_file_data_content.read()
+            try:
+                file_content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ValueError(
+                    "Bedrock file uploads require UTF-8 text content. Binary files are not supported."
+                )
         else:
             raise ValueError("Unsupported file content type")
 
@@ -759,7 +770,9 @@ class BedrockJsonlFilesTransformation:
             with open(str(file_content), "rb") as f:
                 content = f.read()
         elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
+            # Seek to start so this helper is idempotent across multiple calls.
+            if hasattr(file_content, "seek"):
+                file_content.seek(0)
             content = file_content.read()
 
         # Ensure content is string
