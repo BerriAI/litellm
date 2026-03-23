@@ -2103,15 +2103,14 @@ if MCP_AVAILABLE:
         )
         is_admin = _user_has_admin_view(user_api_key_dict)
         op = user_api_key_dict.object_permission
-        # mcp_toolsets=None means the field was never set.
-        # For admins: None → no restriction → return all.
-        # For non-admins: None → no toolsets explicitly granted → return nothing.
+        # mcp_toolsets=None or [] both mean "not restricted by toolsets".
+        # For admins: either value → no restriction → return all.
+        # For non-admins: either value → no toolsets explicitly granted → return nothing.
+        # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
         raw_toolsets = getattr(op, "mcp_toolsets", None) if op else None
-        if raw_toolsets is None:
+        if not raw_toolsets:
             if is_admin:
                 return await list_mcp_toolsets(prisma_client)
-            return []
-        if not raw_toolsets:
             return []
         return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
 

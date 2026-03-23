@@ -1193,9 +1193,16 @@ class MCPServerManager:
                 if not add_prefix:
                     prefix = get_server_prefix(server)
                     sep = MCP_TOOL_PREFIX_SEPARATOR
-                    for t in tools:
-                        if t.name.startswith(f"{prefix}{sep}"):
-                            t.name = t.name[len(prefix) + len(sep) :]
+                    tools = [
+                        (
+                            t.model_copy(
+                                update={"name": t.name[len(prefix) + len(sep) :]}
+                            )
+                            if t.name.startswith(f"{prefix}{sep}")
+                            else t
+                        )
+                        for t in tools
+                    ]
                 return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)

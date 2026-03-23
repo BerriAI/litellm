@@ -22,7 +22,7 @@ def _make_auth(
         object_permission_id="test",
         mcp_servers=mcp_servers,
         mcp_tool_permissions=mcp_tool_permissions or {},
-        mcp_toolsets=mcp_toolsets or [],
+        mcp_toolsets=mcp_toolsets,
     )
     return UserAPIKeyAuth(
         api_key="sk-test",
