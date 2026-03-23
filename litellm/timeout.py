@@ -71,7 +71,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
                 local_timeout_duration = kwargs["request_timeout"]
             try:
                 value = await asyncio.wait_for(
-                    func(*args, **kwargs), timeout=timeout_duration
+                    func(*args, **kwargs), timeout=local_timeout_duration
                 )
                 return value
             except asyncio.TimeoutError:
