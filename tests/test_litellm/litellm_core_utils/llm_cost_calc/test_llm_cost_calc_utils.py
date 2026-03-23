@@ -1430,8 +1430,8 @@ def test_image_count_billing_does_not_fill_prompt_token_gap():
         f"Gap should not be filled when image_count billing is active."
     )
     assert completion_cost == pytest.approx(expected_completion_cost)
- 
- 
+
+
 def test_character_count_billing_does_not_fill_prompt_token_gap():
     """
     Regression: when character_count pricing is active, gaps between
@@ -1440,6 +1440,11 @@ def test_character_count_billing_does_not_fill_prompt_token_gap():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+ 
+    # multimodalembedding@001 has non-zero input_cost_per_character (2e-07),
+    # input_cost_per_token (8e-07), and output_cost_per_token (0) in the cost map,
+    # making the character_count billing assertion non-trivial.
+    model = "multimodalembedding@001"
  
     usage = Usage(
         prompt_tokens=200,
@@ -1455,17 +1460,17 @@ def test_character_count_billing_does_not_fill_prompt_token_gap():
     )
  
     prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-2.0-flash-001",
+        model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
  
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost[model]
     expected_prompt_cost = (
-        100 * model_info["input_cost_per_token"]
+        100 * model_info.get("input_cost_per_token", 0)
         + 1000 * model_info.get("input_cost_per_character", 0)
     )
-    expected_completion_cost = 20 * model_info["output_cost_per_token"]
+    expected_completion_cost = 20 * model_info.get("output_cost_per_token", 0)
  
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Expected prompt_cost={expected_prompt_cost}, got {prompt_cost}. "
@@ -1483,6 +1488,10 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
  
+    # multimodalembedding@001 has non-zero input_cost_per_video_per_second (0.0005)
+    # and input_cost_per_token (8e-07), making the video billing assertion non-trivial.
+    model = "multimodalembedding@001"
+ 
     usage = Usage(
         prompt_tokens=150,
         completion_tokens=10,
@@ -1497,12 +1506,12 @@ def test_video_length_billing_does_not_fill_prompt_token_gap():
     )
  
     prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-2.0-flash-001",
+        model=model,
         usage=usage,
         custom_llm_provider="vertex_ai",
     )
  
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost[model]
     expected_prompt_cost = (
         50 * model_info.get("input_cost_per_token", 0)
         + 12.0 * model_info.get("input_cost_per_video_per_second", 0)
