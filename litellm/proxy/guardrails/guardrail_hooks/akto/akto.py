@@ -58,8 +58,6 @@ class AktoGuardrail(CustomGuardrail):
         Args:
             akto_base_url: Akto API base URL. Falls back to AKTO_GUARDRAIL_API_BASE env var.
             akto_api_key: Akto API key. Falls back to AKTO_API_KEY env var.
-            akto_account_id: Akto account ID. Falls back to AKTO_ACCOUNT_ID env var, then "1000000".
-            akto_vxlan_id: Akto VXLAN ID. Falls back to AKTO_VXLAN_ID env var, then "0".
             unreachable_fallback: Behavior when Akto is unreachable — block or allow.
             guardrail_timeout: HTTP timeout in seconds for Akto API calls.
         """
@@ -116,23 +114,6 @@ class AktoGuardrail(CustomGuardrail):
             metadata = {}
         route = metadata.get("user_api_key_request_route")
         return route if route else "/v1/chat/completions"
-
-    def prepare_headers(self) -> Dict[str, str]:
-        """Build HTTP headers for the Akto API call."""
-        return {
-            "content-type": "application/json",
-            "Authorization": self.akto_api_key,
-        }
-
-    @staticmethod
-    def build_query_params(*, guardrails: bool, ingest_data: bool) -> Dict[str, str]:
-        """Build query params that control Akto backend behavior (guardrail check and/or data ingestion)."""
-        params: Dict[str, str] = {"akto_connector": AKTO_CONNECTOR_NAME}
-        if guardrails:
-            params["guardrails"] = "true"
-        if ingest_data:
-            params["ingest_data"] = "true"
-        return params
 
     @staticmethod
     def build_request_headers(request_data: dict) -> Dict[str, str]:
@@ -225,23 +206,17 @@ class AktoGuardrail(CustomGuardrail):
         status_code: int = 200,
         include_response: bool = False,
     ) -> Dict[str, Any]:
-        """Build the flat MIRRORING payload sent to Akto's HTTP proxy endpoint.
-
-        All body fields use double-encoding: json.dumps({"body": json.dumps(actual_body)})
-        to match the canonical CLI hook format.
-        """
+        """Build the MIRRORING payload for Akto's HTTP proxy endpoint."""
         request_path = self.extract_request_path(request_data)
         request_headers = self.build_request_headers(request_data)
         request_body = self.build_request_body(inputs, request_data)
         tag = self.build_tag_metadata(request_data)
 
-        response_payload = json.dumps({})  # Empty body wrapper when no response yet
+        response_payload = json.dumps({})
         response_headers: Dict[str, str] = {}
         if include_response:
             response_body = self.build_response_body(inputs, request_data)
-            response_payload = json.dumps(
-                {"body": json.dumps(response_body)}
-            )  # Double-encoded
+            response_payload = json.dumps(response_body)
             response_headers = {"content-type": "application/json"}
 
         # Extract client IP from proxy headers
@@ -264,9 +239,7 @@ class AktoGuardrail(CustomGuardrail):
             "requestHeaders": json.dumps(request_headers),
             "responseHeaders": json.dumps(response_headers),
             "method": "POST",
-            "requestPayload": json.dumps(
-                {"body": json.dumps(request_body)}
-            ),  # Double-encoded
+            "requestPayload": json.dumps(request_body),
             "responsePayload": response_payload,
             "ip": ip,
             "destIp": "127.0.0.1",
@@ -339,48 +312,6 @@ class AktoGuardrail(CustomGuardrail):
             bool(guardrails_result.get("Allowed", True)),
             str(guardrails_result.get("Reason", "")),
         )
-
-    def handle_unreachable(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        error: Exception,
-    ) -> GenericGuardrailAPIInputs:
-        """Handle Akto being unreachable based on fail_open/fail_closed config."""
-        if self.unreachable_fallback == "fail_open":
-            verbose_proxy_logger.critical(
-                "Akto unreachable (fail-open): %s",
-                str(error),
-                exc_info=error,
-            )
-            return inputs
-
-        verbose_proxy_logger.error("Akto unreachable (fail-closed): %s", str(error))
-        raise HTTPException(
-            status_code=503,
-            detail="Akto guardrail service unreachable",
-        )
-
-    async def fire_and_forget_request(
-        self,
-        *,
-        guardrails: bool,
-        ingest_data: bool,
-        payload: dict,
-    ) -> None:
-        """Send a request without awaiting it in the caller. Errors are logged, not raised."""
-        try:
-            response = await self.send_request(
-                guardrails=guardrails,
-                ingest_data=ingest_data,
-                payload=payload,
-            )
-            if response.status_code != 200:
-                verbose_proxy_logger.error(
-                    "Akto fire-and-forget returned HTTP %d",
-                    response.status_code,
-                )
-        except Exception as e:
-            verbose_proxy_logger.error("Akto fire-and-forget error: %s", str(e))
 
     @log_guardrail_information
     async def apply_guardrail(

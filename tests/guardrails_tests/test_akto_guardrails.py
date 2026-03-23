@@ -158,8 +158,7 @@ def test_build_akto_payload(akto_validate, sample_inputs, sample_request_data):
     req_headers = json.loads(payload["requestHeaders"])
     assert "content-type" in req_headers
 
-    req_wrapper = json.loads(payload["requestPayload"])
-    req_body = json.loads(req_wrapper["body"])
+    req_body = json.loads(payload["requestPayload"])
     assert req_body["model"] == "gpt-4"
     assert req_body["messages"][0]["content"] == "Hello, how are you?"
 
@@ -173,8 +172,7 @@ def test_build_akto_payload(akto_validate, sample_inputs, sample_request_data):
 
 def test_build_akto_payload_with_response(akto_validate, sample_inputs, sample_request_data):
     payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data, include_response=True)
-    resp_wrapper = json.loads(payload["responsePayload"])
-    resp_body = json.loads(resp_wrapper["body"])
+    resp_body = json.loads(payload["responsePayload"])
     assert "choices" in resp_body
 
 
@@ -191,20 +189,6 @@ def test_build_akto_payload_custom_ids(sample_request_data):
         assert payload["akto_account_id"] == "9999"
         assert payload["akto_vxlan_id"] == "7"
 
-
-def test_build_query_params():
-    params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=False)
-    assert params == {"akto_connector": "litellm", "guardrails": "true"}
-
-    params = AktoGuardrail.build_query_params(guardrails=False, ingest_data=True)
-    assert params == {"akto_connector": "litellm", "ingest_data": "true"}
-
-    params = AktoGuardrail.build_query_params(guardrails=True, ingest_data=True)
-    assert params == {
-        "akto_connector": "litellm",
-        "guardrails": "true",
-        "ingest_data": "true",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -381,22 +365,6 @@ async def test_fail_closed_on_unreachable():
         await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert exc_info.value.status_code == 503
 
-
-def test_fail_closed_generic_message():
-    g = AktoGuardrail(
-        akto_base_url="http://localhost:9090",
-        akto_api_key="test-token",
-        unreachable_fallback="fail_closed",
-        guardrail_name="msg-test",
-        event_hook="pre_call",
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        g.handle_unreachable(
-            inputs=GenericGuardrailAPIInputs(texts=["test"], model="gpt-4"),
-            error=Exception("http://internal-host:9090/secret-path"),
-        )
-    assert "internal-host" not in exc_info.value.detail
-    assert exc_info.value.detail == "Akto guardrail service unreachable"
 
 
 # ---------------------------------------------------------------------------
