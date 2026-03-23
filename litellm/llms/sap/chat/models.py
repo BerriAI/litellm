@@ -68,7 +68,7 @@ class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
 
-    def model_dump(self, **kwargs) -> Self:
+    def model_dump(self, **kwargs) -> dict:
         kwargs["exclude_unset"] = False
         return super().model_dump(**kwargs)
 
