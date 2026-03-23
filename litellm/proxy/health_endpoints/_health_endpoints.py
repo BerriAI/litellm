@@ -348,7 +348,8 @@ async def health_services_endpoint(  # noqa: PLR0915
                 akto_logger = _akto if _akto is not None else AktoLogger()
                 response = await akto_logger.async_health_check()
             except Exception as e:
-                return {"status": "unhealthy", "error_message": str(e)}
+                verbose_proxy_logger.warning("Akto health check error: %s", e)
+                return {"status": "unhealthy", "error_message": "Akto health check failed"}
             return {
                 "status": response["status"],
                 "message": (

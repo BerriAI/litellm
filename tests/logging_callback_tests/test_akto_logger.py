@@ -218,16 +218,104 @@ async def test_async_log_failure_event(logger, sample_kwargs):
     assert payload["statusCode"] == "500"
 
 
+# ── Async failure with response_obj ──
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_with_response_obj(logger, sample_kwargs):
+    logger.async_http_handler.post = AsyncMock(return_value=MagicMock(status_code=200))
+    mock_resp = MagicMock()
+    mock_resp.model_dump.return_value = {"partial": "data"}
+
+    await logger.async_log_failure_event(
+        kwargs=sample_kwargs, response_obj=mock_resp, start_time=None, end_time=None
+    )
+
+    payload = json.loads(logger.async_http_handler.post.call_args.kwargs["data"])
+    assert payload["statusCode"] == "500"
+    assert json.loads(payload["responsePayload"])["partial"] == "data"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_with_status_code(logger, sample_kwargs):
+    logger.async_http_handler.post = AsyncMock(return_value=MagicMock(status_code=200))
+    exc = MagicMock()
+    exc.status_code = 403
+    sample_kwargs["exception"] = exc
+
+    await logger.async_log_failure_event(
+        kwargs=sample_kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    payload = json.loads(logger.async_http_handler.post.call_args.kwargs["data"])
+    assert payload["statusCode"] == "403"
+
+
+# ── Client IP extraction ──
+
+
+def test_extract_client_ip_forwarded():
+    assert AktoLogger.extract_client_ip(
+        {"proxy_server_request": {"headers": {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}}}
+    ) == "1.2.3.4"
+
+
+def test_extract_client_ip_real_ip():
+    assert AktoLogger.extract_client_ip(
+        {"proxy_server_request": {"headers": {"x-real-ip": "10.0.0.1"}}}
+    ) == "10.0.0.1"
+
+
+def test_extract_client_ip_fallback():
+    assert AktoLogger.extract_client_ip({}) == "0.0.0.0"
+
+
+# ── Request path extraction ──
+
+
+def test_extract_request_path_from_metadata():
+    assert AktoLogger.extract_request_path(
+        {"metadata": {"user_api_key_request_route": "/v1/embeddings"}}
+    ) == "/v1/embeddings"
+
+
+def test_extract_request_path_fallback():
+    assert AktoLogger.extract_request_path({}) == "/v1/chat/completions"
+
+
+# ── Default host fallback ──
+
+
+def test_build_request_headers_default_host():
+    headers = AktoLogger.build_request_headers({})
+    assert headers["host"] == "litellm.ai"
+    assert headers["content-type"] == "application/json"
+
+
 # ── Error handling ──
 
 
 @pytest.mark.asyncio
-async def test_async_log_swallows_errors(logger):
+async def test_async_log_success_swallows_errors(logger):
     logger.async_http_handler.post = AsyncMock(
         side_effect=httpx.ConnectError("refused")
     )
     # Should not raise
     await logger.async_log_success_event(
+        kwargs={"messages": [], "model": "m", "litellm_params": {}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_swallows_errors(logger):
+    logger.async_http_handler.post = AsyncMock(
+        side_effect=httpx.ConnectError("refused")
+    )
+    # Should not raise
+    await logger.async_log_failure_event(
         kwargs={"messages": [], "model": "m", "litellm_params": {}},
         response_obj=None,
         start_time=None,
