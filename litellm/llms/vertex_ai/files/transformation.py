@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import time
@@ -292,6 +293,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
+        elif isinstance(extracted_file_data_content, io.IOBase):
+            return extracted_file_data_content  # type: ignore[return-value]
         else:
             raise ValueError("Unsupported file content type")
 
