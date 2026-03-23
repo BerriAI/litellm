@@ -872,10 +872,15 @@ class MCPServerManager:
             if toolset_id is None:
                 keys_to_remove = [k for k in cache_dict if k.startswith("toolset_")]
             else:
+                # Evict permission-cache entries that reference this toolset ID.
+                # Also evict ALL name-cache entries (toolset_name:*): we can't map
+                # toolset_id → toolset_name without a DB call, and the name may have
+                # changed in an update anyway.
                 keys_to_remove = [
                     k
                     for k in cache_dict
-                    if k.startswith("toolset_") and toolset_id in k
+                    if (k.startswith("toolset_perms:") and toolset_id in k)
+                    or k.startswith("toolset_name:")
                 ]
             for k in keys_to_remove:
                 cache_dict.pop(k, None)

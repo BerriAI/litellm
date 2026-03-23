@@ -2164,7 +2164,19 @@ if MCP_AVAILABLE:
         touched_by = (
             litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         )
-        result = await update_mcp_toolset(prisma_client, payload, touched_by)
+        try:
+            result = await update_mcp_toolset(prisma_client, payload, touched_by)
+        except UniqueViolationError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": (
+                        f"A toolset named '{payload.toolset_name}' already exists."
+                        if payload.toolset_name
+                        else "A toolset with that name already exists."
+                    )
+                },
+            )
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

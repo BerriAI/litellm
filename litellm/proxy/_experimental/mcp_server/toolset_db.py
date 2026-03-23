@@ -59,7 +59,7 @@ async def list_mcp_toolsets(
         rows = await prisma_client.db.litellm_mcptoolsettable.find_many(where=where)
         return [_toolset_from_row(r) for r in rows]
     except Exception as e:
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.warning(
             "litellm.proxy._experimental.mcp_server.toolset_db::list_mcp_toolsets - {}".format(
                 str(e)
             )
