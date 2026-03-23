@@ -469,6 +469,23 @@ async def _update_existing_team_model_assignment(
     prisma_client: Optional[PrismaClient],
 ) -> None:
     """Update an existing team model if the public name changed."""
+
+    def _get_team_public_model_name(
+        model_info: Optional[Union[dict, str]]
+    ) -> Optional[str]:
+        if isinstance(model_info, dict):
+            value = model_info.get("team_public_model_name")
+            return value if isinstance(value, str) else None
+        if isinstance(model_info, str):
+            try:
+                parsed = json.loads(model_info)
+            except (TypeError, ValueError):
+                return None
+            if isinstance(parsed, dict):
+                value = parsed.get("team_public_model_name")
+                return value if isinstance(value, str) else None
+        return None
+
     old_public_name = (
         db_model.model_info.team_public_model_name if db_model.model_info else None
     )
@@ -495,8 +512,7 @@ async def _update_existing_team_model_assignment(
                 d
                 for d in response
                 if d.model_name != db_model.model_name
-                and (d.model_info or {}).get("team_public_model_name")
-                == old_public_name
+                and _get_team_public_model_name(d.model_info) == old_public_name
             ]
 
             if not other_deployments_with_old_name:

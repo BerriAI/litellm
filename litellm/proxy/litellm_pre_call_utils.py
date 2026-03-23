@@ -26,6 +26,7 @@ _SPECIAL_HEADERS_CACHE = frozenset(
     v.value.lower() for v in SpecialHeaders._member_map_.values()
 )
 from litellm.router import Router
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -1312,9 +1313,16 @@ def _update_model_if_team_alias_exists(
         # (team models use team_public_model_name, not model_aliases)
         aliased_target = user_api_key_dict.team_model_aliases[_model]
 
-        # Check if the alias points to a stale team-scoped UUID name
+        # Optional bypass for stale aliases from pre-PR deployments:
+        # only enabled via feature flag to preserve backwards compatibility.
+        enable_stale_alias_bypass = get_secret_bool(
+            "LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False
+        )
+        # Check if the alias points to a team-scoped UUID name
         # (format: "model_name_{team_id}_{uuid}")
-        if aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_"):
+        if enable_stale_alias_bypass and aliased_target.startswith(
+            f"model_name_{user_api_key_dict.team_id}_"
+        ):
             # This is a stale alias from pre-PR deployments.
             # Check if current team deployments exist for the public name.
             if llm_router:
