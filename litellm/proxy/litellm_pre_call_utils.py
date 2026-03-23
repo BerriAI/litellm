@@ -1311,13 +1311,20 @@ def _update_model_if_team_alias_exists(
 
         # Skip alias rewrite if this model resolves to team-specific deployments
         # (team models use team_public_model_name, not model_aliases)
-        # Use O(1) index lookup instead of map_team_model to avoid O(n) scan
-        if llm_router and user_api_key_dict.team_id:
-            key = (user_api_key_dict.team_id, _model)
-            if key in llm_router.team_model_to_deployment_indices:
-                return
+        aliased_target = user_api_key_dict.team_model_aliases[_model]
 
-        data["model"] = user_api_key_dict.team_model_aliases[_model]
+        # Check if the alias points to a stale team-scoped UUID name
+        # (format: "model_name_{team_id}_{uuid}")
+        if aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_"):
+            # This is a stale alias from pre-PR deployments.
+            # Check if current team deployments exist for the public name.
+            if llm_router:
+                key = (user_api_key_dict.team_id, _model)
+                if key in llm_router.team_model_to_deployment_indices:
+                    # Team deployments exist; skip stale alias
+                    return
+
+        data["model"] = aliased_target
     return
 
 
