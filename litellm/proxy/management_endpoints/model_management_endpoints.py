@@ -472,14 +472,32 @@ async def _update_existing_team_model_assignment(
     )
 
     if old_public_name and public_model_name != old_public_name:
-        await team_model_delete(
-            data=TeamModelDeleteRequest(
-                team_id=team_id,
-                models=[old_public_name],
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
-        )
+        from litellm.proxy.proxy_server import llm_router
+
+        other_deployments_with_old_name = []
+        if llm_router:
+            all_deployments = llm_router.get_model_list(
+                model_name=old_public_name, team_id=team_id
+            )
+            if all_deployments:
+                other_deployments_with_old_name = [
+                    d
+                    for d in all_deployments
+                    if d.get("model_name") != db_model.model_name
+                    and d.get("model_info", {}).get("team_public_model_name")
+                    == old_public_name
+                ]
+
+        if not other_deployments_with_old_name:
+            await team_model_delete(
+                data=TeamModelDeleteRequest(
+                    team_id=team_id,
+                    models=[old_public_name],
+                ),
+                http_request=Request(scope={"type": "http"}),
+                user_api_key_dict=user_api_key_dict,
+            )
+
         await team_model_add(
             data=TeamModelAddRequest(
                 team_id=team_id,
