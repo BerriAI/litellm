@@ -48,6 +48,11 @@ class TestSAPTransformationIntegration:
         prompt = result["config"]["modules"]["prompt_templating"]["prompt"]
         if "tools" in prompt:
             assert isinstance(prompt["tools"], list)
+            for tool in prompt["tools"]:
+                assert tool["function"]["parameters"]["type"] == "object", (
+                    "SAP API requires parameters.type == 'object'"
+                )
+                assert "properties" in tool["function"]["parameters"]
 
     def test_transform_request_parameter_handling_robustness(self, mock_config):
         """Test transform_request method handles various parameter combinations correctly."""
