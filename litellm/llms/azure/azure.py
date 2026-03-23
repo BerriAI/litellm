@@ -64,9 +64,7 @@ class AzureOpenAIAssistantsAPIConfig:
             "metadata",
         ]
 
-    def map_openai_params_create_message_params(
-        self, non_default_params: dict, optional_params: dict
-    ):
+    def map_openai_params_create_message_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "role":
                 optional_params["role"] = value
@@ -80,9 +78,7 @@ class AzureOpenAIAssistantsAPIConfig:
                         message="Azure only accepts content as a string.",
                         status_code=400,
                     )
-            elif (
-                param == "attachments"
-            ):  # this is a v2 param. Azure currently supports the old 'file_id's param
+            elif param == "attachments":  # this is a v2 param. Azure currently supports the old 'file_id's param
                 file_ids: List[str] = []
                 if isinstance(value, list):
                     for item in value:
@@ -146,9 +142,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         """
         validate_azure_request_payload(data)
         try:
-            raw_response = azure_client.chat.completions.with_raw_response.create(
-                **data, timeout=timeout
-            )
+            raw_response = azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             headers = dict(raw_response.headers)
             response = raw_response.parse()
@@ -172,9 +166,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         start_time = time.time()
         validate_azure_request_payload(data)
         try:
-            raw_response = await azure_client.chat.completions.with_raw_response.create(
-                **data, timeout=timeout
-            )
+            raw_response = await azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             headers = dict(raw_response.headers)
             response = raw_response.parse()
@@ -213,9 +205,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             optional_params["extra_headers"] = headers
         try:
             if model is None or messages is None:
-                raise AzureOpenAIError(
-                    status_code=422, message="Missing model or messages"
-                )
+                raise AzureOpenAIError(status_code=422, message="Missing model or messages")
 
             max_retries = optional_params.pop("max_retries", None)
             if max_retries is None:
@@ -310,7 +300,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
             else:
                 ## LOGGING
-                validate_azure_request_payload(data)
                 logging_obj.pre_call(
                     input=messages,
                     api_key=api_key,
@@ -325,9 +314,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     },
                 )
                 if not isinstance(max_retries, int):
-                    raise AzureOpenAIError(
-                        status_code=422, message="max retries must be an int"
-                    )
+                    raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
                 azure_client = self.get_azure_openai_client(
                     api_version=api_version,
@@ -417,11 +404,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError(
-                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
-                )
+                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
             ## LOGGING
-            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["messages"],
                 api_key=azure_client.api_key,
@@ -522,9 +506,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             "max_retries": max_retries,
             "timeout": timeout,
         }
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
-        )
+        azure_client_params = select_azure_base_url_or_endpoint(azure_client_params=azure_client_params)
         if api_key is not None:
             azure_client_params["api_key"] = api_key
         elif azure_ad_token is not None:
@@ -549,7 +531,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 message="azure_client is not an instance of AzureOpenAI or OpenAI",
             )
         ## LOGGING
-        validate_azure_request_payload(data)
         logging_obj.pre_call(
             input=data["messages"],
             api_key=azure_client.api_key,
@@ -603,12 +584,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError(
-                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
-                )
+                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
 
             ## LOGGING
-            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["messages"],
                 api_key=azure_client.api_key,
@@ -686,13 +664,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 litellm_params=litellm_params,
             )
             if not isinstance(openai_aclient, (AsyncAzureOpenAI, AsyncOpenAI)):
-                raise ValueError(
-                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
-                )
+                raise ValueError("Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI")
 
-            raw_response = await openai_aclient.embeddings.with_raw_response.create(
-                **data, timeout=timeout
-            )
+            raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
             headers = dict(raw_response.headers)
 
             # Convert json.JSONDecodeError to AzureOpenAIError for two critical reasons:
@@ -779,7 +753,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if max_retries is None:
                 max_retries = litellm.DEFAULT_MAX_RETRIES
             ## LOGGING
-            validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=input,
                 api_key=api_key,
@@ -802,6 +775,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     litellm_params=litellm_params,
                     api_base=api_base,
                 )
+            validate_azure_request_payload(data)
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -850,9 +824,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
                 error_text = error_response.text
-            raise AzureOpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise AzureOpenAIError(status_code=status_code, message=error_text, headers=error_headers)
 
     async def make_async_azure_httpx_request(
         self,
@@ -897,9 +869,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-            api_base = modify_url(
-                original_url=api_base, new_path="/openai/images/generations:submit"
-            )
+            api_base = modify_url(original_url=api_base, new_path="/openai/images/generations:submit")
 
             data.pop(
                 "model", None
@@ -923,14 +893,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
-                raise Exception(
-                    "Expected 'status' in response. Got={}".format(response.json())
-                )
+                raise Exception("Expected 'status' in response. Got={}".format(response.json()))
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-                    raise AzureOpenAIError(
-                        status_code=408, message="Operation polling timed out."
-                    )
+                    raise AzureOpenAIError(status_code=408, message="Operation polling timed out.")
 
                 await asyncio.sleep(int(response.headers.get("retry-after") or 10))
                 response = await async_handler.get(
@@ -1009,9 +975,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-            api_base = modify_url(
-                original_url=api_base, new_path="/openai/images/generations:submit"
-            )
+            api_base = modify_url(original_url=api_base, new_path="/openai/images/generations:submit")
 
             data.pop(
                 "model", None
@@ -1035,14 +999,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
-                raise Exception(
-                    "Expected 'status' in response. Got={}".format(response.json())
-                )
+                raise Exception("Expected 'status' in response. Got={}".format(response.json()))
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-                    raise AzureOpenAIError(
-                        status_code=408, message="Operation polling timed out."
-                    )
+                    raise AzureOpenAIError(status_code=408, message="Operation polling timed out.")
 
                 time.sleep(int(response.headers.get("retry-after") or 10))
                 response = sync_handler.get(
@@ -1081,16 +1041,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             headers=headers,
         )
 
-    def create_azure_base_url(
-        self, azure_client_params: dict, model: Optional[str]
-    ) -> str:
+    def create_azure_base_url(self, azure_client_params: dict, model: Optional[str]) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
         )
 
-        api_base: str = azure_client_params.get(
-            "azure_endpoint", ""
-        )  # "https://example-endpoint.openai.azure.com"
+        api_base: str = azure_client_params.get("azure_endpoint", "")  # "https://example-endpoint.openai.azure.com"
         if api_base.endswith("/"):
             api_base = api_base.rstrip("/")
         api_version: str = azure_client_params.get("api_version", "")
@@ -1132,9 +1088,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         response: Optional[dict] = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
-            api_base: str = azure_client_params.get(
-                "api_base", ""
-            )  # "https://example-endpoint.openai.azure.com"
+            api_base: str = azure_client_params.get("api_base", "")  # "https://example-endpoint.openai.azure.com"
             if api_base.endswith("/"):
                 api_base = api_base.rstrip("/")
             api_version: str = azure_client_params.get("api_version", "")
@@ -1164,9 +1118,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers=headers,
             )
 
-            provider_config = get_azure_image_generation_config(
-                data.get("model", "dall-e-2")
-            )
+            provider_config = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if provider_config is not None:
                 return provider_config.transform_image_generation_response(
                     model=data.get("model", "dall-e-2"),
@@ -1234,23 +1186,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
-                model_response._hidden_params["model"] = litellm_params.get(
-                    "base_model", None
-                )
+                model_response._hidden_params["model"] = litellm_params.get("base_model", None)
 
             # Azure image generation API doesn't support extra_body parameter
             extra_body = optional_params.pop("extra_body", {})
             flattened_params = {**optional_params, **extra_body}
 
-            base_model = (
-                litellm_params.get("base_model", None) if litellm_params else None
-            )
+            base_model = litellm_params.get("base_model", None) if litellm_params else None
             data = {"model": base_model or model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
+                raise AzureOpenAIError(status_code=422, message="max retries must be an int")
 
             if api_key is None and azure_ad_token_provider is not None:
                 azure_ad_token = azure_ad_token_provider()
@@ -1282,9 +1228,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )  # type: ignore
 
             # Use the deployment name (model) for URL construction, not the base_model from data
-            img_gen_api_base = self.create_azure_base_url(
-                azure_client_params=azure_client_params, model=model
-            )
+            img_gen_api_base = self.create_azure_base_url(azure_client_params=azure_client_params, model=model)
 
             ## LOGGING
             logging_obj.pre_call(
@@ -1478,14 +1422,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         if (
             completion.headers.get("x-ratelimit-remaining-requests", None) is not None
         ):  # not provided for dall-e requests
-            response["x-ratelimit-remaining-requests"] = completion.headers[
-                "x-ratelimit-remaining-requests"
-            ]
+            response["x-ratelimit-remaining-requests"] = completion.headers["x-ratelimit-remaining-requests"]
 
         if completion.headers.get("x-ratelimit-remaining-tokens", None) is not None:
-            response["x-ratelimit-remaining-tokens"] = completion.headers[
-                "x-ratelimit-remaining-tokens"
-            ]
+            response["x-ratelimit-remaining-tokens"] = completion.headers["x-ratelimit-remaining-tokens"]
 
         if completion.headers.get("x-ms-region", None) is not None:
             response["x-ms-region"] = completion.headers["x-ms-region"]

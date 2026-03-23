@@ -34,6 +34,10 @@ def contains_surrogate_code_point(value: str) -> bool:
     return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
 
 
+def _format_path_key(key: str) -> str:
+    return key.encode("unicode_escape").decode("ascii")
+
+
 def find_surrogate_code_point_path(
     value: Any,
     path: str = "payload",
@@ -45,9 +49,11 @@ def find_surrogate_code_point_path(
 
     if isinstance(value, dict):
         for key, nested_value in value.items():
+            if isinstance(key, str) and contains_surrogate_code_point(key):
+                return f"{path}.{_format_path_key(key)}"
             nested_path = find_surrogate_code_point_path(
                 nested_value,
-                path=f"{path}.{key}",
+                path=f"{path}.{_format_path_key(key) if isinstance(key, str) else key}",
             )
             if nested_path is not None:
                 return nested_path
@@ -85,16 +91,12 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
     for model in known_models:
         try:
-            model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = model_info.get("input_cost_per_token", 0) + model_info.get(
-            "output_cost_per_token", 0
-        )
+        _cost = model_info.get("input_cost_per_token", 0) + model_info.get("output_cost_per_token", 0)
         model_costs.append((model, _cost))
 
     # Sort by cost (ascending)
@@ -113,8 +115,6 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-    )
+    proxy_request_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
     return proxy_request_headers

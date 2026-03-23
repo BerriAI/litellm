@@ -8,9 +8,7 @@ import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 import litellm
@@ -66,9 +64,7 @@ async def test_request_body_caching():
 async def test_request_body_rejects_escaped_lone_surrogates():
     """Escaped lone surrogates should fail fast as invalid request bodies."""
     mock_request = MagicMock()
-    mock_request.body = AsyncMock(
-        return_value=b'{"messages": [{"role": "user", "content": "\\ud83e"}]}'
-    )
+    mock_request.body = AsyncMock(return_value=b'{"messages": [{"role": "user", "content": "\\ud83e"}]}')
     mock_request.headers = {"content-type": "application/json"}
     mock_request.scope = {}
     mock_request.state._cached_headers = None
@@ -79,6 +75,23 @@ async def test_request_body_rejects_escaped_lone_surrogates():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "request_body"
     assert "surrogate" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_request_body_rejects_surrogates_in_dict_keys():
+    mock_request = MagicMock()
+    mock_request.body = AsyncMock(return_value=b'{"bad\\ud83e": "value"}')
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(mock_request)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "request_body"
+    assert "surrogate" in exc_info.value.message.lower()
+    assert "bad\\ud83e" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -374,9 +387,7 @@ async def test_circular_reference_handling():
 
     # Second parse using the same request - will use the modified cached value
     result2 = await _read_request_body(mock_request)
-    assert (
-        "proxy_server_request" not in result2
-    )  # This will pass, showing the cache pollution
+    assert "proxy_server_request" not in result2  # This will pass, showing the cache pollution
 
 
 @pytest.mark.asyncio
@@ -690,9 +701,7 @@ def test_populate_request_with_path_params_does_not_overwrite_existing_values():
 
     # Verify existing values were NOT overwritten
     assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
-    assert (
-        result["organization_id"] == "org-existing"
-    )  # Should keep original, not "org-query-param"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
     # Verify other data is preserved
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
 

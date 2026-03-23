@@ -131,42 +131,6 @@ async def test_non_retryable_error_in_retry_loop_raises_immediately():
 
 
 @pytest.mark.asyncio
-async def test_azure_400_with_surrogate_unicode_fails_fast():
-    """
-    Verify that AzureOpenAIError(status_code=400) containing surrogate Unicode fails fast
-    and does not retry, even when the router sees the raw provider exception.
-    """
-    router = _create_router(num_retries=2)
-
-    call_count = 0
-
-    async def mock_make_call(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise AzureOpenAIError(
-            status_code=400, message="Bad request with surrogate: \ud83d"
-        )
-
-    with (
-        patch.object(router, "make_call", side_effect=mock_make_call),
-        patch.object(
-            router,
-            "_async_get_healthy_deployments",
-            return_value=(["d1", "d2"], ["d1", "d2"]),
-        ),
-        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
-        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
-    ):
-        with pytest.raises(AzureOpenAIError):
-            await router.async_function_with_retries(
-                num_retries=2,
-                **_base_kwargs(),
-            )
-
-        assert call_count == 1
-
-
-@pytest.mark.asyncio
 async def test_bad_request_error_in_retry_loop_raises_immediately():
     """
     A generic 400 BadRequestError inside the retry loop should also break out

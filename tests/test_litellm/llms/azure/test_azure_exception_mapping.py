@@ -5,15 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.exceptions import ContentPolicyViolationError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.azure.azure import AzureChatCompletion
-from litellm.llms.azure.common_utils import AzureOpenAIError
+from litellm.llms.azure.common_utils import AzureOpenAIError, validate_azure_request_payload
 
 
 class TestAzureExceptionMapping:
@@ -187,9 +185,7 @@ class TestAzureExceptionMapping:
                 "code": "content_policy_violation",
                 "inner_error": {
                     "code": "ResponsibleAIPolicyViolation",
-                    "content_filter_results": {
-                        "violence": {"filtered": True, "severity": "low"}
-                    },
+                    "content_filter_results": {"violence": {"filtered": True, "severity": "low"}},
                     "revised_prompt": "revised",
                 },
                 "message": "Your request was rejected as a result of our safety system.",
@@ -217,17 +213,9 @@ class TestAzureExceptionMapping:
 
         # Provider-specific nested details must be preserved
         assert e.provider_specific_fields is not None
-        assert (
-            e.provider_specific_fields["inner_error"]["code"]
-            == "ResponsibleAIPolicyViolation"
-        )
+        assert e.provider_specific_fields["inner_error"]["code"] == "ResponsibleAIPolicyViolation"
         assert e.provider_specific_fields["inner_error"]["revised_prompt"] == "revised"
-        assert (
-            e.provider_specific_fields["inner_error"]["content_filter_results"][
-                "violence"
-            ]["filtered"]
-            is True
-        )
+        assert e.provider_specific_fields["inner_error"]["content_filter_results"]["violence"]["filtered"] is True
 
     def test_azure_content_policy_violation_detected_via_inner_error_code(self):
         """Regression test for #20811: Azure returns inner_error with
@@ -250,13 +238,9 @@ class TestAzureExceptionMapping:
                         "sexual": {"filtered": False, "severity": "safe"},
                         "violence": {"filtered": True, "severity": "low"},
                     },
-                    "revised_prompt": (
-                        "A dark and intense illustration of a man in a dramatic action scene."
-                    ),
+                    "revised_prompt": ("A dark and intense illustration of a man in a dramatic action scene."),
                 },
-                "message": (
-                    "Your request was rejected as a result of our safety system."
-                ),
+                "message": ("Your request was rejected as a result of our safety system."),
                 "type": "invalid_request_error",
             }
         }
@@ -314,10 +298,7 @@ class TestAzureExceptionMapping:
 
         e = exc_info.value
         assert e.provider_specific_fields is not None
-        assert (
-            e.provider_specific_fields["inner_error"]["code"]
-            == "ResponsibleAIPolicyViolation"
-        )
+        assert e.provider_specific_fields["inner_error"]["code"] == "ResponsibleAIPolicyViolation"
 
     def test_azure_image_polling_error_preserves_body(self):
         """Verify that AzureOpenAIError raised from the DALL-E polling path
@@ -447,3 +428,12 @@ def test_azure_chat_request_rejects_lone_surrogates_before_send():
     assert exc_info.value.status_code == 400
     assert "surrogate" in exc_info.value.message.lower()
     azure_client.chat.completions.with_raw_response.create.assert_not_called()
+
+
+def test_azure_request_rejects_surrogate_in_dict_key():
+    with pytest.raises(AzureOpenAIError) as exc_info:
+        validate_azure_request_payload({"bad\ud83e": "value"})
+
+    assert exc_info.value.status_code == 400
+    assert "surrogate" in exc_info.value.message.lower()
+    assert "bad\\ud83e" in exc_info.value.message
