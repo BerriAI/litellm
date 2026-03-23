@@ -721,7 +721,7 @@ class ModuleConfig(BaseModel):
 
 class GlobalStreamOptions(BaseModel):
     enabled: bool = False
-    chunk_size: int = Field(default=None, ge=1)
+    chunk_size: Optional[int] = Field(default=None, ge=1)
     delimiters: Optional[list[str]] = None
 
 
