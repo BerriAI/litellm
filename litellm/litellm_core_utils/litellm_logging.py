@@ -3711,6 +3711,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 print_verbose("Initialized Greenscale Logger")
             elif callback == "akto":
                 aktoLogger = AktoLogger()
+                print_verbose("Initialized Akto Logger")
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:

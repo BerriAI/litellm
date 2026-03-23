@@ -197,8 +197,8 @@ class AktoLogger(CustomLogger):
                 "status": "unhealthy",
                 "error_message": f"Akto returned status {response.status_code}",
             }
-        except Exception as e:
-            return {"status": "unhealthy", "error_message": str(e)}
+        except Exception:
+            return {"status": "unhealthy", "error_message": "Akto health check failed"}
 
     # ── Logging callbacks ──
 
