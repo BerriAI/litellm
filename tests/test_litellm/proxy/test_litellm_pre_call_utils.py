@@ -2191,3 +2191,45 @@ def test_apply_overrides_none_metadata():
         data=data, user_api_key_dict=user_api_key_dict
     )
     assert "api_base" not in data
+
+
+def test_apply_overrides_clientside_api_version_preserved(setup_test_credentials):
+    """Clientside api_version should not be overwritten by credential."""
+    data = {"model": "gpt-4-vision", "api_version": "2025-01-01"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "gpt-4-vision": {
+                    "azure": {"litellm_credentials": "hotel-rec-vision"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    # api_base and api_key should be set from credential
+    assert data["api_base"] == "https://hotel-rec-vision.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-rec-vision"
+    # api_version should be preserved from the request, not overwritten
+    assert data["api_version"] == "2025-01-01"
+
+
+def test_resolve_non_dict_model_config_ignored():
+    """Non-dict model_config (e.g. string) should be safely skipped."""
+    result = _resolve_credential_from_model_config("gpt-4", "not-a-dict", None)
+    assert result is None
+
+    result = _resolve_credential_from_model_config(
+        "gpt-4", None, ["also", "not", "a", "dict"]
+    )
+    assert result is None
+
+    # Valid config still works alongside invalid one
+    result = _resolve_credential_from_model_config(
+        "gpt-4",
+        "invalid",
+        {"gpt-4": {"azure": {"litellm_credentials": "valid-cred"}}},
+    )
+    assert result == "valid-cred"
