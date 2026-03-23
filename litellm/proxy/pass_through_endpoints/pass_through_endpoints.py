@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
+    CommonProxyErrors,
     ConfigFieldInfo,
     ConfigFieldUpdate,
     LiteLLMRoutes,
@@ -651,6 +652,7 @@ async def pass_through_request(  # noqa: PLR0915
     _parsed_body: Optional[dict] = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
+    logging_obj: Optional[Logging] = None
 
     #########################################################
     try:
@@ -961,6 +963,8 @@ async def pass_through_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         if (
             "model" not in request_payload
@@ -1703,6 +1707,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
@@ -1729,6 +1735,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        if logging_obj is not None:
+            request_payload["litellm_logging_obj"] = logging_obj
 
         # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
@@ -2015,13 +2023,24 @@ class InitPassThroughEndpointHelpers:
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
-        """Remove all routes for a specific endpoint ID from the registry"""
+        """Remove all routes for a specific endpoint ID from the registry
+        and clean up corresponding entries from LiteLLMRoutes.openai_routes."""
         keys_to_remove = [
             key
             for key, value in _registered_pass_through_routes.items()
             if value["endpoint_id"] == endpoint_id
         ]
         for key in keys_to_remove:
+            route_info = _registered_pass_through_routes[key]
+            path = route_info.get("path")
+            if isinstance(path, str):
+                openai_routes = LiteLLMRoutes.openai_routes.value
+                if path in openai_routes:
+                    openai_routes.remove(path)
+                if route_info.get("type") == "subpath":
+                    wildcard_path = path.rstrip("/") + "/*"
+                    if wildcard_path in openai_routes:
+                        openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug(
                 "Removed pass-through route from registry: %s", key
@@ -2137,6 +2156,102 @@ def _get_combined_pass_through_endpoints(
     return pass_through_endpoints + config_pass_through_endpoints
 
 
+async def _register_pass_through_endpoint(
+    endpoint: Union[Dict[str, Any], PassThroughGenericEndpoint],
+    app: FastAPI,
+    premium_user: bool,
+    visited_endpoints: set[str],
+) -> None:
+    endpoint_data: Dict[str, Any]
+    if isinstance(endpoint, PassThroughGenericEndpoint):
+        endpoint_data = endpoint.model_dump()
+    else:
+        endpoint_data = endpoint
+
+    if endpoint_data.get("id") is None:
+        endpoint_data["id"] = str(uuid.uuid4())
+    endpoint_id = cast(str, endpoint_data["id"])
+
+    target = endpoint_data.get("target")
+    path = endpoint_data.get("path")
+    if path is None:
+        raise ValueError("Path is required for pass-through endpoint")
+
+    custom_headers = await set_env_variables_in_header(
+        custom_headers=endpoint_data.get("headers")
+    )
+    forward_headers = endpoint_data.get("forward_headers")
+    merge_query_params = endpoint_data.get("merge_query_params")
+    default_query_params = endpoint_data.get("default_query_params")
+    auth = endpoint_data.get("auth")
+    dependencies = None
+
+    if auth is not None and str(auth).lower() == "true":
+        if premium_user is not True:
+            raise ValueError(
+                "Error Setting Authentication on Pass Through Endpoint: {}".format(
+                    CommonProxyErrors.not_premium_user.value
+                )
+            )
+        dependencies = [Depends(user_api_key_auth)]
+        if path not in LiteLLMRoutes.openai_routes.value:
+            LiteLLMRoutes.openai_routes.value.append(path)
+
+    if target is None:
+        return
+
+    guardrails = endpoint_data.get("guardrails")
+    methods = endpoint_data.get("methods")
+    cost_per_request = endpoint_data.get("cost_per_request")
+
+    verbose_proxy_logger.debug(
+        "Initializing pass through endpoint: %s (ID: %s)", path, endpoint_id
+    )
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=app,
+        path=path,
+        target=target,
+        custom_headers=custom_headers,
+        forward_headers=forward_headers,
+        merge_query_params=merge_query_params,
+        dependencies=dependencies,
+        cost_per_request=cost_per_request,
+        endpoint_id=endpoint_id,
+        guardrails=guardrails,
+        methods=methods,
+        default_query_params=default_query_params,
+    )
+
+    methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    methods_str = ",".join(sorted(methods_for_key))
+    visited_endpoints.add(f"{endpoint_id}:exact:{path}:{methods_str}")
+
+    if endpoint_data.get("include_subpath", False) is True:
+        if auth is not None and str(auth).lower() == "true":
+            wildcard_path = path.rstrip("/") + "/*"
+            if wildcard_path not in LiteLLMRoutes.openai_routes.value:
+                LiteLLMRoutes.openai_routes.value.append(wildcard_path)
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path=path,
+            target=target,
+            custom_headers=custom_headers,
+            forward_headers=forward_headers,
+            merge_query_params=merge_query_params,
+            dependencies=dependencies,
+            cost_per_request=cost_per_request,
+            endpoint_id=endpoint_id,
+            guardrails=guardrails,
+            methods=methods,
+            default_query_params=default_query_params,
+        )
+        visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
+
+    verbose_proxy_logger.debug(
+        "Added new pass through endpoint: %s (ID: %s)", path, endpoint_id
+    )
+
+
 async def initialize_pass_through_endpoints(
     pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
 ):
@@ -2153,10 +2268,7 @@ async def initialize_pass_through_endpoints(
     Returns:
         None
     """
-    from litellm._uuid import uuid
-
     verbose_proxy_logger.debug("initializing pass through endpoints")
-    from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
     from litellm.proxy.proxy_server import (
         app,
         config_passthrough_endpoints,
@@ -2183,98 +2295,14 @@ async def initialize_pass_through_endpoints(
         InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
     )
 
-    visited_endpoints = set()
+    visited_endpoints: set[str] = set()
 
     for endpoint in combined_pass_through_endpoints:
-        if isinstance(endpoint, PassThroughGenericEndpoint):
-            endpoint = endpoint.model_dump()
-
-        # Auto-generate ID for backwards compatibility if not present
-        if endpoint.get("id") is None:
-            endpoint["id"] = str(uuid.uuid4())
-
-        # Get the endpoint_id as a string (guaranteed to be set at this point)
-        endpoint_id: str = endpoint["id"]
-
-        _target = endpoint.get("target", None)
-        _path: Optional[str] = endpoint.get("path", None)
-        if _path is None:
-            raise ValueError("Path is required for pass-through endpoint")
-        _custom_headers = endpoint.get("headers", None)
-        _custom_headers = await set_env_variables_in_header(
-            custom_headers=_custom_headers
-        )
-        _forward_headers = endpoint.get("forward_headers", None)
-        _merge_query_params = endpoint.get("merge_query_params", None)
-        _default_query_params = endpoint.get("default_query_params", None)
-        _auth = endpoint.get("auth", None)
-        _dependencies = None
-        if _auth is not None and str(_auth).lower() == "true":
-            if premium_user is not True:
-                raise ValueError(
-                    "Error Setting Authentication on Pass Through Endpoint: {}".format(
-                        CommonProxyErrors.not_premium_user.value
-                    )
-                )
-            _dependencies = [Depends(user_api_key_auth)]
-            LiteLLMRoutes.openai_routes.value.append(_path)
-
-        if _target is None:
-            continue
-
-        # Get guardrails config if present
-        _guardrails = endpoint.get("guardrails", None)
-
-        # Get methods list if present (None means all methods for backward compatibility)
-        _methods = endpoint.get("methods", None)
-
-        # Add exact path route
-        verbose_proxy_logger.debug(
-            "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
-        )
-        InitPassThroughEndpointHelpers.add_exact_path_route(
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
             app=app,
-            path=_path,
-            target=_target,
-            custom_headers=_custom_headers,
-            forward_headers=_forward_headers,
-            merge_query_params=_merge_query_params,
-            dependencies=_dependencies,
-            cost_per_request=endpoint.get("cost_per_request", None),
-            endpoint_id=endpoint_id,
-            guardrails=_guardrails,
-            methods=_methods,
-            default_query_params=_default_query_params,
-        )
-
-        # Generate route key with methods for tracking
-        methods_for_key = (
-            _methods if _methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
-        )
-        methods_str = ",".join(sorted(methods_for_key))
-        visited_endpoints.add(f"{endpoint_id}:exact:{_path}:{methods_str}")
-
-        # Add wildcard route for sub-paths
-        if endpoint.get("include_subpath", False) is True:
-            InitPassThroughEndpointHelpers.add_subpath_route(
-                app=app,
-                path=_path,
-                target=_target,
-                custom_headers=_custom_headers,
-                forward_headers=_forward_headers,
-                merge_query_params=_merge_query_params,
-                dependencies=_dependencies,
-                cost_per_request=endpoint.get("cost_per_request", None),
-                endpoint_id=endpoint_id,
-                guardrails=_guardrails,
-                methods=_methods,
-                default_query_params=_default_query_params,
-            )
-
-            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}:{methods_str}")
-
-        verbose_proxy_logger.debug(
-            "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
+            premium_user=premium_user,
+            visited_endpoints=visited_endpoints,
         )
 
     # remove the ones that are not visited from the list

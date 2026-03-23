@@ -119,7 +119,7 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
-  const Select = ({ children, onChange, ...props }: { children?: any; onChange?: (value: string) => void }) =>
+  const Select = ({ children, onChange, options, ...props }: { children?: any; onChange?: (value: string) => void; options?: Array<{ value: string; label: string }> }) =>
     React.createElement(
       "select",
       {
@@ -127,6 +127,7 @@ vi.mock("antd", () => {
         onChange: (event: any) => onChange?.(event.target.value),
       },
       children,
+      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
 
   Select.Option = ({ children, ...props }: { children?: any }) =>
@@ -213,7 +214,33 @@ vi.mock("../common_components/PassThroughRoutesSelector", () => ({ default: () =
 vi.mock("../common_components/PremiumLoggingSettings", () => ({ default: () => null }));
 vi.mock("../common_components/RateLimitTypeFormItem", () => ({ default: () => null }));
 vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => null }));
-vi.mock("../common_components/team_dropdown", () => ({ default: () => null }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
+vi.mock("../common_components/team_dropdown", () => ({
+  default: ({ onChange, disabled }: { onChange?: (v: string) => void; disabled?: boolean }) => (
+    <select
+      data-testid="team-dropdown"
+      disabled={disabled}
+      onChange={(e) => onChange?.(e.target.value)}
+    >
+      <option value="">Select team</option>
+      <option value="team-1">Team One</option>
+      <option value="team-2">Team Two</option>
+    </select>
+  ),
+}));
 vi.mock("../CreateUserButton", () => ({ CreateUserButton: () => null }));
 vi.mock("../mcp_server_management/MCPServerSelector", () => ({ default: () => null }));
 vi.mock("../mcp_server_management/MCPToolPermissions", () => ({ default: () => null }));
@@ -223,8 +250,43 @@ vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
+  useTags: vi.fn().mockReturnValue({
+    data: [
+      { name: "production", description: "Prod tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+      { name: "staging", description: "Staging tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+    ],
+    isLoading: false,
+  }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
   useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      { organization_id: "org-1", organization_alias: "Engineering" },
+      { organization_id: "org-2", organization_alias: "Sales" },
+    ],
+    isLoading: false,
+  }),
+}));
+
+vi.mock("../common_components/OrganizationDropdown", () => ({
+  default: ({ value, onChange, disabled }: { value?: string; onChange?: (v: string) => void; disabled?: boolean }) => (
+    <select
+      data-testid="org-dropdown"
+      disabled={disabled}
+      value={value || ""}
+      onChange={(e) => onChange?.(e.target.value)}
+    >
+      <option value="">Select org</option>
+      <option value="org-1">Engineering</option>
+      <option value="org-2">Sales</option>
+    </select>
+  ),
 }));
 
 vi.mock("../common_components/ProjectDropdown", () => ({
@@ -406,6 +468,98 @@ describe("CreateKey", () => {
 
     await waitFor(() => {
       expect(setFieldsValueMock).toHaveBeenCalledWith({ key_type: "management" });
+    });
+  });
+
+  describe("organization dropdown", () => {
+    it("should render the organization dropdown when modal is open", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("org-dropdown")).toBeInTheDocument();
+      });
+    });
+
+    it("should disable the organization dropdown for non-admin users", async () => {
+      authorizedState = { ...defaultAuthorizedState, userRole: "Internal User" };
+
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("org-dropdown")).toBeDisabled();
+      });
+    });
+
+    it("should enable the organization dropdown for admin users", async () => {
+      authorizedState = { ...defaultAuthorizedState, userRole: "Admin" };
+
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("org-dropdown")).not.toBeDisabled();
+      });
+    });
+
+    it("should render team dropdown alongside organization dropdown", async () => {
+      const teamsWithOrg = [
+        { team_id: "team-1", team_alias: "Team Alpha", organization_id: "org-1", models: [] },
+      ];
+
+      renderWithProviders(<CreateKey {...defaultProps} teams={teamsWithOrg as any} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("org-dropdown")).toBeInTheDocument();
+        expect(screen.getByTestId("team-dropdown")).toBeInTheDocument();
+      });
+    });
+
+    it("should set organization_id in form state when org is selected", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("org-dropdown")).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("org-dropdown"), { target: { value: "org-1" } });
+      });
+
+      expect(formStateRef.current["organization_id"]).toBe("org-1");
+    });
+  });
+
+  describe("tags dropdown", () => {
+    it("should populate tags dropdown with options from useTags hook", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("production")).toBeInTheDocument();
+        expect(screen.getByText("staging")).toBeInTheDocument();
+      });
     });
   });
 });

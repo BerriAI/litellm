@@ -91,7 +91,8 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
             optional_params = {k: kwargs.get(k) for k in path_params if k in kwargs}
 
             # Pre-call logging
-            litellm_logging_obj.update_environment_variables(
+            litellm_logging_obj.update_from_kwargs(
+                kwargs=kwargs,
                 model="",
                 optional_params=optional_params,
                 litellm_params={"litellm_call_id": litellm_call_id},

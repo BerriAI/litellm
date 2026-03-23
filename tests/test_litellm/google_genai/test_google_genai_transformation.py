@@ -12,9 +12,6 @@ sys.path.insert(
 import pytest
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-from litellm.llms.vertex_ai.google_genai.transformation import (
-    VertexAIGoogleGenAIConfig,
-)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -176,26 +173,6 @@ def test_map_generate_content_optional_params_response_mime_type():
     assert "responseJsonSchema" in result
 
 
-@pytest.mark.parametrize(
-    "config_cls",
-    [GoogleGenAIConfig, VertexAIGoogleGenAIConfig],
-)
-def test_transform_generate_content_request_preserves_tool_config(config_cls):
-    config = config_cls()
-    tool_config = {"functionCallingConfig": {"mode": "ANY"}}
-
-    result = config.transform_generate_content_request(
-        model="gemini-3-flash-preview",
-        contents=[{"role": "user", "parts": [{"text": "hello"}]}],
-        tools=[{"functionDeclarations": [{"name": "execute_command"}]}],
-        tool_config=tool_config,
-        generate_content_config_dict={"temperature": 1},
-        system_instruction={"parts": [{"text": "system"}]},
-    )
-
-    assert result["toolConfig"] == tool_config
-
-
 def test_responses_api_reasoning_dict_format():
     """Test that reasoning parameter with dict format is mapped to reasoning_effort"""
     from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -297,7 +274,6 @@ def test_transform_generate_content_request_with_system_instruction():
         model="gemini-3-flash-preview",
         contents=contents,
         tools=None,
-        tool_config=None,
         generate_content_config_dict=generate_content_config_dict,
         system_instruction=system_instruction,
     )
@@ -329,7 +305,6 @@ def test_transform_generate_content_request_without_system_instruction():
         model="gemini-3-flash-preview",
         contents=contents,
         tools=None,
-        tool_config=None,
         generate_content_config_dict=generate_content_config_dict,
         system_instruction=None,
     )
@@ -381,7 +356,6 @@ def test_transform_generate_content_request_system_instruction_with_tools():
         model="gemini-3-flash-preview",
         contents=contents,
         tools=tools,
-        tool_config=None,
         generate_content_config_dict=generate_content_config_dict,
         system_instruction=system_instruction,
     )

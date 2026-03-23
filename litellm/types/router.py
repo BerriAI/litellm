@@ -77,6 +77,7 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     model_group_retry_policy: Optional[dict] = None
+    model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
     cooldown_time: Optional[float] = None
     num_retries: Optional[int] = None
@@ -188,6 +189,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     max_file_size_mb: Optional[float] = None
 
+    # Proxy-wide default rate limits applied to any API key using this deployment
+    # when the key does not have a model-specific tpm/rpm limit configured.
+    default_api_key_tpm_limit: Optional[int] = None
+    default_api_key_rpm_limit: Optional[int] = None
+
     # Deployment budgets
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
@@ -197,6 +203,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
+
+    # tag-based routing
+    tags: Optional[List[str]] = None
+    # regex patterns matched against request headers for tag routing
+    tag_regex: Optional[List[str]] = None
 
     # auto-router params
     auto_router_config_path: Optional[str] = None
@@ -334,6 +345,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # routing params
     # use this for tag-based routing
     tags: Optional[List[str]]
+    # regex patterns matched against request headers (e.g. "^User-Agent:\\s*claude-code\\/")
+    tag_regex: Optional[List[str]]
 
     # deployment budgets
     max_budget: Optional[float]
