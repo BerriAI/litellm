@@ -1754,3 +1754,5 @@ def test_model_dump_fallback_handles_pydantic_serializer_bug(
     # This call is outside the patch context so it should work normally
     result_dict = result.model_dump()
     assert isinstance(result_dict, dict)
+    # Extra provider field should survive into the serialized output
+    assert result_dict.get("sap_extra_field") == "sap-value"
