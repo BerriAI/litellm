@@ -773,7 +773,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
             )
         else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise litellm.BadRequestError(
+                message=(
+                    f"Invalid reasoning_effort value: '{reasoning_effort}'. "
+                    "Must be one of: 'low', 'medium', 'high', 'minimal', 'none'."
+                ),
+                model=model,
+                llm_provider="anthropic",
+            )
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
