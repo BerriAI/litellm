@@ -51,6 +51,10 @@ class FunctionTool(BaseModel):
     parameters: dict = {"type": "object", "properties": {}}
     strict: bool = False
 
+    def model_dump(self, **kwargs) -> dict:
+        kwargs["exclude_unset"] = False
+        return super().model_dump(**kwargs)
+
     @field_validator("parameters", mode="before")
     @classmethod
     def ensure_object_type(cls, v: dict) -> dict:
