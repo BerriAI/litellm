@@ -1295,6 +1295,10 @@ def _update_model_if_team_alias_exists(
             "gpt-4o": "gpt-4o-team-1"
         }
         - requested_model = "gpt-4o-team-1"
+
+    Note: model_aliases for team models are deprecated. This function only applies
+    to legacy non-team-scoped aliases. Team-scoped deployments use team_public_model_name
+    and are resolved via map_team_model in route_llm_request.
     """
     _model = data.get("model")
     if (
@@ -1302,6 +1306,17 @@ def _update_model_if_team_alias_exists(
         and user_api_key_dict.team_model_aliases
         and _model in user_api_key_dict.team_model_aliases
     ):
+        from litellm.proxy.proxy_server import llm_router
+
+        # Skip alias rewrite if this model resolves to team-specific deployments
+        # (team models use team_public_model_name, not model_aliases)
+        if (
+            llm_router
+            and user_api_key_dict.team_id
+            and llm_router.map_team_model(_model, user_api_key_dict.team_id) is not None
+        ):
+            return
+
         data["model"] = user_api_key_dict.team_model_aliases[_model]
     return
 
