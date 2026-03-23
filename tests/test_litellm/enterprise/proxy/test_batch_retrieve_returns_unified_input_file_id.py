@@ -8,9 +8,9 @@ batch is later read from DB, get_batch_from_database returns the raw ID
 without resolving it to the unified ID.
 """
 
+import base64
 import json
 import pytest
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.openai_files_endpoints.common_utils import get_batch_from_database
@@ -93,7 +93,9 @@ async def test_should_preserve_already_managed_input_file_id():
 
     unified_batch_id = "bGl0ZWxsbV9wcm94eTpiYXRjaF9pZA"
     decoded_unified = "litellm_proxy:application/octet-stream;unified_id,test-123"
-    base64_input_file_id = base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    base64_input_file_id = (
+        base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    )
 
     batch_data = {
         "id": "batch-raw-123",
@@ -122,3 +124,64 @@ async def test_should_preserve_already_managed_input_file_id():
     )
 
     prisma.db.litellm_managedfiletable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_should_rehydrate_hidden_params_for_completed_batch_from_db():
+    """
+    When a completed managed batch is served from the DB early-return path,
+    get_batch_from_database should restore the hidden params needed by the
+    managed_files hook to re-encode output_file_id on the response.
+    """
+    decoded_unified_batch_id = (
+        "litellm_proxy;model_id:model-deploy-xyz;llm_batch_id:batch-raw-123"
+    )
+    unified_batch_id = (
+        base64.urlsafe_b64encode(decoded_unified_batch_id.encode()).decode().rstrip("=")
+    )
+    decoded_unified_input_file_id = (
+        "litellm_proxy:application/octet-stream;"
+        "unified_id,test-input-uuid;"
+        "target_model_names,azure-gpt-4;"
+        "llm_output_file_id,file-abc123-raw;"
+        "llm_output_file_model_id,model-deploy-xyz"
+    )
+    unified_input_file_id = (
+        base64.urlsafe_b64encode(decoded_unified_input_file_id.encode())
+        .decode()
+        .rstrip("=")
+    )
+    raw_input_file_id = "file-abc123-raw"
+
+    batch_data = {
+        "id": "batch-raw-123",
+        "completion_window": "24h",
+        "created_at": 1700000000,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": raw_input_file_id,
+        "object": "batch",
+        "status": "completed",
+        "output_file_id": "file-output-raw",
+    }
+
+    managed_file_record = MagicMock()
+    managed_file_record.unified_file_id = unified_input_file_id
+
+    prisma = _mock_prisma(
+        batch_json=json.dumps(batch_data),
+        managed_file_record=managed_file_record,
+    )
+
+    _, response = await get_batch_from_database(
+        batch_id=unified_batch_id,
+        unified_batch_id=decoded_unified_batch_id,
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma,
+        verbose_proxy_logger=MagicMock(),
+    )
+
+    assert response is not None
+    assert response.input_file_id == unified_input_file_id
+    assert response._hidden_params["unified_batch_id"] == decoded_unified_batch_id
+    assert response._hidden_params["model_id"] == "model-deploy-xyz"
+    assert response._hidden_params["unified_file_id"] == unified_input_file_id
