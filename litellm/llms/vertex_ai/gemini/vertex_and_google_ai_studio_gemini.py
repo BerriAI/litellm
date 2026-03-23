@@ -1721,6 +1721,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = (
                         response_tokens_details.audio_tokens or 0
                     ) + token_count
+                elif modality == "DOCUMENT":
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
+                    ) + token_count
 
         #########################################################
 
@@ -1746,6 +1750,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "VIDEO":
                     response_tokens_details.video_tokens = (
                         response_tokens_details.video_tokens or 0
+                    ) + token_count
+                elif modality == "DOCUMENT":
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
                     ) + token_count
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
@@ -1780,6 +1788,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     prompt_image_tokens = (prompt_image_tokens or 0) + token_count
                 elif modality == "VIDEO":
                     prompt_video_tokens = (prompt_video_tokens or 0) + token_count
+                elif modality == "DOCUMENT":
+                    prompt_text_tokens = (prompt_text_tokens or 0) + token_count
 
         ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
         ## When explicit caching is used, Gemini provides this field to show which modalities were cached
@@ -1800,6 +1810,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cached_image_tokens = (cached_image_tokens or 0) + token_count
                 elif modality == "VIDEO":
                     cached_video_tokens = (cached_video_tokens or 0) + token_count
+                elif modality == "DOCUMENT":
+                    cached_text_tokens = (cached_text_tokens or 0) + token_count
 
         ## Calculate non-cached tokens by subtracting cached from total (per modality)
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
