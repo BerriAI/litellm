@@ -259,6 +259,7 @@ class SemanticToolFilterHook(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         response: Any,
         request_headers: Optional[Dict[str, str]] = None,
+        litellm_call_info: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, str]]:
         """Add semantic filter stats and tool names to response headers."""
         from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
