@@ -994,6 +994,82 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     assert expected_actual_cost == total_cost
 
 
+def test_gemini_partial_prompt_token_breakdown_bills_unaccounted_remainder():
+    """
+    Reproduce #24375: when prompt_tokens_details only covers a subset of the
+    prompt tokens, the remainder should still be billed as text tokens.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.get_model_info(
+        model="gemini/gemini-2.5-flash", custom_llm_provider="gemini"
+    )
+
+    usage = Usage(
+        prompt_tokens=783,
+        completion_tokens=96,
+        total_tokens=879,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=9),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=92,
+            text_tokens=4,
+        ),
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="gemini/gemini-2.5-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    expected_input_cost = usage.prompt_tokens * model_info["input_cost_per_token"]
+    expected_output_cost = usage.completion_tokens * model_info["output_cost_per_token"]
+
+    assert abs(input_cost - expected_input_cost) < 1e-12
+    assert abs(output_cost - expected_output_cost) < 1e-12
+
+
+def test_partial_completion_token_breakdown_bills_unaccounted_remainder_as_text():
+    """
+    If completion_tokens_details omits part of the total completion tokens, the
+    remainder should be billed as text tokens instead of being dropped.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.get_model_info(
+        model="gemini/gemini-2.5-flash", custom_llm_provider="gemini"
+    )
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=120,
+        total_tokens=130,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=10),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=92,
+            text_tokens=4,
+        ),
+    )
+
+    _, output_cost = generic_cost_per_token(
+        model="gemini/gemini-2.5-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    expected_output_cost = usage.completion_tokens * model_info["output_cost_per_token"]
+
+    assert abs(output_cost - expected_output_cost) < 1e-12
+
+
 def test_azure_ai_cache_cost_calculation():
     """
     Test that azure_ai provider correctly calculates cache costs using generic_cost_per_token.
