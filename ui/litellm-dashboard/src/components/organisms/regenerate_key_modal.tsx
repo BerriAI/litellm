@@ -1,12 +1,13 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Form, InputNumber, Modal } from "antd";
+import { Button, Form, Input, InputNumber, Modal, Typography } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
+
+const { Text, Title } = Typography;
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -159,42 +160,42 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               </Button>,
             ]
           : [
-              <Button key="cancel" onClick={handleClose} className="mr-2">
+              <Button key="cancel" onClick={handleClose} style={{ marginRight: 8 }}>
                 Cancel
               </Button>,
-              <Button key="regenerate" onClick={handleRegenerateKey} disabled={isRegenerating}>
-                {isRegenerating ? "Regenerating..." : "Regenerate"}
+              <Button key="regenerate" type="primary" onClick={handleRegenerateKey} loading={isRegenerating}>
+                Regenerate
               </Button>,
             ]
       }
     >
       {regeneratedKey ? (
-        <Grid numItems={1} className="gap-2 w-full">
-          <Title>Regenerated Key</Title>
-          <Col numColSpan={1}>
-            <p>
-              Please replace your old key with the new key generated. For security reasons,{" "}
-              <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
-              you will need to generate a new one.
-            </p>
-          </Col>
-          <Col numColSpan={1}>
-            <Text className="mt-3">Key Alias:</Text>
-            <div className="bg-gray-100 p-2 rounded mb-2">
-              <pre className="break-words whitespace-normal">{selectedToken?.key_alias || "No alias set"}</pre>
-            </div>
-            <Text className="mt-3">New Virtual Key:</Text>
-            <div className="bg-gray-100 p-2 rounded mb-2">
-              <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
-            </div>
-            <CopyToClipboard
-              text={regeneratedKey}
-              onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
-            >
-              <Button className="mt-3">Copy Virtual Key</Button>
-            </CopyToClipboard>
-          </Col>
-        </Grid>
+        <div>
+          <Title level={4}>Regenerated Key</Title>
+          <p>
+            Please replace your old key with the new key generated. For security reasons,{" "}
+            <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
+            you will need to generate a new one.
+          </p>
+          <Text type="secondary" style={{ marginTop: 12, display: "block" }}>Key Alias:</Text>
+          <div style={{ background: "#f8f8f8", padding: 8, borderRadius: 4, marginBottom: 8 }}>
+            <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>
+              {selectedToken?.key_alias || "No alias set"}
+            </pre>
+          </div>
+          <Text type="secondary" style={{ marginTop: 12, display: "block" }}>New Virtual Key:</Text>
+          <div style={{ background: "#f8f8f8", padding: 8, borderRadius: 4, marginBottom: 8 }}>
+            <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>
+              {regeneratedKey}
+            </pre>
+          </div>
+          <CopyToClipboard
+            text={regeneratedKey}
+            onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
+          >
+            <Button type="primary" style={{ marginTop: 12 }}>Copy Virtual Key</Button>
+          </CopyToClipboard>
+        </div>
       ) : (
         <Form
           form={form}
@@ -206,7 +207,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           }}
         >
           <Form.Item name="key_alias" label="Key Alias">
-            <TextInput disabled={true} />
+            <Input disabled={true} />
           </Form.Item>
           <Form.Item name="max_budget" label="Max Budget (USD)">
             <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
@@ -217,18 +218,20 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           <Form.Item name="rpm_limit" label="RPM Limit">
             <InputNumber style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" className="mt-8">
-            <TextInput placeholder="" />
+          <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" style={{ marginTop: 32 }}>
+            <Input placeholder="" />
           </Form.Item>
-          <div className="mt-2 text-sm text-gray-500">
+          <Text type="secondary" style={{ fontSize: 12 }}>
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
-          </div>
-          {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
+          </Text>
+          {newExpiryTime && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "#52c41a" }}>New expiry: {newExpiryTime}</div>
+          )}
           <Form.Item
             name="grace_period"
             label="Grace Period (eg: 24h, 2d)"
             tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
-            className="mt-8"
+            style={{ marginTop: 32 }}
             rules={[
               {
                 pattern: /^(\d+(s|m|h|d|w|mo))?$/,
@@ -236,11 +239,11 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               },
             ]}
           >
-            <TextInput placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
+            <Input placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
           </Form.Item>
-          <div className="mt-2 text-sm text-gray-500">
+          <Text type="secondary" style={{ fontSize: 12 }}>
             Recommended: 24h to 72h for production keys to allow seamless client migration.
-          </div>
+          </Text>
         </Form>
       )}
     </Modal>
