@@ -208,6 +208,7 @@ async def _run_project_checks(
             model=_model,
             project_object=project_object,
             llm_router=llm_router,
+            team_models=valid_token.team_models if valid_token else None,
         )
 
     if not skip_budget_checks:
@@ -2802,16 +2803,24 @@ def can_project_access_model(
     model: Union[str, List[str]],
     project_object: LiteLLM_ProjectTableCachedObj,
     llm_router: Optional[Router],
+    team_models: Optional[List[str]] = None,
 ) -> Literal[True]:
     """
     Returns True if the project can access a specific model.
 
     Raises ProxyException if access is denied.
     """
+    project_models = list(project_object.models) if project_object else []
+
+    # Resolve "all-team-models" sentinel to the team's actual model list,
+    # matching the pattern used in get_key_models() for key-level resolution.
+    if SpecialModelNames.all_team_models.value in project_models:
+        project_models = list(team_models) if team_models else []
+
     return _can_object_call_model(
         model=model,
         llm_router=llm_router,
-        models=project_object.models if project_object else [],
+        models=project_models,
         object_type="project",
     )
 

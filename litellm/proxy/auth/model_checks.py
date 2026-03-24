@@ -148,7 +148,10 @@ def get_team_models(
     if len(team_models) > 0:
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
-            all_models_set.update(team_models)
+            # "all-team-models" is a key/project-level sentinel meaning
+            # "inherit the team's models". It has no meaning on the team
+            # itself, so just strip it out.
+            all_models_set.discard(SpecialModelNames.all_team_models.value)
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
             if include_model_access_groups:

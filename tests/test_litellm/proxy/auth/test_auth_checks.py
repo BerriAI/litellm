@@ -1629,3 +1629,100 @@ async def test_custom_auth_common_checks_opt_in():
             parent_otel_span=None,
         )
         mock_common.assert_called_once()
+
+
+def test_can_project_access_model_all_team_models_resolves():
+    """
+    Regression test: project with models=["all-team-models"] should resolve
+    to the team's actual models, not compare the literal string.
+    """
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="test-project",
+        models=["all-team-models"],
+        created_by="test",
+        updated_by="test",
+    )
+
+    # Team has gpt-5 → project should be able to access it
+    result = can_project_access_model(
+        model="gpt-5",
+        project_object=project,
+        llm_router=None,
+        team_models=["gpt-5", "gpt-4"],
+    )
+    assert result is True
+
+
+def test_can_project_access_model_all_team_models_denies_unlisted():
+    """
+    Project with models=["all-team-models"] should deny a model that
+    the team doesn't have.
+    """
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="test-project",
+        models=["all-team-models"],
+        created_by="test",
+        updated_by="test",
+    )
+
+    with pytest.raises(Exception):
+        can_project_access_model(
+            model="gpt-5",
+            project_object=project,
+            llm_router=None,
+            team_models=["gpt-4"],
+        )
+
+
+def test_can_project_access_model_all_team_models_with_all_proxy_models():
+    """
+    Project has all-team-models, team has all-proxy-models.
+    Should grant access to any model.
+    """
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="test-project",
+        models=["all-team-models"],
+        created_by="test",
+        updated_by="test",
+    )
+
+    result = can_project_access_model(
+        model="gpt-5",
+        project_object=project,
+        llm_router=None,
+        team_models=["all-proxy-models"],
+    )
+    assert result is True
+
+
+def test_can_project_access_model_all_team_models_no_team():
+    """
+    Project has all-team-models but team_models is None/empty.
+    Empty resolved list → all access (matches existing behavior for empty models).
+    """
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="test-project",
+        models=["all-team-models"],
+        created_by="test",
+        updated_by="test",
+    )
+
+    result = can_project_access_model(
+        model="gpt-5",
+        project_object=project,
+        llm_router=None,
+        team_models=None,
+    )
+    assert result is True
