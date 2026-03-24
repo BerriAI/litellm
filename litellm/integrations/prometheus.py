@@ -76,6 +76,10 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
             self._parse_exclude_config()
+            # Registry mapping id(metric) → frozenset of registered label names.
+            # Populated by _create_metric_factory; used by _safe_labels to avoid
+            # relying on prometheus_client private attributes.
+            self._metric_label_registry: Dict[int, frozenset] = {}
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -896,7 +900,12 @@ class PrometheusLogger(CustomLogger):
             metric_name = args[0] if args else kwargs.get("name", "")
 
             if self._is_metric_enabled(metric_name):
-                return metric_class(*args, **kwargs)
+                metric = metric_class(*args, **kwargs)
+                # Record label names so _safe_labels can filter without touching
+                # prometheus_client private attributes.
+                labelnames = kwargs.get("labelnames", args[2] if len(args) > 2 else [])
+                self._metric_label_registry[id(metric)] = frozenset(labelnames)
+                return metric
             else:
                 return NoOpMetric()
 
@@ -931,10 +940,14 @@ class PrometheusLogger(CustomLogger):
         When prometheus_exclude_labels strips labels at registration time, observation
         call sites must supply only the registered subset or prometheus_client raises
         ValueError (label count mismatch).
+
+        Label names are looked up from _metric_label_registry (populated at creation
+        time by _create_metric_factory) to avoid relying on prometheus_client private
+        attributes.
         """
         if isinstance(metric, NoOpMetric):
             return kwargs
-        registered = getattr(metric, "_labelnames", None)
+        registered = self._metric_label_registry.get(id(metric))
         if registered is None:
             return kwargs
         return {k: v for k, v in kwargs.items() if k in registered}
