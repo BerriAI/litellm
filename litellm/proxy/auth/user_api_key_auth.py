@@ -22,6 +22,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.constants import CLI_JWT_TOKEN_NAME
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -1420,6 +1421,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             await user_api_key_cache.async_set_cache(
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+
+            # CLI JWT tokens carry frozen spend/budget from the encrypted blob.
+            # Replace with real DB values so response headers are accurate.
+            if valid_token.token == CLI_JWT_TOKEN_NAME:
+                if user_obj is not None and user_obj.spend is not None:
+                    valid_token.spend = user_obj.spend
+                if (
+                    _team_obj is not None
+                    and _team_obj.max_budget is not None
+                ):
+                    valid_token.max_budget = _team_obj.max_budget
+                elif (
+                    user_obj is not None
+                    and user_obj.max_budget is not None
+                ):
+                    valid_token.max_budget = user_obj.max_budget
 
             # Fetch project object if key belongs to a project
             _project_obj = None
