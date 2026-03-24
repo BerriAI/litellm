@@ -4598,9 +4598,10 @@ class ProxyUpdateSpend:
                                 create_data["budget_id"] = (
                                     litellm.max_end_user_budget_id
                                 )
-                            update_data: Dict[str, Any] = {
-                                "spend": {"increment": response_cost}
-                            }
+                            update_data: Dict[str, Any] = {}
+                            if response_cost != 0.0:
+                                update_data["spend"] = {"increment": response_cost}
+
                             # [Budget Reset Fix]
                             # If we have a pending budget_id update for this user (scheduled from the auth path),
                             # apply it now during the batched spend update.
