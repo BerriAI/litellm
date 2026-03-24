@@ -94,6 +94,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                 self.find_unique = team_lookup_fn
 
     return MockPrismaClient()
+
+
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
@@ -111,7 +113,9 @@ from litellm.types.utils import BudgetConfig
 async def test_is_admin_view_safe_true(monkeypatch):
     # Force underlying check to return True
     monkeypatch.setattr(
-        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: True
+        spend_management_endpoints,
+        "_user_has_admin_view",
+        lambda user_api_key_dict: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
     assert spend_management_endpoints._is_admin_view_safe(auth) is True
@@ -121,7 +125,9 @@ async def test_is_admin_view_safe_true(monkeypatch):
 async def test_is_admin_view_safe_false(monkeypatch):
     # Force underlying check to return False
     monkeypatch.setattr(
-        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: False
+        spend_management_endpoints,
+        "_user_has_admin_view",
+        lambda user_api_key_dict: False,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     assert spend_management_endpoints._is_admin_view_safe(auth) is False
@@ -179,7 +185,9 @@ async def test_can_team_member_view_log_team_not_found(monkeypatch):
     prisma = MockPrisma()
     # Even if admin check would return True, no team means False
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -208,7 +216,9 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: False
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: False,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -237,7 +247,9 @@ async def test_can_team_member_view_log_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+        spend_management_endpoints,
+        "_is_user_team_admin",
+        lambda user_api_key_dict, team_obj: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
@@ -267,6 +279,7 @@ def test_can_user_view_spend_log_false_for_other_roles():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
     assert spend_management_endpoints._can_user_view_spend_log(auth) is False
 
+
 ignored_keys = [
     "request_id",
     "session_id",
@@ -292,6 +305,7 @@ ignored_keys = [
     "metadata.user_api_key_alias",
     "metadata.user_api_key_team_id",
     "metadata.user_api_key_project_id",
+    "metadata.user_api_key_project_alias",
     "metadata.user_api_key_org_id",
     "metadata.user_api_key_user_id",
     "metadata.user_api_key_team_alias",
@@ -502,7 +516,11 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
 
     async def mock_query_raw(sql_query, *params):
         # Endpoint uses raw SQL with ORDER BY startTime DESC; mock returns sorted data
-        order = {"startTime": "desc"} if sort_by is None else {sort_by: sort_order or "desc"}
+        order = (
+            {"startTime": "desc"}
+            if sort_by is None
+            else {sort_by: sort_order or "desc"}
+        )
         sorted_logs = _sort_logs(base_logs, order)
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
@@ -568,6 +586,7 @@ async def test_ui_view_spend_logs_sort_validation_errors(
     client, monkeypatch, sort_by, sort_order
 ):
     """Test that invalid sort_by and sort_order return 400."""
+
     async def mock_count(*args, **kwargs):
         return 0
 
@@ -752,13 +771,33 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, monkeypatch):
+async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(
+    client, monkeypatch
+):
     """
     Internal users should only be able to view their own spend even if user_id is not provided.
     """
     mock_spend_logs = [
-        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
-        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "internal_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "internal_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
     ]
 
     def filter_by_user(where):
@@ -799,8 +838,26 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
     Team admins should be able to view team-wide spend when team_id is provided.
     """
     mock_spend_logs = [
-        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
-        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "member1",
+            "team_id": "team_admin_team",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "member2",
+            "team_id": "team_other",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
     ]
 
     def filter_by_team(where):
@@ -827,7 +884,11 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
 
         response = client.get(
             "/spend/logs/ui",
-            params={"team_id": "team_admin_team", "start_date": start_date, "end_date": end_date},
+            params={
+                "team_id": "team_admin_team",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
             headers={"Authorization": "Bearer sk-test"},
         )
 
@@ -838,6 +899,7 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         assert data["data"][0]["team_id"] == "team_admin_team"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
@@ -2163,7 +2225,9 @@ async def test_ui_view_spend_logs_with_error_code(client):
 
     try:
         with patch.object(
-            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code),
         ):
             start_date, end_date = _default_date_range()
 
@@ -2234,7 +2298,9 @@ async def test_ui_view_spend_logs_with_error_message(client):
 
     try:
         with patch.object(
-            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message),
         ):
             start_date, end_date = _default_date_range()
 
@@ -2255,7 +2321,9 @@ async def test_ui_view_spend_logs_with_error_message(client):
             assert data["data"][0]["id"] == "log1"
             metadata = json.loads(data["data"][0]["metadata"])
             assert "error_information" in metadata
-            assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+            assert (
+                "Rate limit exceeded" in metadata["error_information"]["error_message"]
+            )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -2321,7 +2389,9 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
         with patch.object(
             ps,
             "prisma_client",
-            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
+            make_ui_spend_logs_mock_prisma(
+                mock_spend_logs, filter_by_error_code_and_key_alias
+            ),
         ):
             start_date, end_date = _default_date_range()
 
