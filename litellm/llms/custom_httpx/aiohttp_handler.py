@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 
 import aiohttp
@@ -204,6 +205,12 @@ class BaseLLMAIOHTTPHandler:
             except aiohttp.ClientResponseError as e:
                 setattr(e, "text", e.message)
                 raise self._handle_error(e=e, provider_config=provider_config)
+            except asyncio.CancelledError:
+                # CancelledError is a BaseException in Python 3.8+, so it won't
+                # be caught by `except Exception`. Re-raise explicitly so that
+                # task-cancellation propagates correctly instead of being silently
+                # swallowed or bypassing retry/logging logic. See issue #22100.
+                raise
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
             break
