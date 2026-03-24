@@ -658,9 +658,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
             user_api_key_project_id=user_api_key_dict.project_id,
-            user_api_key_project_alias=getattr(
-                user_api_key_dict, "project_alias", None
-            ),
+            user_api_key_project_alias=user_api_key_dict.project_alias,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
