@@ -566,6 +566,56 @@ curl -X POST http://localhost:4000/embeddings \
 
 **Optional:** `dimensions` maps to Gemini's `outputDimensionality`.
 
+#### Combined Multimodal Embeddings
+
+By default, each element in the `input` list produces a **separate** embedding (OpenAI-compatible). To combine multiple inputs into a **single** embedding (e.g., text + image representing one entity), wrap them in a nested list:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import embedding
+
+# Separate: 2 inputs → 2 embeddings
+response = embedding(
+    model="gemini/gemini-embedding-2-preview",
+    input=["a red shoe", "data:image/png;base64,..."],
+)
+# response.data has 2 embeddings
+
+# Combined: text + image → 1 embedding
+response = embedding(
+    model="gemini/gemini-embedding-2-preview",
+    input=[["a red shoe", "data:image/png;base64,..."]],
+)
+# response.data has 1 embedding representing both together
+
+# Mixed: 1 combined + 1 separate → 2 embeddings
+response = embedding(
+    model="gemini/gemini-embedding-2-preview",
+    input=[["a red shoe", "data:image/png;base64,..."], "just text"],
+)
+# response.data has 2 embeddings
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl -X POST http://localhost:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-embedding-2-preview",
+    "input": [["a red shoe", "data:image/png;base64,..."], "just text"]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+This is useful for representing multi-modal entities (e.g., a product with a name + photo) as a single vector for search and retrieval.
+
 
 ## Vertex AI Embedding Models
 

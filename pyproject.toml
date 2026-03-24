@@ -9,6 +9,9 @@ packages = [
     { include = "litellm" },
     { include = "litellm/py.typed"},
 ]
+include = [
+    { path = "litellm/model_prices_and_context_window.json", format = ["wheel", "sdist"] }
+]
 
 [tool.poetry.urls]
 homepage = "https://litellm.ai"
