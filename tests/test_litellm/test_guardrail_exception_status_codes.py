@@ -5,8 +5,6 @@ GuardrailRaisedException and BlockedPiiEntityError should return 400,
 not 500, since guardrail blocks are client-triggered errors.
 """
 
-import pytest
-
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
 
