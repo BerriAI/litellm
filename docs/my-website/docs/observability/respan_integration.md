@@ -206,15 +206,20 @@ response = litellm.completion(
 The callback automatically handles async completions:
 
 ```python
+import asyncio
 import litellm
 from respan_exporter_litellm import RespanLiteLLMCallback
 
 litellm.callbacks = [RespanLiteLLMCallback()]
 
-response = await litellm.acompletion(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Tell me a joke"}],
-)
+async def main():
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+    )
+    print(response.choices[0].message.content)
+
+asyncio.run(main())
 ```
 
 ## Approach 2: Auto-Instrumented Tracing
@@ -233,13 +238,11 @@ Calls go directly to providers; Respan auto-instruments them for observability.
 
 ```python
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
 import litellm
 from respan import Respan
 from openinference.instrumentation.litellm import LiteLLMInstrumentor
 
+# Set environment variables (or use a .env file with load_dotenv())
 os.environ["RESPAN_API_KEY"] = "your-respan-api-key"
 os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
 
@@ -372,9 +375,9 @@ Each log in Respan captures:
 - **Content** — Input messages, output response, model
 - **Status** — Success/error, error details
 
-## Support & Talk to Founders
+## Support
 
-- [Schedule Demo](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord](https://discord.gg/wuPM9dRgDw)
+- [Respan Documentation](https://respan.ai/docs)
+- [Respan Platform](https://platform.respan.ai)
 
-For Respan-specific support, visit the [Respan documentation](https://respan.ai/docs).
+For LiteLLM-specific questions, [meet the founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or join the [LiteLLM Discord](https://discord.gg/wuPM9dRgDw).
