@@ -112,9 +112,14 @@ def _nova_canvas_task_body(
                 "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
             )
         return {"taskType": "INPAINTING", "inPaintingParams": in_params}
-    var_params: Dict[str, Any] = {
-        "images": [image_b64],
-        "text": text,
+    if isinstance(image, str):
+        # Assume it's already base64-encoded. Reject obvious file paths.
+        if image.startswith("/") or image.startswith("./") or "\\" in image:
+            raise ValueError(
+                "Nova Canvas image edit received a file path string as `image`. "
+                "Pass a file-like object (open(..., 'rb')), bytes, or a base64-encoded string."
+            )
+        return image
     }
     if negative_text is not None:
         var_params["negativeText"] = negative_text
