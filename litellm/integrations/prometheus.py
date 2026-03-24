@@ -504,6 +504,11 @@ class PrometheusLogger(CustomLogger):
             "error_type",
             "hook_type",
         }
+        # Include dynamic custom labels so we don't warn on valid user-defined names.
+        known_labels.update(litellm.custom_prometheus_metadata_labels or [])
+        known_labels.update(
+            f"tag_{tag}" for tag in (litellm.custom_prometheus_tags or [])
+        )
         for name in raw_metrics:
             if name not in defined_metrics:
                 verbose_logger.warning(
