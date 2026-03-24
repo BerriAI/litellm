@@ -917,10 +917,12 @@ class GuardrailRaisedException(Exception):
         guardrail_name: Optional[str] = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
+        status_code: int = 400,
     ):
         default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.message = default_message if should_wrap_with_default_message else message
+        self.status_code = status_code
         super().__init__(self.message)
 
 
@@ -929,12 +931,14 @@ class BlockedPiiEntityError(Exception):
         self,
         entity_type: str,
         guardrail_name: Optional[str] = None,
+        status_code: int = 400,
     ):
         """
         Raised when a blocked entity is detected by a guardrail.
         """
         self.entity_type = entity_type
         self.guardrail_name = guardrail_name
+        self.status_code = status_code
         self.message = f"Blocked entity detected: {entity_type} by Guardrail: {guardrail_name}. This entity is not allowed to be used in this request."
         super().__init__(self.message)
 
