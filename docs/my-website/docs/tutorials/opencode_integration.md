@@ -274,7 +274,7 @@ model_list:
 
 ### Dropping OpenCode-specific parameters
 
-OpenCode sends a `reasoningSummary` parameter (a Responses API concept) with reasoning-capable models such as `gpt-5`. This parameter is not supported by the Chat Completions API and will cause errors. Add `additional_drop_params` to every model entry in your `model_list` that will receive requests from OpenCode with reasoning enabled:
+OpenCode sends a `reasoningSummary` parameter with reasoning-capable models such as `gpt-5`. This parameter is not supported by the Chat Completions API and will cause errors. Add `additional_drop_params` to every model entry in your `model_list` that will receive requests from OpenCode with reasoning enabled:
 
 ```yaml
 model_list:
