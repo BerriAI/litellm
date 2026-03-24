@@ -101,9 +101,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Case 1: Target by role + index (e.g., index=-1 among assistant messages)
         if targetted_index is not None and targetted_role is not None:
             role_indices = [
-                i
-                for i, msg in enumerate(messages)
-                if msg.get("role") == targetted_role
+                i for i, msg in enumerate(messages) if msg.get("role") == targetted_role
             ]
             if role_indices:
                 try:
@@ -116,10 +114,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                         f"Skipping cache control injection for this point."
                     )
                 else:
-                    messages[actual_idx] = (
-                        AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                            messages[actual_idx], control
-                        )
+                    messages[
+                        actual_idx
+                    ] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                        messages[actual_idx], control
                     )
         # Case 2: Target by index only
         elif targetted_index is not None:
