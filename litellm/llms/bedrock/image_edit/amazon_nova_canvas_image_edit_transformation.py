@@ -270,6 +270,10 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 mapped["quality"] = "premium"
             elif _quality == "standard":
                 mapped["quality"] = "standard"
+            else:
+                # Re-emit unknown values (e.g. OpenAI "auto") so transform_image_edit_request
+                # forwards them and the API can reject, or drop_params can still apply upstream.
+                mapped["quality"] = _quality
         for k in ("response_format",):
             mapped.pop(k, None)
         # Drop unknown keys if drop_params

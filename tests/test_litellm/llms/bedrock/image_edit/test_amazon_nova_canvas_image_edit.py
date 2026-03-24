@@ -1,6 +1,7 @@
 """Unit tests for Bedrock Amazon Nova Canvas image edit (issue #24267)."""
 
 import io
+from typing import cast
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from litellm.llms.bedrock.image_edit.handler import BedrockImageEdit
 from litellm.llms.bedrock.image_edit.stability_transformation import (
     BedrockStabilityImageEditConfig,
 )
+from litellm.types.images.main import ImageEditOptionalRequestParams
 
 
 def test_get_config_class_nova_canvas():
@@ -398,6 +400,37 @@ def test_transform_request_image_variation_includes_image_generation_config():
     assert body["imageGenerationConfig"]["width"] == 1024
     assert body["imageGenerationConfig"]["height"] == 1024
     assert body["imageGenerationConfig"]["seed"] == 1
+
+
+def test_map_openai_params_unknown_quality_not_silently_dropped():
+    """Non-Nova quality strings (e.g. OpenAI 'auto') must remain for downstream handling."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    mapped = config.map_openai_params(
+        cast(ImageEditOptionalRequestParams, {"quality": "auto"}),
+        model="amazon.nova-canvas-v1:0",
+        drop_params=False,
+    )
+    assert mapped.get("quality") == "auto"
+
+
+def test_transform_request_unknown_quality_reaches_image_generation_config():
+    """Unknown quality after map_openai_params is forwarded so callers are not silently ignored."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"x")
+    op = config.map_openai_params(
+        cast(ImageEditOptionalRequestParams, {"quality": "auto"}),
+        model="amazon.nova-canvas-v1:0",
+        drop_params=False,
+    )
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="x",
+        image=img,
+        image_edit_optional_request_params=op,
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["imageGenerationConfig"]["quality"] == "auto"
 
 
 def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
