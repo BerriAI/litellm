@@ -236,9 +236,9 @@ The referenced credential can contain any combination of:
 
 Only keys present in the credential are applied. Keys already in the request (e.g. clientside `api_version`) are never overwritten.
 
-## Disabling the Feature
+## Enabling the Feature
 
-The feature is enabled by default. To disable it globally:
+This feature is **disabled by default** and must be explicitly enabled. To enable it:
 
 <Tabs>
 
@@ -246,7 +246,7 @@ The feature is enabled by default. To disable it globally:
 
 ```yaml
 litellm_settings:
-    enable_model_config_credential_overrides: false
+    enable_model_config_credential_overrides: true
 ```
 
 </TabItem>
@@ -254,12 +254,16 @@ litellm_settings:
 <TabItem value="env" label="Environment Variable">
 
 ```bash
-export LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES=false
+export LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES=true
 ```
 
 </TabItem>
 
 </Tabs>
+
+:::info
+The feature flag must be enabled before `model_config` entries in team/project metadata take effect. Without it, credential routing is completely inert — no metadata is read, no credentials are resolved.
+:::
 
 ## Related Documentation
 

@@ -1830,8 +1830,10 @@ async def test_bearer_token_not_in_debug_logs():
 
 @pytest.fixture()
 def setup_test_credentials():
-    """Populate litellm.credential_list with test credentials, clean up after."""
+    """Populate litellm.credential_list with test credentials and enable feature flag, clean up after."""
     original = litellm.credential_list[:]
+    original_flag = litellm.enable_model_config_credential_overrides
+    litellm.enable_model_config_credential_overrides = True
     litellm.credential_list.extend(
         [
             CredentialItem(
@@ -1879,6 +1881,7 @@ def setup_test_credentials():
     )
     yield
     litellm.credential_list[:] = original
+    litellm.enable_model_config_credential_overrides = original_flag
 
 
 # --- Unit tests for _extract_credential_from_entry ---
@@ -2304,8 +2307,9 @@ def test_apply_overrides_with_alias(setup_test_credentials):
     assert data["api_key"] == "key-hotel-eastus"
 
 
-def test_apply_overrides_feature_flag_disabled(setup_test_credentials):
-    """Feature flag litellm.enable_model_config_credential_overrides disables the feature."""
+def test_apply_overrides_feature_flag_disabled_by_default():
+    """Feature flag defaults to False — credential overrides are inert until explicitly enabled."""
+    assert litellm.enable_model_config_credential_overrides is False
     data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test-key",
@@ -2315,16 +2319,11 @@ def test_apply_overrides_feature_flag_disabled(setup_test_credentials):
             }
         },
     )
-    original = litellm.enable_model_config_credential_overrides
-    try:
-        litellm.enable_model_config_credential_overrides = False
-        _apply_credential_overrides_from_model_config(
-            data=data, user_api_key_dict=user_api_key_dict
-        )
-        assert "api_base" not in data
-        assert "api_key" not in data
-    finally:
-        litellm.enable_model_config_credential_overrides = original
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+    assert "api_key" not in data
 
 
 def test_extract_credential_provider_hint_prefers_exact_match():
