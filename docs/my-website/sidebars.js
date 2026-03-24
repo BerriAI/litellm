@@ -561,7 +561,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {

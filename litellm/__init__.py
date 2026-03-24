@@ -318,6 +318,7 @@ return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
 enable_json_schema_validation: bool = False
+enable_model_config_credential_overrides: bool = True
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )

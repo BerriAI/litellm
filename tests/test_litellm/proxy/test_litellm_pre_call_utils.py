@@ -2302,3 +2302,62 @@ def test_apply_overrides_with_alias(setup_test_credentials):
     )
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_feature_flag_disabled(setup_test_credentials):
+    """Feature flag litellm.enable_model_config_credential_overrides disables the feature."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-eastus"}}
+            }
+        },
+    )
+    original = litellm.enable_model_config_credential_overrides
+    try:
+        litellm.enable_model_config_credential_overrides = False
+        _apply_credential_overrides_from_model_config(
+            data=data, user_api_key_dict=user_api_key_dict
+        )
+        assert "api_base" not in data
+        assert "api_key" not in data
+    finally:
+        litellm.enable_model_config_credential_overrides = original
+
+
+def test_extract_credential_provider_hint_prefers_exact_match():
+    """Provider hint selects the correct provider in a multi-provider entry."""
+    entry = {
+        "openai": {"litellm_credentials": "openai-cred"},
+        "azure": {"litellm_credentials": "azure-cred"},
+    }
+    # With provider hint, should pick the exact match
+    assert _extract_credential_from_entry(entry, provider="azure") == "azure-cred"
+    assert _extract_credential_from_entry(entry, provider="openai") == "openai-cred"
+
+    # Without provider hint, falls back to first key (insertion order)
+    result = _extract_credential_from_entry(entry)
+    assert result in ("openai-cred", "azure-cred")
+
+    # Unknown provider falls back to first available
+    result = _extract_credential_from_entry(entry, provider="bedrock")
+    assert result in ("openai-cred", "azure-cred")
+
+
+def test_resolve_provider_hint_from_model_name():
+    """Provider prefix in model name (e.g. azure/gpt-4) threads through to entry extraction."""
+    config = {
+        "gpt-4": {
+            "openai": {"litellm_credentials": "openai-cred"},
+            "azure": {"litellm_credentials": "azure-cred"},
+        },
+    }
+    # Model name "azure/gpt-4" -> provider="azure" -> should prefer azure-cred
+    # But _resolve_credential_from_model_config tries "azure/gpt-4" first (no match),
+    # then falls to defaultconfig (no match). So we need to use pre_alias_model_name.
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4", config, None, pre_alias_model_name="gpt-4", provider="azure"
+    )
+    assert result == "azure-cred"
