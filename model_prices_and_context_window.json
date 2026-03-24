@@ -288,6 +288,20 @@
         "output_cost_per_image": 0.06,
         "supports_nova_canvas_image_edit": true
     },
+    "eu.amazon.nova-canvas-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 2600,
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "supports_nova_canvas_image_edit": true
+    },
+    "ap.amazon.nova-canvas-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 2600,
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "supports_nova_canvas_image_edit": true
+    },
     "us.writer.palmyra-x4-v1:0": {
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "bedrock_converse",

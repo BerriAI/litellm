@@ -411,7 +411,11 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        return "bedrock://image-edit"
+        raise NotImplementedError(
+            "Nova Canvas image edit URLs are built in BedrockImageEdit._prepare_request "
+            "(AWS runtime endpoint + model invoke path). Do not use get_complete_url for "
+            "this config."
+        )
 
     def validate_environment(
         self,

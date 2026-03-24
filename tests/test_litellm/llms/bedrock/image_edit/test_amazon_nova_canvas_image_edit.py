@@ -15,6 +15,31 @@ from litellm.llms.bedrock.image_edit.stability_transformation import (
     BedrockStabilityImageEditConfig,
 )
 
+_NOVA_CANVAS_MODEL_COST_PATCH = {
+    "litellm_provider": "bedrock",
+    "max_input_tokens": 2600,
+    "mode": "image_generation",
+    "output_cost_per_image": 0.06,
+    "supports_nova_canvas_image_edit": True,
+}
+
+
+@pytest.fixture(autouse=True)
+def _ensure_nova_canvas_model_cost_entries(monkeypatch):
+    """
+    Default model_cost may be loaded from remote GitHub JSON in CI; it can lag behind
+    this repo's model_prices. Merge supports_nova_canvas_image_edit so routing tests
+    match bundled expectations.
+    """
+    for key in (
+        "amazon.nova-canvas-v1:0",
+        "us.amazon.nova-canvas-v1:0",
+        "eu.amazon.nova-canvas-v1:0",
+        "ap.amazon.nova-canvas-v1:0",
+    ):
+        merged = {**(litellm.model_cost.get(key) or {}), **_NOVA_CANVAS_MODEL_COST_PATCH}
+        monkeypatch.setitem(litellm.model_cost, key, merged)
+
 
 def test_get_config_class_nova_canvas():
     """Nova Canvas model resolves to BedrockAmazonNovaCanvasImageEditConfig."""
