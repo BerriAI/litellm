@@ -259,7 +259,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         _end_user_budget_updates = db_spend_update_transactions.get(
             "end_user_budget_updates"
         )
-        if _end_user_transactions:
+        if _end_user_transactions is not None:
             filtered_transactions = {}
             for k, v in _end_user_transactions.items():
                 # Keep if cost > 0 OR if there's a budget update for this user

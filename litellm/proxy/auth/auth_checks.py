@@ -904,6 +904,11 @@ async def _apply_default_budget_to_end_user(
                     budget_id=litellm.max_end_user_budget_id,
                 )
             )
+        else:
+            verbose_proxy_logger.warning(
+                "LiteLLM Budget Reset Fix: proxy_logging_obj is None; "
+                "budget_id for end user will not be persisted to DB."
+            )
 
     return end_user_obj
 

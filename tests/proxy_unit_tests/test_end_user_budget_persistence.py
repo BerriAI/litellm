@@ -83,6 +83,7 @@ async def test_apply_default_budget_persistence():
     """
     Test that _apply_default_budget_to_end_user persists the budget_id to the database.
     """
+    mock_proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update.reset_mock()
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = "default_budget_123"
     litellm.max_end_user_budget_id = default_budget_id
@@ -158,6 +159,7 @@ async def test_update_end_user_spend_persistence():
     # Mock for transaction.batch_() context manager
     mock_batch_context = MagicMock()
     mock_batch = MagicMock()
+    mock_batch.litellm_endusertable.upsert = AsyncMock()
     mock_batch_context.__aenter__ = AsyncMock(return_value=mock_batch)
     mock_batch_context.__aexit__ = AsyncMock(return_value=None)
     mock_transaction.batch_.return_value = mock_batch_context
@@ -258,6 +260,7 @@ async def test_get_end_user_object_cache_sync():
 
     mock_cache.async_get_cache = AsyncMock(side_effect=mock_async_get_cache)
     mock_cache.async_set_cache = AsyncMock()
+    mock_cache.async_set_cache.reset_mock()
 
     mock_prisma_client = MagicMock()
     # Mock find_unique for budget
