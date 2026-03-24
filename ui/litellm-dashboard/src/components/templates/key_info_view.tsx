@@ -1,11 +1,13 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Button as AntdButton, Form, Tag, Tooltip } from "antd";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { Form, Modal, Tag } from "antd";
+import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
@@ -16,6 +18,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -47,15 +50,19 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
+  const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-
+  const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
+  const { mutate: resetKeySpend, isPending: resetSpendLoading } = useResetKeySpend();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
@@ -134,7 +141,7 @@ export default function KeyInfoView({
       formValues.key = currentKey;
 
       // Guard premium features
-      if (!premiumUser) {
+      if (!canEditGuardrails) {
         delete formValues.guardrails;
         delete formValues.prompts;
       }
@@ -203,7 +210,7 @@ export default function KeyInfoView({
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
                 litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -222,7 +229,7 @@ export default function KeyInfoView({
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
               litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -284,16 +291,6 @@ export default function KeyInfoView({
     }
   };
 
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
-  };
-
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
@@ -344,81 +341,57 @@ export default function KeyInfoView({
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
+  const canResetSpend =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+        userID || "",
+      ));
+
+  const handleResetSpend = () => {
+    resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
+      onSuccess: () => {
+        setCurrentKeyData((prevData) => (prevData ? { ...prevData, spend: 0 } : undefined));
+        if (onKeyDataUpdate) {
+          onKeyDataUpdate({ spend: 0 });
+        }
+        NotificationManager.success("Key spend reset to $0");
+        setIsResetSpendModalOpen(false);
+      },
+      onError: (error) => {
+        NotificationManager.fromBackend(parseErrorMessage(error));
+        console.error("Error resetting key spend:", error);
+      },
+    });
+  };
+
   return (
     <div className="w-full h-screen p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            {backButtonText}
-          </Button>
-          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
-
-          <div className="flex items-center cursor-pointer mb-2 space-y-6">
-            <div>
-              <Text className="text-xs text-gray-400 uppercase tracking-wide mt-2">Key ID</Text>
-              <Text className="text-gray-500 font-mono text-sm">{currentKeyData.token_id || currentKeyData.token}</Text>
-            </div>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-              onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
-              className={`ml-2 transition-all duration-200${copiedStates["key-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
-            />
-          </div>
-
-          {/* Add timestamp and regeneration indicator */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <Text className="text-sm text-gray-500">
-              {currentKeyData.updated_at && currentKeyData.updated_at !== currentKeyData.created_at
-                ? `Updated: ${formatTimestamp(currentKeyData.updated_at)}`
-                : `Created: ${formatTimestamp(currentKeyData.created_at)}`}
-            </Text>
-
-            {isRecentlyRegenerated && (
-              <Badge color="green" size="xs" className="animate-pulse">
-                Recently Regenerated
-              </Badge>
-            )}
-
-            {lastRegeneratedAt && (
-              <Badge color="blue" size="xs">
-                Regenerated
-              </Badge>
-            )}
-          </div>
-        </div>
-        {canModifyKey && (
-          <div className="flex gap-2">
-            <Tooltip
-              title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
-            >
-              <span className="inline-block">
-                <Button
-                  icon={RefreshIcon}
-                  variant="secondary"
-                  onClick={() => setIsRegenerateModalOpen(true)}
-                  className="flex items-center"
-                  disabled={!premiumUser}
-                >
-                  Regenerate Key
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
-            >
-              Delete Key
-            </Button>
-          </div>
-        )}
-      </div>
+      <KeyInfoHeader
+        data={{
+          keyName: currentKeyData.key_alias || "Virtual Key",
+          keyId: currentKeyData.token_id || currentKeyData.token,
+          userId: currentKeyData.user_id || "",
+          userEmail: currentKeyData.user_email || "",
+          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
+          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+        }}
+        onBack={onClose}
+        onRegenerate={() => setIsRegenerateModalOpen(true)}
+        onDelete={() => setIsDeleteModalOpen(true)}
+        onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
+        canModifyKey={canModifyKey}
+        backButtonText={backButtonText}
+        regenerateDisabled={!premiumUser}
+        regenerateTooltip={
+          !premiumUser
+            ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
+            : undefined
+        }
+      />
 
       {/* Add RegenerateKeyModal */}
       <RegenerateKeyModal
@@ -463,6 +436,26 @@ export default function KeyInfoView({
         confirmLoading={deleteLoading}
         requiredConfirmation={currentKeyData?.key_alias}
       />
+
+      {/* Reset Spend Confirmation Modal */}
+      <Modal
+        title="Reset Key Spend"
+        open={isResetSpendModalOpen}
+        onOk={handleResetSpend}
+        onCancel={() => setIsResetSpendModalOpen(false)}
+        okText="Reset"
+        okButtonProps={{ danger: true }}
+        confirmLoading={resetSpendLoading}
+      >
+        <p>
+          Reset spend for <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong> to{" "}
+          <strong>$0</strong>?
+        </p>
+        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
+          preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
+        </p>
+      </Modal>
 
       <TabGroup>
         <TabList className="mb-4">
@@ -595,7 +588,7 @@ export default function KeyInfoView({
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                {!isEditing && canModifyKey && (
                   <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
@@ -633,9 +626,25 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.team_id || "Not Set"}</Text>
                   </div>
 
+                  {enableProjectsUI && (
+                    <div>
+                      <Text className="font-medium">Project</Text>
+                      <Text>
+                        {currentKeyData.project_id
+                          ? (() => {
+                              const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                              return project?.project_alias
+                                ? `${project.project_alias} (${currentKeyData.project_id})`
+                                : currentKeyData.project_id;
+                            })()
+                          : "Not Set"}
+                      </Text>
+                    </div>
+                  )}
+
                   <div>
                     <Text className="font-medium">Organization</Text>
-                    <Text>{currentKeyData.organization_id || "Not Set"}</Text>
+                    <Text>{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</Text>
                   </div>
 
                   <div>

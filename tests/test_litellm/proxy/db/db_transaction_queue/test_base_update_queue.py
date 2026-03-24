@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,3 +43,20 @@ async def test_queue_flush_limit():
     assert (
         queue.update_queue.qsize() == 100
     ), "Expected 100 items to remain in the queue"
+
+
+def test_misconfigured_queue_thresholds_warns():
+    """
+    Test that a warning is logged when MAX_SIZE_IN_MEMORY_QUEUE >= LITELLM_ASYNCIO_QUEUE_MAXSIZE.
+
+    This misconfiguration causes the spend aggregation check in SpendUpdateQueue.add_update()
+    to never trigger because asyncio.Queue blocks before qsize() can reach the threshold.
+    """
+    import litellm.proxy.db.db_transaction_queue.base_update_queue as bq_module
+
+    with patch.object(bq_module, "MAX_SIZE_IN_MEMORY_QUEUE", 2000), patch.object(
+        bq_module, "LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000
+    ), patch.object(bq_module.verbose_proxy_logger, "warning") as mock_warning:
+        BaseUpdateQueue()
+        mock_warning.assert_called_once()
+        assert "Misconfigured queue thresholds" in mock_warning.call_args[0][0]

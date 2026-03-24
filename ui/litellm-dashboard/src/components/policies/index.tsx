@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Modal, message, Alert } from "antd";
+import { Modal, Alert } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { ExclamationCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
@@ -12,6 +13,8 @@ import AddAttachmentForm from "./add_attachment_form";
 import PolicyTestPanel from "./policy_test_panel";
 import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
+import TemplateParameterModal from "./template_parameter_modal";
+import AiSuggestionModal from "./ai_suggestion_modal";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -23,6 +26,7 @@ import {
   updatePolicyCall,
   createPolicyAttachmentCall,
   createGuardrailCall,
+  enrichPolicyTemplate,
 } from "../networking";
 import {
   Policy,
@@ -58,6 +62,13 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
   const [isCreatingGuardrails, setIsCreatingGuardrails] = useState(false);
   const [showFlowBuilder, setShowFlowBuilder] = useState(false);
+  const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
+  const [isEnrichingTemplate, setIsEnrichingTemplate] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<any>(null);
+  const [isAiSuggestionModalOpen, setIsAiSuggestionModalOpen] = useState(false);
+  const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
+  const [templateQueue, setTemplateQueue] = useState<any[]>([]);
+  const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -70,7 +81,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setPoliciesList(response.policies || []);
     } catch (error) {
       console.error("Error fetching policies:", error);
-      message.error("Failed to fetch policies");
+      MessageManager.error("Failed to fetch policies");
     } finally {
       setIsLoading(false);
     }
@@ -85,7 +96,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setAttachmentsList(response.attachments || []);
     } catch (error) {
       console.error("Error fetching attachments:", error);
-      message.error("Failed to fetch attachments");
+      MessageManager.error("Failed to fetch attachments");
     } finally {
       setIsAttachmentsLoading(false);
     }
@@ -138,11 +149,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setIsDeleting(true);
     try {
       await deletePolicyCall(accessToken, policyToDelete.policy_id);
-      message.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
+      MessageManager.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
       await fetchPolicies();
     } catch (error) {
       console.error("Error deleting policy:", error);
-      message.error("Failed to delete policy");
+      MessageManager.error("Failed to delete policy");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -167,11 +178,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         if (!accessToken) return;
         try {
           await deletePolicyAttachmentCall(accessToken, attachmentId);
-          message.success("Attachment deleted successfully");
+          MessageManager.success("Attachment deleted successfully");
           fetchAttachments();
         } catch (error) {
           console.error("Error deleting attachment:", error);
-          message.error("Failed to delete attachment");
+          MessageManager.error("Failed to delete attachment");
         }
       },
     });
@@ -183,12 +194,24 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
   const handleUseTemplate = async (template: any) => {
     if (!accessToken) {
-      message.error("Authentication required");
+      MessageManager.error("Authentication required");
       return;
     }
 
+    // If template has parameters, show parameter modal first
+    if (template.parameters && template.parameters.length > 0) {
+      setPendingTemplate(template);
+      setIsParameterModalOpen(true);
+      return;
+    }
+
+    await proceedWithTemplate(template);
+  };
+
+  const proceedWithTemplate = async (template: any) => {
+    if (!accessToken) return;
+
     try {
-      // Fetch existing guardrails to show in the modal
       const existingGuardrailsResponse = await getGuardrailsList(accessToken);
       const existingNames = new Set<string>(
         existingGuardrailsResponse.guardrails?.map((g: any) => g.guardrail_name as string) || []
@@ -199,8 +222,64 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setIsGuardrailSelectionModalOpen(true);
     } catch (error) {
       console.error("Error fetching guardrails:", error);
-      message.error("Failed to load guardrails. Please try again.");
+      MessageManager.error("Failed to load guardrails. Please try again.");
     }
+  };
+
+  const substituteParameters = (template: any, parameters: Record<string, string>): any => {
+    let templateStr = JSON.stringify(template);
+    for (const [key, value] of Object.entries(parameters)) {
+      templateStr = templateStr.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    }
+    return JSON.parse(templateStr);
+  };
+
+  const handleParameterConfirm = async (
+    parameters: Record<string, string>,
+    enrichmentOptions?: { model?: string; competitors?: string[] }
+  ) => {
+    if (!accessToken || !pendingTemplate) return;
+
+    setIsEnrichingTemplate(true);
+
+    try {
+      let enrichedTemplate = pendingTemplate;
+
+      if (pendingTemplate.llm_enrichment) {
+        // Call backend to enrich template with LLM-discovered data (or user-provided competitors)
+        const enrichResult = await enrichPolicyTemplate(
+          accessToken,
+          pendingTemplate.id,
+          parameters,
+          enrichmentOptions?.model,
+          enrichmentOptions?.competitors
+        );
+        // The backend returns the enriched guardrailDefinitions + discovered competitors
+        enrichedTemplate = {
+          ...pendingTemplate,
+          guardrailDefinitions: enrichResult.guardrailDefinitions,
+          discoveredCompetitors: enrichResult.competitors || [],
+        };
+      }
+
+      // Substitute parameters in template
+      enrichedTemplate = substituteParameters(enrichedTemplate, parameters);
+
+      setIsParameterModalOpen(false);
+      setIsEnrichingTemplate(false);
+      setPendingTemplate(null);
+
+      await proceedWithTemplate(enrichedTemplate);
+    } catch (error) {
+      console.error("Error enriching template:", error);
+      MessageManager.error("Failed to configure template. Please try again.");
+      setIsEnrichingTemplate(false);
+    }
+  };
+
+  const handleParameterCancel = () => {
+    setIsParameterModalOpen(false);
+    setPendingTemplate(null);
   };
 
   const handleGuardrailSelectionConfirm = async (selectedGuardrailDefinitions: any[]) => {
@@ -240,28 +319,45 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
       // Show success message
       if (createdGuardrails.length > 0) {
-        message.success(
+        MessageManager.success(
           `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`
         );
       } else {
-        message.success("Template ready! Complete the policy form to save.");
+        MessageManager.success("Template ready! Complete the policy form to save.");
       }
 
       if (failedGuardrails.length > 0) {
-        message.warning(
+        MessageManager.warning(
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
         );
       }
+
+      // Process next template in queue if any
+      if (templateQueue.length > 0) {
+        const [nextTemplate, ...remaining] = templateQueue;
+        setTemplateQueue(remaining);
+        setTemplateQueueProgress((prev) =>
+          prev ? { ...prev, current: prev.current + 1 } : null
+        );
+        // Small delay so user can see the success message
+        setTimeout(() => handleUseTemplate(nextTemplate), 500);
+      } else {
+        setTemplateQueueProgress(null);
+      }
     } catch (error) {
       setIsCreatingGuardrails(false);
+      setTemplateQueue([]);
+      setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
-      message.error("Failed to create guardrails. Please try again.");
+      MessageManager.error("Failed to create guardrails. Please try again.");
     }
   };
 
   const handleGuardrailSelectionCancel = () => {
     setIsGuardrailSelectionModalOpen(false);
     setSelectedTemplate(null);
+    setTemplateQueue([]);
+    setTemplateQueueProgress(null);
   };
 
   return (
@@ -305,7 +401,12 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               closable
               className="mb-6"
             />
-            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
+            <PolicyTemplates
+              onUseTemplate={handleUseTemplate}
+              onOpenAiSuggestion={() => setIsAiSuggestionModalOpen(true)}
+              onTemplatesLoaded={setLoadedTemplates}
+              accessToken={accessToken}
+            />
           </TabPanel>
 
           <TabPanel>
@@ -352,11 +453,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onEdit={(policy) => {
                   setEditingPolicy(policy);
                   setSelectedPolicyId(null);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 accessToken={accessToken}
                 isAdmin={isAdmin}
@@ -369,11 +466,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onDeleteClick={handleDeleteClick}
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 onViewClick={(policyId) => setSelectedPolicyId(policyId)}
                 isAdmin={isAdmin}
@@ -419,6 +512,16 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onConfirm={handleGuardrailSelectionConfirm}
               onCancel={handleGuardrailSelectionCancel}
               isLoading={isCreatingGuardrails}
+              progressInfo={templateQueueProgress}
+            />
+
+            <TemplateParameterModal
+              visible={isParameterModalOpen}
+              template={pendingTemplate}
+              onConfirm={handleParameterConfirm}
+              onCancel={handleParameterCancel}
+              isLoading={isEnrichingTemplate}
+              accessToken={accessToken || ""}
             />
           </TabPanel>
 
@@ -497,6 +600,27 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         </TabPanels>
       </TabGroup>
 
+      <AiSuggestionModal
+        visible={isAiSuggestionModalOpen}
+        onSelectTemplates={(selectedTemplates) => {
+          setIsAiSuggestionModalOpen(false);
+          if (selectedTemplates.length > 0) {
+            // Queue all templates: process first immediately, queue the rest
+            const [first, ...rest] = selectedTemplates;
+            setTemplateQueue(rest);
+            setTemplateQueueProgress(
+              selectedTemplates.length > 1
+                ? { current: 1, total: selectedTemplates.length }
+                : null
+            );
+            handleUseTemplate(first);
+          }
+        }}
+        onCancel={() => setIsAiSuggestionModalOpen(false)}
+        accessToken={accessToken}
+        allTemplates={loadedTemplates}
+      />
+
       {showFlowBuilder && (
         <FlowBuilderPage
           onBack={() => {
@@ -512,6 +636,17 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           availableGuardrails={guardrailsList}
           createPolicy={createPolicyCall}
           updatePolicy={updatePolicyCall}
+          onVersionCreated={(newPolicy) => {
+            setEditingPolicy(newPolicy);
+            fetchPolicies();
+          }}
+          onSelectVersion={(policy) => {
+            setEditingPolicy(policy);
+          }}
+          onVersionStatusUpdated={(updatedPolicy) => {
+            setEditingPolicy(updatedPolicy);
+            fetchPolicies();
+          }}
         />
       )}
     </div>

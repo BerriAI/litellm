@@ -1,3 +1,30 @@
+/** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
+export interface MCPEvent {
+  type: string;
+  sequence_number?: number;
+  output_index?: number;
+  item_id?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    server_label?: string;
+    tools?: Array<{
+      name: string;
+      description: string;
+      annotations?: {
+        read_only?: boolean;
+      };
+      input_schema?: unknown;
+    }>;
+    name?: string;
+    arguments?: string;
+    output?: string;
+  };
+  delta?: string;
+  arguments?: string;
+  timestamp?: number;
+}
+
 export interface Team {
   team_id: string;
   team_alias?: string;
@@ -9,8 +36,10 @@ export const AUTH_TYPE = {
   NONE: "none",
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
+  TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
+  AWS_SIGV4: "aws_sigv4",
 };
 
 export const OAUTH_FLOW = {
@@ -22,11 +51,17 @@ export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
   STDIO: "stdio",
+  OPENAPI: "openapi",
 };
 
-export const handleTransport = (transport?: string | null): string => {
+export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
+  }
+
+  // If server has spec_path, display as "openapi" instead of the raw transport type
+  if (specPath && transport !== TRANSPORT.STDIO) {
+    return TRANSPORT.OPENAPI;
   }
 
   return transport;
@@ -131,6 +166,7 @@ export interface MCPToolsViewerProps {
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
+  extraHeaders?: string[] | null;
 }
 
 export interface MCPServer {
@@ -143,6 +179,7 @@ export interface MCPServer {
    * For `stdio`, the backend can return null/undefined.
    */
   url?: string | null;
+  spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;
@@ -161,6 +198,8 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  tool_name_to_display_name?: Record<string, string>;
+  tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
 
@@ -168,6 +207,22 @@ export interface MCPServer {
   command?: string | null;
   args?: string[] | null;
   env?: Record<string, string> | null;
+
+  /** BYOK (Bring Your Own Key) fields */
+  is_byok?: boolean | null;
+  byok_description?: string[] | null;
+  byok_api_key_help_url?: string | null;
+  has_user_credential?: boolean | null;
+
+  /** GitHub / source repository URL */
+  source_url?: string | null;
+
+  /** BYOM (Bring Your Own MCP) submission fields */
+  approval_status?: "active" | "pending_review" | "rejected" | null;
+  submitted_by?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
+  review_notes?: string | null;
 }
 
 export interface MCPServerProps {
@@ -194,4 +249,12 @@ export interface DiscoverableMCPServer {
 export interface DiscoverMCPServersResponse {
   servers: DiscoverableMCPServer[];
   categories: string[];
+}
+
+export interface MCPSubmissionsSummary {
+  total: number;
+  pending_review: number;
+  active: number;
+  rejected: number;
+  items: MCPServer[];
 }

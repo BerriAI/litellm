@@ -5,6 +5,7 @@ import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
 } from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
 import ContentFilterDetails from "./ContentFilterDetails";
+import CompliancePanel from "./CompliancePanel";
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ interface GuardrailInformation {
   duration: number;
   end_time: number;
   start_time: number;
-  guardrail_mode: string;
+  guardrail_mode: string | string[] | Record<string, unknown> | null;
   guardrail_name: string;
   guardrail_status: string;
   guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse | any;
@@ -58,6 +59,14 @@ interface GuardrailInformation {
 
 interface GuardrailViewerProps {
   data: GuardrailInformation | GuardrailInformation[];
+  accessToken?: string | null;
+  logEntry?: {
+    request_id: string;
+    user?: string;
+    model?: string;
+    startTime?: string;
+    metadata?: Record<string, any>;
+  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -68,8 +77,51 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
   "litellm_content_filter",
 ]);
 
-const formatMode = (mode: string): string => {
-  return mode.replace(/_/g, "-").toUpperCase();
+/**
+ * Extracts a plain string from guardrail_mode for display purposes.
+ * Returns the first mode when multiple are present.
+ */
+const resolveMode = (mode: GuardrailInformation["guardrail_mode"]): string | null => {
+  if (mode == null) return null;
+  if (typeof mode === "string") return mode;
+  if (Array.isArray(mode)) {
+    const first = mode[0];
+    return typeof first === "string" ? first : null;
+  }
+  if (typeof mode === "object" && "default" in mode) {
+    const def = mode.default;
+    if (typeof def === "string") return def;
+    if (Array.isArray(def)) {
+      const first = def[0];
+      return typeof first === "string" ? first : null;
+    }
+  }
+  return null;
+};
+
+/**
+ * Checks whether guardrail_mode includes the given target stage.
+ * Handles arrays (multi-stage guardrails) by checking all elements.
+ */
+const modeMatches = (
+  mode: GuardrailInformation["guardrail_mode"],
+  target: string,
+): boolean => {
+  if (mode == null) return false;
+  if (typeof mode === "string") return mode === target;
+  if (Array.isArray(mode)) return mode.includes(target);
+  if (typeof mode === "object" && "default" in mode) {
+    const def = mode.default;
+    if (typeof def === "string") return def === target;
+    if (Array.isArray(def)) return def.some((x) => typeof x === "string" && x === target);
+  }
+  return false;
+};
+
+const formatMode = (mode: GuardrailInformation["guardrail_mode"]): string => {
+  const s = resolveMode(mode);
+  if (s == null || s === "") return "—";
+  return s.replace(/_/g, "-").toUpperCase();
 };
 
 const formatDurationMs = (seconds: number): string => {
@@ -290,10 +342,13 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     // Request received
     items.push({ type: "request", label: "Request received", offsetMs: 0 });
 
-    // Pre-call guardrails
-    const preCalls = sorted.filter((e) => e.guardrail_mode === "pre_call");
-    const postCalls = sorted.filter((e) => e.guardrail_mode === "post_call" || e.guardrail_mode === "logging_only");
-    const duringCalls = sorted.filter((e) => e.guardrail_mode === "during_call");
+    // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
+    // place the entry in every matching bucket.
+    const preCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call"));
+    const postCalls = sorted.filter(
+      (e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only"),
+    );
+    const duringCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call"));
 
     for (const e of preCalls) {
       const offsetMs = Math.round((e.end_time - baseTime) * 1000);
@@ -507,20 +562,6 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
       {/* Expanded details */}
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
-          {/* View Policy Configuration link */}
-          {entry.policy_template && (
-            <div className="flex justify-end mb-3">
-              <a
-                href="/ui/policies"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-              >
-                View Policy Configuration
-                <ExternalLinkIcon />
-              </a>
-            </div>
-          )}
 
           {/* Classification details for llm-judge */}
           {entry.classification && (
@@ -599,7 +640,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
-const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
+const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) => {
   const guardrailEntries = useMemo(() => {
     return Array.isArray(data)
       ? data.filter((entry): entry is GuardrailInformation => Boolean(entry))
@@ -673,11 +714,6 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
             <div className="text-sm font-medium text-gray-900">
               Total: {totalOverheadMs}ms overhead
             </div>
-            {policyTemplates.length > 0 && (
-              <div className="text-xs text-gray-500 mt-0.5">
-                Policy: {policyTemplates.join(" / ")}
-              </div>
-            )}
           </div>
 
           <button
@@ -689,6 +725,13 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
           </button>
         </div>
       </div>
+
+      {/* ── Compliance Panel ──────────────────────────────────── */}
+      {accessToken && logEntry && (
+        <div className="px-6 py-4 border-b border-gray-100">
+          <CompliancePanel accessToken={accessToken} logEntry={logEntry} />
+        </div>
+      )}
 
       {/* ── Body: two columns ──────────────────────────────────── */}
       <div className="flex">

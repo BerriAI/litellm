@@ -271,7 +271,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-3-opus-20240229"])
+@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -521,7 +521,7 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("gemini/gemini-1.5-flash", True),
+        ("gemini/gemini-2.5-flash", True),
     ],
 )
 def test_supports_function_calling(model, expected_bool):
@@ -1062,8 +1062,8 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("vertex_ai/gemini-1.5-pro", True),
-        ("gemini/gemini-1.5-pro", True),
+        ("vertex_ai/gemini-2.5-pro", True),
+        ("gemini/gemini-2.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
@@ -1074,7 +1074,7 @@ def test_supports_response_schema(model, expected_bool):
     """
     Unit tests for 'supports_response_schema' helper function.
 
-    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
     Should be false otherwise
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1093,7 +1093,7 @@ def test_supports_response_schema(model, expected_bool):
         ("gpt-3.5-turbo", True),
         ("gpt-4", True),
         ("command-nightly", False),
-        ("gemini-pro", True),
+        ("gemini-2.5-pro", True),
     ],
 )
 def test_supports_function_calling_v2(model, expected_bool):
@@ -1109,10 +1109,10 @@ def test_supports_function_calling_v2(model, expected_bool):
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("gpt-4-vision-preview", True),
+        ("gpt-4o", True),
         ("gpt-3.5-turbo", False),
-        ("claude-3-opus-20240229", True),
-        ("gemini-pro-vision", True),
+        ("claude-sonnet-4-6", True),
+        ("gemini-2.5-flash", True),
         ("command-nightly", False),
     ],
 )
@@ -1727,7 +1727,7 @@ def test_supports_vision_gemini():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.utils import supports_vision
 
-    assert supports_vision("gemini-1.5-pro") is True
+    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -2348,7 +2348,7 @@ def test_get_valid_models_from_dynamic_api_key():
         check_provider_endpoint=True,
     )
     assert len(valid_models) > 0
-    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
 def test_get_whitelisted_models():

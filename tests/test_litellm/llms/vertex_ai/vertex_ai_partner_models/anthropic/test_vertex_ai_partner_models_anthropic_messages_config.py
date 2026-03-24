@@ -5,6 +5,7 @@ import pytest
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_validate_environment_uses_vertex_ai_location():
@@ -215,3 +216,80 @@ def test_both_compact_and_context_management_headers_added():
             f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
         assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
             f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+
+def test_validate_environment_with_authorization_header_calculates_api_base():
+    """Test that api_base is calculated even when Authorization header is already present"""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    # Simulate scenario where Authorization is already in headers (e.g., from cached extra_headers)
+    headers = {"Authorization": "Bearer existing-token"}
+    litellm_params = {
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+    }
+    optional_params = {}
+
+    with patch.object(
+        config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
+    ) as mock_get_url:
+        updated_headers, api_base = config.validate_anthropic_messages_environment(
+            headers=headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+        
+        # Verify that api_base was calculated even though Authorization was already present
+        assert api_base == "https://mock-vertex-url", \
+            f"api_base should be calculated even with Authorization header. Got: {api_base}"
+        assert mock_get_url.called, "get_complete_vertex_url should be called"
+        
+        # Verify Authorization header is still present
+        assert "Authorization" in updated_headers, \
+            "Authorization header should be preserved"
+
+
+def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
+    """Ensure scope field is removed from cache_control for Vertex AI (not supported)."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ],
+        }
+    ]
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "system": [
+            {
+                "type": "text",
+                "text": "You are an AI assistant.",
+                "cache_control": {"type": "ephemeral", "scope": "global"},
+            }
+        ],
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    # scope removed from system
+    assert "scope" not in result["system"][0]["cache_control"]
+    assert result["system"][0]["cache_control"]["type"] == "ephemeral"
+
+    # scope removed from message content
+    assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
+    assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"

@@ -2,11 +2,13 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
 from fastapi import Request
+from starlette.datastructures import State
 
 from litellm.proxy.utils import _get_docs_url, _get_redoc_url
 
@@ -23,12 +25,15 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
+
 
 @pytest.fixture
 def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
+    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -807,6 +812,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.url.path = "/chat/completions"
     mock_request.query_params = {}
     mock_request.headers = {}
+    mock_request.state = State()
 
     # Setup key with tags in metadata
     user_api_key_dict = UserAPIKeyAuth(
@@ -1486,12 +1492,46 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
+    
+    async def get_data(
+        self,
+        token: Optional[Union[str, list]] = None,
+        user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
+        team_id: Optional[str] = None,
+        team_id_list: Optional[list] = None,
+        key_val: Optional[dict] = None,
+        table_name: Optional[str] = None,
+        query_type: str = "find_unique",
+        expires: Optional[datetime] = None,
+        reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """Mock get_data method to return user info for admin"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        
+        # Return a proper LiteLLM_UserTable object when querying by user_id
+        if user_id:
+            return LiteLLM_UserTable(
+                user_id=user_id,
+                user_role="proxy_admin",
+                spend=0.0,
+                max_budget=None,
+            )
+        return None
 
 
 @pytest.mark.asyncio
 async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
     # Patch the prisma_client import
-    from litellm.proxy._types import UserInfoResponse
+    from litellm.proxy._types import UserAPIKeyAuth, UserInfoResponse
+
+    # Create a mock user_api_key_dict for admin user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user_123",
+        user_role="proxy_admin",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
@@ -1502,11 +1542,18 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         )
 
         # Execute the function
-        result = await _get_user_info_for_proxy_admin()
+        result = await _get_user_info_for_proxy_admin(
+            user_api_key_dict=mock_user_api_key_dict
+        )
 
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+        # Verify admin's user_id is populated
+        assert result.user_id == "admin_user_123"
+        # Verify admin's user_info is populated
+        assert result.user_info is not None
+        assert result.user_info["user_id"] == "admin_user_123"
 
 
 def test_custom_openid_response():
@@ -1623,6 +1670,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
     mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    mock_prisma.start_db_health_watchdog_task = AsyncMock()
     # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
     mock_db = MagicMock()
     mock_db.start_token_refresh_task = AsyncMock()
@@ -1896,12 +1944,12 @@ from litellm.proxy._types import LiteLLM_UserTable
         (
             "anthropic/*",
             {"model": "anthropic/*"},
-            ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
+            ["anthropic/claude-haiku-4-5-20251001", "anthropic/claude-opus-4-6"],
         ),
         (
             "vertex_ai/gemini-*",
             {"model": "vertex_ai/gemini-*"},
-            ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+            ["vertex_ai/gemini-2.5-flash", "vertex_ai/gemini-2.5-pro"],
         ),
         (
             "foo/*",
@@ -1926,6 +1974,24 @@ def test_get_known_models_from_wildcard(
             print(f"Missing expected model: {model}")
 
     assert all(model in wildcard_models for model in expected_models)
+
+
+def test_get_known_models_from_wildcard_without_litellm_params():
+    """
+    Test wildcard expansion without litellm_params (BYOK case - team has openai/*
+    but no deployment in router config).
+    """
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="openai/*", litellm_params=None
+    )
+    # Should return expanded OpenAI models (gpt-4o, gpt-4o-mini, etc.)
+    assert len(wildcard_models) > 0
+    assert all(m.startswith("openai/") for m in wildcard_models)
+    # Check for common OpenAI models
+    model_ids = [m.split("/", 1)[1] for m in wildcard_models]
+    assert "gpt-4o" in model_ids or "gpt-3.5-turbo" in model_ids
 
 
 @pytest.mark.parametrize(
@@ -2213,6 +2279,75 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, route, expected_call_type",
+    [
+        (
+            {"model": "bad-model", "messages": [{"role": "user", "content": "hello"}]},
+            "/v1/chat/completions",
+            "acompletion",
+        ),
+        (
+            {"model": "bad-model", "prompt": "hello"},
+            "/v1/completions",
+            "atext_completion",
+        ),
+        (
+            {"model": "bad-model", "input": ["hello"]},
+            "/v1/embeddings",
+            "aembedding",
+        ),
+    ],
+)
+async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
+    request_data, route, expected_call_type
+):
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+    captured_logging_obj = {}
+    original_function_setup = litellm.utils.function_setup
+
+    def _capture_function_setup(*args, **kwargs):
+        logging_obj, data = original_function_setup(*args, **kwargs)
+        captured_logging_obj["logging_obj"] = logging_obj
+        return logging_obj, data
+
+    with patch(
+        "litellm.proxy.utils.litellm.utils.function_setup",
+        side_effect=_capture_function_setup,
+    ), patch.object(
+        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+    ), patch.object(
+        Logging, "failure_handler", return_value=None
+    ), patch(
+        "litellm.proxy.utils.threading.Thread"
+    ) as mock_thread:
+        mock_thread.return_value.start = Mock()
+
+        await proxy_logging._handle_logging_proxy_only_error(
+            request_data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test_key",
+                user_id="test_user",
+                token="test_token",
+                request_route=route,
+            ),
+            route=route,
+            original_exception=HTTPException(status_code=400, detail="bad request"),
+        )
+
+    logging_obj = captured_logging_obj["logging_obj"]
+    assert logging_obj.call_type == expected_call_type
+    assert logging_obj.model_call_details["call_type"] == expected_call_type
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.
@@ -2319,3 +2454,134 @@ async def test_during_call_hook_parallel_execution_with_error():
         assert "Guardrail violation detected!" in str(exc_info.value)
     finally:
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type():
+    """Ensure _handle_logging_proxy_only_error does not overwrite call_type
+    when the logging object is already marked as pass_through_endpoint.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import CallTypes
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
+        with patch.object(logging_obj, "failure_handler"):
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    assert logging_obj.call_type == CallTypes.pass_through.value
+
+
+@pytest.mark.asyncio
+async def test_litellm_logging_obj_excluded_from_optional_params():
+    """Ensure litellm_logging_obj is excluded from _optional_params to prevent
+    circular references in model_call_details.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock):
+        with patch.object(logging_obj, "failure_handler"):
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    assert "litellm_logging_obj" not in logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through():
+    """Ensure _handle_logging_proxy_only_error skips async_failure_handler and
+    failure_handler for pass-through endpoint errors, so only
+    async_post_call_failure_hook fires (avoiding duplicate logs).
+
+    Regression test for duplicate Datadog/Arize logs on pass-through failures.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import CallTypes
+
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "messages": [{"role": "user", "content": "test"}],
+        "model": "claude-3-5-sonnet",
+    }
+
+    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+        with patch.object(logging_obj, "failure_handler") as mock_sync:
+            await proxy_logging._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", token="test_token"
+                ),
+                original_exception=Exception("test error"),
+            )
+
+    # Neither handler should fire for pass-through requests
+    mock_async.assert_not_called()
+    mock_sync.assert_not_called()
+    assert logging_obj.call_type == CallTypes.pass_through.value

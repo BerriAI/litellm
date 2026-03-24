@@ -10,4 +10,3 @@ __all__ = [
     "AzureDocumentIntelligenceOCRConfig",
     "get_azure_ai_ocr_config",
 ]
-

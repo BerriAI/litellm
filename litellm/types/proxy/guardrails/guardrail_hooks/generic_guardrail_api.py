@@ -31,6 +31,14 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         description="Additional provider-specific parameters to send with the guardrail request",
     )
 
+    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when the guardrail endpoint is unreachable due to network errors. "
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
