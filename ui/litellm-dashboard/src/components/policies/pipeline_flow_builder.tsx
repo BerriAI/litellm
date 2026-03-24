@@ -21,7 +21,7 @@ import {
   PassIcon,
   FailIcon,
   Connector,
-} from "./pipeline_icons";
+} from "./pipeline_utils";
 import { PipelineTestPanel } from "./pipeline_test_drawer";
 
 const { Text } = Typography;

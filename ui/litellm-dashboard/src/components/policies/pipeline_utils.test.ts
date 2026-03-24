@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultStep,
   insertStep,
@@ -6,8 +6,12 @@ import {
   updateStepAtIndex,
   derivePipelineFromPolicy,
   complianceMatchExpected,
-} from "./pipeline_icons";
+  getPromptsForTestSource,
+  TEST_SOURCE_QUICK,
+  TEST_SOURCE_ALL,
+} from "./pipeline_utils";
 import type { PipelineStep, Policy } from "./types";
+import * as complianceData from "../../data/compliancePrompts";
 
 const makeStep = (guardrail: string, overrides?: Partial<PipelineStep>): PipelineStep => ({
   guardrail,
@@ -181,5 +185,37 @@ describe("complianceMatchExpected", () => {
 
   it("should not match 'fail' expectation with 'allow' action", () => {
     expect(complianceMatchExpected("fail", "allow")).toBe(false);
+  });
+});
+
+describe("getPromptsForTestSource", () => {
+  it("should return an empty array for quick_chat source", () => {
+    expect(getPromptsForTestSource(TEST_SOURCE_QUICK)).toEqual([]);
+  });
+
+  it("should return all compliance prompts for __all__ source", () => {
+    const mockPrompts = [
+      { id: "p1", framework: "fw", category: "c", categoryIcon: "", categoryDescription: "", prompt: "test", expectedResult: "pass" as const },
+    ];
+    vi.spyOn(complianceData, "getComplianceDatasetPrompts").mockReturnValue(mockPrompts);
+    const result = getPromptsForTestSource(TEST_SOURCE_ALL);
+    expect(result).toEqual(mockPrompts);
+    vi.restoreAllMocks();
+  });
+
+  it("should return prompts for a matching framework name", () => {
+    const prompt = { id: "p1", framework: "GDPR", category: "c", categoryIcon: "", categoryDescription: "", prompt: "test", expectedResult: "fail" as const };
+    vi.spyOn(complianceData, "getFrameworks").mockReturnValue([
+      { name: "GDPR", icon: "", description: "", categories: [{ name: "c", icon: "", description: "", prompts: [prompt] }] },
+    ]);
+    const result = getPromptsForTestSource("GDPR");
+    expect(result).toEqual([prompt]);
+    vi.restoreAllMocks();
+  });
+
+  it("should return an empty array for an unrecognized source", () => {
+    vi.spyOn(complianceData, "getFrameworks").mockReturnValue([]);
+    expect(getPromptsForTestSource("nonexistent")).toEqual([]);
+    vi.restoreAllMocks();
   });
 });

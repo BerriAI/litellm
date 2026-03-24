@@ -11,7 +11,7 @@ import {
   ACTION_LABELS,
   getPromptsForTestSource,
   complianceMatchExpected,
-} from "./pipeline_icons";
+} from "./pipeline_utils";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Style maps
