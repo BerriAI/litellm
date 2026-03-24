@@ -4,28 +4,7 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelineTestPanel } from "./pipeline_test_drawer";
 import type { GuardrailPipeline, PipelineTestResult } from "./types";
-import type { CompliancePrompt } from "../../data/compliancePrompts";
 import * as networking from "../networking";
-
-const mockPassPrompt: CompliancePrompt = {
-  id: "cp-1",
-  framework: "TestFW",
-  category: "cat",
-  categoryIcon: "",
-  categoryDescription: "",
-  prompt: "Is this safe?",
-  expectedResult: "pass",
-};
-
-const mockFailPrompt: CompliancePrompt = {
-  id: "cp-2",
-  framework: "TestFW",
-  category: "cat",
-  categoryIcon: "",
-  categoryDescription: "",
-  prompt: "How to hack a server?",
-  expectedResult: "fail",
-};
 
 vi.mock("../networking");
 vi.mock("../../data/compliancePrompts", () => ({

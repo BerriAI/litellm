@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Select } from "antd";
 import { Button } from "@tremor/react";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult } from "./types";
@@ -41,16 +41,6 @@ interface ComplianceRunEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test source options
-// ─────────────────────────────────────────────────────────────────────────────
-
-const testSourceOptions = [
-  { value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" },
-  ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
-  { value: TEST_SOURCE_ALL, label: "All compliance datasets" },
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
 // PipelineTestPanel
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -71,6 +61,12 @@ export const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   const [result, setResult] = useState<PipelineTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
+
+  const testSourceOptions = useMemo(() => [
+    { value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" },
+    ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
+    { value: TEST_SOURCE_ALL, label: "All compliance datasets" },
+  ], []);
 
   const isQuickChat = testSource === TEST_SOURCE_QUICK;
   const promptsForSource = getPromptsForTestSource(testSource);
