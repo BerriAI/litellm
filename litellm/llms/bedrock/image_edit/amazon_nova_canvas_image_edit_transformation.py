@@ -255,7 +255,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             try:
                 mapped["width"], mapped["height"] = int(w), int(h)
             except ValueError:
-                pass
+            text = ""  # Not used; BACKGROUND_REMOVAL body omits the text field.
         _n = mapped.pop("n", None)
         if _n is not None:
             mapped["numberOfImages"] = _n
