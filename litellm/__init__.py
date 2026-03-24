@@ -24,6 +24,7 @@ from typing import (
     List,
     Optional,
     Dict,
+    Sequence,
     Union,
     Any,
     Literal,
@@ -398,8 +399,8 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
-prometheus_latency_buckets: Optional[Tuple] = (
-    None  # override default LATENCY_BUCKETS for histogram metrics
+prometheus_latency_buckets: Optional[Sequence[float]] = (
+    None  # override default LATENCY_BUCKETS for histogram metrics; must be set before PrometheusLogger is first instantiated
 )
 prometheus_exclude_metrics: Optional[List[str]] = (
     None  # metric names to disable entirely

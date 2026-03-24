@@ -1,7 +1,10 @@
 """
-Tests that prometheus_latency_buckets is respected end-to-end:
+Tests that prometheus_latency_buckets, prometheus_exclude_metrics, and
+prometheus_exclude_labels are respected end-to-end:
 - histograms are registered with the custom boundaries
 - observed values land in the expected bucket
+- excluded metrics are replaced by NoOpMetric
+- excluded labels are stripped from all metrics
 """
 
 from datetime import datetime, timedelta
@@ -10,26 +13,32 @@ import pytest
 from prometheus_client import REGISTRY
 
 import litellm
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus import NoOpMetric, PrometheusLogger
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 
 @pytest.fixture(autouse=True)
 def reset_prometheus_registry():
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for c in collectors:
-        REGISTRY.unregister(c)
+    """Unregister only collectors added during the test, avoiding private-API churn."""
+    before = set(REGISTRY._names_to_collectors.keys())
     yield
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for c in collectors:
-        REGISTRY.unregister(c)
+    after = set(REGISTRY._names_to_collectors.keys())
+    for name in after - before:
+        try:
+            REGISTRY.unregister(REGISTRY._names_to_collectors[name])
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)
-def reset_litellm_buckets():
-    original = litellm.prometheus_latency_buckets
+def reset_litellm_prometheus_settings():
+    original_buckets = litellm.prometheus_latency_buckets
+    original_exclude_metrics = litellm.prometheus_exclude_metrics
+    original_exclude_labels = litellm.prometheus_exclude_labels
     yield
-    litellm.prometheus_latency_buckets = original
+    litellm.prometheus_latency_buckets = original_buckets
+    litellm.prometheus_exclude_metrics = original_exclude_metrics
+    litellm.prometheus_exclude_labels = original_exclude_labels
 
 
 def _make_enum_values() -> UserAPIKeyLabelValues:
@@ -70,23 +79,61 @@ def _get_bucket_count(metric_name: str, le: str) -> float:
     raise AssertionError(f"Bucket le={le} not found in metric {metric_name}")
 
 
+def _get_registered_bucket_les(metric_name: str) -> set:
+    """Return the set of 'le' label values registered for a histogram metric."""
+    return {
+        sample.labels["le"]
+        for family in REGISTRY.collect()
+        if family.name == metric_name
+        for sample in family.samples
+        if sample.name.endswith("_bucket")
+    }
+
+
+def _observe_once(logger: PrometheusLogger) -> None:
+    """Make one zero-latency observation so that labeled histograms emit samples.
+
+    prometheus_client only populates the registry for labeled metric instances
+    that have received at least one ``observe()`` call.  Without this, REGISTRY.collect()
+    returns an empty sample list for any labeled Histogram, making bucket-boundary
+    inspection via the registry impossible.
+    """
+    now = datetime.now()
+    logger._set_latency_metrics(
+        kwargs={
+            "start_time": now,
+            "end_time": now,
+            "api_call_start_time": now,
+            "litellm_params": {"metadata": {}},
+            "model": "gpt-4",
+        },
+        model="gpt-4",
+        user_api_key="test-key",
+        user_api_key_alias="test-alias",
+        user_api_team=None,
+        user_api_team_alias=None,
+        enum_values=_make_enum_values(),
+    )
+
+
 def test_custom_latency_buckets_registered():
     """Histograms use prometheus_latency_buckets when set."""
     litellm.prometheus_latency_buckets = (1.0, 5.0, float("inf"))
 
     logger = PrometheusLogger()
 
-    assert logger._get_latency_buckets() == (1.0, 5.0, float("inf"))
-    assert logger.litellm_request_total_latency_metric._upper_bounds == [
-        1.0,
-        5.0,
-        float("inf"),
-    ]
-    assert logger.litellm_llm_api_latency_metric._upper_bounds == [
-        1.0,
-        5.0,
-        float("inf"),
-    ]
+    assert list(logger._get_latency_buckets()) == [1.0, 5.0, float("inf")]
+
+    # prometheus_client only emits samples for labeled metrics that have been observed;
+    # trigger a zero-latency observation so the registry is populated before we inspect it.
+    _observe_once(logger)
+
+    # Verify via the public registry text format, not private _upper_bounds
+    les = _get_registered_bucket_les("litellm_request_total_latency_metric")
+    assert les == {"1.0", "5.0", "+Inf"}
+
+    les_api = _get_registered_bucket_les("litellm_llm_api_latency_metric")
+    assert les_api == {"1.0", "5.0", "+Inf"}
 
 
 def test_observation_lands_in_correct_custom_bucket():
@@ -138,7 +185,44 @@ def test_default_buckets_used_when_not_set():
 
     logger = PrometheusLogger()
 
-    assert logger._get_latency_buckets() == LATENCY_BUCKETS
-    assert logger.litellm_request_total_latency_metric._upper_bounds == list(
-        LATENCY_BUCKETS
-    )
+    assert list(logger._get_latency_buckets()) == list(LATENCY_BUCKETS)
+
+    # Trigger an observation so the labeled histogram emits samples to the registry.
+    _observe_once(logger)
+
+    # Verify via the registry
+    les = _get_registered_bucket_les("litellm_request_total_latency_metric")
+    expected = {str(b) if b != float("inf") else "+Inf" for b in LATENCY_BUCKETS}
+    assert les == expected
+
+
+def test_exclude_metrics_replaces_with_noop():
+    """Excluded metrics are replaced by NoOpMetric and never registered in Prometheus."""
+    litellm.prometheus_exclude_metrics = ["litellm_overhead_latency_metric"]
+
+    logger = PrometheusLogger()
+
+    assert isinstance(logger.litellm_overhead_latency_metric, NoOpMetric)
+
+    # The metric must not appear in the registry at all
+    registered_names = {f.name for f in REGISTRY.collect()}
+    assert "litellm_overhead_latency_metric" not in registered_names
+
+    # Other metrics are real
+    assert not isinstance(logger.litellm_request_total_latency_metric, NoOpMetric)
+
+
+def test_exclude_labels_strips_label_from_metrics():
+    """Excluded labels are absent from the label set of all affected metrics."""
+    litellm.prometheus_exclude_labels = ["end_user"]
+
+    logger = PrometheusLogger()
+
+    # Verify via the registry: no sample for litellm_request_total_latency_metric
+    # should carry the end_user label key
+    for family in REGISTRY.collect():
+        if family.name == "litellm_request_total_latency_metric":
+            for sample in family.samples:
+                assert (
+                    "end_user" not in sample.labels
+                ), f"end_user label found in sample {sample}"

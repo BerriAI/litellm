@@ -14,6 +14,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -445,15 +446,26 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
-    def _get_latency_buckets(self) -> tuple:
+    def _get_latency_buckets(self) -> Sequence[float]:
         """Return latency buckets to use for histogram metrics.
 
         Uses ``litellm.prometheus_latency_buckets`` when set, falling back to the
         module-level ``LATENCY_BUCKETS`` constant.
+
+        .. note::
+            This value is read once at ``PrometheusLogger`` instantiation time.
+            ``litellm.prometheus_latency_buckets`` must be configured **before** the
+            first request is processed (i.e. before the logger is created).
+            Changes made after initialisation are silently ignored because Prometheus
+            histograms cannot be re-registered mid-run.
         """
         import litellm
 
-        return litellm.prometheus_latency_buckets or LATENCY_BUCKETS
+        return (
+            litellm.prometheus_latency_buckets
+            if litellm.prometheus_latency_buckets is not None
+            else LATENCY_BUCKETS
+        )
 
     def _parse_exclude_config(self) -> None:
         """Populate self.excluded_metrics and self.excluded_labels from litellm module vars."""
@@ -857,7 +869,7 @@ class PrometheusLogger(CustomLogger):
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
         # Check exclude list first — excluded metrics are always disabled
-        if hasattr(self, "excluded_metrics") and metric_name in self.excluded_metrics:
+        if metric_name in self.excluded_metrics:
             return False
 
         # If no specific include configuration is provided, enable all metrics (default behavior)
@@ -902,7 +914,7 @@ class PrometheusLogger(CustomLogger):
             labels = [label for label in default_labels if label in configured_labels]
 
         # Strip globally excluded labels
-        if hasattr(self, "excluded_labels") and self.excluded_labels:
+        if self.excluded_labels:
             labels = [label for label in labels if label not in self.excluded_labels]
 
         return labels
