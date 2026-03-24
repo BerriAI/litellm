@@ -66,6 +66,9 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
                 user_api_key_project_id=user_api_key_dict.project_id,
+                user_api_key_project_alias=getattr(
+                    user_api_key_dict, "project_alias", None
+                ),
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
