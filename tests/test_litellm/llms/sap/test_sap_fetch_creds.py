@@ -123,7 +123,7 @@ def test_partial_credentials_missing_auth_url(monkeypatch):
     creds = sap_credentials.fetch_credentials()
     creds.pop('resource_group')
 
-    with pytest.raises(ValueError, match="SAP AI Core credentials not found."):
+    with pytest.raises(ValueError, match="SAP AI Core credentials not found"):
         sap_credentials.validate_credentials(**creds)
 
 def test_credentials_without_authentication_mode(monkeypatch):
@@ -138,5 +138,5 @@ def test_credentials_without_authentication_mode(monkeypatch):
     creds.pop('resource_group')
 
     # validate_credentials should raise because no authentication mode is provided
-    with pytest.raises(ValueError, match="SAP AI Core credentials are incomplete."):
+    with pytest.raises(ValueError, match="SAP AI Core credentials are incomplete"):
         sap_credentials.validate_credentials(**creds)

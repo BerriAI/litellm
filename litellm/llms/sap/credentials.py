@@ -226,6 +226,9 @@ def _parse_service_key_once(
                 "SAP service key is a string but not valid JSON. Skipping this source."
             )
             return None
+    verbose_logger.warning(
+        f"SAP service key has unexpected type '{type(service_key).__name__}'. Expected str or dict. Ignoring."
+    )
     return None
 
 def _resolve_credential_from_service_key(
@@ -484,11 +487,16 @@ def get_token_creator(
                     cert_pair=(cert_path, key_path),
                 )
         # Case 3: file-based cert/key
-        return _request_token(
-            auth_url=auth_url,
-            client_id=client_id,
-            timeout=timeout,
-            cert_pair=(cert_file_path, key_file_path),
+        if cert_file_path and key_file_path:
+            return _request_token(
+                auth_url=auth_url,
+                client_id=client_id,
+                timeout=timeout,
+                cert_pair=(cert_file_path, key_file_path),
+            )
+        # Defensive guard: should never reach here due to validate_credentials()
+        raise ValueError(
+            "Invalid authentication configuration: no valid credentials found. "
         )
 
     def get_token() -> str:
