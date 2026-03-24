@@ -1467,7 +1467,7 @@ def _resolve_credential_from_model_config(
                 _safe_name = str(name).replace("\n", "").replace("\r", "")
                 verbose_proxy_logger.debug(
                     "model_config entry '%s' found but has no litellm_credentials, "
-                    "falling through to defaultconfig",
+                    "trying next candidate",
                     _safe_name,
                 )
 

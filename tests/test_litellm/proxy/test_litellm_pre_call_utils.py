@@ -2170,7 +2170,7 @@ def test_apply_overrides_api_version_only_if_present(setup_test_credentials):
     assert "api_version" not in data
 
 
-def test_apply_overrides_no_model_in_data():
+def test_apply_overrides_no_model_in_data(setup_test_credentials):
     """No model in request data -> skip override."""
     data = {"messages": [{"role": "user", "content": "hello"}]}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2189,7 +2189,7 @@ def test_apply_overrides_no_model_in_data():
     assert "api_base" not in data
 
 
-def test_apply_overrides_none_metadata():
+def test_apply_overrides_none_metadata(setup_test_credentials):
     """None metadata on both team and project -> skip override."""
     data = {"model": "gpt-4"}
     user_api_key_dict = UserAPIKeyAuth(
