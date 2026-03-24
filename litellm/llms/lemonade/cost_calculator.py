@@ -6,18 +6,22 @@ This prevents cost calculation errors when using models not in model_prices_and_
 """
 from typing import Tuple
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    InputCostBreakdown,
+    OutputCostBreakdown,
+)
 from litellm.types.utils import Usage
 
 
 def cost_per_token(
     model: str,
     usage: Usage,
-) -> Tuple[float, float]:
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculate cost per token for Lemonade models.
 
     Since Lemonade is a local/self-hosted deployment, there are no per-token costs.
-    This function returns (0.0, 0.0) for all models to allow cost tracking to work
+    Returns zero-cost breakdowns for all models to allow cost tracking to work
     without errors for any Lemonade model, regardless of whether it's in the
     model_prices_and_context_window.json file.
 
@@ -26,10 +30,6 @@ def cost_per_token(
         usage: Usage object containing token counts
 
     Returns:
-        Tuple of (prompt_cost, completion_cost) - always (0.0, 0.0) for Lemonade
+        Tuple of (InputCostBreakdown, OutputCostBreakdown) - always zero for Lemonade
     """
-    # Lemonade is self-hosted/local, so cost is always 0
-    prompt_cost = 0.0
-    completion_cost = 0.0
-
-    return prompt_cost, completion_cost
+    return InputCostBreakdown(total=0.0), OutputCostBreakdown(total=0.0)

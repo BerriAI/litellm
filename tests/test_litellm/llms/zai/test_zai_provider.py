@@ -82,11 +82,13 @@ def test_zai_glm46_cost_calculation():
     key = "zai/glm-4.6"
     info = litellm.model_cost[key]
 
-    prompt_cost, completion_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model="zai/glm-4.6",
         prompt_tokens=1000000,  # 1M tokens
         completion_tokens=1000000,
     )
+    prompt_cost = input_bd["total"]
+    completion_cost = output_bd["total"]
 
     # GLM-4.6: $0.6/M input, $2.2/M output
     assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)
@@ -128,11 +130,13 @@ def test_glm47_cost_calculation():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    prompt_cost, completion_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model="zai/glm-4.7",
         prompt_tokens=1000000,  # 1M tokens
         completion_tokens=1000000,
     )
+    prompt_cost = input_bd["total"]
+    completion_cost = output_bd["total"]
 
     # GLM-4.7: $0.6/M input, $2.2/M output (same as GLM-4.6)
     assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)

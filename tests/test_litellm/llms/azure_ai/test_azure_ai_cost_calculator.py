@@ -90,7 +90,9 @@ class TestAzureModelRouterFlatCost:
             total_tokens=1500,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+        input_bd, output_bd = cost_per_token(model=model, usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Calculate expected flat cost
         expected_flat_cost = (
@@ -117,7 +119,9 @@ class TestAzureModelRouterFlatCost:
             total_tokens=150_000,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+        input_bd, output_bd = cost_per_token(model=model, usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Calculate expected flat cost
         expected_flat_cost = (
@@ -142,7 +146,9 @@ class TestAzureModelRouterFlatCost:
             total_tokens=1_100_000,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+        input_bd, output_bd = cost_per_token(model=model, usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Calculate expected flat cost
         expected_flat_cost = AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
@@ -162,7 +168,9 @@ class TestAzureModelRouterFlatCost:
             total_tokens=1500,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+        input_bd, output_bd = cost_per_token(model=model, usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # No flat cost should be added for non-Model Router models
         # The cost might be 0 or based on the model's pricing
@@ -182,7 +190,9 @@ class TestAzureModelRouterFlatCost:
             cache_creation_input_tokens=200,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+        input_bd, output_bd = cost_per_token(model=model, usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Flat cost is based on ALL prompt tokens (including cached)
         expected_flat_cost = (
@@ -215,11 +225,13 @@ class TestAzureModelRouterFlatCost:
         # Request model is the router - user called azure_ai/model_router/model-router
         request_model = "azure_ai/model_router/model-router"
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model=response_model,
             usage=usage,
             request_model=request_model,
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected: model cost (from gpt-5-nano) + router flat cost
         expected_flat_cost = (

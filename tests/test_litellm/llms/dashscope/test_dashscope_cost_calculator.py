@@ -42,9 +42,11 @@ class TestDashscopeCostCalculator:
         usage = Usage(prompt_tokens=1000, completion_tokens=500)
 
         # We call the specific calculator for dashscope
-        prompt_cost, completion_cost = dashscope_cost_per_token(
+        input_bd, output_bd = dashscope_cost_per_token(
             model="qwen-max", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         model_info = litellm.get_model_info("dashscope/qwen-max")
         expected_prompt_cost = 1000 * model_info["input_cost_per_token"]
@@ -60,9 +62,11 @@ class TestDashscopeCostCalculator:
         """
         # Tier 1 for qwen-flash is [0, 256,000] tokens
         usage = Usage(prompt_tokens=100000, completion_tokens=50000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
+        input_bd, output_bd = dashscope_cost_per_token(
             model="qwen-flash", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1_pricing = model_info["tiered_pricing"][0]
@@ -80,9 +84,11 @@ class TestDashscopeCostCalculator:
         """
         # Tiering for qwen-flash: Tier 1: [0, 256k], Tier 2: [256k, 1M]
         usage = Usage(prompt_tokens=300000, completion_tokens=300000)
-        prompt_cost, completion_cost = dashscope_cost_per_token(
+        input_bd, output_bd = dashscope_cost_per_token(
             model="qwen-flash", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1 = model_info["tiered_pricing"][0]
@@ -113,7 +119,8 @@ class TestDashscopeCostCalculator:
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=10000),
         )
 
-        prompt_cost, _ = dashscope_cost_per_token(model="qwen3-coder-plus", usage=usage)
+        input_bd, _ = dashscope_cost_per_token(model="qwen3-coder-plus", usage=usage)
+        prompt_cost = input_bd["total"]
 
         model_info = litellm.get_model_info("dashscope/qwen3-coder-plus")
         tier_1 = model_info["tiered_pricing"][0]
@@ -140,7 +147,8 @@ class TestDashscopeCostCalculator:
             prompt_tokens=1200000, completion_tokens=1000
         )  # Max defined range for qwen-flash is 1M
 
-        prompt_cost, _ = dashscope_cost_per_token(model="qwen-flash", usage=usage)
+        input_bd, _ = dashscope_cost_per_token(model="qwen-flash", usage=usage)
+        prompt_cost = input_bd["total"]
 
         model_info = litellm.get_model_info("dashscope/qwen-flash")
         tier_1 = model_info["tiered_pricing"][0]

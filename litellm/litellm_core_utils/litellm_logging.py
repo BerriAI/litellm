@@ -91,6 +91,10 @@ from litellm.types.llms.openai import (
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    InputCostBreakdown,
+    OutputCostBreakdown,
+)
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
@@ -1371,6 +1375,8 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_percent: Optional[float] = None,
         margin_fixed_amount: Optional[float] = None,
         margin_total_amount: Optional[float] = None,
+        input_cost_breakdown: Optional[InputCostBreakdown] = None,
+        output_cost_breakdown: Optional[OutputCostBreakdown] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1387,6 +1393,8 @@ class Logging(LiteLLMLoggingBaseClass):
             margin_percent: Margin percentage applied (0.10 = 10%)
             margin_fixed_amount: Fixed margin amount in USD
             margin_total_amount: Total margin added in USD
+            input_cost_breakdown: Granular input cost components
+            output_cost_breakdown: Granular output cost components
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1419,6 +1427,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
+
+        if input_cost_breakdown is not None:
+            self.cost_breakdown["input_cost_breakdown"] = input_cost_breakdown  # type: ignore
+        if output_cost_breakdown is not None:
+            self.cost_breakdown["output_cost_breakdown"] = output_cost_breakdown  # type: ignore
 
     def _response_cost_calculator(
         self,

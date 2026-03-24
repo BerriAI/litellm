@@ -138,11 +138,13 @@ class TestPerplexityIntegration:
         usage.citation_tokens = 40
         
         # Test main cost calculator
-        prompt_cost, completion_cost_val = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="sonar-deep-research",
             custom_llm_provider="perplexity",
             usage_object=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost_val = output_bd["total"]
         
         # Calculate expected costs
         expected_prompt_cost = (200 * 2e-6) + (40 * 2e-6)  # Input + citation
@@ -217,11 +219,13 @@ class TestPerplexityIntegration:
         usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=0)
         
         # Should not add any extra cost
-        prompt_cost, completion_cost_val = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="sonar-deep-research",
             custom_llm_provider="perplexity",
             usage_object=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost_val = output_bd["total"]
         
         expected_prompt_cost = 100 * 2e-6
         expected_completion_cost = 50 * 8e-6
@@ -305,11 +309,13 @@ class TestPerplexityIntegration:
         usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=1)
         
         # Should work regardless of case
-        prompt_cost, completion_cost_val = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="sonar-deep-research",
             custom_llm_provider=provider_name.lower(),  # Normalize to lowercase
             usage_object=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost_val = output_bd["total"]
         
         # Should calculate costs correctly
         expected_prompt_cost = (100 * 2e-6) + (10 * 2e-6)

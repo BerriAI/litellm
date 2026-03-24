@@ -23,6 +23,8 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
+    InputCostBreakdown,
+    OutputCostBreakdown,
     _generic_cost_per_character,
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
@@ -286,7 +288,7 @@ def cost_per_token(  # noqa: PLR0915
     response: Optional[Any] = None,
     ### REQUEST MODEL ###
     request_model: Optional[str] = None,  # original request model for router detection
-) -> Tuple[float, float]:  # type: ignore
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -331,7 +333,7 @@ def cost_per_token(  # noqa: PLR0915
     )
 
     if response_cost is not None:
-        return response_cost[0], response_cost[1]
+        return InputCostBreakdown(total=response_cost[0]), OutputCostBreakdown(total=response_cost[1])
 
     # given
     prompt_tokens_cost_usd_dollar: float = 0
@@ -413,41 +415,47 @@ def cost_per_token(  # noqa: PLR0915
             prompt_cost = _prompt_cost
             completion_cost = _completion_cost
         elif cost_metric == "cost_per_token":
-            prompt_cost, completion_cost = generic_cost_per_token(
+            _input_bd, _output_bd = generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
             )
+            prompt_cost = _input_bd["total"]
+            completion_cost = _output_bd["total"]
 
-        return prompt_cost, completion_cost
+        return InputCostBreakdown(total=prompt_cost), OutputCostBreakdown(total=completion_cost)
     elif call_type == "arerank" or call_type == "rerank":
-        return rerank_cost(
+        _rerank_result = rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
         )
+        return InputCostBreakdown(total=_rerank_result[0]), OutputCostBreakdown(total=_rerank_result[1])
     elif call_type == "avector_store_search" or call_type == "vector_store_search":
-        return vector_store_search_cost(
+        _vs_result = vector_store_search_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response=cast(VectorStoreSearchResponse, response),
         )
+        return InputCostBreakdown(total=_vs_result[0]), OutputCostBreakdown(total=_vs_result[1])
     elif call_type == "ocr" or call_type == "aocr":
-        return ocr_cost(
+        _ocr_result = ocr_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response=response,
         )
+        return InputCostBreakdown(total=_ocr_result[0]), OutputCostBreakdown(total=_ocr_result[1])
     elif (
         call_type == "aretrieve_batch"
         or call_type == "retrieve_batch"
         or call_type == CallTypes.aretrieve_batch
         or call_type == CallTypes.retrieve_batch
     ):
-        return batch_cost_calculator(
+        _batch_result = batch_cost_calculator(
             usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
         )
+        return InputCostBreakdown(total=_batch_result[0]), OutputCostBreakdown(total=_batch_result[1])
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
             return openai_cost_per_token(
@@ -456,16 +464,17 @@ def cost_per_token(  # noqa: PLR0915
                 service_tier=service_tier,
             )
 
-        return openai_cost_per_second(
+        _transcription_result = openai_cost_per_second(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             duration=audio_transcription_file_duration,
         )
+        return InputCostBreakdown(total=_transcription_result[0]), OutputCostBreakdown(total=_transcription_result[1])
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
         from litellm.search import search_provider_cost_per_query
 
-        return search_provider_cost_per_query(
+        _search_result = search_provider_cost_per_query(
             model=model,
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
@@ -475,6 +484,7 @@ def cost_per_token(  # noqa: PLR0915
                 else None
             ),
         )
+        return InputCostBreakdown(total=_search_result[0]), OutputCostBreakdown(total=_search_result[1])
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -482,63 +492,94 @@ def cost_per_token(  # noqa: PLR0915
             call_type=call_type,
         )
         if cost_router == "cost_per_character":
-            return google_cost_per_character(
+            _char_result = google_cost_per_character(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
                 usage=usage_block,
             )
+            return InputCostBreakdown(total=_char_result[0]), OutputCostBreakdown(total=_char_result[1])
         elif cost_router == "cost_per_token":
-            return google_cost_per_token(
+            _input_bd, _output_bd = google_cost_per_token(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage_block,
                 service_tier=service_tier,
             )
+            return _input_bd, _output_bd
+        else:
+            raise ValueError(
+                f"Unknown google cost_router: {cost_router} for model={model}"
+            )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = anthropic_cost_per_token(model=model, usage=usage_block)
+        return _input_bd, _output_bd
     elif custom_llm_provider == "bedrock":
-        return bedrock_cost_per_token(
+        _input_bd, _output_bd = bedrock_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
         )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(
+        _input_bd, _output_bd = openai_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
         )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = databricks_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "fireworks_ai":
-        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = fireworks_ai_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "azure":
-        return azure_openai_cost_per_token(
+        _input_bd, _output_bd = azure_openai_cost_per_token(
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(
+        _input_bd, _output_bd = gemini_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
         )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "deepseek":
-        return deepseek_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = deepseek_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = perplexity_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "xai":
-        return xai_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = xai_cost_per_token(model=model, usage=usage_block)
+        return _input_bd, _output_bd
     elif custom_llm_provider == "lemonade":
-        return lemonade_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = lemonade_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "dashscope":
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
 
-        return dashscope_cost_per_token(model=model, usage=usage_block)
+        _input_bd, _output_bd = dashscope_cost_per_token(
+            model=model, usage=usage_block
+        )
+        return _input_bd, _output_bd
     elif custom_llm_provider == "azure_ai":
-        return azure_ai_cost_per_token(
+        _input_bd, _output_bd = azure_ai_cost_per_token(
             model=model,
             usage=usage_block,
             response_time_ms=response_time_ms,
             request_model=request_model,
         )
+        return _input_bd, _output_bd
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -548,12 +589,13 @@ def cost_per_token(  # noqa: PLR0915
             model_info.get("input_cost_per_token", 0) > 0
             or model_info.get("output_cost_per_token", 0) > 0
         ):
-            return generic_cost_per_token(
+            _input_bd, _output_bd = generic_cost_per_token(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
             )
+            return _input_bd, _output_bd
 
         if (
             model_info.get("input_cost_per_second", None) is not None
@@ -591,7 +633,7 @@ def cost_per_token(  # noqa: PLR0915
             prompt_tokens_cost_usd_dollar,
             completion_tokens_cost_usd_dollar,
         )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        return InputCostBreakdown(total=prompt_tokens_cost_usd_dollar), OutputCostBreakdown(total=completion_tokens_cost_usd_dollar)
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -965,6 +1007,8 @@ def _store_cost_breakdown_in_logging_obj(
     margin_percent: Optional[float] = None,
     margin_fixed_amount: Optional[float] = None,
     margin_total_amount: Optional[float] = None,
+    input_cost_breakdown: Optional[InputCostBreakdown] = None,
+    output_cost_breakdown: Optional[OutputCostBreakdown] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1000,6 +1044,8 @@ def _store_cost_breakdown_in_logging_obj(
             margin_percent=margin_percent,
             margin_fixed_amount=margin_fixed_amount,
             margin_total_amount=margin_total_amount,
+            input_cost_breakdown=input_cost_breakdown,
+            output_cost_breakdown=output_cost_breakdown,
         )
 
     except Exception as breakdown_error:
@@ -1489,8 +1535,8 @@ def completion_cost(  # noqa: PLR0915
                     request_model_for_cost = litellm_logging_obj.model
 
                 (
-                    prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar,
+                    input_cost_breakdown,
+                    output_cost_breakdown,
                 ) = cost_per_token(
                     model=model,
                     prompt_tokens=prompt_tokens or 0,
@@ -1512,6 +1558,8 @@ def completion_cost(  # noqa: PLR0915
                     response=completion_response,
                     request_model=request_model_for_cost,
                 )
+                prompt_tokens_cost_usd_dollar = input_cost_breakdown["total"]
+                completion_tokens_cost_usd_dollar = output_cost_breakdown["total"]
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
                 if custom_llm_provider == "azure_ai":
@@ -1602,6 +1650,8 @@ def completion_cost(  # noqa: PLR0915
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
+                        input_cost_breakdown=input_cost_breakdown,
+                        output_cost_breakdown=output_cost_breakdown,
                     )
 
                 return _final_cost
@@ -2279,15 +2329,15 @@ def handle_realtime_stream_cost_calculation(
         try:
             if model_name is None:
                 continue
-            _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
+            _input_bd, _output_bd = generic_cost_per_token(
                 model=model_name,
                 usage=combined_usage_object,
                 custom_llm_provider=custom_llm_provider,
             )
         except Exception:
             continue
-        input_cost_per_token += _input_cost_per_token
-        output_cost_per_token += _output_cost_per_token
+        input_cost_per_token += _input_bd["total"]
+        output_cost_per_token += _output_bd["total"]
         break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
 

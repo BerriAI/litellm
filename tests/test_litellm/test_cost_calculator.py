@@ -17,7 +17,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
 
 
@@ -961,11 +961,13 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
         ),
     )
 
-    input_cost, output_cost = generic_cost_per_token(
+    _input_bd, _output_bd = generic_cost_per_token(
         model="gemini/gemini-2.5-pro",
         usage=usage,
         custom_llm_provider="gemini",
     )
+    input_cost = _input_bd["total"]
+    output_cost = _output_bd["total"]
 
     total_cost = input_cost + output_cost
 
@@ -1035,11 +1037,13 @@ def test_azure_ai_cache_cost_calculation():
         cache_creation_input_tokens=100,  # 100 cache creation tokens
     )
 
-    input_cost, output_cost = generic_cost_per_token(
+    _input_bd, _output_bd = generic_cost_per_token(
         model=test_model_id,
         usage=usage,
         custom_llm_provider="azure_ai",
     )
+    input_cost = _input_bd["total"]
+    output_cost = _output_bd["total"]
 
     total_cost = input_cost + output_cost
 
@@ -1970,3 +1974,67 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
+
+
+def test_completion_cost_stores_granular_breakdown_on_logging_obj():
+    """Test that completion_cost populates input/output cost breakdowns on the logging obj."""
+    from unittest.mock import MagicMock
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = ModelResponse(
+        id="test-id",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(
+            prompt_tokens=500,
+            completion_tokens=200,
+            total_tokens=700,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100, text_tokens=400,
+            ),
+        ),
+    )
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model = "gpt-4o"
+    mock_logging_obj.cost_breakdown = None
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        litellm_logging_obj=mock_logging_obj,
+    )
+
+    assert cost > 0
+    mock_logging_obj.set_cost_breakdown.assert_called_once()
+    call_kwargs = mock_logging_obj.set_cost_breakdown.call_args
+    if call_kwargs.kwargs:
+        assert "input_cost_breakdown" in call_kwargs.kwargs
+        assert "output_cost_breakdown" in call_kwargs.kwargs
+        assert call_kwargs.kwargs["input_cost_breakdown"]["total"] > 0
+    else:
+        pass
+
+
+def test_completion_cost_works_without_logging_obj():
+    """Test that completion_cost works fine when no logging obj is passed."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = ModelResponse(
+        id="test-id",
+        model="gpt-4o",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gpt-4o",
+        custom_llm_provider="openai",
+    )
+
+    assert isinstance(cost, float)
+    assert cost > 0
