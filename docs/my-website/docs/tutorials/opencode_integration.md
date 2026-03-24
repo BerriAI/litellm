@@ -253,7 +253,7 @@ model_list:
     litellm_params:
       model: openai/gpt-4
       api_key: os.environ/OPENAI_API_KEY
-  
+
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -264,12 +264,25 @@ model_list:
     litellm_params:
       model: anthropic/claude-3-5-sonnet-20241022
       api_key: os.environ/ANTHROPIC_API_KEY
-  
+
   # DeepSeek models
   - model_name: deepseek-chat
     litellm_params:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
+```
+
+### Dropping OpenCode-specific parameters
+
+OpenCode sends a `reasoningSummary` parameter (a Responses API concept) with certain models. This parameter is not supported by the Chat Completions API and will cause errors. Use `additional_drop_params` in your `litellm_params` to drop it:
+
+```yaml
+model_list:
+  - model_name: gpt-5
+    litellm_params:
+      model: gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+      additional_drop_params: ["reasoningSummary"]
 ```
 
 ## Troubleshooting
@@ -293,6 +306,16 @@ model_list:
 - Check the config file path and permissions
 - Validate JSON syntax using a JSON validator
 - Ensure the `$schema` URL is accessible
+
+**`Unknown parameter: 'reasoningSummary'` error:**
+- OpenCode sends a `reasoningSummary` parameter that is not supported by the Chat Completions API. Add `additional_drop_params: ["reasoningSummary"]` to your model's `litellm_params` to drop it automatically:
+  ```yaml
+  - model_name: gpt-5
+    litellm_params:
+      model: gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+      additional_drop_params: ["reasoningSummary"]
+  ```
 
 ## Tips
 
