@@ -187,6 +187,42 @@ describe("LicenseExpiryBanner", () => {
     });
   });
 
+  it("should show error banner when fetch fails for a confirmed enterprise user", async () => {
+    // First call succeeds (confirms enterprise), then component re-renders
+    // with fetchError after a subsequent failure.
+    // Simulate by resolving first, then rejecting on next call.
+    mockGetLicenseInfo
+      .mockResolvedValueOnce(makeLicense("2026-03-20"))
+      .mockRejectedValueOnce(new Error("Network error"));
+
+    const { rerender } = render(<LicenseExpiryBanner />);
+
+    // First render shows the warning banner (license within 14 days)
+    expect(
+      await screen.findByText(/Enterprise License Expiring/i)
+    ).toBeInTheDocument();
+
+    // Force a re-render that triggers a new fetch (simulating accessToken change)
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "new-token",
+      isLoading: false,
+      isAuthorized: true,
+      token: "tok",
+      userId: "u1",
+      userEmail: "u@e.com",
+      userRole: "proxy_admin",
+      premiumUser: true,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    } as any);
+
+    rerender(<LicenseExpiryBanner />);
+
+    expect(
+      await screen.findByText("Unable to verify enterprise license")
+    ).toBeInTheDocument();
+  });
+
   it("should render nothing when expiration_date is unparseable", async () => {
     mockGetLicenseInfo.mockResolvedValue(makeLicense("N/A"));
 
