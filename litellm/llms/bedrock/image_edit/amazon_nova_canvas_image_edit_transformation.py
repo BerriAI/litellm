@@ -206,11 +206,7 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         entry = _litellm.model_cost.get(key) or {}
         if entry.get("supports_nova_canvas_image_edit") is True:
             return True
-        if (
-            entry.get("litellm_provider") == "bedrock"
-            and entry.get("mode") == "image_generation"
-            and "amazon.nova-canvas" in key.lower()
-        ):
+        if entry.get("supports_nova_canvas_image_edit") is True:
             return True
     return False
 
