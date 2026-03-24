@@ -28,17 +28,22 @@ _CACHE_TTL_SECONDS = 3600  # 1 hour
 # Deterministic HMAC key for cache keys — prevents raw credential strings from
 # appearing verbatim in heap dumps, but is NOT a secret value and does NOT
 # provide cryptographic confidentiality. Do not rely on this for security.
-_CREDENTIAL_CACHE_HMAC_KEY = hashlib.sha256(b"litellm-azure-credential-cache-v1").digest()
+_CREDENTIAL_CACHE_HMAC_KEY = hashlib.sha256(
+    b"litellm-azure-credential-cache-v1"
+).digest()
 
 _cache_lock = threading.Lock()
 
 try:
     from cachetools import TTLCache
+
     _provider_cache: Any = TTLCache(maxsize=_CACHE_MAX_SIZE, ttl=_CACHE_TTL_SECONDS)
 except ImportError:
-    _provider_cache = {} # unbounded fallback; install cachetools for TTL+LRU eviction
+    _provider_cache = {}  # unbounded fallback; install cachetools for TTL+LRU eviction
 
 
 def _hash_secret(secret: str) -> str:
     # codeql[py/weak-cryptographic-algorithm]
-    return hmac.new(_CREDENTIAL_CACHE_HMAC_KEY, secret.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(
+        _CREDENTIAL_CACHE_HMAC_KEY, secret.encode(), hashlib.sha256
+    ).hexdigest()

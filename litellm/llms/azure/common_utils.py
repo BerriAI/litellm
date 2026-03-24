@@ -8,7 +8,11 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.llms.azure.credential_cache import _cache_lock, _hash_secret, _provider_cache
+from litellm.llms.azure.credential_cache import (
+    _cache_lock,
+    _hash_secret,
+    _provider_cache,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
