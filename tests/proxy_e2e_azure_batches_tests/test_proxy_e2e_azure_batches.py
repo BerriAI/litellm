@@ -49,9 +49,12 @@ def is_managed_id(file_id: str) -> bool:
         decoded = base64.urlsafe_b64decode(padded).decode()
         if decoded.startswith(MANAGED_FILE_ID_PREFIX):
             return True
-        # encode_file_id_with_model output: litellm:<provider_id>;model,<name>
+        # encode_file_id_with_model: litellm:<provider_id>;model,<name> — require non-empty segments
         if decoded.startswith("litellm:") and ";model," in decoded:
-            return True
+            after_litellm = decoded[len("litellm:") :]
+            provider_part, sep, model_part = after_litellm.partition(";model,")
+            if sep and provider_part.strip() and model_part.strip():
+                return True
         return False
     except Exception:
         return False

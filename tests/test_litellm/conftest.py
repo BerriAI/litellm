@@ -16,8 +16,10 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-# Load bundled model_prices (capabilities like supports_reasoning) instead of
-# fetching GitHub main at import time, so unit tests match this repo/branch (#24416).
+# Prefer bundled model_prices for this tree so capability flags match the checkout.
+# setdefault only applies when unset (CI can still force remote map explicitly).
+# Note: this runs before `import litellm` below; a narrower scope would require
+# deferring that import across this conftest (large refactor).
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
 import asyncio
