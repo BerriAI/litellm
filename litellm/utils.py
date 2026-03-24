@@ -9004,11 +9004,11 @@ class ProviderConfigManager:
 
             return get_stability_image_edit_config(model)
         elif LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.image_edit.stability_transformation import (
-                BedrockStabilityImageEditConfig,
+            from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+                get_bedrock_image_edit_config_for_model,
             )
 
-            return BedrockStabilityImageEditConfig()
+            return get_bedrock_image_edit_config_for_model(model)
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,
