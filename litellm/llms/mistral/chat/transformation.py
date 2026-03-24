@@ -44,28 +44,6 @@ from litellm.utils import (
 )
 
 
-def _mistral_safe_model_for_log(model: str, max_len: int = 256) -> str:
-    """
-    Sanitize model identifier for log lines: strip C0 controls and escape newlines
-    so values cannot forge additional log records (CodeQL log injection).
-    """
-    if not model:
-        return ""
-    parts: List[str] = []
-    for ch in model:
-        o = ord(ch)
-        if ch == "\n":
-            parts.append("\\n")
-        elif ch == "\r":
-            parts.append("\\r")
-        elif o < 32 or o == 127:
-            parts.append("?")
-        else:
-            parts.append(ch)
-    out = "".join(parts)
-    return (out[:max_len] + "...") if len(out) > max_len else out
-
-
 class MistralConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.mistral.ai/api/
@@ -179,9 +157,7 @@ class MistralConfig(OpenAIGPTConfig):
                     return True
         except Exception:
             verbose_logger.debug(
-                "MistralConfig._mistral_model_supports_reasoning: model_cost fallback failed "
-                "for model=%s",
-                _mistral_safe_model_for_log(model),
+                "MistralConfig._mistral_model_supports_reasoning: model_cost fallback failed",
                 exc_info=True,
             )
         return False
