@@ -364,8 +364,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             mask_b64=mask_b64,
             text=text,
             negative_text=negative_text,
-            similarity_strength=similarity_strength,
-            task_type=task_type,
+        cost_per_image = model_info.get("output_cost_per_image")
+        if cost_per_image is not None and model_response.data:
             mask_prompt=mask_prompt,
             out_painting_mode=out_painting_mode,
         )
