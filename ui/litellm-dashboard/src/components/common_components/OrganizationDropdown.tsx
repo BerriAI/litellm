@@ -1,6 +1,8 @@
 import React from "react";
-import { Select } from "antd";
+import { Select, Typography } from "antd";
 import { Organization } from "../networking";
+
+const { Text } = Typography;
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
@@ -8,6 +10,7 @@ interface OrganizationDropdownProps {
   onChange?: (value: string) => void;
   disabled?: boolean;
   loading?: boolean;
+  style?: React.CSSProperties;
 }
 
 const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
@@ -16,16 +19,18 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   onChange,
   disabled,
   loading,
+  style,
 }) => {
   return (
     <Select
       showSearch
-      placeholder="Search or select an organization"
+      placeholder="All Organizations"
       value={value}
       onChange={onChange}
       disabled={disabled}
       loading={loading}
       allowClear
+      style={{ minWidth: 280, ...style }}
       filterOption={(input, option) => {
         if (!option) return false;
         const org = organizations?.find((o) => o.organization_id === option.key);
@@ -37,12 +42,11 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
 
         return orgAlias.includes(searchTerm) || orgId.includes(searchTerm);
       }}
-      optionFilterProp="children"
     >
       {organizations?.map((org) => (
         <Select.Option key={org.organization_id} value={org.organization_id}>
           <span className="font-medium">{org.organization_alias}</span>{" "}
-          <span className="text-gray-500">({org.organization_id})</span>
+          <Text type="secondary">({org.organization_id})</Text>
         </Select.Option>
       ))}
     </Select>

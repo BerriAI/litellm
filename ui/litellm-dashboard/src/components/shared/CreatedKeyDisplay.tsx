@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button, message } from "antd";
+import { Button } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -15,7 +16,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
 
   const handleCopy = () => {
     setCopied(true);
-    message.success("Key copied to clipboard");
+    MessageManager.success("Key copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
   };
 

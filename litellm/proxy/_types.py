@@ -1672,6 +1672,7 @@ class NewTeamRequest(TeamBase):
         int
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2415,6 +2416,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_metadata: Optional[dict] = None
 
     # Project Params
+    project_alias: Optional[str] = None
     project_metadata: Optional[dict] = None
 
     # Time stamps
@@ -2471,6 +2473,9 @@ class UserAPIKeyAuth(
         Any
     ] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
+    # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
+    jwt_claims: Optional[Dict] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2952,7 +2957,9 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
+AUDIT_ACTIONS = Literal[
+    "created", "updated", "deleted", "blocked", "unblocked", "rotated"
+]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -3222,6 +3229,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]

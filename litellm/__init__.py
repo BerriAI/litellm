@@ -98,6 +98,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
+audit_log_callbacks: List[CALLBACK_TYPES] = []
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -1468,9 +1469,15 @@ if TYPE_CHECKING:
     from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
     from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
     from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
-    from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
-    from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
-    from .llms.sagemaker.nova.transformation import SagemakerNovaConfig as SagemakerNovaConfig
+    from .llms.sagemaker.completion.transformation import (
+        SagemakerConfig as SagemakerConfig,
+    )
+    from .llms.sagemaker.chat.transformation import (
+        SagemakerChatConfig as SagemakerChatConfig,
+    )
+    from .llms.sagemaker.nova.transformation import (
+        SagemakerNovaConfig as SagemakerNovaConfig,
+    )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from .llms.anthropic.experimental_pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,

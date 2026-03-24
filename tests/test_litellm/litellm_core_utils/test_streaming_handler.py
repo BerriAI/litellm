@@ -1340,6 +1340,121 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
     )
 
 
+def _make_chunk(content: Optional[str]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=content))],
+    )
+
+
+def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
+    """
+    Build a list of chunks based on a pattern specification.
+    """
+    chunks = []
+    for i, p in enumerate(pattern):
+        if p == "same":
+            chunks.append(_make_chunk("same_chunk"))
+        elif p == "diff":
+            chunks.append(_make_chunk(f"chunk_{i}"))
+        else:
+            chunks.append(_make_chunk(p))
+    return chunks
+
+_REPETITION_TEST_CASES = [
+    # Basic cases
+    pytest.param(
+        ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        True,
+        id="all_identical_raises",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="below_threshold_no_raise",
+    ),
+    pytest.param(
+        [None] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="none_content_no_raise",
+    ),
+    pytest.param(
+        [""] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="empty_content_no_raise",
+    ),
+    # Short content (len <= 2) should not raise
+    pytest.param(
+        ["##"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_no_raise",
+    ),
+    pytest.param(
+        ["{"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_1char_no_raise",
+    ),
+    pytest.param(
+        ["ab"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_ab_no_raise",
+    ),
+    # All different chunks
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="all_different_no_raise",
+    ),
+    # One chunk different at various positions
+    pytest.param(
+        ["different_first"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="first_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1) + ["different_last"],
+        False,
+        id="last_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        False,
+        id="middle_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 2) + ["diff", "diff"],
+        False,
+        id="last_two_different_no_raise",
+    ),
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        True,
+        id="in_between_same_and_diff_raise",
+    ),
+]
+
+
+@pytest.mark.parametrize("chunks_pattern,should_raise", _REPETITION_TEST_CASES)
+def test_raise_on_model_repetition(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    chunks_pattern: list,
+    should_raise: bool,
+):
+    wrapper = initialized_custom_stream_wrapper
+    chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
+
+    if should_raise:
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            for chunk in chunks:
+                wrapper.chunks.append(chunk)
+                wrapper.raise_on_model_repetition()
+        assert "repeating the same chunk" in str(exc_info.value)
+    else:
+        for chunk in chunks:
+            wrapper.chunks.append(chunk)
+            wrapper.raise_on_model_repetition()
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -1564,3 +1679,150 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
     )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_iterators(
+    logging_obj: Logging,
+):
+    """
+    Regression test: __anext__ must not call blocking next() on a sync iterator on the
+    event loop thread. This happens for some provider streams which are sync iterators
+    but used in async contexts (e.g. boto3-style streaming).
+    """
+
+    class BlockingIterator:
+        def __init__(self, chunks, delay_s: float):
+            self._it = iter(chunks)
+            self._delay_s = delay_s
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            time.sleep(self._delay_s)  # simulate blocking I/O
+            return next(self._it)
+
+    test_chunk = ModelResponseStream(
+        id="chatcmpl-test",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="hello",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    # Delay is intentionally > the wait_for timeout used to detect event loop blocking.
+    wrapper = CustomStreamWrapper(
+        completion_stream=BlockingIterator([test_chunk], delay_s=0.3),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    tick_event = asyncio.Event()
+
+    async def background_tick():
+        await asyncio.sleep(0.05)
+        tick_event.set()
+
+    # Run the two coroutines concurrently and measure wall time.
+    # If __anext__ blocks the event loop, background_tick can't run and the gather
+    # takes the full 0.3 s delay; if non-blocking both finish within ~0.35 s total.
+    start = asyncio.get_event_loop().time()
+
+    out, _ = await asyncio.gather(
+        wrapper.__anext__(),
+        background_tick(),
+    )
+
+    elapsed = asyncio.get_event_loop().time() - start
+    assert isinstance(out, ModelResponseStream)
+    # background_tick sleeps 0.05 s; total must finish well under 2 × 0.3 s
+    assert elapsed < 0.5, f"Event loop was likely blocked (elapsed={elapsed:.2f}s)"
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteration(
+    logging_obj: Logging,
+):
+    """
+    PEP 479 regression: when a sync iterator is exhausted, asyncio.to_thread(next, it)
+    raises StopIteration inside a coroutine, which Python converts to RuntimeError.
+    The wrapper must catch StopIteration in the thread and raise StopAsyncIteration
+    in the coroutine instead, so callers get clean stream termination.
+    """
+
+    class SingleChunkIterator:
+        def __init__(self, chunk: ModelResponseStream):
+            self._chunk = chunk
+            self._done = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._done:
+                raise StopIteration
+            self._done = True
+            return self._chunk
+
+    test_chunk = ModelResponseStream(
+        id="chatcmpl-exhaustion-test",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="done",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=SingleChunkIterator(test_chunk),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    # Drain the wrapper fully.  The wrapper's except-handler calls finish_reason_handler()
+    # on the first StopAsyncIteration (sent_last_chunk=False→True), then re-raises on the
+    # next call.  What must NOT happen is a RuntimeError from PEP 479 converting
+    # StopIteration (raised inside the thread) to RuntimeError inside the coroutine.
+    try:
+        while True:
+            await wrapper.__anext__()
+    except StopAsyncIteration:
+        pass  # expected clean termination
+    except RuntimeError as e:
+        pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")

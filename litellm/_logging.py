@@ -17,7 +17,9 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
+_ENABLE_SECRET_REDACTION = (
+    os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
+)
 
 _REDACTED = "REDACTED"
 
@@ -50,6 +52,17 @@ def _build_secret_patterns() -> re.Pattern:
         r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
+        # ── Key-name-based redaction ──
+        # Catches secrets inside dicts/config dumps by matching on the KEY name
+        # regardless of what the value looks like.
+        # e.g. 'master_key': 'any-value-here', "database_url": "postgres://..."
+        r"(?:master_key|database_url|db_url|connection_string|"
+        r"private_key|signing_key|encryption_key|"
+        r"auth_token|access_token|refresh_token|"
+        r"slack_webhook_url|webhook_url|"
+        r"database_connection_string|"
+        r"huggingface_token|jwt_secret)"
+        r"""['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+""",
     ]
     return re.compile("|".join(patterns), re.IGNORECASE)
 
@@ -199,7 +212,9 @@ class JsonFormatter(Formatter):
                 json_record[key] = value
 
         if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
+            json_record["stacktrace"] = record.exc_text or self.formatException(
+                record.exc_info
+            )
 
         return safe_dumps(json_record)
 
@@ -268,7 +283,7 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
-# Add the handler to the logger
+# Add the handler to the loggers
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)

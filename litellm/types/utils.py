@@ -2488,6 +2488,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2802,6 +2803,20 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
     """
+
+
+class StandardAuditLogPayload(TypedDict):
+    """Payload for audit log events dispatched to external callbacks."""
+
+    id: str
+    updated_at: str  # ISO-8601
+    changed_by: str
+    changed_by_api_key: str
+    action: str  # "created" | "updated" | "deleted" | "blocked" | "rotated"
+    table_name: str
+    object_id: str
+    before_value: Optional[str]
+    updated_values: Optional[str]
 
 
 class StandardLoggingPayload(TypedDict):
