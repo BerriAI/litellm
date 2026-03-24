@@ -235,22 +235,25 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
             transactions_dict[entity_id] += response_cost or 0
 
-        # [REFINEMENT] Optimize database writes: if the total response_cost for an entity is 0,
-        # we don't need to include it in the increment logic.
-        # This prevents unnecessary DB overhead for metadata-only updates (like budget_id).
-        for dict_key in [
-            "user_list_transactions",
-            "end_user_list_transactions",
-            "key_list_transactions",
-            "team_list_transactions",
-            "team_member_list_transactions",
-            "org_list_transactions",
-            "tag_list_transactions",
-        ]:
-            _dict = db_spend_update_transactions.get(dict_key)
-            if _dict:
-                filtered_dict = {k: v for k, v in _dict.items() if v > 0}
-                db_spend_update_transactions[dict_key] = filtered_dict  # type: ignore
+        # [REFINEMENT] Optimize database writes for end-users: if the total response_cost is 0,
+        # we only include it if there's a corresponding budget_id update.
+        # This prevents unnecessary DB overhead for no-op increments, while ensuring
+        # metadata-only updates (like budget_id) are still persisted.
+        # [Budget Reset Fix]
+        _end_user_transactions = db_spend_update_transactions.get(
+            "end_user_list_transactions"
+        )
+        _end_user_budget_updates = db_spend_update_transactions.get(
+            "end_user_budget_updates"
+        )
+        if _end_user_transactions:
+            filtered_transactions = {}
+            for k, v in _end_user_transactions.items():
+                # Keep if cost > 0 OR if there's a budget update for this user
+                has_budget_update = _end_user_budget_updates and k in _end_user_budget_updates
+                if v > 0 or has_budget_update:
+                    filtered_transactions[k] = v
+            db_spend_update_transactions["end_user_list_transactions"] = filtered_transactions
 
         # Second pass to capture metadata-only updates (budget_id)
         for update in updates:    

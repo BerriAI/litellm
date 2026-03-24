@@ -1121,18 +1121,25 @@ class DBSpendUpdateWriter:
                 end_user_list_transactions, end_user_budget_updates
             )
         )
-        if (
+        
+        # [Budget Reset Fix]
+        # Ensure we commit the update if either (a) there's a spend increment
+        # or (b) there's a budget_id update (even with 0 spend).
+        has_spend = (
             end_user_list_transactions is not None
             and len(end_user_list_transactions.keys()) > 0
-        ) or (
+        )
+        has_budget_updates = (
             end_user_budget_updates is not None
             and len(end_user_budget_updates.keys()) > 0
-        ):
+        )
+
+        if has_spend or has_budget_updates:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
-                end_user_list_transactions=end_user_list_transactions,
+                end_user_list_transactions=end_user_list_transactions or {},
                 end_user_budget_updates=end_user_budget_updates,
             )
         ### UPDATE KEY TABLE ###

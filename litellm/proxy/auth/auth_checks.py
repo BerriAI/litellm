@@ -868,8 +868,8 @@ async def _apply_default_budget_to_end_user(
     Returns:
         Updated end user object with default budget applied if applicable
     """
-    # If end user already has a budget assigned, no need to apply default
-    if end_user_obj.litellm_budget_table is not None:
+    # If end user already has a budget assigned or a budget_id set, no need to apply default
+    if end_user_obj.litellm_budget_table is not None or end_user_obj.budget_id is not None:
         return end_user_obj
 
     # If no default budget configured, return as-is
@@ -976,13 +976,20 @@ async def get_end_user_object(
         # Apply default budget if needed
         # Track if the budget was newly applied so we can update the cache
         _initial_budget_id = return_obj.budget_id
-        return_obj = await _apply_default_budget_to_end_user(
-            end_user_obj=return_obj,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            parent_otel_span=parent_otel_span,
-        )
+        try:
+            return_obj = await _apply_default_budget_to_end_user(
+                end_user_obj=return_obj,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                parent_otel_span=parent_otel_span,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "LiteLLM Budget Reset Fix: Error applying default budget to end user in cache path: {}".format(
+                    str(e)
+                )
+            )
 
         # Synchronization: If a default budget was newly applied above during the
         # auth-check, we update the cache immediately so subsequent requests

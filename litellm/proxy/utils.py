@@ -4569,6 +4569,9 @@ class ProxyUpdateSpend:
         end_user_list_transactions: Dict[str, float],
         end_user_budget_updates: Optional[Dict[str, str]] = None,
     ):
+        if end_user_list_transactions is None:
+            end_user_list_transactions = {}
+
         for i in range(n_retry_times + 1):
             start_time = time.time()
             try:

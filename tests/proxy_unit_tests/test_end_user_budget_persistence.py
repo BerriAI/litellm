@@ -349,3 +349,117 @@ async def test_update_end_user_spend_zero_cost_persistence():
     args, kwargs = mock_batcher.litellm_endusertable.upsert.call_args
     assert kwargs["data"]["update"]["budget_id"] == budget_id
     assert kwargs["data"]["update"]["spend"]["increment"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_update_end_user_spend_none_transactions():
+    """
+    Verifies that update_end_user_spend handles end_user_list_transactions=None gracefully (prevents AttributeError).
+    """
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    user_id = "test-user-none-tx"
+    budget_id = "test-budget-id"
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_endusertable.upsert = AsyncMock()
+
+    mock_tx = MagicMock()
+    mock_tx.batch_.return_value.__aenter__.return_value = mock_batcher
+
+    prisma_client.db.tx = MagicMock()
+    prisma_client.db.tx.return_value.__aenter__.return_value = mock_tx
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.alerting_handler = AsyncMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    # EXECUTE: Pass None for end_user_list_transactions, but provide budget updates
+    await ProxyUpdateSpend.update_end_user_spend(
+        n_retry_times=0,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        end_user_list_transactions=None,  # This should NOT crash now
+        end_user_budget_updates={user_id: budget_id},
+    )
+
+    # VERIFY: upsert was called for the user in the budget updates
+    mock_batcher.litellm_endusertable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_default_budget_to_end_user_redundant_check():
+    """
+    Verifies that _apply_default_budget_to_end_user returns early if budget_id is already set,
+    preventing redundant writes as per Greptile P1.
+    """
+    from litellm.proxy.auth.auth_checks import _apply_default_budget_to_end_user
+    from litellm.proxy._types import LiteLLM_EndUserTable
+
+    # Setup end user with budget_id already set
+    end_user_obj = LiteLLM_EndUserTable(
+        user_id="test-user", budget_id="existing-budget", blocked=False
+    )
+
+    # Mock dependencies
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.alerting_handler = AsyncMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer = MagicMock()
+
+    # EXECUTE
+    result = await _apply_default_budget_to_end_user(
+        end_user_obj=end_user_obj,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # VERIFY: returned early without calling any database or cache methods
+    assert result == end_user_obj
+    prisma_client.db.litellm_budgettable.find_unique.assert_not_called()
+    proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_end_user_spend_zero_spend_budget_update():
+    """
+    Verifies that budget_id updates are persisted even when response_cost is 0.
+    Addresses the 'silent drop' P1 issue.
+    """
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    user_id = "test-user-zero-spend"
+    budget_id = "new-budget-id"
+
+    # Mock Prisma
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_endusertable.upsert = MagicMock()
+    
+    mock_tx = MagicMock()
+    mock_tx.batch_.return_value.__aenter__ = AsyncMock(return_value=mock_batcher)
+    mock_tx.batch_.return_value.__aexit__ = AsyncMock()
+    
+    prisma_client = MagicMock()
+    prisma_client.db.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
+    prisma_client.db.tx.return_value.__aexit__ = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.alerting_handler = AsyncMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    # EXECUTE: Spend is 0 (or empty dict), but budget_id needs update
+    await ProxyUpdateSpend.update_end_user_spend(
+        n_retry_times=0,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        end_user_list_transactions={},  # Zero spend
+        end_user_budget_updates={user_id: budget_id},
+    )
+
+    # VERIFY: upsert should have been called despite zero spend
+    mock_batcher.litellm_endusertable.upsert.assert_called()
