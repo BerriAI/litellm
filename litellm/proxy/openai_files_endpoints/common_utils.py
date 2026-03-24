@@ -770,6 +770,19 @@ async def get_batch_from_database(
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
         await resolve_input_file_id_to_unified(response, prisma_client)
 
+        # Enterprise managed_files post_call_success_hook needs these to unify
+        # output_file_id / error_file_id when the batch is served from DB (terminal state).
+        # Without them, output_file_id stays a raw provider id (e.g. file-batch-output-...).
+        if not hasattr(response, "_hidden_params") or response._hidden_params is None:
+            response._hidden_params = {}
+        if unified_batch_id:
+            response._hidden_params["unified_batch_id"] = unified_batch_id
+            model_id = get_model_id_from_unified_batch_id(unified_batch_id)
+            if model_id:
+                response._hidden_params["model_id"] = model_id
+        if response.input_file_id:
+            response._hidden_params["unified_file_id"] = response.input_file_id
+
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"
         )

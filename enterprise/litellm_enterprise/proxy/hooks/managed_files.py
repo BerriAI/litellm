@@ -1026,9 +1026,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             original_response_id = response.id
 
             if (unified_batch_id or unified_file_id) and model_id:
-                response.id = self.get_unified_batch_id(
-                    batch_id=response.id, model_id=model_id
-                )
+                # DB-served batches already use the encoded unified batch id as response.id;
+                # do not re-wrap with get_unified_batch_id (would corrupt the id).
+                if not _is_base64_encoded_unified_file_id(response.id):
+                    response.id = self.get_unified_batch_id(
+                        batch_id=response.id, model_id=model_id
+                    )
 
                 # Handle both output_file_id and error_file_id
                 for file_attr in ["output_file_id", "error_file_id"]:
