@@ -6,25 +6,54 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getLicenseInfo, LicenseInfo } from "./networking";
 
 const EXPIRY_WARNING_DAYS = 14;
+/** Re-fetch license info every 6 hours so long-lived sessions pick up expiry. */
+const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export const LicenseExpiryBanner: React.FC = () => {
   const { accessToken } = useAuthorized();
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     if (!accessToken) return;
 
     let cancelled = false;
-    getLicenseInfo(accessToken)
-      .then((info) => {
-        if (!cancelled) setLicenseInfo(info);
-      })
-      .catch(() => null);
+
+    const fetchLicense = () => {
+      getLicenseInfo(accessToken)
+        .then((info) => {
+          if (!cancelled) {
+            setLicenseInfo(info);
+            setFetchError(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setFetchError(true);
+        });
+    };
+
+    fetchLicense();
+    const intervalId = setInterval(fetchLicense, REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
+      clearInterval(intervalId);
     };
   }, [accessToken]);
+
+  if (fetchError) {
+    return (
+      <Alert
+        message="Unable to verify enterprise license"
+        description="Could not reach the license server. If your license is near expiry, you may not see a warning. Please check your connection or contact support."
+        type="warning"
+        showIcon
+        banner
+        closable={false}
+        style={{ marginBottom: 0, borderRadius: 0 }}
+      />
+    );
+  }
 
   if (!licenseInfo?.has_license || !licenseInfo.expiration_date) {
     return null;

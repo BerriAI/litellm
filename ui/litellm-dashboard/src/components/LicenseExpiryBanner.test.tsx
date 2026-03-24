@@ -95,7 +95,7 @@ describe("LicenseExpiryBanner", () => {
   });
 
   it("should show a warning banner when license expires within 14 days", async () => {
-    // Now is 2026-03-15T12:00:00Z, exp is 2026-03-22T23:59:59 => ~7.5 days => ceil = 8
+    // Now is 2026-03-15T12:00:00Z, exp is 2026-03-22T23:59:59Z (UTC) => ~7.5 days => ceil = 8
     mockGetLicenseInfo.mockResolvedValue(makeLicense("2026-03-22"));
 
     render(<LicenseExpiryBanner />);
@@ -106,7 +106,7 @@ describe("LicenseExpiryBanner", () => {
   });
 
   it("should show singular 'day' when 1 day remains", async () => {
-    // Now is 2026-03-15T12:00:00Z, exp is 2026-03-15T23:59:59 => ~0.5 days => ceil = 1
+    // Now is 2026-03-15T12:00:00Z, exp is 2026-03-15T23:59:59Z (UTC) => ~0.5 days => ceil = 1
     mockGetLicenseInfo.mockResolvedValue(makeLicense("2026-03-15"));
 
     render(<LicenseExpiryBanner />);
@@ -171,6 +171,16 @@ describe("LicenseExpiryBanner", () => {
     await waitFor(() => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
+  });
+
+  it("should show a warning when getLicenseInfo API call fails", async () => {
+    mockGetLicenseInfo.mockRejectedValue(new Error("Network error"));
+
+    render(<LicenseExpiryBanner />);
+
+    expect(
+      await screen.findByText("Unable to verify enterprise license")
+    ).toBeInTheDocument();
   });
 
   it("should render nothing when expiration_date is unparseable", async () => {
