@@ -345,3 +345,45 @@ async def test_release_lock_reuses_registered_script(pod_lock_manager, mock_redi
     await pod_lock_manager.release_lock(cronjob_id="test_job")
 
     assert mock_redis.async_register_script.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_release_lock_lua_path_emits_released_event(
+    pod_lock_manager, mock_redis
+):
+    """
+    Test that _emit_released_lock_event is called when the Lua path returns 1
+    (successful release).
+    """
+    script_callable = AsyncMock(return_value=1)
+    mock_redis.async_register_script = MagicMock(return_value=script_callable)
+
+    with patch.object(pod_lock_manager, "_emit_released_lock_event") as mock_emit:
+        await pod_lock_manager.release_lock(cronjob_id="test_job")
+
+    mock_emit.assert_called_once_with(
+        cronjob_id="test_job", pod_id=pod_lock_manager.pod_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(
+    pod_lock_manager, mock_redis
+):
+    """
+    Test that release_lock falls back to GET+DEL when Lua script execution
+    raises (e.g. Redis restart cleared loaded scripts).
+    """
+    script_callable = AsyncMock(side_effect=Exception("NOSCRIPT"))
+    mock_redis.async_register_script = MagicMock(return_value=script_callable)
+    mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id
+    mock_redis.async_delete_cache.return_value = 1
+
+    await pod_lock_manager.release_lock(cronjob_id="test_job")
+
+    # Lua failed — should have fallen back to GET+DEL
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_called_once_with(lock_key)
+    mock_redis.async_delete_cache.assert_called_once_with(lock_key)
+    # Cached script handle should be reset so next call re-registers
+    assert pod_lock_manager._release_lock_script is None
