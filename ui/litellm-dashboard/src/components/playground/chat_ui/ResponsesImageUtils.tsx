@@ -4,16 +4,26 @@ import { MessageType, MultimodalContent } from "./types";
  * Ensures an image src URL uses a safe scheme (blob:, data:, http:, https:).
  * Returns an empty string for anything else (e.g. javascript: URIs) to
  * prevent XSS via img src injection.
+ *
+ * Uses URL parsing so the returned value (`parsed.href`) is reconstructed from
+ * parsed components, breaking the taint chain for static-analysis tools like
+ * CodeQL that track the raw user-provided string.
  */
 export const sanitizeImageSrc = (url: string | undefined): string => {
   if (!url) return "";
-  if (
-    url.startsWith("blob:") ||
-    url.startsWith("data:") ||
-    url.startsWith("http://") ||
-    url.startsWith("https://")
-  ) {
-    return url;
+  try {
+    const parsed = new URL(url);
+    const proto = parsed.protocol;
+    if (
+      proto === "blob:" ||
+      proto === "data:" ||
+      proto === "http:" ||
+      proto === "https:"
+    ) {
+      return parsed.href;
+    }
+  } catch {
+    // invalid URL — fall through
   }
   return "";
 };

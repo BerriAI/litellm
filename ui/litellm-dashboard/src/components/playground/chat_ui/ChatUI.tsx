@@ -492,7 +492,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleImageUpload = (file: File) => {
     setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
+    const rawUrl = URL.createObjectURL(file);
+    // Validate the blob URL protocol to break the taint chain for static analysis.
+    // URL.createObjectURL always returns a blob: URL, but we verify explicitly so
+    // CodeQL can confirm no untrusted scheme reaches <img src>.
+    const previewUrl = sanitizeImageSrc(rawUrl);
     setImagePreviewUrls((prev) => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
