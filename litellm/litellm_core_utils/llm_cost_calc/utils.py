@@ -673,13 +673,17 @@ def generic_cost_per_token(  # noqa: PLR0915
     )
     has_double_counting = cache_hit > 0 and accounted_tokens > usage.prompt_tokens
 
-    # Some models use alternative billing dimensions (character_count, video_length_seconds)
-    # that account for prompt_tokens without being included in the per-token detail fields.
-    # When these are active, a gap between accounted_tokens and prompt_tokens is expected
-    # and must NOT be filled. Note: image_count is additive billing, not alternative.
+    # Some models use alternative billing dimensions that account for prompt_tokens
+    # without being included in the per-token detail fields. When any of these are
+    # active, a gap between accounted_tokens and prompt_tokens is expected and must
+    # NOT be filled:
+    #   - character_count / video_length_seconds: replace per-token billing entirely
+    #   - image_count: additive flat-rate billing; the image-URL tokens are already
+    #     reflected in prompt_tokens and billed separately via input_cost_per_image
     has_non_token_alternative_billing = (
         prompt_tokens_details["character_count"] > 0
         or prompt_tokens_details["video_length_seconds"] > 0
+        or prompt_tokens_details["image_count"] > 0
     )
 
     if has_double_counting:
@@ -697,7 +701,6 @@ def generic_cost_per_token(  # noqa: PLR0915
     elif (
         accounted_tokens < usage.prompt_tokens
         and not has_non_token_alternative_billing
-        and prompt_tokens_details["image_count"] == 0
     ):
         # Unaccounted tokens fix: inline documents (PDF, DOCX, etc.) are counted
         # in prompt_tokens by the provider but not broken out into any detail field.
@@ -707,10 +710,9 @@ def generic_cost_per_token(  # noqa: PLR0915
         # 1. text_tokens=0 (provider didn't set it) - gap fills the entire remainder
         # 2. text_tokens>0 but < total (mixed content like PDF+text) - gap fills remainder
         #
-        # Skip filling when:
-        # - Non-token alternative billing is active (character_count, video_length_seconds)
-        # - Image count billing is active (image_count > 0) - those tokens are already
-        #   billed separately via input_cost_per_image and shouldn't be double-charged
+        # Skip filling when has_alternative_billing is True (character_count,
+        # video_length_seconds, or image_count are active) - those dimensions
+        # already account for the prompt_tokens gap.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
 
