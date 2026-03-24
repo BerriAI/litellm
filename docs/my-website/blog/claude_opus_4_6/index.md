@@ -3,18 +3,9 @@ slug: claude_opus_4_6
 title: "Day 0 Support: Claude Opus 4.6"
 date: 2026-02-05T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - sameer
+  - ishaan-alt
+  - krrish
 description: "Day 0 support for Claude Opus 4.6 on LiteLLM AI Gateway - use across Anthropic, Azure, Vertex AI, and Bedrock."
 tags: [anthropic, claude, opus 4.6]
 hide_table_of_contents: false
@@ -24,6 +15,8 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 LiteLLM now supports Claude Opus 4.6 on Day 0. Use it across Anthropic, Azure, Vertex AI, and Bedrock through the LiteLLM AI Gateway.
+
+{/* truncate */}
 
 ## Docker Image
 
@@ -185,7 +178,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 model_list:
   - model_name: claude-opus-4-6
     litellm_params:
-      model: bedrock/anthropic.claude-opus-4-6-v1:0
+      model: bedrock/anthropic.claude-opus-4-6-v1
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-east-1
@@ -389,6 +382,10 @@ Compaction blocks are also supported in streaming mode. You'll receive:
 
 ### Adaptive Thinking
 
+:::note
+When using `reasoning_effort` with Claude Opus 4.6, all values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly (see "Native thinking param" tab below).
+:::
+
 <Tabs>
 <TabItem value="completions" label="/chat/completions">
 
@@ -432,6 +429,21 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
         }
     ]
 }'
+```
+
+</TabItem>
+<TabItem value="native" label="Native thinking param">
+
+Use the `thinking` parameter directly for adaptive thinking via the SDK:
+
+```python
+import litellm
+
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "Solve this complex problem: What is the optimal strategy for..."}],
+  thinking={"type": "adaptive"},
+)
 ```
 
 </TabItem>

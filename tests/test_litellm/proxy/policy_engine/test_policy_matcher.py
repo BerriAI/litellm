@@ -64,6 +64,70 @@ class TestPolicyMatcherScopeMatching:
         assert PolicyMatcher.scope_matches(scope, context) is True
 
 
+class TestPolicyMatcherScopeMatchingWithTags:
+    """Test scope matching with tag patterns."""
+
+    def test_scope_tag_matching(self):
+        """Test scope tag matching: exact, wildcard, no-match, and empty context tags."""
+        # Exact match
+        scope = PolicyScope(teams=["*"], keys=["*"], models=["*"], tags=["healthcare"])
+        context = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["healthcare", "internal"],
+        )
+        assert PolicyMatcher.scope_matches(scope, context) is True
+
+        # Wildcard match
+        scope_wc = PolicyScope(teams=["*"], keys=["*"], models=["*"], tags=["health-*"])
+        context_wc = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["health-prod"],
+        )
+        assert PolicyMatcher.scope_matches(scope_wc, context_wc) is True
+
+        # No match — wrong tag
+        context_wrong = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["finance"],
+        )
+        assert PolicyMatcher.scope_matches(scope, context_wrong) is False
+
+        # No match — context has no tags
+        context_none = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4", tags=None,
+        )
+        assert PolicyMatcher.scope_matches(scope, context_none) is False
+
+        # Scope without tags matches any context (opt-in semantics)
+        scope_no_tags = PolicyScope(teams=["*"], keys=["*"], models=["*"])
+        assert PolicyMatcher.scope_matches(scope_no_tags, context) is True
+
+    def test_scope_tags_and_team_combined(self):
+        """Test scope with both tags and team — both must match (AND logic)."""
+        scope = PolicyScope(teams=["team-a"], keys=["*"], models=["*"], tags=["healthcare"])
+
+        # Both match
+        context_both = PolicyMatchContext(
+            team_alias="team-a", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        assert PolicyMatcher.scope_matches(scope, context_both) is True
+
+        # Tag matches, team doesn't
+        context_wrong_team = PolicyMatchContext(
+            team_alias="team-b", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        assert PolicyMatcher.scope_matches(scope, context_wrong_team) is False
+
+        # Team matches, tag doesn't
+        context_wrong_tag = PolicyMatchContext(
+            team_alias="team-a", key_alias="key", model="gpt-4",
+            tags=["finance"],
+        )
+        assert PolicyMatcher.scope_matches(scope, context_wrong_tag) is False
+
+
 class TestPolicyMatcherWithAttachments:
     """Test getting matching policies via attachments."""
 

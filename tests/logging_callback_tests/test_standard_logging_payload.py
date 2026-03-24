@@ -721,6 +721,190 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     print("✅ Cost breakdown missing test passed!")
 
 
+@pytest.mark.parametrize(
+    "use_combined_usage_object",
+    [False, True],
+    ids=["normal_usage_dict", "combined_usage_object"],
+)
+def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
+    """
+    Regression test: verify that usage data flows correctly through
+    get_standard_logging_object_payload without unnecessary Pydantic round-trips.
+
+    Checks:
+    - usage_object in StandardLoggingMetadata is a plain dict with correct token values
+    - prompt_tokens, completion_tokens, total_tokens on the payload match the usage dict
+    - Works for both normal usage dict path and combined_usage_object (realtime API) path
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
+    from datetime import datetime
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-usage-roundtrip",
+        function_id="test-fn",
+    )
+
+    mock_response = {
+        "id": "chatcmpl-usage-test",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 42,
+            "completion_tokens": 58,
+            "total_tokens": 100,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "response_cost": 0.01,
+        "custom_llm_provider": "openai",
+    }
+
+    if use_combined_usage_object:
+        kwargs["combined_usage_object"] = Usage(
+            prompt_tokens=42, completion_tokens=58, total_tokens=100
+        )
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+
+    # Top-level token fields must match
+    assert payload["prompt_tokens"] == 42
+    assert payload["completion_tokens"] == 58
+    assert payload["total_tokens"] == 100
+
+    # usage_object in metadata must be a plain dict (not a Pydantic model)
+    usage_obj = payload["metadata"]["usage_object"]
+    assert isinstance(usage_obj, dict)
+    assert usage_obj["prompt_tokens"] == 42
+    assert usage_obj["completion_tokens"] == 58
+    assert usage_obj["total_tokens"] == 100
+
+
+def test_standard_logging_payload_uses_actual_model_for_azure_router():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model-router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-opt-in",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model-router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-opt-in",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
+def test_standard_logging_payload_uses_actual_model_for_azure_router_with_underscore():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model_router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-underscore",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model_router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-underscore",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
 def test_merge_litellm_metadata_basic():
     """
     Test that merge_litellm_metadata correctly merges metadata and litellm_metadata.

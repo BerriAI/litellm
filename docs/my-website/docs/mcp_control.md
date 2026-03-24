@@ -323,7 +323,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/dev_group/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -335,7 +335,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 }'
 ```
 
-This example uses URL namespacing to access all servers in the "dev_group" access group.
+This example uses the `x-mcp-servers` header to access all servers in the "dev_group" access group. Use `server_url: "litellm_proxy"` when calling the proxy's `/v1/responses` endpoint—do not use the full proxy URL.
 
 </TabItem>
 
@@ -423,7 +423,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -436,7 +436,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 }'
 ```
 
-This configuration restricts the request to only use tools from the specified MCP servers.
+This configuration restricts the request to only use tools from the specified MCP servers. Use `server_url: "litellm_proxy"` when calling the proxy's `/v1/responses` endpoint.
 
 </TabItem>
 

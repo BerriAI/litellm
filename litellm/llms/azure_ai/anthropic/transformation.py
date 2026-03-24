@@ -2,10 +2,6 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
-
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
@@ -53,7 +49,7 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
@@ -90,12 +86,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
 
-        # Filter out unsupported beta headers for Azure AI
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="azure_ai",
-        )
-
         return headers
 
     def transform_request(
@@ -125,4 +115,3 @@ class AzureAnthropicConfig(AnthropicConfig):
         data.pop("stream_options", None)
 
         return data
-

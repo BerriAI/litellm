@@ -5,10 +5,7 @@ OpenAI Moderation Guardrail Integration for LiteLLM
 
 from typing import (
     TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
     Dict,
-    List,
     Literal,
     Optional,
     Type,
@@ -27,15 +24,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from .base import OpenAIGuardrailBase
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
@@ -58,7 +54,9 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         guardrail_name: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = None,
+        model: Optional[
+            Literal["omni-moderation-latest", "text-moderation-latest"]
+        ] = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
@@ -75,7 +73,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             supported_event_hooks=supported_event_hooks,
             **kwargs,
         )
-        
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -83,10 +81,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         # Store configuration
         self.api_key = api_key or self._get_api_key()
         self.api_base = api_base or "https://api.openai.com/v1"
-        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = model or "omni-moderation-latest"
+        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = (
+            model or "omni-moderation-latest"
+        )
 
         if not self.api_key:
-            raise ValueError("OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration.")
+            raise ValueError(
+                "OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration."
+            )
 
         verbose_proxy_logger.debug(
             f"Initialized OpenAI Moderation Guardrail: {guardrail_name} with model: {self.model}"
@@ -98,7 +100,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         import litellm
         from litellm.secret_managers.main import get_secret_str
-        
+
         return (
             os.environ.get("OPENAI_API_KEY")
             or litellm.api_key
@@ -106,21 +108,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             or get_secret_str("OPENAI_API_KEY")
         )
 
-    async def async_make_request(
-        self, input_text: str
-    ) -> "OpenAIModerationResponse":
+    async def async_make_request(self, input_text: str) -> "OpenAIModerationResponse":
         """
         Make a request to the OpenAI Moderation API.
         """
-        request_body = {
-            "model": self.model,
-            "input": input_text
-        }
-        
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation guard request: %s", request_body
-        )
-        
+        request_body = {"model": self.model, "input": input_text}
+
+        verbose_proxy_logger.debug("OpenAI Moderation guard request: %s", request_body)
+
         response = await self.async_handler.post(
             url=f"{self.api_base}/moderations",
             headers={
@@ -133,7 +128,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         verbose_proxy_logger.debug(
             "OpenAI Moderation guard response: %s", response.json()
         )
-        
+
         if response.status_code != 200:
             raise HTTPException(
                 status_code=response.status_code,
@@ -144,9 +139,12 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             )
 
         from litellm.types.llms.openai import OpenAIModerationResponse
+
         return OpenAIModerationResponse(**response.json())
 
-    def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
+    def _check_moderation_result(
+        self, moderation_response: "OpenAIModerationResponse"
+    ) -> None:
         """
         Check if the moderation response indicates harmful content and raise exception if needed.
         """
@@ -168,10 +166,10 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             }
 
             verbose_proxy_logger.warning(
-                "OpenAI Moderation: Content flagged for violations: %s", 
-                violation_details
+                "OpenAI Moderation: Content flagged for violations: %s",
+                violation_details,
             )
-            
+
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -180,6 +178,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 },
             )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -189,156 +188,135 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """
         Apply OpenAI moderation guardrail using the unified guardrail interface.
-        
+
         This method is called by the UnifiedLLMGuardrails system for all endpoint types
         (chat completions, embeddings, responses API, etc.).
-        
+
         Args:
             inputs: GenericGuardrailAPIInputs containing texts and/or structured_messages
             request_data: The original request data
             input_type: Whether this is a "request" (pre-call) or "response" (post-call)
             logging_obj: Optional logging object
-            
+
         Returns:
             The inputs unchanged (moderation doesn't modify content, only blocks)
-            
+
         Raises:
             HTTPException: If content violates moderation policy
         """
         # Extract text to moderate from inputs
         text_to_moderate: Optional[str] = None
-        
+
         # Prefer structured_messages if available (has role context)
         if structured_messages := inputs.get("structured_messages"):
             text_to_moderate = self.get_user_prompt(structured_messages)
-        
+
         # Fall back to texts
         if not text_to_moderate:
             if texts := inputs.get("texts"):
                 # Join all texts for moderation
                 text_to_moderate = "\n".join(texts)
-        
+
         if not text_to_moderate:
             verbose_proxy_logger.debug(
                 "OpenAI Moderation: No text content to moderate in inputs"
             )
             return inputs
-                
+
         # Make moderation request
         moderation_response = await self.async_make_request(input_text=text_to_moderate)
-        
+
+        # Stash full moderation response in request_data for logging
+        # (Model Armor pattern — per-request dict avoids race conditions)
+        if isinstance(request_data, dict):
+            metadata = request_data.get("metadata") or {}
+            request_data["metadata"] = metadata
+            metadata["_openai_moderation_response"] = moderation_response.model_dump()
+
         # Check if content is flagged and raise exception if needed
         self._check_moderation_result(moderation_response)
-        
+
         # Moderation doesn't modify content, just blocks - return inputs unchanged
         return inputs
 
-
-    @log_guardrail_information
-    async def async_post_call_streaming_iterator_hook(
+    def _process_response(
         self,
-        user_api_key_dict: "UserAPIKeyAuth",
-        response: Any,
-        request_data: Dict[str, Any],
-    ) -> AsyncGenerator["ModelResponseStream", None]:
+        response: Optional[Dict],
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[Dict] = None,
+    ):
         """
-        Process streaming response chunks for OpenAI moderation.
+        Override to log the full OpenAI Moderation API response instead of
+        the decorator's simplified "allow"/"mask" string.
 
-        Collects all chunks from the stream, assembles them into a complete response,
-        and applies moderation check. If content violates moderation policy, raises HTTPException.
+        Follows the Model Armor pattern (model_armor.py:325-360).
         """
-        # Import here to avoid circular imports
-        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-        from litellm.main import stream_chunk_builder
-        from litellm.types.utils import TextCompletionResponse
+        if isinstance(request_data, dict):
+            metadata = request_data.get("metadata") or {}
+            request_data["metadata"] = metadata  # anchor so pop() mutates the real dict
+        else:
+            metadata = {}
 
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation: Running streaming response scan"
+        # .pop() cleans up the internal key so it doesn't leak to downstream
+        # loggers. Falls back to "allow" when no moderation call was made
+        # (e.g. no text to moderate — early return in apply_guardrail).
+        guardrail_response = metadata.pop("_openai_moderation_response", "allow")
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+        )
+        return response
+
+    def _process_error(
+        self,
+        e: Exception,
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+    ):
+        """
+        Override to log the full OpenAI Moderation API response on error
+        instead of the stringified exception.
+        """
+        guardrail_status: GuardrailStatus = (
+            "guardrail_intervened"
+            if self._is_guardrail_intervention(e)
+            else "guardrail_failed_to_respond"
         )
 
-        # Collect all chunks to process them together
-        all_chunks: List["ModelResponseStream"] = []
-        async for chunk in response:
-            all_chunks.append(chunk)
+        if isinstance(request_data, dict):
+            metadata = request_data.get("metadata") or {}
+            request_data["metadata"] = metadata  # anchor so pop() mutates the real dict
+        else:
+            metadata = {}
 
-        # Assemble the complete response from chunks
-        assembled_model_response: Optional[
-            Union["ModelResponse", TextCompletionResponse]
-        ] = stream_chunk_builder(
-            chunks=all_chunks,
+        # Use the stashed moderation response if available, fall back to exception
+        guardrail_response: Union[dict, Exception, str] = metadata.pop(
+            "_openai_moderation_response", e
         )
 
-        if isinstance(assembled_model_response, (type(None), TextCompletionResponse)):
-            # If we can't assemble a ModelResponse or it's a text completion, 
-            # just yield the original chunks without moderation
-            verbose_proxy_logger.warning(
-                "OpenAI Moderation: Could not assemble ModelResponse from chunks, skipping moderation"
-            )
-            for chunk in all_chunks:
-                yield chunk
-            return
-
-        # Extract response text for moderation
-        response_text = self._extract_response_text(assembled_model_response)
-        if response_text:
-            verbose_proxy_logger.debug(
-                f"OpenAI Moderation: Streaming response text: {response_text[:100]}..."  # Log first 100 chars
-            )
-            
-            # Make moderation request - this will raise HTTPException if content is flagged
-            moderation_response = await self.async_make_request(
-                input_text=response_text,
-            )
-            
-            # Check if content is flagged and raise exception if needed
-            self._check_moderation_result(moderation_response)
-
-        # If we reach here, content passed moderation - yield the original chunks
-        mock_response = MockResponseIterator(
-            model_response=assembled_model_response
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response,
+            request_data=request_data,
+            guardrail_status=guardrail_status,
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
         )
-
-        # Return the reconstructed stream
-        async for chunk in mock_response:
-            yield chunk
-
-    def _extract_response_text(self, response: "ModelResponse") -> Optional[str]:
-        """
-        Extract text content from the model response for moderation.
-        """
-        if not hasattr(response, 'choices') or not response.choices:
-            return None
-
-        response_texts = []
-        for choice in response.choices:
-            try:
-                # Try to get content from message (chat completion)
-                message = getattr(choice, 'message', None)
-                if message:
-                    content = getattr(message, 'content', None)
-                    if content and isinstance(content, str):
-                        response_texts.append(content)
-                        continue
-                
-                # Try to get text (text completion)
-                text = getattr(choice, 'text', None)
-                if text and isinstance(text, str):
-                    response_texts.append(text)
-                    continue
-                
-                # Try to get content from delta (streaming)
-                delta = getattr(choice, 'delta', None)
-                if delta:
-                    content = getattr(delta, 'content', None)
-                    if content and isinstance(content, str):
-                        response_texts.append(content)
-                        continue
-                        
-            except (AttributeError, TypeError):
-                # Skip choices that don't have expected attributes
-                continue
-
-        return "\n".join(response_texts) if response_texts else None
+        raise e
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

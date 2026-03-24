@@ -70,7 +70,9 @@ def _route_has_dependency(route, dependency) -> bool:
     dependant = getattr(route, "dependant", None)
     if dependant is None:
         return False
-    return any(getattr(dep, "call", None) == dependency for dep in dependant.dependencies)
+    return any(
+        getattr(dep, "call", None) == dependency for dep in dependant.dependencies
+    )
 
 
 class TestExecuteWithMcpClient:
@@ -481,7 +483,9 @@ class TestListToolsRestAPI:
 
         captured = {"called": False}
 
-        async def fake_get_tools(server, server_auth_header, raw_headers=None):
+        async def fake_get_tools(
+            server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None
+        ):
             captured["called"] = True
             captured["server"] = server
             captured["auth_header"] = server_auth_header
@@ -524,6 +528,175 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
+
+    async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
+        """When server_id is a name string, it should be resolved to its UUID
+        and used for the tools lookup when the UUID is in allowed_server_ids."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-abc-123",
+            name="my-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "my-server"
+        stub_server.server_name = "my-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "my-server"}
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        # Allowed list contains the UUID, not the name
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["uuid-abc-123"]
+
+        captured = {"called": False, "server_arg": None}
+
+        async def fake_get_tools(server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None):
+            captured["called"] = True
+            captured["server_arg"] = server
+            return ["tool-x"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_name",
+            lambda name: stub_server if name == "my-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-abc-123" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="my-server",  # pass name, not UUID
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert captured["called"] is True
+        assert captured["server_arg"] is stub_server
+        assert result["tools"] == ["tool-x"]
+        assert result["error"] is None
+
+    async def test_name_not_in_allowed_returns_access_denied(self, monkeypatch):
+        """When name resolves to a server whose UUID is NOT in allowed_server_ids,
+        the result should be an access_denied error (not a crash or silent pass)."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="uuid-xyz-999",
+            name="restricted-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.available_on_public_internet = True
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        # No allowed servers for this key
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_name",
+            lambda name: stub_server if name == "restricted-server" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "uuid-xyz-999" else None,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="restricted-server",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == []
+        assert result["error"] == "unexpected_error"
+        assert "access_denied" in result["message"]
+
+    async def test_oauth2_user_token_injected_for_single_server(self, monkeypatch):
+        """For a single-server OAuth2 request, _get_user_oauth_extra_headers is called
+        and the returned headers are forwarded to _get_tools_for_single_server."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="oauth-server-id",
+            name="oauth-server",
+            transport=MCPTransport.sse,
+        )
+        stub_server.alias = "oauth-server"
+        stub_server.server_name = "oauth-server"
+        stub_server.available_on_public_internet = True
+        stub_server.allowed_tools = None
+        stub_server.mcp_info = {"server_name": "oauth-server"}
+        stub_server.auth_type = MCPAuth.oauth2
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["oauth-server-id"]
+
+        oauth_headers = {"Authorization": "Bearer user-oauth-token"}
+
+        async def fake_get_user_oauth_extra_headers(server, user_api_key_dict, prefetched_creds=None):
+            return oauth_headers
+
+        captured = {}
+
+        async def fake_get_tools(server, server_auth_header, raw_headers=None, user_api_key_auth=None, extra_headers=None):
+            captured["server"] = server
+            captured["auth_header"] = server_auth_header
+            return ["oauth-tool"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers, raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_mcp_server_by_id",
+            lambda sid: stub_server if sid == "oauth-server-id" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints, "_get_user_oauth_extra_headers",
+            fake_get_user_oauth_extra_headers, raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="oauth-server-id",
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+        )
+
+        assert result["tools"] == ["oauth-tool"]
+        assert result["error"] is None
 
 
 class TestListPromptsRestAPI:
@@ -905,12 +1078,14 @@ class TestCallToolRestAPI:
             return ["server-1"]
 
         class StubServer:
+            server_id = "server-1"
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
+            auth_type = None
 
         stub_server = StubServer()
 
@@ -978,3 +1153,293 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+
+
+class TestGetToolsForSingleServer:
+    """Test _get_tools_for_single_server with object_permission filtering"""
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_filters_tools_by_object_permission_mcp_tool_permissions(
+        self, monkeypatch
+    ):
+        """Test that tools are filtered by user_api_key_auth.object_permission.mcp_tool_permissions"""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        # Create mock tools
+        class MockTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+                self.inputSchema = {}
+
+        mock_tools = [
+            MockTool("tool1", "First tool"),
+            MockTool("tool2", "Second tool"),
+            MockTool("tool3", "Third tool"),
+        ]
+
+        # Mock _get_tools_from_server to return all tools
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        # Create server
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=None,  # No server-level filtering
+        )
+
+        # Create UserAPIKeyAuth with object_permission
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test-permission-id",
+            mcp_tool_permissions={"test-server-id": ["tool1", "tool3"]},
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=object_permission,
+        )
+
+        # Call the function
+        result = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+
+        # Verify only allowed tools are returned
+        assert len(result) == 2
+        tool_names = [tool.name for tool in result]
+        assert "tool1" in tool_names
+        assert "tool3" in tool_names
+        assert "tool2" not in tool_names
+
+    async def test_no_filtering_when_object_permission_is_none(self, monkeypatch):
+        """Test that all tools are returned when object_permission is None"""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+                self.inputSchema = {}
+
+        mock_tools = [
+            MockTool("tool1", "First tool"),
+            MockTool("tool2", "Second tool"),
+        ]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=None,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=None,
+        )
+
+        result = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+
+        # All tools should be returned
+        assert len(result) == 2
+
+    async def test_no_filtering_when_mcp_tool_permissions_is_none(self, monkeypatch):
+        """Test that all tools are returned when mcp_tool_permissions is None"""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+                self.inputSchema = {}
+
+        mock_tools = [
+            MockTool("tool1", "First tool"),
+            MockTool("tool2", "Second tool"),
+        ]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test-permission-id",
+            mcp_tool_permissions=None,  # No tool permissions set
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=object_permission,
+        )
+
+        result = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+
+        # All tools should be returned
+        assert len(result) == 2
+
+    async def test_no_filtering_when_server_not_in_mcp_tool_permissions(
+        self, monkeypatch
+    ):
+        """Test that all tools are returned when server is not in mcp_tool_permissions"""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+                self.inputSchema = {}
+
+        mock_tools = [
+            MockTool("tool1", "First tool"),
+            MockTool("tool2", "Second tool"),
+        ]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test-permission-id",
+            mcp_tool_permissions={"other-server-id": ["tool1"]},  # Different server
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=object_permission,
+        )
+
+        result = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+
+        # All tools should be returned since server is not in permissions
+        assert len(result) == 2
+
+    async def test_combines_server_allowed_tools_and_object_permission_filters(
+        self, monkeypatch
+    ):
+        """Test that both server.allowed_tools and object_permission.mcp_tool_permissions filters are applied"""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name, description):
+                self.name = name
+                self.description = description
+                self.inputSchema = {}
+
+        mock_tools = [
+            MockTool("tool1", "First tool"),
+            MockTool("tool2", "Second tool"),
+            MockTool("tool3", "Third tool"),
+            MockTool("tool4", "Fourth tool"),
+        ]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        # Server allows tool1, tool2, tool3
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=["tool1", "tool2", "tool3"],
+        )
+
+        # Object permission allows tool2, tool3, tool4
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="test-permission-id",
+            mcp_tool_permissions={"test-server-id": ["tool2", "tool3", "tool4"]},
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=object_permission,
+        )
+
+        result = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+
+        # Only tools in both lists should be returned (intersection): tool2, tool3
+        assert len(result) == 2
+        tool_names = [tool.name for tool in result]
+        assert "tool2" in tool_names
+        assert "tool3" in tool_names
+        assert "tool1" not in tool_names
+        assert "tool4" not in tool_names

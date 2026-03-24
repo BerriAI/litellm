@@ -2,12 +2,14 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
-from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    remove_custom_field_from_tools,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -61,7 +63,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if "response_format" in non_default_params:
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
-        
+
         optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
@@ -69,12 +71,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model,
             drop_params,
         )
-        
+
         # Restore original model name
         model = original_model
-        
-        return optional_params
 
+        return optional_params
 
     def transform_request(
         self,
@@ -92,12 +93,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if k not in self.aws_authentication_params
         }
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
-        
+
         _anthropic_request = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_params, 
+            optional_params=filtered_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -106,8 +107,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         _anthropic_request.pop("stream", None)
         # Bedrock Invoke doesn't support output_format parameter
         _anthropic_request.pop("output_format", None)
+        # Bedrock Invoke doesn't support output_config parameter
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        _anthropic_request.pop("output_config", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
+
+        # Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(_anthropic_request)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
@@ -119,15 +129,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
-            prompt_caching_set=False, 
+            prompt_caching_set=False,
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
         )
         beta_set.update(auto_betas)
 
-        if (
-            tool_search_used
-            and not (programmatic_tool_calling_used or input_examples_used)
+        if tool_search_used and not (
+            programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
@@ -136,13 +145,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Filter out beta headers that Bedrock Invoke doesn't support
         # Uses centralized configuration from anthropic_beta_headers_config.json
         beta_list = list(beta_set)
-        filtered_beta_list = filter_and_transform_beta_headers(
-            beta_headers=beta_list,
-            provider="bedrock",
-        )
-
-        if filtered_beta_list:
-            _anthropic_request["anthropic_beta"] = filtered_beta_list
+        _anthropic_request["anthropic_beta"] = beta_list
 
         return _anthropic_request
 

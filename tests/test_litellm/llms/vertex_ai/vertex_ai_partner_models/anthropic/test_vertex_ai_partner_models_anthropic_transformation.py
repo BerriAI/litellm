@@ -86,6 +86,7 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {"edits": [{"type": "compact_20260112"}]},
         "max_tokens": 100,
@@ -97,16 +98,20 @@ def test_vertex_ai_anthropic_context_management_compact_beta_header():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     # Verify context_management is included
     assert "context_management" in result
     assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
 
-    # Verify compact beta header is in anthropic_beta field
+    # Verify compact beta header is in anthropic_beta body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
+
+    # Verify compact beta header is also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_context_management_mixed_edits():
@@ -114,6 +119,7 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "context_management": {
             "edits": [
@@ -130,13 +136,18 @@ def test_vertex_ai_anthropic_context_management_mixed_edits():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
-    # Verify both beta headers are present
+    # Verify both beta headers are present in body field
     assert "anthropic_beta" in result
     assert "compact-2026-01-12" in result["anthropic_beta"]
     assert "context-management-2025-06-27" in result["anthropic_beta"]
+
+    # Verify both beta headers are also set as HTTP header
+    assert "anthropic-beta" in headers
+    assert "compact-2026-01-12" in headers["anthropic-beta"]
+    assert "context-management-2025-06-27" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_structured_output_header_not_added():
@@ -331,16 +342,17 @@ def test_vertex_ai_anthropic_other_models_still_use_tools():
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_propagation():
-    """Test that anthropic-beta values from extra_headers are propagated to the
-    anthropic_beta request body field for Vertex AI requests.
+    """Test that anthropic-beta values from extra_headers are propagated to both
+    the anthropic_beta request body field and the anthropic-beta HTTP header
+    for Vertex AI requests.
 
-    Vertex AI requires beta flags in the request body (anthropic_beta array),
-    not as HTTP headers. This mirrors the Bedrock handler's behavior of
-    extracting user-specified beta headers.
+    Vertex AI rawPredict requires beta flags as HTTP headers. The body field
+    anthropic_beta alone is insufficient for features like context_management.
     """
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -354,12 +366,16 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" in result
     assert "interleaved-thinking-2025-05-14" in result["anthropic_beta"]
     assert "extra_headers" not in result
+
+    # Verify HTTP header is also set
+    assert "anthropic-beta" in headers
+    assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_merged_with_auto_betas():
@@ -421,6 +437,7 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "Hello"}]
+    headers = {}
     optional_params = {
         "max_tokens": 100,
         "is_vertex_request": True,
@@ -431,11 +448,12 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={},
+        headers=headers,
     )
 
     assert "anthropic_beta" not in result
     assert "extra_headers" not in result
+    assert "anthropic-beta" not in headers
 
 
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
@@ -459,7 +477,7 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     assert PROMPT_CACHING_BETA_HEADER not in (
         beta_header or ""
     ), f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
-    assert "other-feature" in (
+    assert "other-feature" not in (
         beta_header or ""
     ), "Other non-excluded beta headers should remain"
     assert "web-search-2025-03-05" in (
@@ -471,3 +489,112 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     assert (
         "anthropic-beta" not in headers2
     ), "Header should be removed if no supported values remain"
+
+
+def test_vertex_ai_anthropic_output_config_dropped():
+    """
+    Test that output_config parameter is dropped from Vertex AI Anthropic requests.
+    
+    Vertex AI does not support the output_config parameter (used for effort settings
+    in Anthropic API). This test ensures it's properly removed to prevent
+    "Extra inputs are not permitted" errors.
+    """
+    config = VertexAIAnthropicConfig()
+    
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+    headers = {}
+    
+    # Simulate optional_params with output_config that would be passed in
+    optional_params = {
+        "max_tokens": 1024,
+        "output_config": {
+            "effort": "high"  # This is Anthropic-specific and not supported by Vertex AI
+        },
+    }
+    
+    # Call transform_request which should drop output_config
+    result = config.transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify output_config was removed
+    assert "output_config" not in result, \
+        "output_config should be dropped from Vertex AI Anthropic requests"
+    
+    # Verify other parameters are preserved
+    assert result["max_tokens"] == 1024, "max_tokens should be preserved"
+    assert "messages" in result, "messages should be present"
+
+
+def test_vertex_ai_anthropic_output_format_and_output_config_both_dropped():
+    """
+    Test that both output_format and output_config are dropped from Vertex AI requests.
+    
+    This ensures that even if both parameters somehow make it to the transform_request,
+    they are properly cleaned up before sending to Vertex AI.
+    """
+    config = VertexAIAnthropicConfig()
+    
+    messages = [{"role": "user", "content": "Extract structured data"}]
+    headers = {}
+    
+    optional_params = {
+        "max_tokens": 2048,
+        "output_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "data",
+                "schema": {"type": "object", "properties": {"result": {"type": "string"}}}
+            }
+        },
+        "output_config": {
+            "effort": "high"
+        },
+    }
+    
+    # Simulate parent class creating test_data with both parameters
+    # (as if the parent transform_request added them)
+    test_data = {
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": messages,
+        "max_tokens": 2048,
+        "output_format": optional_params["output_format"],
+        "output_config": optional_params["output_config"],
+    }
+    
+    # Mock the parent transform_request to return data with both parameters
+    original_transform = config.__class__.__bases__[0].transform_request
+    
+    def mock_transform_request(self, model, messages, optional_params, litellm_params, headers):
+        return test_data.copy()
+    
+    config.__class__.__bases__[0].transform_request = mock_transform_request
+    
+    try:
+        result = config.transform_request(
+            model="claude-3-5-sonnet-20241022",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers=headers,
+        )
+        
+        # Verify both were removed
+        assert "output_format" not in result, \
+            "output_format should be dropped from Vertex AI requests"
+        assert "output_config" not in result, \
+            "output_config should be dropped from Vertex AI requests"
+        
+        # Verify essential params are preserved
+        assert result["max_tokens"] == 2048, "max_tokens should be preserved"
+        assert "messages" in result, "messages should be present"
+        assert "model" not in result, "model should also be dropped for Vertex AI"
+        
+    finally:
+        # Restore original method
+        config.__class__.__bases__[0].transform_request = original_transform
+

@@ -470,9 +470,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             response = getattr(e, "response", None)
             if isinstance(response, httpx.Response):
                 try:
-                    status_code, detail_message = (
-                        self._parse_bedrock_guardrail_error_response(response)
-                    )
+                    (
+                        status_code,
+                        detail_message,
+                    ) = self._parse_bedrock_guardrail_error_response(response)
                     self.add_standard_logging_guardrail_information_to_request_data(
                         guardrail_provider=self.guardrail_provider,
                         guardrail_json_response={"error": detail_message},

@@ -23,10 +23,13 @@ vi.mock("../common/queryKeysFactory", () => ({
 
 // Mock data
 const mockUIConfig: LiteLLMWellKnownUiConfig = {
+  sso_configured: true,
   server_root_path: "/api",
   proxy_base_url: "https://proxy.example.com",
   auto_redirect_to_sso: true,
   admin_ui_disabled: false,
+  is_control_plane: false,
+  workers: [],
 };
 
 describe("useUIConfig", () => {
@@ -99,7 +102,10 @@ describe("useUIConfig", () => {
       server_root_path: "/v1",
       proxy_base_url: null,
       auto_redirect_to_sso: false,
+      sso_configured: false,
       admin_ui_disabled: true,
+      is_control_plane: false,
+      workers: [],
     };
 
     // Mock successful API call with different data

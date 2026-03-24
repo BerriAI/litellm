@@ -469,6 +469,7 @@ credential_list:
       api_version: "2023-05-15"
     credential_info:
       description: "Production credentials for EU region"
+      custom_llm_provider: "azure"
 ```
 
 #### Key Parameters
@@ -600,6 +601,22 @@ Since you shouldn't use 12.5, round down to **10** to leave a safety buffer. Thi
 - Each of the 8 workers will have a connection pool limit of 10
 - Total maximum connections: 8 workers × 10 connections = 80 connections
 - This stays safely under your database's 100 connection limit
+
+## LiteLLM License Key (Enterprise)
+
+To enable [LiteLLM Enterprise features](https://docs.litellm.ai/docs/proxy/enterprise), set your license key as an environment variable:
+
+```bash
+export LITELLM_LICENSE="eyJ..."
+```
+
+The license key is a JWT token provided when you purchase a LiteLLM Enterprise license. Once set, LiteLLM will automatically detect and activate enterprise features.
+
+You can also add it to your `.env` file:
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
 
 ## Extras
 
