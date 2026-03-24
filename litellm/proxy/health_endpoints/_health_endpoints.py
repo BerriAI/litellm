@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -29,6 +29,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
+    HealthCheckMode,
     _clean_endpoint_data,
     _get_health_check_attempts,
     _is_successful_health_check_result,
@@ -120,22 +121,7 @@ def _resolve_os_environ_variables(params: dict) -> dict:
 
 async def _run_test_connection_attempt(
     litellm_params: dict,
-    mode: Optional[
-        Literal[
-            "chat",
-            "completion",
-            "embedding",
-            "audio_speech",
-            "audio_transcription",
-            "image_generation",
-            "video_generation",
-            "batch",
-            "rerank",
-            "realtime",
-            "responses",
-            "ocr",
-        ]
-    ],
+    mode: HealthCheckMode,
     stream: bool,
 ) -> dict:
     """
@@ -147,13 +133,20 @@ async def _run_test_connection_attempt(
     successful manual request path used by the user.
     """
     if mode == "chat" and stream is True:
-        response = await run_with_timeout(
-            litellm.acompletion(
-                **litellm_params,
-                stream=True,
-            ),
-            HEALTH_CHECK_TIMEOUT_SECONDS,
-        )
+        try:
+            response = await run_with_timeout(
+                litellm.acompletion(
+                    **litellm_params,
+                    stream=True,
+                ),
+                HEALTH_CHECK_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            return {"error": str(exc), "mode_error": str(exc)}
+
+        if isinstance(response, dict) and "error" in response:
+            return response
+
         response_headers: dict = (
             getattr(response, "_hidden_params", {}).get("headers", {}) or {}
         )
@@ -877,22 +870,35 @@ async def _perform_single_model_health_check_and_save(
         model_info=model_info,
         litellm_params=litellm_params,
     )
+    strategy = _resolve_health_check_strategy(model_info)
+    attempts = _get_health_check_attempts(strategy)
 
     attempted_modes: list[str] = []
     result: dict = {"error": "Health check did not run"}
+    start_monotonic = time.monotonic()
 
-    for attempt_mode, stream in [("non_stream", False), ("stream", True)]:
+    for attempt_mode, stream in attempts:
         attempted_modes.append(attempt_mode)
+        elapsed = time.monotonic() - start_monotonic
+        remaining_timeout = timeout - elapsed
+
+        if remaining_timeout <= 0:
+            result = {
+                "error": "Timeout exceeded",
+                "mode_error": "Timeout exceeded before fallback completed",
+            }
+            break
+
         result = await _run_single_health_check_attempt(
             litellm_params=copy.deepcopy(effective_litellm_params),
             mode=health_check_mode,
             stream=stream,
-            timeout=timeout,
+            timeout=remaining_timeout,
         )
         if _is_successful_health_check_result(result):
             result = {
                 **result,
-                "health_check_strategy": "non_stream_then_stream",
+                "health_check_strategy": strategy,
                 "health_check_attempted_modes": attempted_modes,
                 "health_check_result_mode": attempt_mode,
             }
@@ -900,7 +906,7 @@ async def _perform_single_model_health_check_and_save(
     else:
         result = {
             **result,
-            "health_check_strategy": "non_stream_then_stream",
+            "health_check_strategy": strategy,
             "health_check_attempted_modes": attempted_modes,
             "health_check_result_mode": None,
         }
