@@ -59,7 +59,7 @@ pip install litellm==1.82.6.rc.1
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
 | OpenAI | `gpt-5.4-mini` | 272K | $0.75 | $4.50 | chat, vision, tools, reasoning, prompt caching |
 | OpenAI | `gpt-5.4-nano` | 1.05M | $0.20 | $1.25 | chat, vision, tools, reasoning, prompt caching |
-| Azure OpenAI | `azure/gpt-5.4-mini` | 1.05M | $0.75 | $4.50 | chat, vision, tools, reasoning |
+| Azure OpenAI | `azure/gpt-5.4-mini` | 272K | $0.75 | $4.50 | chat, vision, tools, reasoning |
 | Azure OpenAI | `azure/gpt-5.4-nano` | 1.05M | $0.20 | $1.25 | chat, vision, tools, reasoning |
 | OpenAI | `gpt-4-0314` | 8K | $30.00 | $60.00 | chat (restored; deprecation 2026-03-26) |
 | xAI | `xai/grok-4.20-beta-0309-reasoning` | 2M | $2.00 | $6.00 | chat, vision, tools, web search, reasoning |
@@ -74,11 +74,13 @@ pip install litellm==1.82.6.rc.1
 
 - **[OpenAI](../../docs/providers/openai)**
     - Add `supports_minimal_reasoning_effort` to entire `gpt-5.x` model series (gpt-5.1 through gpt-5.4, including codex, pro, nano, and mini variants) and `azure/gpt-5.1-2025-11-13`
+
+- **[xAI](../../docs/providers/xai)**
     - Add `supports_minimal_reasoning_effort` to `xai/grok-beta`
 
 - **[Azure AI](../../docs/providers/azure_ai)**
     - Add Cohere Rerank 4.0 models (`azure_ai/cohere-rerank-v4`, `azure_ai/cohere-rerank-v4-multilingual`) to model cost map
-    - Add DeepSeek V3.2 models (`azure_ai/DeepSeek-V3-2`, `azure_ai/DeepSeek-V3-2-speciale`) to model cost map
+    - Add DeepSeek V3.2 models (`azure_ai/deepseek-v3.2`, `azure_ai/deepseek-v3.2-speciale`) to model cost map
 
 - **[Google Vertex AI](../../docs/providers/vertex)**
     - Correct `supported_regions` for Vertex AI DeepSeek models - [PR #23864](https://github.com/BerriAI/litellm/pull/23864)
@@ -118,7 +120,6 @@ pip install litellm==1.82.6.rc.1
 
 - **[Azure AI](../../docs/providers/azure_ai)**
     - Preserve annotations in Bing Search grounding responses from Azure AI Agents - [PR #23939](https://github.com/BerriAI/litellm/pull/23939)
-    - Auto-route Azure `gpt-5.4+` tools+reasoning calls to Responses API - [PR #23926](https://github.com/BerriAI/litellm/pull/23926)
 
 - **[Mistral](../../docs/providers/mistral)**
     - Preserve diarization segments in transcription response — `segments` field was being dropped - [PR #23925](https://github.com/BerriAI/litellm/pull/23925)
@@ -302,7 +303,7 @@ No major secret manager changes in this release.
 
 ## 03/23/2026
 * New Models / Updated Models: 12 new
-* LLM API Endpoints: 6
+* LLM API Endpoints: 4
 * Management Endpoints / UI: 17
 * Logging / Guardrail / Prompt Management Integrations: 9
 * MCP Gateway: 2
