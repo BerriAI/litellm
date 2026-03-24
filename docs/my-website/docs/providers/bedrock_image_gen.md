@@ -134,6 +134,8 @@ response = image_edit(
 
 Pass `mask=...` for inpainting. For **outpainting**, use `taskType="OUTPAINTING"` with `mask=...` or `maskPrompt="..."`. For `taskType="INPAINTING"`, supply a mask or `maskPrompt` as well. Unsupported Bedrock models for image edit raise `ValueError` (no silent fallback to another provider config).
 
+For **`BACKGROUND_REMOVAL`**, the AWS request must not include `imageGenerationConfig`; LiteLLM omits it for that task even if you pass `size`, `n`, `seed`, etc. Additional Nova Canvas inference IDs for image edit should set **`supports_nova_canvas_image_edit`: true** in `model_prices_and_context_window.json` (see `amazon.nova-canvas-v1:0`).
+
 ## Using Inference Profiles with Image Generation
 
 For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:

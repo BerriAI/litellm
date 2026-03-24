@@ -314,6 +314,78 @@ def test_transform_request_background_removal():
     assert "image" in body["backgroundRemovalParams"]
 
 
+def test_transform_request_background_removal_omits_image_generation_config():
+    """AWS Nova Canvas does not allow imageGenerationConfig on BACKGROUND_REMOVAL."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"x")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="ignored",
+        image=img,
+        image_edit_optional_request_params={
+            "taskType": "BACKGROUND_REMOVAL",
+            "size": "512x512",
+            "seed": 42,
+            "quality": "standard",
+            "cfgScale": 7.5,
+            "n": 2,
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "BACKGROUND_REMOVAL"
+    assert "imageGenerationConfig" not in body
+
+
+def test_transform_request_image_variation_includes_image_generation_config():
+    """Non-BACKGROUND_REMOVAL tasks may include imageGenerationConfig when params are set."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"x")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="warm",
+        image=img,
+        image_edit_optional_request_params={"size": "1024x1024", "seed": 1},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "IMAGE_VARIATION"
+    assert "imageGenerationConfig" in body
+    assert body["imageGenerationConfig"]["width"] == 1024
+    assert body["imageGenerationConfig"]["height"] == 1024
+    assert body["imageGenerationConfig"]["seed"] == 1
+
+
+def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
+    """Routing uses supports_nova_canvas_image_edit in model_cost, not a hardcoded name substring."""
+    fake_id = "amazon.custom-bedrock-image-edit-v99:0"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        fake_id,
+        {
+            "litellm_provider": "bedrock",
+            "mode": "image_generation",
+            "supports_nova_canvas_image_edit": True,
+        },
+    )
+    assert BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id) is True
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "amazon.not-nova-canvas-v1:0",
+        {
+            "litellm_provider": "bedrock",
+            "mode": "image_generation",
+        },
+    )
+    assert (
+        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
+            "amazon.not-nova-canvas-v1:0"
+        )
+        is False
+    )
+
+
 def test_transform_response_to_openai_format():
     """Response maps images[] to ImageResponse.data b64_json."""
     config = BedrockAmazonNovaCanvasImageEditConfig()

@@ -125,9 +125,17 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 
     @classmethod
     def _is_nova_canvas_image_edit_model(cls, model: Optional[str] = None) -> bool:
-        if model and "amazon.nova-canvas" in model:
-            return True
-        return False
+        """
+        Use model_cost / get_model_info (supports_nova_canvas_image_edit) so new Nova Canvas
+        inference IDs are added via model_prices_and_context_window.json only.
+        """
+        if not model:
+            return False
+        try:
+            info = get_model_info(model, custom_llm_provider="bedrock")
+            return info.get("supports_nova_canvas_image_edit") is True
+        except Exception:
+            return False
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -245,7 +253,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             out_painting_mode=out_painting_mode,
         )
 
-        if image_generation_config:
+        # BACKGROUND_REMOVAL InvokeModel body must not include imageGenerationConfig (AWS rejects it).
+        if image_generation_config and body.get("taskType") != "BACKGROUND_REMOVAL":
             body["imageGenerationConfig"] = image_generation_config
 
         return body, {}
