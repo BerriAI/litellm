@@ -238,6 +238,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    "litellm_provider_remaining_budget_metric",
 ]
 
 
@@ -528,6 +529,10 @@ class PrometheusMetricLabels:
 
     litellm_user_budget_remaining_hours_metric = [
         UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_provider_remaining_budget_metric = [
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_remaining_api_key_requests_for_model = [

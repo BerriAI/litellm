@@ -324,7 +324,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_provider_remaining_budget_metric = self._gauge_factory(
                 "litellm_provider_remaining_budget_metric",
                 "Remaining budget for provider - used when you set provider budget limits",
-                labelnames=["api_provider"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_provider_remaining_budget_metric"
+                ),
             )
 
             # Metric for deployment state
@@ -2459,7 +2461,12 @@ class PrometheusLogger(CustomLogger):
         """
         Track provider remaining budget in Prometheus
         """
-        self.litellm_provider_remaining_budget_metric.labels(provider).set(
+        self.litellm_provider_remaining_budget_metric.labels(
+            **self._safe_labels(
+                self.litellm_provider_remaining_budget_metric,
+                api_provider=provider,
+            )
+        ).set(
             self._safe_get_remaining_budget(
                 max_budget=budget_limit,
                 spend=spend,
