@@ -7397,6 +7397,22 @@ async def _audio_speech_chunk_generator(
         yield chunk
 
 
+async def _audio_speech_sse_generator(
+    _response: HttpxBinaryResponseContent,
+) -> AsyncGenerator[str, None]:
+    """
+    Wraps binary audio chunks in SSE events for stream_format='sse' requests.
+    Each audio chunk is base64-encoded and sent as a JSON SSE event.
+    """
+    import base64
+
+    _generator = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    async for chunk in _generator:
+        encoded = base64.b64encode(chunk).decode("utf-8")
+        yield f"data: {json.dumps({'audio': encoded})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -7482,6 +7498,14 @@ async def audio_speech(
             request_data=data,
             hidden_params=hidden_params,
         )
+
+        # If stream_format='sse' is requested, wrap audio chunks in SSE events
+        if data.get("stream_format") == "sse":
+            return StreamingResponse(
+                _audio_speech_sse_generator(response),  # type: ignore[arg-type]
+                media_type="text/event-stream",
+                headers=custom_headers,  # type: ignore
+            )
 
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
