@@ -735,6 +735,22 @@ class TestTransformListInputItemsRequest:
         assert data["model"] == "gpt-4o"
         assert data["input"] == "hello"
 
+    def test_openai_transform_compact_response_api_request_strips_responses_prefix(
+        self,
+    ):
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="responses/gpt-4o",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
+        assert url == "https://api.openai.com/v1/responses/compact"
+        assert data["model"] == "gpt-4o"
+        assert data["input"] == "hello"
+
     def test_azure_transform_list_input_items_request_minimal(self):
         """Test Azure implementation with minimal parameters"""
         # Setup

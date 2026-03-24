@@ -547,7 +547,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
         data = dict(
             ResponsesAPIRequestParams(
-                model=model, input=input, **response_api_optional_request_params
+                model=self._normalize_response_api_model_name(model),
+                input=input,
+                **response_api_optional_request_params,
             )
         )
 
