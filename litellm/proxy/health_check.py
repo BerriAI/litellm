@@ -240,7 +240,7 @@ def _update_litellm_params_for_health_check(
     elif "*" not in (
         model_info.get("health_check_model") or litellm_params.get("model") or ""
     ):
-        litellm_params["max_tokens"] = 1
+        litellm_params["max_tokens"] = 16
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
