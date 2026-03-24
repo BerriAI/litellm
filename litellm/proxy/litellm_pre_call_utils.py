@@ -1363,7 +1363,7 @@ def _apply_credential_overrides_from_model_config(
     5. Team default override (defaultconfig)
     6. Deployment default (no action needed)
     """
-    # Feature flag gate — operators can disable this with litellm.enable_model_config_credential_overrides = False
+    # Feature flag gate — disabled by default, opt in with litellm.enable_model_config_credential_overrides = True
     if not litellm.enable_model_config_credential_overrides:
         return
 
@@ -1402,9 +1402,10 @@ def _apply_credential_overrides_from_model_config(
 
     credential_values = CredentialAccessor.get_credential_values(credential_name)
     if not credential_values:
+        _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
         verbose_proxy_logger.warning(
             "model_config references credential '%s' but it was not found or has no values",
-            credential_name,
+            _safe_cred,
         )
         return
 
@@ -1413,10 +1414,12 @@ def _apply_credential_overrides_from_model_config(
         if key in credential_values and key not in data:
             data[key] = credential_values[key]
 
+    _safe_model = str(model_name).replace("\n", "").replace("\r", "")
+    _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
     verbose_proxy_logger.debug(
         "Applied credential override '%s' for model '%s'",
-        credential_name,
-        model_name,
+        _safe_cred,
+        _safe_model,
     )
 
 
@@ -1461,10 +1464,11 @@ def _resolve_credential_from_model_config(
                 )
                 if credential_name:
                     return credential_name
+                _safe_name = str(name).replace("\n", "").replace("\r", "")
                 verbose_proxy_logger.debug(
                     "model_config entry '%s' found but has no litellm_credentials, "
                     "falling through to defaultconfig",
-                    name,
+                    _safe_name,
                 )
 
         # Default check
