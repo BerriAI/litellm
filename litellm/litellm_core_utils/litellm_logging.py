@@ -969,12 +969,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
+            _litellm_params = self.model_call_details.get("litellm_params", {})
+            _metadata = _litellm_params.get("metadata", {}) or {}
             if (
                 self.log_raw_request_response is True
                 or log_raw_request_response is True
+                or _metadata.get("log_raw_request") is True
             ):
-                _litellm_params = self.model_call_details.get("litellm_params", {})
-                _metadata = _litellm_params.get("metadata", {}) or {}
                 try:
                     # [Non-blocking Extra Debug Information in metadata]
                     if turn_off_message_logging is True:
