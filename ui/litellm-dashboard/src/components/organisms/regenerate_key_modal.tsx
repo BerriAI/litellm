@@ -241,7 +241,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           >
             <Input placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
           </Form.Item>
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
             Recommended: 24h to 72h for production keys to allow seamless client migration.
           </Text>
         </Form>
