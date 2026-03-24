@@ -3674,17 +3674,32 @@ def test_vertex_ai_service_tier_in_map_openai_params():
     )
 
     v = VertexGeminiConfig()
+    
+    # Test pass-through
     optional_params = {}
     non_default_params = {"service_tier": "FLEX"}
 
     result = v.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
-        model="gemini-pro",
+        model="gemini-3-pro-preview",
         drop_params=True,
     )
 
     assert result["service_tier"] == "FLEX"
+
+    # Test auto -> priority
+    optional_params_auto = {}
+    non_default_params_auto = {"service_tier": "auto"}
+
+    result_auto = v.map_openai_params(
+        non_default_params=non_default_params_auto,
+        optional_params=optional_params_auto,
+        model="gemini-3-pro-preview",
+        drop_params=True,
+    )
+
+    assert result_auto["service_tier"] == "priority"
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():

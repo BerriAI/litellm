@@ -363,6 +363,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
+    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+        """
+        Map OpenAI service_tier (string) to Gemini serviceTier.
+        'auto' maps to 'priority'.
+        Other values are passed blindly.
+        """
+        if value == "auto":
+            optional_params["service_tier"] = "priority"
+        else:
+            optional_params["service_tier"] = value
+
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
         Transform Computer Use configuration to Gemini API format.
@@ -1123,7 +1134,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params, [_tools]
                 )
             elif param == "service_tier" and isinstance(value, str):
-                optional_params["service_tier"] = value
+                self._map_service_tier_param(value, optional_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
