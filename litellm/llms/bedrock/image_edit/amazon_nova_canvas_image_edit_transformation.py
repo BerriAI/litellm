@@ -74,6 +74,21 @@ def _nova_canvas_task_body(
             "taskType": "OUTPAINTING",
             "outPaintingParams": out_params,
         }
+    # Honour explicit IMAGE_VARIATION even when a mask is present (mask is ignored
+    # for this task type; callers use INPAINTING when they want mask semantics).
+    if task_type == "IMAGE_VARIATION":
+        var_params_explicit: Dict[str, Any] = {
+            "images": [image_b64],
+            "text": text,
+        }
+        if negative_text is not None:
+            var_params_explicit["negativeText"] = negative_text
+        if similarity_strength is not None:
+            var_params_explicit["similarityStrength"] = similarity_strength
+        return {
+            "taskType": "IMAGE_VARIATION",
+            "imageVariationParams": var_params_explicit,
+        }
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
         in_params: Dict[str, Any] = {"image": image_b64, "text": text}
         if mask_prompt is not None:

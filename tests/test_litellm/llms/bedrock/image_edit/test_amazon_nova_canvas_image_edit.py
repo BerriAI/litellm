@@ -169,6 +169,28 @@ def test_transform_request_inpainting_with_mask():
     assert ip["image"]  # base64
 
 
+def test_transform_request_explicit_image_variation_with_mask_honors_task_type():
+    """Explicit taskType=IMAGE_VARIATION must not be overridden by mask presence."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    main = io.BytesIO(b"img-bytes")
+    mask = io.BytesIO(b"mask-bytes")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="vary style",
+        image=main,
+        image_edit_optional_request_params={
+            "taskType": "IMAGE_VARIATION",
+            "mask": mask,
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "IMAGE_VARIATION"
+    assert "imageVariationParams" in body
+    assert body["imageVariationParams"]["text"] == "vary style"
+    assert len(body["imageVariationParams"]["images"]) == 1
+
+
 def test_transform_request_outpainting_with_mask():
     """OUTPAINTING with OpenAI mask -> outPaintingParams.maskImage."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
