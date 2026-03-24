@@ -1560,8 +1560,9 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["status"] == "incomplete"
 
     @pytest.mark.asyncio
-    async def test_no_terminal_event_defaults_to_completed(self):
-        """Test that when no terminal event is received, status defaults to completed"""
+    async def test_no_terminal_event_defaults_to_failed(self):
+        """Test that when no terminal event is received, status defaults to failed
+        with a descriptive error (stream ended prematurely)."""
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
@@ -1583,7 +1584,119 @@ class TestBackgroundStreamingTerminalEvents:
             await background_streaming_task(**kwargs)
 
         final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["code"] == "missing_terminal_event"
+        assert final_call.kwargs["error"]["type"] == "internal_error"
+
+    @pytest.mark.asyncio
+    async def test_sse_error_chunk_sets_failed_status(self):
+        """Test that an SSE error chunk (no 'type' field) from async_data_generator
+        results in failed status with the error extracted."""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        events = [
+            {"type": "response.in_progress"},
+            # Error chunk emitted by async_data_generator — no "type" field
+            {
+                "error": {
+                    "message": "AnthropicException: overloaded",
+                    "type": "internal_error",
+                    "code": 529,
+                }
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_7", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["message"] == "AnthropicException: overloaded"
+        assert final_call.kwargs["error"]["code"] == 529
+
+    @pytest.mark.asyncio
+    async def test_text_delta_auto_creates_content_parts(self):
+        """Test that text deltas auto-create content parts when no
+        ContentPartAddedEvent was emitted (Anthropic/Bedrock adapter path)."""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        events = [
+            {"type": "response.in_progress"},
+            # OutputItemAdded with empty content (like LiteLLMCompletionStreamingIterator)
+            {
+                "type": "response.output_item.added",
+                "item": {"id": "item_1", "type": "message", "content": []},
+            },
+            # Text deltas without prior ContentPartAdded
+            {
+                "type": "response.output_text.delta",
+                "item_id": "item_1",
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "item_1",
+                "content_index": 0,
+                "delta": " world",
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "status": "completed",
+                    "model": "claude-sonnet-4-20250514",
+                    "output": [
+                        {
+                            "id": "item_1",
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "Hello world"}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 5, "output_tokens": 2},
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_8", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "completed"
+
+        # Verify intermediate flush captured the auto-created content.
+        # Find a flush call that included output with populated text.
+        output_calls = [
+            c for c in handler.update_state.call_args_list
+            if "output" in c.kwargs and c.kwargs["output"]
+        ]
+        # At minimum, the final response.completed should have updated output
+        assert len(output_calls) > 0
+        # The final output should have content with "Hello world"
+        last_output = output_calls[-1].kwargs["output"]
+        item_1 = [i for i in last_output if i.get("id") == "item_1"][0]
+        assert len(item_1["content"]) == 1
+        assert item_1["content"][0]["text"] == "Hello world"
 
 
 class TestEdgeCases:

@@ -166,6 +166,23 @@ async def background_streaming_task(  # noqa: PLR0915
 
                     try:
                         event = json.loads(chunk_data)
+
+                        # Handle SSE error chunks from async_data_generator.
+                        # These are {"error": {...}} dicts with no "type" field,
+                        # emitted when the streaming iterator raises an exception.
+                        if "error" in event and "type" not in event:
+                            error_info = event["error"]
+                            terminal_status = "failed"
+                            terminal_error = {
+                                "type": error_info.get("type", "internal_error"),
+                                "message": error_info.get("message", str(error_info)),
+                                "code": error_info.get("code", "streaming_error"),
+                            }
+                            verbose_proxy_logger.error(
+                                f"Received SSE error for {polling_id}: {terminal_error['message']}"
+                            )
+                            continue
+
                         event_type = event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec
@@ -204,16 +221,17 @@ async def background_streaming_task(  # noqa: PLR0915
                                 accumulated_text[key] += delta
 
                                 # Update the content in output_items
-                                if "content" in output_items[item_id]:
-                                    content_list = output_items[item_id]["content"]
-                                    if content_index < len(content_list):
-                                        # Update existing content part with accumulated text
-                                        if isinstance(
-                                            content_list[content_index], dict
-                                        ):
-                                            content_list[content_index][
-                                                "text"
-                                            ] = accumulated_text[key]
+                                if "content" not in output_items[item_id]:
+                                    output_items[item_id]["content"] = []
+                                content_list = output_items[item_id]["content"]
+                                # Auto-create content part if missing.
+                                # Some providers (e.g. Anthropic via the litellm
+                                # completion adapter) don't emit
+                                # response.content_part.added before text deltas.
+                                while len(content_list) <= content_index:
+                                    content_list.append({"type": "output_text", "text": ""})
+                                if isinstance(content_list[content_index], dict):
+                                    content_list[content_index]["text"] = accumulated_text[key]
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":
@@ -223,11 +241,13 @@ async def background_streaming_task(  # noqa: PLR0915
                             content_index = event.get("content_index", 0)
 
                             if item_id and item_id in output_items:
-                                # Update with final content from event
-                                if "content" in output_items[item_id]:
-                                    content_list = output_items[item_id]["content"]
-                                    if content_index < len(content_list):
-                                        content_list[content_index] = content_part
+                                if "content" not in output_items[item_id]:
+                                    output_items[item_id]["content"] = []
+                                content_list = output_items[item_id]["content"]
+                                # Grow content list if needed (mirrors text delta fix)
+                                while len(content_list) <= content_index:
+                                    content_list.append({"type": "output_text", "text": ""})
+                                content_list[content_index] = content_part
                                 state_dirty = True
 
                         elif event_type == "response.output_item.done":
@@ -318,9 +338,21 @@ async def background_streaming_task(  # noqa: PLR0915
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
-
-        # Use the terminal status from the stream, default to "completed"
-        final_status = terminal_status or "completed"
+        # Use the terminal status from the stream.  If no terminal event was
+        # received (e.g. the stream errored before response.completed), treat
+        # as failed rather than silently reporting success.
+        if terminal_status is None and terminal_error is None:
+            verbose_proxy_logger.warning(
+                f"No terminal event received for {polling_id}; "
+                "marking as failed (stream may have ended prematurely)"
+            )
+            terminal_status = "failed"
+            terminal_error = {
+                "type": "internal_error",
+                "message": "Stream ended without a terminal event (response.completed/failed/incomplete)",
+                "code": "missing_terminal_event",
+            }
+        final_status = terminal_status or "failed"
 
         await polling_handler.update_state(
             polling_id=polling_id,
