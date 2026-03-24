@@ -110,6 +110,11 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
         return base64.b64encode(image).decode("utf-8")
     if isinstance(image, str):
         return image
+    if isinstance(image, tuple):
+        raise ValueError(
+            "Nova Canvas image edit does not support tuple FileTypes. "
+            "Pass a file-like object, bytes, or a base64-encoded string."
+        )
     return base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore[arg-type]
 
 
