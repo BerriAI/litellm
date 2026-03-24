@@ -7,6 +7,7 @@ on:
 
 jobs:
   stale:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/stale@v8

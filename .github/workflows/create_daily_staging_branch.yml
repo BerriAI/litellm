@@ -7,6 +7,7 @@ on:
 
 jobs:
   create-staging-branch:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
 
     steps:
@@ -43,6 +44,7 @@ jobs:
           fi
 
   create-internal-dev-branch:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
 
     steps:
