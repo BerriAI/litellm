@@ -329,11 +329,16 @@ async def _add_team_model_to_db(
     _team_id = model_params.model_info.team_id
     if _team_id is None:
         return None
+    # Capture the original public name before mutating model_params.model_name
     original_model_name = model_params.model_name
+
+    # Generate unique internal model_name for team-scoped deployment
+    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
+
+    # Store public name in model_info BEFORE overwriting model_name
+    # so _add_model_to_db serializes the correct team_public_model_name
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
-
-    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
 
     model_params.model_name = unique_model_name
 
@@ -458,6 +463,25 @@ async def _setup_new_team_model_assignment(
     )
 
 
+async def _get_team_deployments(
+    team_id: str, prisma_client: PrismaClient
+) -> List[LiteLLM_ProxyModelTable]:
+    """
+    Fetch all deployments for a given team_id from the database.
+
+    Centralizes team deployment queries to ensure consistent filtering and error handling.
+    """
+    response = await prisma_client.db.litellm_proxymodeltable.find_many(
+        where={
+            "model_info": {
+                "path": ["team_id"],
+                "equals": team_id,
+            }
+        }
+    )
+    return response if response else []
+
+
 async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
@@ -504,23 +528,14 @@ async def _update_existing_team_model_assignment(
             )
             return
 
-        response = await prisma_client.db.litellm_proxymodeltable.find_many(
-            where={
-                "model_info": {
-                    "path": ["team_id"],
-                    "equals": team_id,
-                }
-            }
-        )
-        if not response:
-            other_deployments_with_old_name = []
-        else:
-            other_deployments_with_old_name = [
-                d
-                for d in response
-                if d.model_name != db_model.model_name
-                and _get_team_public_model_name(d.model_info) == old_public_name
-            ]
+        # Query DB for all team deployments to check for sibling deployments
+        team_deployments = await _get_team_deployments(team_id, prisma_client)
+        other_deployments_with_old_name = [
+            d
+            for d in team_deployments
+            if d.model_name != db_model.model_name
+            and _get_team_public_model_name(d.model_info) == old_public_name
+        ]
 
         # Add new name first, then delete old name to prevent access loss on partial failure
         await team_model_add(
