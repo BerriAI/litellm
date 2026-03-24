@@ -672,6 +672,71 @@ def test_check_finish_reason():
         )
 
 
+def test_vertex_ai_empty_content_with_stop_finish_reason():
+    """
+    Test that Gemini responses with finishReason=STOP but no content/parts
+    (empty response in agentic tasks) are handled correctly.
+
+    See: https://github.com/BerriAI/litellm/issues/24442
+    See: https://discuss.ai.google.dev/t/finishreason-stop-but-parts-is-missing-inside-candidate/99331
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+
+    v = VertexGeminiConfig()
+
+    # Simulate the raw API response that has finishReason=STOP but no parts
+    raw_response = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model"
+                    # Note: no "parts" key - this is the bug condition
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 3130,
+            "totalTokenCount": 3130,
+            "promptTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 3130}
+            ],
+        },
+        "modelVersion": "gemini-2.5-flash-lite",
+        "responseId": "8ZfBaYu9LarVz7IPlJG7gQU",
+    }
+
+    # Mock the logging object
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.optional_params = {}
+
+    # Transform the response
+    model_response = ModelResponse()
+    model_response._hidden_params = {}
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    result = v._transform_google_generate_content_to_openai_model_response(
+        completion_response=GenerateContentResponseBody(**raw_response),
+        model_response=model_response,
+        model="gemini-2.5-flash-lite",
+        logging_obj=mock_logging_obj,
+        raw_response=MagicMock(headers={}),
+    )
+
+    # The response should have a choice with finish_reason=stop and content=None
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "stop"
+    assert result.choices[0].message.content is None
+    assert result.choices[0].message.role == "assistant"
+
+
 def test_finish_reason_unspecified_and_malformed_function_call():
     """
     Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL
