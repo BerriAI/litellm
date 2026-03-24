@@ -19,6 +19,7 @@ from typing import (
     Union,
     cast,
 )
+from weakref import WeakKeyDictionary
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -76,10 +77,12 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
             self._parse_exclude_config()
-            # Registry mapping id(metric) → frozenset of registered label names.
+            # Registry mapping metric object → frozenset of registered label names.
             # Populated by _create_metric_factory; used by _safe_labels to avoid
             # relying on prometheus_client private attributes.
-            self._metric_label_registry: Dict[int, frozenset] = {}
+            # WeakKeyDictionary lets GC reclaim metrics if ever replaced, avoiding
+            # the id()-reuse hazard of a plain dict.
+            self._metric_label_registry: WeakKeyDictionary = WeakKeyDictionary()
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -482,12 +485,37 @@ class PrometheusLogger(CustomLogger):
     def _parse_exclude_config(self) -> None:
         """Populate self.excluded_metrics and self.excluded_labels from litellm module vars."""
         import litellm
+        from litellm.types.integrations.prometheus import (
+            DEFINED_PROMETHEUS_METRICS,
+            UserAPIKeyLabelNames,
+        )
 
         raw_metrics = litellm.prometheus_exclude_metrics or []
         raw_labels = litellm.prometheus_exclude_labels or []
 
         self.excluded_metrics: set = set(raw_metrics)
         self.excluded_labels: set = set(raw_labels)
+
+        # Warn on any typos / unknown names so they don't silently no-op.
+        defined_metrics: set = set(DEFINED_PROMETHEUS_METRICS.__args__)  # type: ignore[union-attr]
+        known_labels: set = {m.value for m in UserAPIKeyLabelNames} | {
+            "guardrail_name",
+            "status",
+            "error_type",
+            "hook_type",
+        }
+        for name in raw_metrics:
+            if name not in defined_metrics:
+                verbose_logger.warning(
+                    f"prometheus_exclude_metrics: '{name}' is not a known LiteLLM "
+                    "Prometheus metric name and will have no effect."
+                )
+        for label in raw_labels:
+            if label not in known_labels:
+                verbose_logger.warning(
+                    f"prometheus_exclude_labels: '{label}' is not a known LiteLLM "
+                    "Prometheus label name and will have no effect."
+                )
 
     def _parse_prometheus_config(self) -> Dict[str, List[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
@@ -906,7 +934,7 @@ class PrometheusLogger(CustomLogger):
                 # Record label names so _safe_labels can filter without touching
                 # prometheus_client private attributes.
                 labelnames = kwargs.get("labelnames", args[2] if len(args) > 2 else [])
-                self._metric_label_registry[id(metric)] = frozenset(labelnames)
+                self._metric_label_registry[metric] = frozenset(labelnames)
                 return metric
             else:
                 return NoOpMetric()
@@ -943,13 +971,13 @@ class PrometheusLogger(CustomLogger):
         call sites must supply only the registered subset or prometheus_client raises
         ValueError (label count mismatch).
 
-        Label names are looked up from _metric_label_registry (populated at creation
-        time by _create_metric_factory) to avoid relying on prometheus_client private
-        attributes.
+        Label names are looked up from _metric_label_registry (a WeakKeyDictionary
+        populated at creation time by _create_metric_factory) to avoid relying on
+        prometheus_client private attributes.
         """
         if isinstance(metric, NoOpMetric):
             return kwargs
-        registered = self._metric_label_registry.get(id(metric))
+        registered = self._metric_label_registry.get(metric)
         if registered is None:
             return kwargs
         return {k: v for k, v in kwargs.items() if k in registered}
