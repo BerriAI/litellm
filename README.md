@@ -28,6 +28,9 @@
     <a href="https://www.litellm.ai/support">
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Slack&color=black&logo=Slack&style=flat-square" alt="Slack">
     </a>
+    <a href="https://codspeed.io/BerriAI/litellm?utm_source=badge">
+        <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"/>
+    </a>
 </h4>
 
 <img width="2688" height="1600" alt="Group 7154 (1)" src="https://github.com/user-attachments/assets/c5ee0412-6fb5-4fb6-ab5b-bafae4209ca6" />
@@ -203,7 +206,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "http://localhost:4000/mcp",
+      "url": "http://localhost:4000/mcp/",
       "headers": {
         "x-litellm-api-key": "Bearer sk-1234"
       }
@@ -399,7 +402,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 # Enterprise
 For companies that need better security, user management and professional support
 
-[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Talk to founders](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 This covers:
 - ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**

@@ -96,10 +96,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Handle simple string input
         if isinstance(input_data, str):
             inputs = GenericGuardrailAPIInputs(texts=[input_data])
+            original_tools: List[Dict[str, Any]] = []
 
             # Extract and transform tools if present
-
             if "tools" in data and data["tools"]:
+                original_tools = list(data["tools"])
                 self._extract_and_transform_tools(data["tools"], tools_to_check)
                 if tools_to_check:
                     inputs["tools"] = tools_to_check
@@ -118,6 +119,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
+            self._apply_guardrailed_tools_to_data(
+                data, original_tools, guardrailed_inputs.get("tools")
+            )
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
             return data
 
@@ -128,8 +132,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
-        # Track (message_index, content_index) for each text
-        # content_index is None for string content, int for list content
+        original_tools_list: List[Dict[str, Any]] = list(data.get("tools") or [])
 
         # Step 1: Extract all text content, images, and tools
         for msg_idx, message in enumerate(input_data):
@@ -166,6 +169,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            self._apply_guardrailed_tools_to_data(
+                data,
+                original_tools_list,
+                guardrailed_inputs.get("tools"),
+            )
 
             # Step 3: Map guardrail responses back to original input structure
             await self._apply_guardrail_responses_to_input(
@@ -179,6 +187,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from Responses API request (tools[].name for function, tools[].server_label for mcp)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("type") == "function" and tool.get("name"):
+                names.append(str(tool["name"]))
+            elif tool.get("type") == "mcp" and tool.get("server_label"):
+                names.append(str(tool["server_label"]))
+        return names
 
     def _extract_and_transform_tools(
         self,
@@ -202,6 +222,53 @@ class OpenAIResponsesHandler(BaseTranslation):
             tools_to_check.extend(
                 cast(List[ChatCompletionToolParam], transformed_tools)
             )
+
+    def _remap_tools_to_responses_api_format(
+        self, guardrailed_tools: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Remap guardrail-returned tools (Chat Completion format) back to
+        Responses API request tool format.
+        """
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            guardrailed_tools  # type: ignore
+        )
+
+    def _merge_tools_after_guardrail(
+        self,
+        original_tools: List[Dict[str, Any]],
+        remapped: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge remapped guardrailed tools with original tools that were not sent
+        to the guardrail (e.g. web_search, web_search_preview), preserving order.
+        """
+        if not original_tools:
+            return remapped
+        result: List[Dict[str, Any]] = []
+        j = 0
+        for tool in original_tools:
+            if isinstance(tool, dict) and tool.get("type") in (
+                "web_search",
+                "web_search_preview",
+            ):
+                result.append(tool)
+            else:
+                if j < len(remapped):
+                    result.append(remapped[j])
+                    j += 1
+        return result
+
+    def _apply_guardrailed_tools_to_data(
+        self,
+        data: dict,
+        original_tools: List[Dict[str, Any]],
+        guardrailed_tools: Optional[List[Any]],
+    ) -> None:
+        """Remap guardrailed tools to Responses API format and merge with original, then set data['tools']."""
+        if guardrailed_tools is not None:
+            remapped = self._remap_tools_to_responses_api_format(guardrailed_tools)
+            data["tools"] = self._merge_tools_after_guardrail(original_tools, remapped)
 
     def _extract_input_text_and_images(
         self,
@@ -280,6 +347,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -335,15 +403,21 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a standalone dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
 
             # Add user API key metadata with prefixed keys
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+            if "litellm_metadata" not in request_data:
+                user_metadata = self.transform_user_api_key_dict_to_metadata(
+                    user_api_key_dict
+                )
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -387,6 +461,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> List[Any]:
         """
         Process output streaming response by applying guardrails to text content.
@@ -407,11 +482,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     List[ChatCompletionToolCallChunk], tool_calls
                 )
                 # Include model information if available
-                if hasattr(model_response_stream, "model") and model_response_stream.model:
+                if (
+                    hasattr(model_response_stream, "model")
+                    and model_response_stream.model
+                ):
                     inputs["model"] = model_response_stream.model
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
-                    request_data={},
+                    request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
@@ -442,13 +520,15 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if tool_calls or text:
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
-                        request_data={},
+                        request_data=request_data if request_data is not None else {},
                         input_type="response",
                         logging_obj=litellm_logging_obj,
                     )
                     return responses_so_far
             else:
-                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
+                verbose_proxy_logger.debug(
+                    "Skipping output guardrail - model response has no choices"
+                )
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
@@ -456,12 +536,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         inputs = GenericGuardrailAPIInputs(texts=[string_so_far])
         # Try to get model from the final chunk if available
         if isinstance(final_chunk, dict):
-            response_model = final_chunk.get("response", {}).get("model") if isinstance(final_chunk.get("response"), dict) else None
+            response_model = (
+                final_chunk.get("response", {}).get("model")
+                if isinstance(final_chunk.get("response"), dict)
+                else None
+            )
             if response_model:
                 inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data if request_data is not None else {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
@@ -591,8 +675,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                     content = generic_response_output_item.content
             except Exception:
                 # Try to extract content directly from output_item if validation fails
-                if hasattr(output_item, "content") and output_item.content:
-                    content = output_item.content
+                if hasattr(output_item, "content") and output_item.content:  # type: ignore
+                    content = output_item.content  # type: ignore
                 else:
                     return
         elif isinstance(output_item, dict):
@@ -669,10 +753,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
+                            if hasattr(output_item, "content") and output_item.content:  # type: ignore
+                                original_content = output_item.content[content_idx]  # type: ignore
                                 if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                                    original_content.text = guardrail_response  # type: ignore
                 except Exception:
                     pass
             elif isinstance(output_item, dict):

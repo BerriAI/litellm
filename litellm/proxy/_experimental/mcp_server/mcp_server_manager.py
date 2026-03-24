@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -30,8 +31,14 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_TIMEOUT,
+    MCP_METADATA_TIMEOUT,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -70,7 +77,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -155,13 +164,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
@@ -309,6 +318,7 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
+                oauth2_flow=server_config.get("oauth2_flow", None),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -328,8 +338,14 @@ class MCPServerManager:
                 static_headers=server_config.get("static_headers", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
-                    server_config.get("available_on_public_internet", False)
+                    server_config.get("available_on_public_internet", True)
                 ),
+                # AWS SigV4 fields
+                aws_access_key_id=server_config.get("aws_access_key_id", None),
+                aws_secret_access_key=server_config.get("aws_secret_access_key", None),
+                aws_session_token=server_config.get("aws_session_token", None),
+                aws_region_name=server_config.get("aws_region_name", None),
+                aws_service_name=server_config.get("aws_service_name", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -376,6 +392,7 @@ class MCPServerManager:
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
             load_openapi_spec_async,
+            resolve_operation_params,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -387,8 +404,7 @@ class MCPServerManager:
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
@@ -409,6 +425,8 @@ class MCPServerManager:
                     headers["Authorization"] = f"ApiKey {server.authentication_token}"
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
+                elif server.auth_type == MCPAuth.token:
+                    headers["Authorization"] = f"token {server.authentication_token}"
 
             # Add any static headers from server config.
             #
@@ -430,6 +448,7 @@ class MCPServerManager:
 
             # Extract and register tools from OpenAPI paths
             paths = spec.get("paths", {})
+            components = spec.get("components", {})
             registered_count = 0
 
             verbose_logger.debug(f"Processing {len(paths)} paths from OpenAPI spec")
@@ -440,6 +459,11 @@ class MCPServerManager:
                         continue
 
                     operation = path_item[method]
+
+                    # Resolve $ref params and merge path-level params into the operation.
+                    resolved_operation = resolve_operation_params(
+                        operation, path_item, components
+                    )
 
                     # Generate tool name (without prefix initially)
                     operation_id = operation.get(
@@ -459,11 +483,11 @@ class MCPServerManager:
                     )
 
                     # Build input schema using imported function
-                    input_schema = build_input_schema(operation)
+                    input_schema = build_input_schema(resolved_operation)
 
                     # Create tool function with headers using imported function
                     tool_func = create_tool_function(
-                        path, method, operation, base_url, headers=headers
+                        path, method, resolved_operation, base_url, headers=headers
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
@@ -477,12 +501,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -573,6 +597,11 @@ class MCPServerManager:
             else:
                 client_secret_value = encrypted_client_secret
 
+        # AWS SigV4 credential fields
+        aws_creds = self._extract_aws_credentials(
+            credentials_dict, credentials_are_encrypted
+        )
+
         scopes: Optional[List[str]] = None
         if credentials_dict:
             scopes_value = credentials_dict.get("scopes")
@@ -590,12 +619,17 @@ class MCPServerManager:
             mcp_info["description"] = mcp_server.description
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
-        if mcp_server.url and auth_type == MCPAuth.oauth2:
-            mcp_oauth_metadata = await self._descovery_metadata(
-                server_url=mcp_server.url,
-            )
-        else:
-            mcp_oauth_metadata = None
+        server_url = mcp_server.url
+        needs_discovery = (
+            bool(server_url)
+            and auth_type == MCPAuth.oauth2
+            and not mcp_server.authorization_url
+        )
+        mcp_oauth_metadata = (
+            await self._descovery_metadata(server_url=server_url)  # type: ignore[arg-type]
+            if needs_discovery
+            else None
+        )
 
         resolved_scopes = scopes or (
             mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
@@ -607,6 +641,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -616,6 +651,7 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
+            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -631,17 +667,47 @@ class MCPServerManager:
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             allow_all_keys=mcp_server.allow_all_keys,
             available_on_public_internet=bool(
-                getattr(mcp_server, "available_on_public_internet", False)
+                getattr(mcp_server, "available_on_public_internet", True)
             ),
+            created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
+            tool_name_to_display_name=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_display_name", None)
+            ),
+            tool_name_to_description=_deserialize_json_dict(
+                getattr(mcp_server, "tool_name_to_description", None)
+            ),
+            is_byok=bool(getattr(mcp_server, "is_byok", False)),
+            byok_description=getattr(mcp_server, "byok_description", None) or [],
+            byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            # AWS SigV4 fields
+            aws_access_key_id=aws_creds.get("aws_access_key_id"),
+            aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
+            aws_session_token=aws_creds.get("aws_session_token"),
+            aws_region_name=aws_creds.get("aws_region_name"),
+            aws_service_name=aws_creds.get("aws_service_name"),
         )
         return new_server
+
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -653,6 +719,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -738,14 +805,30 @@ class MCPServerManager:
 
         Returns server_ids unchanged when client_ip is None (no filtering).
         """
+        filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
+        return filtered
+
+    def filter_server_ids_by_ip_with_info(
+        self, server_ids: List[str], client_ip: Optional[str]
+    ) -> Tuple[List[str], int]:
+        """
+        Filter server IDs by client IP — external callers only see public servers.
+
+        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the number
+        of servers that were blocked because the client IP is not allowed to access them.
+        Returns server_ids unchanged (with 0 blocked) when client_ip is None.
+        """
         if client_ip is None:
-            return server_ids
-        return [
-            sid
-            for sid in server_ids
-            if (s := self.get_mcp_server_by_id(sid)) is not None
-            and self._is_server_accessible_from_ip(s, client_ip)
-        ]
+            return server_ids, 0
+        allowed = []
+        blocked = 0
+        for sid in server_ids:
+            s = self.get_mcp_server_by_id(sid)
+            if s is not None and self._is_server_accessible_from_ip(s, client_ip):
+                allowed.append(sid)
+            elif s is not None:
+                blocked += 1
+        return allowed, blocked
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
@@ -887,8 +970,17 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = (
+                stdio_env if stdio_env is not None else dict(server.env or {})
+            )
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -902,20 +994,33 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
             )
         else:
             # For HTTP/SSE transports
             server_url = server.url or ""
+
+            # Create SigV4 auth if configured
+            aws_auth = None
+            if server.auth_type == MCPAuth.aws_sigv4:
+                aws_auth = MCPSigV4Auth(
+                    aws_access_key_id=server.aws_access_key_id,
+                    aws_secret_access_key=server.aws_secret_access_key,
+                    aws_session_token=server.aws_session_token,
+                    aws_region_name=server.aws_region_name,
+                    aws_service_name=server.aws_service_name,
+                )
+
             return MCPClient(
                 server_url=server_url,
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=60.0,
+                timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
+                aws_auth=aws_auth,
             )
 
     async def _get_tools_from_server(
@@ -1293,7 +1398,7 @@ class MCPServerManager:
         try:
             client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": 10.0},
+                params={"timeout": MCP_METADATA_TIMEOUT},
             )
             response = await client.get(resource_metadata_url)
             response.raise_for_status()
@@ -1389,7 +1494,7 @@ class MCPServerManager:
             try:
                 client = get_async_httpx_client(
                     llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": 10.0},
+                    params={"timeout": MCP_METADATA_TIMEOUT},
                 )
                 response = await client.get(url)
                 response.raise_for_status()
@@ -1422,6 +1527,52 @@ class MCPServerManager:
 
         return None
 
+    @staticmethod
+    def _decrypt_credential_field(
+        encrypted_value: Optional[str],
+        key: str,
+        credentials_are_encrypted: bool,
+    ) -> Optional[str]:
+        """Decrypt a single credential field, or return as-is if not encrypted."""
+        if not encrypted_value:
+            return None
+        if credentials_are_encrypted:
+            return decrypt_value_helper(
+                value=encrypted_value,
+                key=key,
+                exception_type="debug",
+                return_original_value=True,
+            )
+        return encrypted_value
+
+    def _extract_aws_credentials(
+        self,
+        credentials_dict: Optional[Dict[str, str]],
+        credentials_are_encrypted: bool,
+    ) -> Dict[str, Optional[str]]:
+        """Extract and decrypt AWS SigV4 credential fields from credentials dict."""
+        if not credentials_dict:
+            return {}
+        return {
+            "aws_access_key_id": self._decrypt_credential_field(
+                credentials_dict.get("aws_access_key_id"),
+                "aws_access_key_id",
+                credentials_are_encrypted,
+            ),
+            "aws_secret_access_key": self._decrypt_credential_field(
+                credentials_dict.get("aws_secret_access_key"),
+                "aws_secret_access_key",
+                credentials_are_encrypted,
+            ),
+            "aws_session_token": self._decrypt_credential_field(
+                credentials_dict.get("aws_session_token"),
+                "aws_session_token",
+                credentials_are_encrypted,
+            ),
+            "aws_region_name": credentials_dict.get("aws_region_name"),
+            "aws_service_name": credentials_dict.get("aws_service_name"),
+        }
+
     def _extract_scopes(self, scopes_value: Any) -> Optional[List[str]]:
         if isinstance(scopes_value, str):
             scopes = [s.strip() for s in scopes_value.split() if s.strip()]
@@ -1437,6 +1588,9 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
+        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
+        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
@@ -1444,24 +1598,12 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-
-        async def _list_tools_task():
-            try:
+        try:
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-
-        try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
@@ -1766,7 +1908,15 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
-    ):
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run pre-call checks and guardrail hooks for an MCP tool call.
+
+        Returns a dict that may contain:
+        - "arguments": hook-modified tool arguments (only if changed)
+        - "extra_headers": headers injected by pre_mcp_call guardrail hooks
+        """
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -1789,6 +1939,14 @@ class MCPServerManager:
             arguments=arguments,
             server=server,
         )
+
+        # Extract incoming Bearer token from raw request headers so
+        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
+        normalized_raw = {k.lower(): v for k, v in (raw_headers or {}).items()}
+        incoming_bearer_token: Optional[str] = None
+        auth_hdr = normalized_raw.get("authorization", "")
+        if auth_hdr.lower().startswith("bearer "):
+            incoming_bearer_token = auth_hdr[len("bearer ") :]
 
         pre_hook_kwargs = {
             "name": name,
@@ -1815,6 +1973,7 @@ class MCPServerManager:
                 if user_api_key_auth
                 else None
             ),
+            "incoming_bearer_token": incoming_bearer_token,
         }
 
         # Create MCP request object for processing
@@ -1827,6 +1986,7 @@ class MCPServerManager:
             mcp_request_obj, pre_hook_kwargs
         )
 
+        hook_result: Dict[str, Any] = {}
         try:
             # Use standard pre_call_hook
             modified_data = await proxy_logging_obj.pre_call_hook(
@@ -1842,7 +2002,9 @@ class MCPServerManager:
                     )
                 )
                 if modified_kwargs.get("arguments") != arguments:
-                    arguments = modified_kwargs["arguments"]
+                    hook_result["arguments"] = modified_kwargs["arguments"]
+                if modified_kwargs.get("extra_headers"):
+                    hook_result["extra_headers"] = modified_kwargs["extra_headers"]
 
         except (
             BlockedPiiEntityError,
@@ -1852,6 +2014,8 @@ class MCPServerManager:
             # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
+
+        return hook_result
 
     def _create_during_hook_task(
         self,
@@ -1905,6 +2069,7 @@ class MCPServerManager:
         raw_headers: Optional[Dict[str, str]],
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
+        hook_extra_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -1919,6 +2084,9 @@ class MCPServerManager:
             oauth2_headers: Optional OAuth2 headers
             raw_headers: Optional raw headers from the request
             proxy_logging_obj: Optional ProxyLogging object for hook integration
+            host_progress_callback: Optional callback for progress updates
+            hook_extra_headers: Optional headers injected by pre_mcp_call guardrail
+                hooks. Merged last (highest priority) into outbound request headers.
 
         Returns:
             CallToolResult from the MCP server
@@ -1973,6 +2141,31 @@ class MCPServerManager:
             if extra_headers is None:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
+
+        if hook_extra_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            if "Authorization" in hook_extra_headers:
+                if "Authorization" in extra_headers:
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
+                        "the existing Authorization header from static_headers. "
+                        "The hook JWT will take precedence."
+                    )
+                elif server_auth_header is not None:
+                    # server_auth_header is passed separately to _create_mcp_client as
+                    # auth_value.  Both will reach the upstream server — warn so admins
+                    # know two Authorization credentials are being sent.
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
+                        "server '%s' already has a configured authentication_token. "
+                        "Both credentials will be sent; the hook header is in extra_headers "
+                        "and the server token is in auth_value — the upstream server decides "
+                        "which one wins.  Consider unsetting authentication_token if you want "
+                        "the hook JWT to be the sole credential.",
+                        mcp_server.server_name or mcp_server.name,
+                    )
+            extra_headers.update(hook_extra_headers)
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
@@ -2059,15 +2252,19 @@ class MCPServerManager:
         # Allow validation and modification of tool calls before execution
         # Using standard pre_call_hook
         #########################################################
+        hook_result: Dict[str, Any] = {}
         if proxy_logging_obj:
-            await self.pre_call_tool_check(
+            hook_result = await self.pre_call_tool_check(
                 name=name,
                 arguments=arguments,
                 server_name=server_name,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
+                raw_headers=raw_headers,
             )
+            if "arguments" in hook_result:
+                arguments = hook_result["arguments"]
 
         # Prepare tasks for during hooks
         tasks = []
@@ -2085,8 +2282,16 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                f"Calling OpenAPI tool {name} directly via HTTP handler"
+                "Calling OpenAPI tool %s directly via HTTP handler", name
             )
+            if hook_result.get("extra_headers"):
+                verbose_logger.warning(
+                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
+                    "MCP server '%s' — header injection is not supported for "
+                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
+                    "transport to enable hook header injection.",
+                    server_name,
+                )
             tasks.append(
                 asyncio.create_task(
                     self._call_openapi_tool_handler(mcp_server, name, arguments)
@@ -2105,6 +2310,7 @@ class MCPServerManager:
                 raw_headers=raw_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
+                hook_extra_headers=hook_result.get("extra_headers"),
             )
 
         # For OpenAPI tools, await outside the client context
@@ -2215,7 +2421,9 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        db_mcp_servers = await get_all_mcp_servers(
+            prisma_client, approval_status="active"
+        )
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry
@@ -2243,9 +2451,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 
@@ -2447,13 +2655,15 @@ class MCPServerManager:
         # Check if we should skip health check based on auth configuration
         should_skip_health_check = False
 
-        # Skip if auth_type is oauth2
-        if server.needs_user_oauth_token:
+        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
+        if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
+        # (except aws_sigv4 which uses its own credential fields)
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
+            and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
         ):
             should_skip_health_check = True
@@ -2476,11 +2686,18 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=10.0)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+                )
                 status = "healthy"
             except asyncio.TimeoutError:
-                health_check_error = "Health check timed out after 10 seconds"
+                health_check_error = (
+                    f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
+                )
                 status = "unhealthy"
+            except asyncio.CancelledError:
+                health_check_error = "Health check was cancelled"
+                status = "unknown"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
@@ -2495,8 +2712,8 @@ class MCPServerManager:
             url=server.url,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2575,8 +2792,6 @@ class MCPServerManager:
         return list_mcp_servers
 
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
-        from datetime import datetime
-
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
             server_name=server.server_name,
@@ -2585,10 +2800,11 @@ class MCPServerManager:
                 server.mcp_info.get("description") if server.mcp_info else None
             ),
             url=server.url,
+            spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=server.created_at,
+            updated_at=server.updated_at,
             teams=[],
             mcp_access_groups=server.access_groups or [],
             allowed_tools=server.allowed_tools or [],
@@ -2606,6 +2822,9 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            is_byok=server.is_byok,
+            byok_description=server.byok_description,
+            byok_api_key_help_url=server.byok_api_key_help_url,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

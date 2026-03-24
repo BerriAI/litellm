@@ -24,7 +24,7 @@ def test_azure_gpt5_supports_temperature():
 
 def test_azure_o_series_does_not_support_temperature():
     """Test that Azure O-series models still use the correct O-series config."""
-    test_models = ["o1", "o1-preview", "o3"]
+    test_models = ["o1", "o3"]
     
     for model in test_models:
         config = ProviderConfigManager.get_provider_responses_api_config(

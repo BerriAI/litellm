@@ -25,9 +25,7 @@ def _get_minimal_error_response() -> httpx.Response:
     if _MINIMAL_ERROR_RESPONSE is None:
         _MINIMAL_ERROR_RESPONSE = httpx.Response(
             status_code=400,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),
+            request=httpx.Request(method="GET", url="https://litellm.ai"),
         )
     return _MINIMAL_ERROR_RESPONSE
 
@@ -955,7 +953,8 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        self.status_code = 503  # Service Unavailable
+        original_status = getattr(original_exception, "status_code", None)
+        self.status_code = int(original_status) if original_status is not None else 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
@@ -978,7 +977,14 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         else:
             self.response = response
 
-        # Call the parent constructor
+        # Save the original attributes before they are overridden by ServiceUnavailableError
+        _saved_response = self.response
+        _saved_request = getattr(self.response, "request", None) or httpx.Request(
+            method="POST", url=f"https://{llm_provider}.com/v1/"
+        )
+        _saved_message = self.message
+
+        # Call the parent constructor (which hardcodes status_code=503 and modifies the response object)
         super().__init__(
             message=self.message,
             llm_provider=llm_provider,
@@ -988,6 +994,13 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
             max_retries=self.max_retries,
             num_retries=self.num_retries,
         )
+
+        # Restore the propagated status and original response/request objects
+        self.status_code = int(original_status) if original_status is not None else 503
+        self.response = _saved_response
+        self.request = _saved_request
+        self.message = _saved_message
+        self.args = (_saved_message,)
 
     def __str__(self):
         _message = self.message

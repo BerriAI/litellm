@@ -4,6 +4,7 @@ import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.utils import GuardrailTracingDetail
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -385,6 +386,118 @@ class TestGuardrailLoggingAggregation:
         assert info[1]["guardrail_name"] == "test_guardrail"
 
 
+class TestGuardrailSensitiveFieldStripping:
+    """Tests that secret_fields is stripped from guardrail responses before logging.
+
+    Matches the pattern used by Langfuse and Arize integrations which also
+    pop("secret_fields") to prevent raw Authorization headers from being persisted.
+    """
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def test_secret_fields_stripped_from_guardrail_response(self):
+        """Ensure secret_fields (containing raw Authorization headers) is not persisted."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail_response_with_secrets = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "secret_fields": {
+                "raw_headers": {
+                    "authorization": "Bearer sk-live-secret-key-12345",
+                    "content-type": "application/json",
+                }
+            },
+            "proxy_server_request": {"url": "http://localhost:4000/chat/completions"},
+        }
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_response_with_secrets,
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(info) == 1
+        logged_response = info[0]["guardrail_response"]
+
+        # secret_fields must be stripped
+        assert "secret_fields" not in logged_response
+
+        # Other fields should be preserved
+        assert "model" in logged_response
+        assert "messages" in logged_response
+        assert "proxy_server_request" in logged_response
+
+    def test_string_guardrail_response_not_affected(self):
+        """String responses (e.g. 'allow', 'deny') should pass through unchanged."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="allow",
+            request_data=request_data,
+            guardrail_status="success",
+            duration=0.5,
+        )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_response"] == "allow"
+
+    def test_no_authorization_header_in_logged_response(self):
+        """Verify no plaintext Authorization header ends up in the logged guardrail response."""
+        import json
+
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={
+                "model": "gpt-4",
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-live-SHOULD-NOT-APPEAR",
+                    }
+                },
+            },
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        logged_response = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+        assert "secret_fields" not in logged_response
+        assert "sk-live-SHOULD-NOT-APPEAR" not in json.dumps(logged_response)
+
+    def test_secret_fields_stripped_from_list_dict_response(self):
+        """Ensure secret_fields is stripped from List[dict] guardrail responses too."""
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=[
+                {"result": "ok", "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}}},
+                {"result": "also_ok"},
+            ],
+            request_data=request_data,
+            guardrail_status="success",
+            duration=1.0,
+        )
+
+        import json
+        serialized = json.dumps(request_data)
+        assert "secret_fields" not in serialized
+        assert "sk-secret" not in serialized
+
+
 class TestCustomGuardrailPassthroughSupport:
     """Tests for passthrough endpoint guardrail support - Issue fixes."""
 
@@ -723,3 +836,99 @@ class TestEventTypeLogging:
         logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
+
+class TestTracingFieldsPopulation:
+    """Verify add_standard_logging_guardrail_information_to_request_data passes tracing_detail fields."""
+
+    def test_new_fields_set_on_slg(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        request_data = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            tracing_detail=GuardrailTracingDetail(
+                guardrail_id="rail-123",
+                policy_template="EU AI Act Article 5",
+                detection_method="regex",
+                confidence_score=0.95,
+                match_details=[{"type": "pattern", "action_taken": "BLOCK"}],
+                patterns_checked=12,
+                alert_recipients=["admin@example.com"],
+            ),
+        )
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        slg = slg_list[0]
+        assert slg["guardrail_id"] == "rail-123"
+        assert slg["policy_template"] == "EU AI Act Article 5"
+        assert slg["detection_method"] == "regex"
+        assert slg["confidence_score"] == 0.95
+        assert slg["patterns_checked"] == 12
+        assert slg["alert_recipients"] == ["admin@example.com"]
+        assert len(slg["match_details"]) == 1
+
+    def test_new_fields_default_to_absent(self):
+        """When tracing_detail is not passed, new fields are absent from the SLG dict."""
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        request_data = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="ok",
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg.get("guardrail_id") is None
+        assert slg.get("policy_template") is None
+        assert slg.get("confidence_score") is None
+
+    def test_multiple_guardrails_with_different_policies(self):
+        """One request, multiple guardrails each with own policy_template."""
+        cg1 = CustomGuardrail(guardrail_name="rail-1")
+        cg2 = CustomGuardrail(guardrail_name="rail-2")
+        request_data = {"metadata": {}}
+
+        cg1.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="ok",
+            request_data=request_data,
+            guardrail_status="success",
+            tracing_detail=GuardrailTracingDetail(policy_template="GDPR"),
+        )
+        cg2.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="blocked",
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+            tracing_detail=GuardrailTracingDetail(policy_template="EU AI Act Article 5"),
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 2
+        assert slg_list[0]["policy_template"] == "GDPR"
+        assert slg_list[1]["policy_template"] == "EU AI Act Article 5"
+
+    def test_classification_field_passed_through(self):
+        """Classification dict for LLM-judge guardrails is passed through."""
+        cg = CustomGuardrail(guardrail_name="judge-rail")
+        request_data = {"metadata": {}}
+        classification = {
+            "flagged": True,
+            "category": "workplace_emotion_recognition",
+            "article_reference": "Article 5(1)(f)",
+            "confidence": 0.94,
+            "reason": "Request asks to analyze employee sentiment",
+        }
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="blocked",
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+            tracing_detail=GuardrailTracingDetail(
+                classification=classification,
+                detection_method="llm-judge",
+                confidence_score=0.94,
+            ),
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["classification"] == classification
+        assert slg["detection_method"] == "llm-judge"
+        assert slg["confidence_score"] == 0.94

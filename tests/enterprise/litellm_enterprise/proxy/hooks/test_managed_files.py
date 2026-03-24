@@ -1,4 +1,6 @@
+import base64
 import json
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,6 +8,7 @@ from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 from litellm.caching import DualCache
+from litellm.proxy._types import CallTypes
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
 )
@@ -59,6 +62,109 @@ async def test_async_pre_call_hook_batch_retrieve():
     response = await proxy_managed_files.async_pre_call_hook(**data)
     assert response["batch_id"] == "batch_a322b6ba-ac7e-4888-929c-1ad3442f06ed"
     assert response["model"] == "my-general-azure-deployment"
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_resolves_model_id_from_litellm_metadata():
+    """
+    For batch operations the router stores model_info under
+    kwargs["litellm_metadata"]["model_info"] (not top-level kwargs["model_info"]).
+    async_pre_call_deployment_hook must check both locations so the managed
+    file ID is resolved to the provider-specific file ID.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    managed_file_id = "managed-file-abc"
+    model_id = "deployment-xyz"
+    provider_file_id = "gs://bucket/path/to/file.jsonl"
+
+    # model_info is nested under litellm_metadata (batch path)
+    kwargs = {
+        "input_file_id": managed_file_id,
+        "model_file_id_mapping": {
+            managed_file_id: {model_id: provider_file_id},
+        },
+        "litellm_metadata": {
+            "model_info": {"id": model_id},
+        },
+    }
+
+    result = await proxy_managed_files.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.acreate_batch
+    )
+
+    assert result["input_file_id"] == provider_file_id, (
+        f"Expected provider file ID '{provider_file_id}', got '{result['input_file_id']}'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_prefers_top_level_model_info():
+    """
+    When model_info exists at top-level kwargs, async_pre_call_deployment_hook
+    should use it without falling back to litellm_metadata.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    managed_file_id = "managed-file-abc"
+    top_level_model_id = "deployment-top"
+    nested_model_id = "deployment-nested"
+    top_level_provider_file = "file-top-123"
+    nested_provider_file = "file-nested-456"
+
+    kwargs = {
+        "input_file_id": managed_file_id,
+        "model_file_id_mapping": {
+            managed_file_id: {
+                top_level_model_id: top_level_provider_file,
+                nested_model_id: nested_provider_file,
+            },
+        },
+        "model_info": {"id": top_level_model_id},
+        "litellm_metadata": {
+            "model_info": {"id": nested_model_id},
+        },
+    }
+
+    result = await proxy_managed_files.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.acreate_batch
+    )
+
+    assert result["input_file_id"] == top_level_provider_file, (
+        "Should prefer top-level model_info over litellm_metadata"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_unchanged():
+    """
+    When model_info is absent from both top-level and litellm_metadata,
+    the managed file ID should remain unchanged.
+    """
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    managed_file_id = "managed-file-abc"
+
+    kwargs = {
+        "input_file_id": managed_file_id,
+        "model_file_id_mapping": {
+            managed_file_id: {"some-model": "provider-file-xyz"},
+        },
+    }
+
+    result = await proxy_managed_files.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.acreate_batch
+    )
+
+    assert result["input_file_id"] == managed_file_id, (
+        "File ID should remain unchanged when model_info is not available"
+    )
 
 
 # def test_list_managed_files():
@@ -371,6 +477,81 @@ async def test_output_file_id_for_batch_retrieve():
     )
 
     assert not cast(LiteLLMBatch, response).output_file_id.startswith("file-")
+
+
+@pytest.mark.asyncio
+async def test_output_file_id_preserves_target_model_names_when_model_name_missing():
+    """
+    Regression test: when provider response does not include _hidden_params.model_name
+    (e.g. Vertex batch retrieve), unified output_file_id should still include
+    target_model_names from the managed input file ID.
+    """
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="batch_123",
+        completion_window="24h",
+        created_at=1750883933,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-provider-id",
+        object="batch",
+        status="completed",
+        output_file_id="file-provider-output-id",
+        request_counts=BatchRequestCounts(completed=1, failed=0, total=1),
+        usage=None,
+    )
+
+    # Build a valid managed input id string and base64 encode it.
+    managed_input_file_payload = (
+        "litellm_proxy:application/octet-stream;"
+        "unified_id,test-uuid;"
+        "target_model_names,gemini-2.5-pro;"
+        "llm_output_file_id,file-input-1;"
+        "llm_output_file_model_id,model-id-1"
+    )
+    managed_input_file_id = (
+        base64.urlsafe_b64encode(managed_input_file_payload.encode())
+        .decode()
+        .rstrip("=")
+    )
+
+    batch._hidden_params = {
+        "model_id": "model-id-1",
+        "unified_batch_id": "litellm_proxy;model_id:model-id-1;llm_batch_id:batch_123",
+        "unified_file_id": managed_input_file_id,
+        # Intentionally omit model_name to mimic Vertex issue.
+    }
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=AsyncMock()
+    )
+
+    provider_output_file = OpenAIFileObject(
+        id="file-provider-output-id",
+        object="file",
+        bytes=1,
+        created_at=1,
+        filename="predictions.jsonl",
+        purpose="batch_output",
+    )
+
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock) as mock_retrieve:
+        mock_retrieve.return_value = provider_output_file
+        response = await proxy_managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
+            response=batch,
+        )
+
+    decoded_output_file_id = _is_base64_encoded_unified_file_id(
+        cast(LiteLLMBatch, response).output_file_id
+    )
+    assert decoded_output_file_id
+    assert "target_model_names,gemini-2.5-pro" in cast(str, decoded_output_file_id)
 
 
 @pytest.mark.asyncio

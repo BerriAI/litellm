@@ -7,6 +7,7 @@ from typing import (
     Any,
     AsyncIterator,
     Coroutine,
+    Dict,
     Iterator,
     List,
     Literal,
@@ -58,6 +59,7 @@ from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -162,6 +164,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "service_tier",
             "safety_identifier",
             "prompt_cache_key",
+            "prompt_cache_retention",
+            "store",
         ]  # works across all models
 
         model_specific_params = []
@@ -171,7 +175,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append("response_format")
 
         # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
-        model_for_check = model.split("responses/", 1)[1] if "responses/" in model else model
+        model_for_check = (
+            model.split("responses/", 1)[1] if "responses/" in model else model
+        )
         if (
             model_for_check in litellm.open_ai_chat_completion_models
         ) or model_for_check in litellm.open_ai_text_completion_models:
@@ -364,10 +370,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         List[OpenAIMessageContentListBlock], message_content
                     )
                     for i, content_item in enumerate(message_content_types):
-                        message_content_types[i] = (
-                            await self._async_transform_content_item(
-                                cast(OpenAIMessageContentListBlock, content_item),
-                            )
+                        message_content_types[
+                            i
+                        ] = await self._async_transform_content_item(
+                            cast(OpenAIMessageContentListBlock, content_item),
                         )
             return messages
 
@@ -454,12 +460,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
-        transformed_messages, tools = (
-            self.remove_cache_control_flag_from_messages_and_tools(
-                model=model,
-                messages=transformed_messages,
-                tools=optional_params.get("tools", []),
-            )
+        (
+            transformed_messages,
+            tools,
+        ) = self.remove_cache_control_flag_from_messages_and_tools(
+            model=model,
+            messages=transformed_messages,
+            tools=optional_params.get("tools", []),
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
@@ -589,9 +596,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
 
             translated_choice.finish_reason = map_finish_reason(
-                self._get_finish_reason(
-                    translated_message, choice["finish_reason"]
-                )
+                self._get_finish_reason(translated_message, choice["finish_reason"])
             )
             transformed_choices.append(translated_choice)
 
@@ -756,6 +761,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model
 
+    def get_token_counter(self) -> Optional["BaseTokenCounter"]:
+        from litellm.llms.openai.responses.count_tokens.token_counter import (
+            OpenAITokenCounter,
+        )
+
+        return OpenAITokenCounter()
+
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
@@ -770,14 +782,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        """
+        Map 'reasoning' field to 'reasoning_content' field in delta.
+
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm) return
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+
+        Args:
+            choices: List of choice objects from the streaming chunk
+
+        Returns:
+            List of choices with reasoning field mapped to reasoning_content
+        """
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+        return choices
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            return ModelResponseStream(
-                id=chunk["id"],
-                object="chat.completion.chunk",
-                created=chunk.get("created"),
-                model=chunk.get("model"),
-                choices=chunk.get("choices", []),
-            )
+            choices = chunk.get("choices", [])
+            choices = self._map_reasoning_to_reasoning_content(choices)
+
+            kwargs: Dict[str, Any] = {
+                "id": chunk.get("id"),
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": chunk.get("model"),
+                "choices": choices,
+            }
+            if "usage" in chunk and chunk["usage"] is not None:
+                kwargs["usage"] = chunk["usage"]
+            return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e
