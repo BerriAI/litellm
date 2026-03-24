@@ -923,6 +923,20 @@ class PrometheusLogger(CustomLogger):
 
         return labels
 
+    def _safe_labels(self, metric, **kwargs) -> dict:
+        """Return only the label kwargs that are registered for the metric.
+
+        When prometheus_exclude_labels strips labels at registration time, observation
+        call sites must supply only the registered subset or prometheus_client raises
+        ValueError (label count mismatch).
+        """
+        if isinstance(metric, NoOpMetric):
+            return kwargs
+        registered = getattr(metric, "_labelnames", None)
+        if registered is None:
+            return kwargs
+        return {k: v for k, v in kwargs.items() if k in registered}
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
         from litellm.types.utils import StandardLoggingPayload
@@ -1326,17 +1340,23 @@ class PrometheusLogger(CustomLogger):
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
+            **self._safe_labels(
+                self.litellm_remaining_api_key_requests_for_model,
+                hashed_api_key=_sanitize_prometheus_label_value(user_api_key),
+                api_key_alias=_sanitize_prometheus_label_value(user_api_key_alias),
+                model=_sanitize_prometheus_label_value(model_group),
+                model_id=_sanitize_prometheus_label_value(model_id),
+            )
         ).set(remaining_requests)
 
         self.litellm_remaining_api_key_tokens_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
+            **self._safe_labels(
+                self.litellm_remaining_api_key_tokens_for_model,
+                hashed_api_key=_sanitize_prometheus_label_value(user_api_key),
+                api_key_alias=_sanitize_prometheus_label_value(user_api_key_alias),
+                model=_sanitize_prometheus_label_value(model_group),
+                model_id=_sanitize_prometheus_label_value(model_id),
+            )
         ).set(remaining_tokens)
 
     def _set_latency_metrics(
@@ -1457,16 +1477,19 @@ class PrometheusLogger(CustomLogger):
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
-                _sanitize_prometheus_label_value(end_user_id),
-                _sanitize_prometheus_label_value(user_api_key),
-                _sanitize_prometheus_label_value(user_api_key_alias),
-                _sanitize_prometheus_label_value(model),
-                _sanitize_prometheus_label_value(user_api_team),
-                _sanitize_prometheus_label_value(user_api_team_alias),
-                _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(
-                    standard_logging_payload.get("model_id", "")
-                ),
+                **self._safe_labels(
+                    self.litellm_llm_api_failed_requests_metric,
+                    end_user=_sanitize_prometheus_label_value(end_user_id),
+                    hashed_api_key=_sanitize_prometheus_label_value(user_api_key),
+                    api_key_alias=_sanitize_prometheus_label_value(user_api_key_alias),
+                    model=_sanitize_prometheus_label_value(model),
+                    team=_sanitize_prometheus_label_value(user_api_team),
+                    team_alias=_sanitize_prometheus_label_value(user_api_team_alias),
+                    user=_sanitize_prometheus_label_value(user_id),
+                    model_id=_sanitize_prometheus_label_value(
+                        standard_logging_payload.get("model_id", "")
+                    ),
+                )
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -2180,25 +2203,34 @@ class PrometheusLogger(CustomLogger):
         try:
             # Record latency
             self.litellm_guardrail_latency_metric.labels(
-                guardrail_name=guardrail_name,
-                status=status,
-                error_type=error_type or "none",
-                hook_type=hook_type,
+                **self._safe_labels(
+                    self.litellm_guardrail_latency_metric,
+                    guardrail_name=guardrail_name,
+                    status=status,
+                    error_type=error_type or "none",
+                    hook_type=hook_type,
+                )
             ).observe(latency_seconds)
 
             # Record request count
             self.litellm_guardrail_requests_total.labels(
-                guardrail_name=guardrail_name,
-                status=status,
-                hook_type=hook_type,
+                **self._safe_labels(
+                    self.litellm_guardrail_requests_total,
+                    guardrail_name=guardrail_name,
+                    status=status,
+                    hook_type=hook_type,
+                )
             ).inc()
 
             # Record error count if there was an error
             if status == "error" and error_type:
                 self.litellm_guardrail_errors_total.labels(
-                    guardrail_name=guardrail_name,
-                    error_type=error_type,
-                    hook_type=hook_type,
+                    **self._safe_labels(
+                        self.litellm_guardrail_errors_total,
+                        guardrail_name=guardrail_name,
+                        error_type=error_type,
+                        hook_type=hook_type,
+                    )
                 ).inc()
         except Exception as e:
             verbose_logger.debug(f"Error recording guardrail metrics: {str(e)}")
@@ -2382,11 +2414,14 @@ class PrometheusLogger(CustomLogger):
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         self.litellm_deployment_cooled_down.labels(
-            _sanitize_prometheus_label_value(litellm_model_name),
-            _sanitize_prometheus_label_value(model_id),
-            _sanitize_prometheus_label_value(api_base),
-            _sanitize_prometheus_label_value(api_provider),
-            _sanitize_prometheus_label_value(exception_status),
+            **self._safe_labels(
+                self.litellm_deployment_cooled_down,
+                litellm_model_name=_sanitize_prometheus_label_value(litellm_model_name),
+                model_id=_sanitize_prometheus_label_value(model_id),
+                api_base=_sanitize_prometheus_label_value(api_base),
+                api_provider=_sanitize_prometheus_label_value(api_provider),
+                exception_status=_sanitize_prometheus_label_value(exception_status),
+            )
         ).inc()
 
     def increment_callback_logging_failure(
