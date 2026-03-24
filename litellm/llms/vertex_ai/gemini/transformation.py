@@ -288,6 +288,88 @@ def check_if_part_exists_in_parts(
     return False
 
 
+def _convert_part_to_vertex_httpx_format(part: dict) -> dict:
+    """
+    Convert a single Gemini PartType dict from internal snake_case field names to the
+    camelCase field names required by the Vertex AI REST API (generateContent endpoint).
+
+    Only the STRUCTURAL Gemini API field names are renamed; user-controlled content
+    (function arguments, function response payload, JSON schema properties, text, etc.)
+    is left completely untouched to avoid corrupting user-defined identifiers.
+
+    Mapping applied:
+      inline_data              -> inlineData
+      inline_data.mime_type    -> inlineData.mimeType
+      file_data                -> fileData
+      file_data.mime_type      -> fileData.mimeType
+      file_data.file_uri       -> fileData.fileUri
+      function_call            -> functionCall
+      function_response        -> functionResponse
+      media_resolution         -> mediaResolution
+
+    Fields already in camelCase (e.g. ``thoughtSignature``, ``videoMetadata``)
+    are passed through unchanged.
+
+    See: https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#Part
+    """
+    result: dict = {}
+    for key, value in part.items():
+        if key == "inline_data":
+            # Rename blob container and its mimeType field; data payload is opaque bytes.
+            blob = dict(value) if isinstance(value, dict) else value
+            if isinstance(blob, dict) and "mime_type" in blob:
+                blob = dict(blob)
+                blob["mimeType"] = blob.pop("mime_type")
+            result["inlineData"] = blob
+        elif key == "file_data":
+            # Rename file container and its mimeType / fileUri fields.
+            fdata = dict(value) if isinstance(value, dict) else value
+            if isinstance(fdata, dict):
+                fdata = dict(fdata)
+                if "mime_type" in fdata:
+                    fdata["mimeType"] = fdata.pop("mime_type")
+                if "file_uri" in fdata:
+                    fdata["fileUri"] = fdata.pop("file_uri")
+            result["fileData"] = fdata
+        elif key == "function_call":
+            # Rename the container; args dict is user-defined and must not be touched.
+            result["functionCall"] = value
+        elif key == "function_response":
+            # Rename the container; response dict is user-defined and must not be touched.
+            result["functionResponse"] = value
+        elif key == "media_resolution":
+            result["mediaResolution"] = value
+        else:
+            # Pass through: text, thought, thoughtSignature, videoMetadata, etc.
+            result[key] = value
+    return result
+
+
+def _convert_contents_to_vertex_format(
+    contents: List[ContentType],
+) -> List[dict]:
+    """
+    Walk every part in every content block and apply
+    ``_convert_part_to_vertex_httpx_format`` so that the final JSON payload
+    sent to the Vertex AI REST API uses the camelCase field names it requires.
+
+    This is the single, focused conversion step between LiteLLM's internal
+    snake_case PartType representation and the wire format.  It avoids a
+    blanket recursive camelCase transform which would incorrectly rename
+    user-defined identifiers inside tool arguments and JSON schema properties
+    (e.g. ``security_risk`` -> ``securityRisk``).
+    """
+    converted: List[dict] = []
+    for content in contents:
+        new_parts = [
+            _convert_part_to_vertex_httpx_format(dict(p))
+            for p in content.get("parts", [])
+        ]
+        new_content: dict = {"role": content["role"], "parts": new_parts}
+        converted.append(new_content)
+    return converted
+
+
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: Optional[str] = None,
@@ -708,7 +790,15 @@ def _transform_request_body(  # noqa: PLR0915
                         "level"
                     ]
 
-        data = RequestBody(contents=content)
+        # Convert internal snake_case PartType field names to the camelCase names
+        # required by the Vertex AI REST API (e.g. inline_data -> inlineData).
+        # For Google AI Studio (gemini provider) the REST API also expects camelCase,
+        # so we apply the conversion unconditionally.
+        # User-defined content (function args, response payloads, schema properties)
+        # is intentionally left untouched to preserve user-defined identifiers.
+        content = _convert_contents_to_vertex_format(content)  # type: ignore[arg-type]
+
+        data = RequestBody(contents=content)  # type: ignore[arg-type]
         if system_instructions is not None:
             data["system_instruction"] = system_instructions
         if tools is not None:
