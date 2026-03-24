@@ -331,15 +331,28 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             img_element = element
                             format: Optional[str] = None
                             media_resolution_enum: Optional[Dict[str, str]] = None
-                            if isinstance(img_element["image_url"], dict):
-                                image_url = img_element["image_url"]["url"]
-                                format = img_element["image_url"].get("format")
-                                detail = img_element["image_url"].get("detail")
+                            raw_image_url = img_element.get("image_url")
+                            if raw_image_url is None:
+                                raise litellm.BadRequestError(
+                                    message="Invalid message content: element type is 'image_url' but 'image_url' field is missing",
+                                    model=model,
+                                    llm_provider="vertex_ai",
+                                )
+                            if isinstance(raw_image_url, dict):
+                                image_url = raw_image_url.get("url")
+                                if image_url is None:
+                                    raise litellm.BadRequestError(
+                                        message="Invalid message content: element type is 'image_url' but 'url' field is missing inside 'image_url'",
+                                        model=model,
+                                        llm_provider="vertex_ai",
+                                    )
+                                format = raw_image_url.get("format")
+                                detail = raw_image_url.get("detail")
                                 media_resolution_enum = (
                                     _convert_detail_to_media_resolution_enum(detail)
                                 )
                             else:
-                                image_url = img_element["image_url"]
+                                image_url = raw_image_url
                             _part = _process_gemini_media(
                                 image_url=image_url,
                                 format=format,
