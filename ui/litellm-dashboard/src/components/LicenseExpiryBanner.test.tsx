@@ -90,7 +90,7 @@ describe("LicenseExpiryBanner", () => {
       expect(mockGetLicenseInfo).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(container.querySelector(".ant-alert")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 
@@ -169,7 +169,19 @@ describe("LicenseExpiryBanner", () => {
       expect(mockGetLicenseInfo).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(container.querySelector(".ant-alert")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  it("should render nothing when expiration_date is unparseable", async () => {
+    mockGetLicenseInfo.mockResolvedValue(makeLicense("N/A"));
+
+    const { container } = render(<LicenseExpiryBanner />);
+    await waitFor(() => {
+      expect(mockGetLicenseInfo).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 });

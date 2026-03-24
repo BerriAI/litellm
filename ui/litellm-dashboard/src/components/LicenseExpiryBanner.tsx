@@ -14,9 +14,16 @@ export const LicenseExpiryBanner: React.FC = () => {
   useEffect(() => {
     if (!accessToken) return;
 
+    let cancelled = false;
     getLicenseInfo(accessToken)
-      .then(setLicenseInfo)
+      .then((info) => {
+        if (!cancelled) setLicenseInfo(info);
+      })
       .catch(() => null);
+
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken]);
 
   if (!licenseInfo?.has_license || !licenseInfo.expiration_date) {
@@ -27,6 +34,12 @@ export const LicenseExpiryBanner: React.FC = () => {
   // then append end-of-day in UTC to avoid timezone-dependent parsing.
   const dateOnly = licenseInfo.expiration_date.split("T")[0];
   const expDate = new Date(dateOnly + "T23:59:59Z");
+
+  // Guard against unparseable expiration_date values (e.g. "N/A", malformed strings)
+  if (isNaN(expDate.getTime())) {
+    return null;
+  }
+
   const now = new Date();
   const diffMs = expDate.getTime() - now.getTime();
   const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
