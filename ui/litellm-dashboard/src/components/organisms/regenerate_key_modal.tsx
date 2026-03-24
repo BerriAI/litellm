@@ -225,7 +225,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </Text>
           {newExpiryTime && (
-            <div style={{ marginTop: 8, fontSize: 12, color: "#52c41a" }}>New expiry: {newExpiryTime}</div>
+            <Text type="success" style={{ marginTop: 8, fontSize: 12, display: "block" }}>New expiry: {newExpiryTime}</Text>
           )}
           <Form.Item
             name="grace_period"
