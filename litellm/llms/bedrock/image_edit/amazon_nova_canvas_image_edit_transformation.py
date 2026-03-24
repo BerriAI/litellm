@@ -21,7 +21,7 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
-from litellm.utils import get_model_info
+from litellm.utils import _get_model_cost_key, _get_potential_model_names, get_model_info
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -118,6 +118,64 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
     return base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore[arg-type]
 
 
+def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
+    """
+    True when model_cost marks the model for Nova Canvas image edit.
+
+    Prefer supports_nova_canvas_image_edit (config-driven). If that key is absent on
+    older installs, accept a registered Bedrock image_generation model whose catalog
+    key is the known Nova Canvas id family (amazon.nova-canvas...).
+
+    get_model_info / ModelInfoBase omit arbitrary JSON keys, so we read model_cost
+    directly (same idea as supports_* bare_entry fallback).
+    """
+    import litellm as _litellm
+
+    if not model:
+        return False
+
+    seen: set[str] = set()
+    candidates: List[str] = []
+
+    def _add(name: Optional[str]) -> None:
+        if name and name not in seen:
+            seen.add(name)
+            candidates.append(name)
+
+    _add(model)
+    if "/" in model:
+        suffix = model.split("/")[-1]
+        _add(suffix)
+        _add(f"bedrock/{suffix}")
+
+    try:
+        potential = _get_potential_model_names(model=model, custom_llm_provider=None)
+        for field in (
+            "combined_model_name",
+            "combined_stripped_model_name",
+            "stripped_model_name",
+            "split_model",
+        ):
+            _add(potential[field])
+    except Exception:
+        pass
+
+    for name in candidates:
+        key = _get_model_cost_key(name)
+        if key is None:
+            continue
+        entry = _litellm.model_cost.get(key) or {}
+        if entry.get("supports_nova_canvas_image_edit") is True:
+            return True
+        if (
+            entry.get("litellm_provider") == "bedrock"
+            and entry.get("mode") == "image_generation"
+            and "amazon.nova-canvas" in key.lower()
+        ):
+            return True
+    return False
+
+
 class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     """
     Bedrock InvokeModel image edit for amazon.nova-canvas-v1:0 and regional variants.
@@ -126,16 +184,11 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     @classmethod
     def _is_nova_canvas_image_edit_model(cls, model: Optional[str] = None) -> bool:
         """
-        Use model_cost / get_model_info (supports_nova_canvas_image_edit) so new Nova Canvas
-        inference IDs are added via model_prices_and_context_window.json only.
+        Use model_cost.supports_nova_canvas_image_edit so new Nova Canvas inference IDs
+        are added via model_prices_and_context_window.json only (not get_model_info, which
+        drops keys not on ModelInfoBase).
         """
-        if not model:
-            return False
-        try:
-            info = get_model_info(model, custom_llm_provider="bedrock")
-            return info.get("supports_nova_canvas_image_edit") is True
-        except Exception:
-            return False
+        return _supports_nova_canvas_image_edit_from_model_cost(model or "")
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -211,8 +264,22 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         if mask_raw is not None:
             mask_b64 = _file_types_to_b64(mask_raw)  # type: ignore[arg-type]
 
+        _size = op.pop("size", None)
         width = op.pop("width", None)
         height = op.pop("height", None)
+        if (
+            width is None
+            and height is None
+            and _size is not None
+            and isinstance(_size, str)
+            and "x" in _size
+        ):
+            w, h = _size.split("x", 1)
+            try:
+                width, height = int(w), int(h)
+            except ValueError:
+                pass
+
         number_of_images = op.pop("numberOfImages", None)
         quality = op.pop("quality", None)
         cfg_scale = op.pop("cfgScale", None)
