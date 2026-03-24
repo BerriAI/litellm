@@ -1121,7 +1121,7 @@ class DBSpendUpdateWriter:
                 end_user_list_transactions, end_user_budget_updates
             )
         )
-        
+
         # [Budget Reset Fix]
         # Ensure we commit the update if either (a) there's a spend increment
         # or (b) there's a budget_id update (even with 0 spend).

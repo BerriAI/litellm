@@ -869,7 +869,10 @@ async def _apply_default_budget_to_end_user(
         Updated end user object with default budget applied if applicable
     """
     # If end user already has a budget assigned or a budget_id set, no need to apply default
-    if end_user_obj.litellm_budget_table is not None or end_user_obj.budget_id is not None:
+    if (
+        end_user_obj.litellm_budget_table is not None
+        or end_user_obj.budget_id is not None
+    ):
         return end_user_obj
 
     # If no default budget configured, return as-is

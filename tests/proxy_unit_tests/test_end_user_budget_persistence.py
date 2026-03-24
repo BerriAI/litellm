@@ -439,11 +439,11 @@ async def test_update_end_user_spend_zero_spend_budget_update():
     # Mock Prisma
     mock_batcher = MagicMock()
     mock_batcher.litellm_endusertable.upsert = MagicMock()
-    
+
     mock_tx = MagicMock()
     mock_tx.batch_.return_value.__aenter__ = AsyncMock(return_value=mock_batcher)
     mock_tx.batch_.return_value.__aexit__ = AsyncMock()
-    
+
     prisma_client = MagicMock()
     prisma_client.db.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
     prisma_client.db.tx.return_value.__aexit__ = AsyncMock()

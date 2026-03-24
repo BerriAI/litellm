@@ -53,9 +53,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
-        updates: List[
-            SpendUpdateQueueItem
-        ] = await self.flush_all_updates_from_in_memory_queue()
+        updates: List[SpendUpdateQueueItem] = (
+            await self.flush_all_updates_from_in_memory_queue()
+        )
         aggregated_updates = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
             await self.update_queue.put(update)
@@ -235,6 +235,19 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
             transactions_dict[entity_id] += response_cost or 0
 
+            # [Budget Reset Fix]
+            # Capture the budget_id update for end-users inline to prevent redundant iteration.
+            budget_id = update.get("budget_id")
+            if (
+                entity_type == Litellm_EntityType.END_USER
+                and budget_id is not None
+                and db_spend_update_transactions.get("end_user_budget_updates")
+                is not None
+            ):
+                db_spend_update_transactions["end_user_budget_updates"][
+                    entity_id
+                ] = budget_id
+
         # [REFINEMENT] Optimize database writes for end-users: if the total response_cost is 0,
         # we only include it if there's a corresponding budget_id update.
         # This prevents unnecessary DB overhead for no-op increments, while ensuring
@@ -250,29 +263,14 @@ class SpendUpdateQueue(BaseUpdateQueue):
             filtered_transactions = {}
             for k, v in _end_user_transactions.items():
                 # Keep if cost > 0 OR if there's a budget update for this user
-                has_budget_update = _end_user_budget_updates and k in _end_user_budget_updates
+                has_budget_update = (
+                    _end_user_budget_updates and k in _end_user_budget_updates
+                )
                 if v > 0 or has_budget_update:
                     filtered_transactions[k] = v
-            db_spend_update_transactions["end_user_list_transactions"] = filtered_transactions
-
-        # Second pass to capture metadata-only updates (budget_id)
-        for update in updates:    
-
-            # [Budget Reset Fix]
-            # Capture the budget_id update for end-users.
-            # This allows LiteLLM to persist the budget_id (foreign key) in the background
-            # during the spend update batch, satisfying Greptile's request for decentralized writes.
-            entity_type = update.get("entity_type")
-            entity_id = update.get("entity_id") or ""
-            budget_id = update.get("budget_id")
-            if (
-                entity_type == Litellm_EntityType.END_USER
-                and budget_id is not None
-                and db_spend_update_transactions["end_user_budget_updates"] is not None
-            ):
-                db_spend_update_transactions["end_user_budget_updates"][
-                    entity_id
-                ] = budget_id
+            db_spend_update_transactions["end_user_list_transactions"] = (
+                filtered_transactions
+            )
 
         return db_spend_update_transactions
 
