@@ -117,6 +117,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             self.safe_get_vertex_ai_credentials(litellm_params)
             or self._resolve_vertex_credentials()
         )
+        if api_key and not vertex_credentials:
+            return {
+                **headers,
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            }
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
