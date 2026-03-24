@@ -406,7 +406,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             )
 
         error_msg = response_data.get("message") or response_data.get("error")
-        if error_msg:
+        if error_msg and not response_data.get("images"):
             if not isinstance(error_msg, str):
                 error_msg = str(error_msg)
             raise self.get_error_class(

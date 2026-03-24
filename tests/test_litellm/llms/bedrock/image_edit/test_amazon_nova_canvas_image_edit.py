@@ -481,7 +481,7 @@ def test_transform_response_errors_field_raises():
 
 
 def test_transform_response_message_or_error_field_raises():
-    """API-level error payload in JSON body is raised even when status is 200."""
+    """API-level error payload when there are no images (status 200)."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     resp = httpx.Response(
         200,
@@ -493,6 +493,26 @@ def test_transform_response_message_or_error_field_raises():
             raw_response=resp,
             logging_obj=None,  # type: ignore[arg-type]
         )
+
+
+def test_transform_response_allows_informational_message_with_images():
+    """Do not treat ``message`` as fatal when ``images`` is present (SDK wrappers)."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(
+        200,
+        json={
+            "message": "ok",
+            "images": ["YmFzZTY0X2E="],
+        },
+    )
+    model_response = config.transform_image_edit_response(
+        model="amazon.nova-canvas-v1:0",
+        raw_response=resp,
+        logging_obj=None,  # type: ignore[arg-type]
+    )
+    assert model_response.data is not None
+    assert len(model_response.data) == 1
+    assert model_response.data[0].b64_json == "YmFzZTY0X2E="
 
 
 def test_transform_response_non_null_finish_reason_raises():
