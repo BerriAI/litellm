@@ -10,7 +10,7 @@ echo "Starting security scans for LiteLLM..."
 # Function to install Trivy and required tools
 install_trivy() {
     echo "Installing Trivy and required tools..."
-    TRIVY_VERSION="0.69.3"
+    TRIVY_VERSION="0.35.0"
     sudo apt-get update
     sudo apt-get install -y wget jq curl bsdmainutils
     wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.deb"
