@@ -16,11 +16,17 @@ export const sanitizeImageSrc = (url: string | undefined): string => {
     const proto = parsed.protocol;
     if (
       proto === "blob:" ||
-      proto === "data:" ||
       proto === "http:" ||
       proto === "https:"
     ) {
       return parsed.href;
+    }
+    // Restrict data: URIs to image and PDF MIME types only
+    if (proto === "data:") {
+      const mime = parsed.pathname.split(";")[0].toLowerCase();
+      if (mime.startsWith("image/") || mime === "application/pdf") {
+        return parsed.href;
+      }
     }
   } catch {
     // invalid URL — fall through

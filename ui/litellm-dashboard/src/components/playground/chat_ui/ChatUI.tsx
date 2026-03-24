@@ -340,6 +340,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     proxySettings,
   ]);
 
+  // Note: this debounced chatHistory persistence was part of the original
+  // security-fixes branch (litellm_security_fixes_v1.82.3) and is ported
+  // as-is to keep the cherry-pick faithful. It prevents the synchronous
+  // sessionStorage writes that were flagged by the security scan.
   useEffect(() => {
     if (simplified) return; // Do not persist chat history in simplified (embedded) mode
     const handler = setTimeout(() => {

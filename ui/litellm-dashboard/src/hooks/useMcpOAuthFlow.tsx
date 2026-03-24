@@ -83,13 +83,17 @@ export const useMcpOAuthFlow = ({
   };
 
   const getStorageItem = (key: string): string | null => {
-    // Try obfuscated sessionStorage first, fall back to legacy plain localStorage
+    // Try obfuscated sessionStorage first, fall back to legacy plain localStorage.
+    // The localStorage fallback exists for one-time migration of values written
+    // before the obfuscated-sessionStorage switch. It can be removed once all
+    // active sessions have been refreshed (target: next major release).
     const obfuscated = getObfuscated(key);
     if (obfuscated !== null) return obfuscated;
     if (typeof window === "undefined") return null;
     try {
       return window.localStorage.getItem(key);
     } catch (err) {
+      console.warn(`Failed to read legacy localStorage key "${key}"`, err);
       return null;
     }
   };

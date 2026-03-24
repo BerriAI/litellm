@@ -10,7 +10,10 @@
 
 export function setObfuscated(key: string, value: string): void {
   try {
-    sessionStorage.setItem(key, btoa(value));
+    // Encode via encodeURIComponent first so non-Latin1 characters
+    // (e.g. Unicode MCP server aliases in OAuth flow-state JSON)
+    // are converted to percent-encoded ASCII before btoa.
+    sessionStorage.setItem(key, btoa(unescape(encodeURIComponent(value))));
   } catch {
     // quota exceeded or SSR — silently drop
   }
@@ -20,7 +23,7 @@ export function getObfuscated(key: string): string | null {
   try {
     const raw = sessionStorage.getItem(key);
     if (raw === null) return null;
-    return atob(raw);
+    return decodeURIComponent(escape(atob(raw)));
   } catch {
     // invalid base64 or SSR — treat as missing
     return null;
