@@ -43,7 +43,7 @@ import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, consumeReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { buildLoginUrlWithReturn, consumeReturnUrl, isValidReturnUrl, normalizeUrlForCompare, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { formatUserRole, isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
@@ -276,14 +276,15 @@ function CreateKeyPageContent() {
 
     // Check for a stored return URL
     const returnUrl = consumeReturnUrl();
-    if (returnUrl) {
+    // Guard at redirect site so static analysis can verify the validation
+    if (returnUrl && isValidReturnUrl(returnUrl)) {
+      const parsed = new URL(returnUrl, window.location.origin);
+      const safePath = parsed.pathname + parsed.search + parsed.hash;
       const currentUrl = window.location.href;
-      const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
+      const normalizedReturnUrl = normalizeUrlForCompare(safePath);
       const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
-      // Only redirect if the return URL is different from the current URL
-      // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        window.location.replace(returnUrl);
+        window.location.replace(safePath);
       }
     }
   }, [authLoading, token]);
