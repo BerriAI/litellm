@@ -101,5 +101,13 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "crusoe": {
+    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
+    "api_key_env": "CRUSOE_API_KEY",
+    "api_base_env": "CRUSOE_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
