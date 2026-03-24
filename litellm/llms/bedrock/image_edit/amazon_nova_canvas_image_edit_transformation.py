@@ -378,16 +378,17 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ImageResponse:
-        try:
-            response_data = raw_response.json()
-        except Exception as e:
-            raise self.get_error_class(
-                error_message=f"Error parsing Nova Canvas image edit response: {e}",
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-
+    def get_complete_url(
+        self,
+        model: str,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> str:
+        raise NotImplementedError(
+            "BedrockAmazonNovaCanvasImageEditConfig does not use get_complete_url. "
+            "The invoke URL is built inside BedrockImageEdit._prepare_request via "
+            "SigV4 signing. This method should never be called for Bedrock Nova Canvas."
+        )
         model_response = ImageResponse()
         model_response.data = []
         images: List[str] = response_data.get("images") or []
