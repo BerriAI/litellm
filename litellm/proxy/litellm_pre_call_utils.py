@@ -1363,6 +1363,10 @@ def _apply_credential_overrides_from_model_config(
     5. Team default override (defaultconfig)
     6. Deployment default (no action needed)
     """
+    # Feature flag gate — operators can disable this with litellm.enable_model_config_credential_overrides = False
+    if not litellm.enable_model_config_credential_overrides:
+        return
+
     # Respect clientside credentials — highest precedence
     if data.get("api_base") is not None or data.get("api_key") is not None:
         return
@@ -1380,11 +1384,17 @@ def _apply_credential_overrides_from_model_config(
     if not project_model_config and not team_model_config:
         return
 
+    # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure")
+    provider: Optional[str] = None
+    if "/" in model_name:
+        provider = model_name.split("/", 1)[0]
+
     credential_name = _resolve_credential_from_model_config(
         model_name=model_name,
         project_model_config=project_model_config,
         team_model_config=team_model_config,
         pre_alias_model_name=pre_alias_model_name,
+        provider=provider,
     )
 
     if not credential_name:
@@ -1415,6 +1425,7 @@ def _resolve_credential_from_model_config(
     project_model_config: Optional[dict],
     team_model_config: Optional[dict],
     pre_alias_model_name: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Optional[str]:
     """
     Walk the precedence chain and return the first matching credential name.
@@ -1426,6 +1437,11 @@ def _resolve_credential_from_model_config(
     4. team_model_config[model_name][provider] — team model-specific
     5. team_model_config[pre_alias_model_name][provider] — team pre-alias
     6. team_model_config["defaultconfig"][provider] — team default
+
+    When a model-specific entry exists but contains no litellm_credentials,
+    the function falls through to defaultconfig. This is intentional —
+    an entry without litellm_credentials is treated as incomplete config,
+    not as an explicit "no override" signal.
     """
     # Build the list of model names to try (post-alias first, then pre-alias)
     model_names_to_try = [model_name]
@@ -1440,29 +1456,52 @@ def _resolve_credential_from_model_config(
         for name in model_names_to_try:
             model_entry = model_config.get(name)
             if model_entry:
-                credential_name = _extract_credential_from_entry(model_entry)
+                credential_name = _extract_credential_from_entry(
+                    model_entry, provider=provider
+                )
                 if credential_name:
                     return credential_name
+                verbose_proxy_logger.debug(
+                    "model_config entry '%s' found but has no litellm_credentials, "
+                    "falling through to defaultconfig",
+                    name,
+                )
 
         # Default check
         default_entry = model_config.get("defaultconfig")
         if default_entry:
-            credential_name = _extract_credential_from_entry(default_entry)
+            credential_name = _extract_credential_from_entry(
+                default_entry, provider=provider
+            )
             if credential_name:
                 return credential_name
 
     return None
 
 
-def _extract_credential_from_entry(entry: dict) -> Optional[str]:
+def _extract_credential_from_entry(
+    entry: dict, provider: Optional[str] = None
+) -> Optional[str]:
     """
     Extract litellm_credentials from a model_config entry.
 
     Entry structure: {"azure": {"litellm_credentials": "name"}, ...}
-    Returns the first credential name found across all provider keys.
+
+    When provider is given (e.g. "azure"), tries an exact provider match first.
+    Falls back to the first credential found across all provider keys.
     """
     if not isinstance(entry, dict):
         return None
+
+    # Prefer exact provider match when provider hint is available
+    if provider and provider in entry:
+        provider_config = entry[provider]
+        if isinstance(provider_config, dict):
+            credential_name = provider_config.get("litellm_credentials")
+            if credential_name:
+                return credential_name
+
+    # Fall back to first available provider
     for provider_config in entry.values():
         if isinstance(provider_config, dict):
             credential_name = provider_config.get("litellm_credentials")
