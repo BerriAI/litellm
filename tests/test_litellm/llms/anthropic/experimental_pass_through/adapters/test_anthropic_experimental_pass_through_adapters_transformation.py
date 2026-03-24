@@ -1984,3 +1984,76 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_tool_choice_none():
+    """
+    Test that tool_choice {"type": "none"} is correctly translated to OpenAI "none".
+
+    This is a regression test for:
+    https://github.com/BerriAI/litellm/issues/24443
+
+    When passing `tool_choice = {"type": "none"}` to the Anthropic /v1/messages
+    API via LiteLLM proxy, it was returning a 500 error:
+    "Incompatible tool choice param submitted - {'type': 'none'}"
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hi"}],
+        tool_choice={"type": "none"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tool_choice" in openai_request
+    assert openai_request["tool_choice"] == "none"
+
+
+def test_translate_anthropic_tool_choice_auto():
+    """
+    Test that tool_choice {"type": "auto"} is correctly translated to OpenAI "auto".
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hi"}],
+        tool_choice={"type": "auto"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tool_choice" in openai_request
+    assert openai_request["tool_choice"] == "auto"
+
+
+def test_translate_anthropic_tool_choice_any():
+    """
+    Test that tool_choice {"type": "any"} is correctly translated to OpenAI "required".
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hi"}],
+        tool_choice={"type": "any"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    assert "tool_choice" in openai_request
+    assert openai_request["tool_choice"] == "required"
