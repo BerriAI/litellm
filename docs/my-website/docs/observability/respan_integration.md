@@ -345,6 +345,9 @@ def handle_request(user_id: str, question: str):
             messages=[{"role": "user", "content": question}],
         )
         print(response.choices[0].message.content)
+
+handle_request("user-123", "What is an AI gateway?")
+respan.flush()
 ```
 
 ## Respan Parameters Reference
@@ -356,7 +359,7 @@ def handle_request(user_id: str, question: str):
 | `metadata` | `dict` | Custom key-value pairs for filtering and search |
 | `workflow_name` | `str` | Name for the workflow span (logging mode) |
 | `span_name` | `str` | Name for the individual span (logging mode) |
-| `disable_log` | `bool` | Set to `true` to disable logging for sensitive data |
+| `disable_log` | `bool` | Set to `True` to disable logging for sensitive data |
 | `fallback_models` | `list` | Models to fall back to if primary fails (gateway mode) |
 
 ## Environment Variables
