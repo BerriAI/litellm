@@ -218,11 +218,21 @@ def test_exclude_labels_strips_label_from_metrics():
 
     logger = PrometheusLogger()
 
+    # Force at least one observation so the labeled histogram emits samples to
+    # the registry; without this, family.samples is empty and the assertion
+    # below never executes (trivially passing even if exclude_labels is broken).
+    _observe_once(logger)
+
     # Verify via the registry: no sample for litellm_request_total_latency_metric
     # should carry the end_user label key
+    found_any_sample = False
     for family in REGISTRY.collect():
         if family.name == "litellm_request_total_latency_metric":
             for sample in family.samples:
+                found_any_sample = True
                 assert (
                     "end_user" not in sample.labels
                 ), f"end_user label found in sample {sample}"
+    assert (
+        found_any_sample
+    ), "No samples found; _observe_once did not populate the registry"
