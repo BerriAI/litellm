@@ -141,11 +141,18 @@ const TEAM_COLORS: Record<string, string> = {
   Finance: "bg-green-100 text-green-700",
 };
 
+/** Sanitize a string for safe interpolation into YAML: strip newlines and
+ *  escape backslash + double-quote so injected content cannot break out of
+ *  a YAML value or introduce extra keys. */
+function yamlSafe(s: string): string {
+  return s.replace(/[\r\n]/g, "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   const lines: string[] = [
     "litellm_settings:",
     "  guardrails:",
-    `    - guardrail_name: "${g.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+    `    - guardrail_name: "${yamlSafe(g.name)}"`,
     "      litellm_params:",
     `        guardrail: ${g.guardrailType ?? "generic_guardrail_api"}`,
     `        mode: ${g.mode ?? "pre_call"}  # or post_call, during_call`,
@@ -160,20 +167,20 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   if (g.customHeaders.length > 0) {
     lines.push("        headers:  # static headers (sent with every request)");
     for (const h of g.customHeaders) {
-      lines.push(`          ${h.key}: "${String(h.value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+      lines.push(`          ${yamlSafe(h.key)}: "${yamlSafe(String(h.value))}"`);
     }
   }
   if (g.extraHeaders.length > 0) {
     lines.push("        extra_headers:  # forward these client request headers to the guardrail");
     for (const name of g.extraHeaders) {
-      lines.push(`          - ${name}`);
+      lines.push(`          - ${yamlSafe(name)}`);
     }
   }
   if (g.additionalProviderParams && Object.keys(g.additionalProviderParams).length > 0) {
     lines.push("        additional_provider_specific_params:");
     for (const [k, v] of Object.entries(g.additionalProviderParams)) {
-      const val = typeof v === "string" ? `"${v}"` : String(v);
-      lines.push(`          ${k}: ${val}`);
+      const val = typeof v === "string" ? `"${yamlSafe(v)}"` : String(v);
+      lines.push(`          ${yamlSafe(k)}: ${val}`);
     }
   }
   return lines.join("\n");
