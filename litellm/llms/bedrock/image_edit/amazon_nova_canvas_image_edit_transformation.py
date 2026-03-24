@@ -400,15 +400,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        finish_reasons = response_data.get("finish_reasons", [])
-        first_finish_reason = finish_reasons[0] if finish_reasons else None
-        if first_finish_reason and first_finish_reason.upper() not in ("SUCCESS",):
-            raise self.get_error_class(
-                error_message=f"Nova Canvas image edit error: {first_finish_reason}",
-                status_code=400,
-                headers=raw_response.headers,
-            )
-
+        # Nova Canvas InvokeModel success body uses "images" and optional "error" (AWS docs);
+        # it does not use Stability-style "finish_reasons".
         error_msg = response_data.get("message") or response_data.get("error")
         if error_msg and not response_data.get("images"):
             if not isinstance(error_msg, str):

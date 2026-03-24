@@ -548,12 +548,12 @@ def test_transform_response_allows_informational_message_with_images():
     assert model_response.data[0].b64_json == "YmFzZTY0X2E="
 
 
-def test_transform_response_non_null_finish_reason_raises():
-    """Align with Bedrock Stability: non-null first finish_reason indicates failure."""
+def test_transform_response_content_filtered_via_error_field():
+    """AWS Nova Canvas signals failures (e.g. content filter) via top-level ``error``, not ``finish_reasons``."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     resp = httpx.Response(
         200,
-        json={"images": [], "finish_reasons": ["content_filtered"]},
+        json={"images": [], "error": "CONTENT_FILTERED"},
     )
     with pytest.raises(Exception, match="Nova Canvas image edit error"):
         config.transform_image_edit_response(
