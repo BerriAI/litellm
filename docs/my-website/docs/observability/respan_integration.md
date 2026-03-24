@@ -78,7 +78,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  callbacks: custom_callbacks.respan_handler
+  callbacks: ["custom_callbacks.respan_handler"]
 
 environment_variables:
   RESPAN_API_KEY: "your-respan-api-key"
@@ -121,10 +121,11 @@ Route LiteLLM requests through Respan's gateway for full feature access — fall
 <TabItem value="sdk" label="SDK">
 
 ```python
+import os
 import litellm
 
 response = litellm.completion(
-    api_key="your-respan-api-key",
+    api_key=os.environ["RESPAN_API_KEY"],
     api_base="https://api.respan.ai/api",
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello!"}],
@@ -183,10 +184,11 @@ response = litellm.completion(
 Pass Respan-specific parameters via `extra_body`:
 
 ```python
+import os
 import litellm
 
 response = litellm.completion(
-    api_key="your-respan-api-key",
+    api_key=os.environ["RESPAN_API_KEY"],
     api_base="https://api.respan.ai/api",
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello!"}],
