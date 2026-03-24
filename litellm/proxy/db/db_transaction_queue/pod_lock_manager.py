@@ -156,14 +156,24 @@ end
         """
         script_register = getattr(self.redis_cache, "async_register_script", None)
         if callable(script_register):
-            if self._release_lock_script is None:
-                self._release_lock_script = script_register(
-                    self._COMPARE_AND_DELETE_LOCK_SCRIPT
+            try:
+                if self._release_lock_script is None:
+                    self._release_lock_script = script_register(
+                        self._COMPARE_AND_DELETE_LOCK_SCRIPT
+                    )
+                result = await self._release_lock_script(
+                    keys=[lock_key], args=[self.pod_id]
                 )
-            result = await self._release_lock_script(
-                keys=[lock_key], args=[self.pod_id]
-            )
-            return int(result or 0)
+                return int(result or 0)
+            except Exception:
+                # Lua execution failed (e.g. Redis restart cleared loaded scripts,
+                # or scripting is disabled). Reset cached script handle and fall
+                # through to the GET + DEL fallback so the lock is still released.
+                self._release_lock_script = None
+                verbose_proxy_logger.warning(
+                    "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
+                    lock_key,
+                )
 
         current_value = await self.redis_cache.async_get_cache(lock_key)  # type: ignore
         if isinstance(current_value, bytes):
