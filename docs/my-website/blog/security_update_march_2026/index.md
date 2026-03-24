@@ -16,6 +16,15 @@ import TabItem from '@theme/TabItem';
 > **Status:** Active investigation
 > **Last updated:** March 24, 2026, 2:00 PM ET
 
+## TLDR; 
+- The compromised PyPI packages were **litellm==1.82.7** and **litellm==1.82.8**. Those packages have now been removed from PyPI.
+- We believe that the compromise originated from the Trivy dependency used in our CI/CD security scanning workflow.
+- Customers running the official LiteLLM Proxy Docker image were not impacted. That deployment path pins dependencies in requirements.txt and does not rely on the compromised PyPI packages.
+- We are pausing new LiteLLM releases until we complete a broader supply-chain review and confirm the release path is safe.
+
+
+## Overview
+
 LiteLLM is investigating a suspected supply chain attack involving unauthorized PyPI package publishes. Current evidence suggests a maintainer's PyPI account may have been compromised and used to distribute malicious code.
 
 At this time, we believe this incident may be linked to the broader [Trivy security compromise](https://www.aquasec.com/blog/trivy-supply-chain-attack-what-you-need-to-know/), in which stolen credentials were reportedly used to gain unauthorized access to the LiteLLM publishing pipeline.
