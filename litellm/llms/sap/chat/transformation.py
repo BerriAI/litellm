@@ -281,9 +281,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options.get("delimiters")
 
-        placeholder_values = optional_params.pop("placeholder_values", {})
+        placeholder_values = optional_params.pop("placeholder_values", None)
         placeholder_values = (
-            {"placeholder_values": placeholder_values} if placeholder_values else {}
+            {"placeholder_values": placeholder_values} if placeholder_values is not None else {}
         )
 
         fallback_modules = optional_params.pop("fallback_sap_modules", [])

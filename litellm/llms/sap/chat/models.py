@@ -391,10 +391,13 @@ class MaskingModuleConfig(BaseModel):
         has_providers = self.providers is not None
         has_masking_providers = self.masking_providers is not None
 
-        if has_providers == has_masking_providers:
+        if not has_providers and not has_masking_providers:
             raise ValueError(
-                "For SAP Masking Module Config must set exactly one of: 'providers' or 'masking_providers' "
-                "DEPRECATED: parameter 'masking_providers' will be removed Sept 15, 2026. Use 'providers' instead."
+                "For SAP Masking Module Config you must provide 'providers'."
+            )
+        if has_providers and has_masking_providers:
+            raise ValueError(
+                "For SAP Masking Module Config you must set exactly one of: 'providers' or 'masking_providers', not both."
             )
 
         if has_masking_providers:
