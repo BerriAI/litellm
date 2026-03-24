@@ -318,6 +318,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
+            "service_tier",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -1121,6 +1122,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
+            elif param == "service_tier" and isinstance(value, str):
+                optional_params["service_tier"] = value
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -2415,6 +2418,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "provider_specific_fields", {}
                 )["traffic_type"] = traffic_type
 
+            ## ADD SERVICE TIER ##
+            if "serviceTier" in completion_response:
+                setattr(model_response, "service_tier", completion_response["serviceTier"])
+
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
@@ -3138,6 +3145,9 @@ class ModelResponseIterator:
                     model_response._hidden_params.setdefault(
                         "provider_specific_fields", {}
                     )["traffic_type"] = traffic_type
+
+            if "serviceTier" in processed_chunk:
+                setattr(model_response, "service_tier", processed_chunk["serviceTier"])
 
             setattr(model_response, "usage", usage)  # type: ignore
 
