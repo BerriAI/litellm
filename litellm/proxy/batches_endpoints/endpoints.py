@@ -439,7 +439,7 @@ async def retrieve_batch(  # noqa: PLR0915
             # Mirror litellm.utils._client_async_logging_helper for this path.
             try:
                 if model_for_file_encoding and llm_router is not None:
-                    from litellm.litellm_core_utils.litellm_params import (
+                    from litellm.litellm_core_utils.get_litellm_params import (
                         get_litellm_params,
                     )
                     from litellm.litellm_core_utils.logging_worker import (
@@ -466,17 +466,21 @@ async def retrieve_batch(  # noqa: PLR0915
                         litellm_params=_litellm_params,
                         custom_llm_provider=_creds["custom_llm_provider"],
                     )
+                    _batch_log_end = datetime.now()
+                    _batch_log_start = litellm_logging_obj.start_time
+                    if _batch_log_start is None:
+                        _batch_log_start = _batch_log_end
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                         async_coroutine=litellm_logging_obj.async_success_handler(
                             result=response,
-                            start_time=None,
-                            end_time=None,
+                            start_time=_batch_log_start,
+                            end_time=_batch_log_end,
                         )
                     )
                     litellm_logging_obj.handle_sync_success_callbacks_for_async_calls(
                         result=response,
-                        start_time=None,
-                        end_time=None,
+                        start_time=_batch_log_start,
+                        end_time=_batch_log_end,
                     )
             except Exception as _db_cache_log_err:
                 verbose_proxy_logger.warning(
