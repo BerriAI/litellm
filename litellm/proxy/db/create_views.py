@@ -27,14 +27,16 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         await db.execute_raw(
             """
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
-                SELECT 
-                v.*, 
-                t.spend AS team_spend, 
-                t.max_budget AS team_max_budget, 
-                t.tpm_limit AS team_tpm_limit, 
-                t.rpm_limit AS team_rpm_limit
+                SELECT
+                v.*,
+                t.spend AS team_spend,
+                t.max_budget AS team_max_budget,
+                t.tpm_limit AS team_tpm_limit,
+                t.rpm_limit AS team_rpm_limit,
+                p.project_alias AS project_alias
                 FROM "LiteLLM_VerificationToken" v
-                LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
+                LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
+                LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
             """
         )
 
