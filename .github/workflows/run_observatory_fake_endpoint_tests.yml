@@ -1,0 +1,191 @@
+name: Run Observatory Fake Endpoint Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker image tag to test (e.g. v1.81.12-stable.2)"
+        required: true
+        type: string
+      duration_hours:
+        description: "Test duration in hours"
+        required: false
+        type: string
+        default: "2"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Docker image tag to test"
+        required: true
+        type: string
+      duration_hours:
+        description: "Test duration in hours"
+        required: false
+        type: string
+        default: "2"
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_API_URL: https://backboard.railway.com/graphql/v2
+
+jobs:
+  redeploy-proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate tag input
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Invalid tag format: $TAG (expected vX.Y.Z...)"
+            exit 1
+          fi
+
+      - name: Update LITELLM_IMAGE_TAG variable on Railway
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          SERVICE_ID: ${{ secrets.RAILWAY_PROXY_SERVICE_ID }}
+          ENVIRONMENT_ID: ${{ secrets.RAILWAY_PROXY_ENVIRONMENT_ID }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "Setting LITELLM_IMAGE_TAG=${TAG} on Railway proxy..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${RAILWAY_API_URL}" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${RAILWAY_API_TOKEN}" \
+            -d "$(jq -n \
+              --arg serviceId "$SERVICE_ID" \
+              --arg envId "$ENVIRONMENT_ID" \
+              --arg tag "$TAG" \
+              '{
+                query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }",
+                variables: {
+                  input: {
+                    projectId: "",
+                    serviceId: $serviceId,
+                    environmentId: $envId,
+                    name: "LITELLM_IMAGE_TAG",
+                    value: $tag
+                  }
+                }
+              }')")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response ($HTTP_CODE): $BODY"
+
+          if echo "$BODY" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::Failed to update LITELLM_IMAGE_TAG variable"
+            exit 1
+          fi
+          echo "Variable updated successfully"
+
+      - name: Trigger redeployment
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          SERVICE_ID: ${{ secrets.RAILWAY_PROXY_SERVICE_ID }}
+          ENVIRONMENT_ID: ${{ secrets.RAILWAY_PROXY_ENVIRONMENT_ID }}
+        run: |
+          echo "Triggering redeployment with new image tag..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${RAILWAY_API_URL}" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${RAILWAY_API_TOKEN}" \
+            -d "$(jq -n \
+              --arg serviceId "$SERVICE_ID" \
+              --arg envId "$ENVIRONMENT_ID" \
+              '{
+                query: "mutation serviceInstanceDeployV2($serviceId: String!, $environmentId: String!) { serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId) }",
+                variables: {
+                  serviceId: $serviceId,
+                  environmentId: $envId
+                }
+              }')")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response ($HTTP_CODE): $BODY"
+
+          if echo "$BODY" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::Failed to trigger redeployment"
+            exit 1
+          fi
+          echo "Redeployment triggered"
+
+      - name: Wait for proxy to be healthy
+        env:
+          OBSERVATORY_PROXY_URL: ${{ secrets.OBSERVATORY_PROXY_URL }}
+        run: |
+          echo "Waiting for proxy to be healthy..."
+          # Initial wait for Railway to start the new deployment
+          sleep 30
+          for i in $(seq 1 30); do
+            if curl -s -f "${OBSERVATORY_PROXY_URL}/health/liveliness" > /dev/null 2>&1; then
+              echo "Proxy is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/30 - not ready yet, waiting 10s..."
+            sleep 10
+          done
+          echo "::error::Proxy failed to become healthy within 5 minutes"
+          exit 1
+
+  trigger-fake-endpoint-tests:
+    needs: [redeploy-proxy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        include:
+          - test_suite: TestFakeBedrockRelease
+            model: fake-bedrock-model
+          - test_suite: TestFakeVertexAIRelease
+            model: fake-vertex-model
+    steps:
+      - name: Trigger ${{ matrix.test_suite }}
+        env:
+          OBSERVATORY_URL: ${{ secrets.OBSERVATORY_URL }}
+          OBSERVATORY_API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
+          OBSERVATORY_PROXY_URL: ${{ secrets.OBSERVATORY_PROXY_URL }}
+          OBSERVATORY_PROXY_API_KEY: ${{ secrets.OBSERVATORY_PROXY_API_KEY }}
+          DURATION_HOURS: ${{ inputs.duration_hours || '2' }}
+        run: |
+          echo "Triggering ${{ matrix.test_suite }} for $DURATION_HOURS hours..."
+          echo "Proxy: $OBSERVATORY_PROXY_URL"
+          echo "Model: ${{ matrix.model }}"
+
+          PAYLOAD=$(jq -n \
+            --arg url "${OBSERVATORY_PROXY_URL}" \
+            --arg key "${OBSERVATORY_PROXY_API_KEY}" \
+            --arg suite "${{ matrix.test_suite }}" \
+            --arg model "${{ matrix.model }}" \
+            --argjson duration "${DURATION_HOURS}" \
+            '{
+              deployment_url: $url,
+              api_key: $key,
+              test_suite: $suite,
+              models: [$model],
+              duration_hours: $duration
+            }')
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
+            -H "Content-Type: application/json" \
+            -H "X-LiteLLM-Observatory-API-Key: ${OBSERVATORY_API_KEY}" \
+            -d "$PAYLOAD")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "Response ($HTTP_CODE): $BODY"
+
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Failed to trigger ${{ matrix.test_suite }}"
+            exit 1
+          fi
+
+          REQUEST_ID=$(echo "$BODY" | jq -r '.results.request_id')
+          echo "Test triggered successfully!"
+          echo "Request ID: $REQUEST_ID"
+          echo "Results will be posted to Slack when complete (~${DURATION_HOURS}h)."

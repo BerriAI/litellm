@@ -17,3 +17,17 @@ model_list:
       model: azure/gpt-4o-mini
       api_key: os.environ/AZURE_API_KEY
       api_base: os.environ/AZURE_API_BASE
+
+  # Fake Bedrock-like model (openai-compatible mock, tests proxy HTTP lifecycle)
+  - model_name: fake-bedrock-model
+    litellm_params:
+      model: openai/fake-bedrock-model
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+  # Fake Vertex AI-like model (openai-compatible mock, tests proxy HTTP lifecycle)
+  - model_name: fake-vertex-model
+    litellm_params:
+      model: openai/fake-vertex-model
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
