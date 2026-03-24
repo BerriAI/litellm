@@ -347,7 +347,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   useEffect(() => {
     if (simplified) return; // Do not persist chat history in simplified (embedded) mode
     const handler = setTimeout(() => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
+      setObfuscated("chatHistory", JSON.stringify(chatHistory));
     }, 500); // Debounce by 500ms
 
     return () => {

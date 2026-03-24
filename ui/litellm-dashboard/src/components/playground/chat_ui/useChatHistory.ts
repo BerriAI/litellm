@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { MessageType, A2ATaskMetadata } from "./types";
 import { TokenUsage } from "./ResponseMetrics";
 import { MCPEvent } from "../../mcp_tools/types";
+import { getObfuscated, setObfuscated } from "../../../utils/storageUtils";
 import { truncateString } from "../../../utils/textUtils";
 
 export interface UseChatHistoryReturn {
@@ -40,7 +41,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
   const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
     if (simplified) return [];
     try {
-      const saved = sessionStorage.getItem("chatHistory");
+      const saved = getObfuscated("chatHistory");
       return saved ? JSON.parse(saved) : [];
     } catch (error) {
       console.error("Error parsing chatHistory from sessionStorage", error);
@@ -71,7 +72,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     // don't re-write an empty array back into sessionStorage.
     if (chatHistory.length === 0) return;
     const handler = setTimeout(() => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
+      setObfuscated("chatHistory", JSON.stringify(chatHistory));
     }, 500); // Debounce by 500ms
 
     return () => {

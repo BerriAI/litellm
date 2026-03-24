@@ -1,6 +1,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useChatHistory } from "./useChatHistory";
+import { setObfuscated, getObfuscated } from "../../../utils/storageUtils";
 
 describe("useChatHistory", () => {
   beforeEach(() => {
@@ -439,7 +440,7 @@ describe("useChatHistory", () => {
       vi.useFakeTimers();
       const { result } = renderHook(() => useChatHistory({ simplified: false }));
 
-      sessionStorage.setItem("chatHistory", "[]");
+      setObfuscated("chatHistory", "[]");
       sessionStorage.setItem("messageTraceId", "trace-1");
       sessionStorage.setItem("responsesSessionId", "resp-1");
 
@@ -452,7 +453,7 @@ describe("useChatHistory", () => {
         vi.advanceTimersByTime(600);
       });
 
-      expect(sessionStorage.getItem("chatHistory")).toBeNull();
+      expect(getObfuscated("chatHistory")).toBeNull();
       expect(sessionStorage.getItem("messageTraceId")).toBeNull();
       expect(sessionStorage.getItem("responsesSessionId")).toBeNull();
 
@@ -460,7 +461,7 @@ describe("useChatHistory", () => {
     });
 
     it("should NOT clear sessionStorage when simplified", () => {
-      sessionStorage.setItem("chatHistory", '[{"role":"user","content":"hi"}]');
+      setObfuscated("chatHistory", '[{"role":"user","content":"hi"}]');
 
       const { result } = renderHook(() => useChatHistory({ simplified: true }));
 
@@ -469,7 +470,7 @@ describe("useChatHistory", () => {
       });
 
       // simplified mode should not touch sessionStorage
-      expect(sessionStorage.getItem("chatHistory")).toBe('[{"role":"user","content":"hi"}]');
+      expect(getObfuscated("chatHistory")).toBe('[{"role":"user","content":"hi"}]');
     });
 
     it("should not re-write chatHistory to sessionStorage after clear via debounce", () => {
@@ -485,7 +486,7 @@ describe("useChatHistory", () => {
       act(() => {
         vi.advanceTimersByTime(600);
       });
-      expect(sessionStorage.getItem("chatHistory")).not.toBeNull();
+      expect(getObfuscated("chatHistory")).not.toBeNull();
 
       // Now clear
       act(() => {
@@ -497,7 +498,7 @@ describe("useChatHistory", () => {
         vi.advanceTimersByTime(600);
       });
 
-      expect(sessionStorage.getItem("chatHistory")).toBeNull();
+      expect(getObfuscated("chatHistory")).toBeNull();
 
       vi.useRealTimers();
     });
