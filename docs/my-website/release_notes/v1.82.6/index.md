@@ -214,9 +214,6 @@ pip install litellm==1.82.6.rc.1
 - **[LangSmith](../../docs/proxy/logging#langsmith)**
     - Populate `usage_metadata` in outputs for Cost column tracking - [PR #24043](https://github.com/BerriAI/litellm/pull/24043)
 
-- **[Audit Log Export](../../docs/proxy/logging)**
-    - Export audit logs to external callback systems (S3, custom destinations) - [PR #23167](https://github.com/BerriAI/litellm/pull/23167)
-
 - **General**
     - Preserve `router_model_group` in generic API log entries - [PR #24044](https://github.com/BerriAI/litellm/pull/24044)
     - Merge `hidden_params` into metadata for streaming requests — previously only non-streaming requests had full metadata - [PR #24220](https://github.com/BerriAI/litellm/pull/24220)
@@ -242,10 +239,13 @@ No major secret manager changes in this release.
 
 ## MCP Gateway
 
+#### Features
+
+- Upgrade `mcp` SDK to 1.26.0 - [PR #24179](https://github.com/BerriAI/litellm/pull/24179)
+
 #### Bugs
 
 - Fix `oauth2_flow` not being set when building `MCPServer` in `_execute_with_mcp_client` — caused MCP server auth failures for OAuth2-protected servers - [PR #23468](https://github.com/BerriAI/litellm/pull/23468)
-- Upgrade `mcp` SDK to 1.26.0 - [PR #24179](https://github.com/BerriAI/litellm/pull/24179)
 
 ---
 
