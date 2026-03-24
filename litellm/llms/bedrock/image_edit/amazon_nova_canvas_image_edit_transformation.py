@@ -382,6 +382,38 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
+        if raw_response.status_code not in (200,):
+            raise self.get_error_class(
+                error_message=f"Nova Canvas image edit error: {response_data}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        if "errors" in response_data:
+            raise self.get_error_class(
+                error_message=f"Nova Canvas image edit error: {response_data['errors']}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        finish_reasons = response_data.get("finish_reasons", [])
+        if finish_reasons and finish_reasons[0]:
+            raise self.get_error_class(
+                error_message=f"Nova Canvas image edit error: {finish_reasons[0]}",
+                status_code=400,
+                headers=raw_response.headers,
+            )
+
+        error_msg = response_data.get("message") or response_data.get("error")
+        if error_msg:
+            if not isinstance(error_msg, str):
+                error_msg = str(error_msg)
+            raise self.get_error_class(
+                error_message=f"Nova Canvas image edit error: {error_msg}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
         model_response = ImageResponse()
         model_response.data = []
         images: List[str] = response_data.get("images") or []
@@ -421,7 +453,11 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        return "bedrock://image-edit"
+        raise NotImplementedError(
+            "Nova Canvas image edit URLs are built in BedrockImageEdit._prepare_request "
+            "(AWS runtime endpoint + model invoke path). Do not use get_complete_url for "
+            "this config."
+        )
 
     def validate_environment(
         self,

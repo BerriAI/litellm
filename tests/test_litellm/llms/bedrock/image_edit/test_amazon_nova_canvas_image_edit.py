@@ -448,3 +448,63 @@ def test_transform_response_to_openai_format():
     assert model_response.data is not None
     assert len(model_response.data) == 2
     assert model_response.data[0].b64_json == "YmFzZTY0X2E="
+
+
+def test_transform_response_non_200_raises():
+    """HTTP 4xx/5xx with JSON body surfaces a structured error."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(
+        400,
+        json={"message": "ValidationException: invalid input"},
+    )
+    with pytest.raises(Exception, match="Nova Canvas image edit error"):
+        config.transform_image_edit_response(
+            model="amazon.nova-canvas-v1:0",
+            raw_response=resp,
+            logging_obj=None,  # type: ignore[arg-type]
+        )
+
+
+def test_transform_response_errors_field_raises():
+    """Align with Bedrock Stability: top-level ``errors`` in body."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(
+        200,
+        json={"errors": ["upstream failure"]},
+    )
+    with pytest.raises(Exception, match="Nova Canvas image edit error"):
+        config.transform_image_edit_response(
+            model="amazon.nova-canvas-v1:0",
+            raw_response=resp,
+            logging_obj=None,  # type: ignore[arg-type]
+        )
+
+
+def test_transform_response_message_or_error_field_raises():
+    """API-level error payload in JSON body is raised even when status is 200."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(
+        200,
+        json={"message": "ValidationException: task rejected"},
+    )
+    with pytest.raises(Exception, match="Nova Canvas image edit error"):
+        config.transform_image_edit_response(
+            model="amazon.nova-canvas-v1:0",
+            raw_response=resp,
+            logging_obj=None,  # type: ignore[arg-type]
+        )
+
+
+def test_transform_response_non_null_finish_reason_raises():
+    """Align with Bedrock Stability: non-null first finish_reason indicates failure."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(
+        200,
+        json={"images": [], "finish_reasons": ["content_filtered"]},
+    )
+    with pytest.raises(Exception, match="Nova Canvas image edit error"):
+        config.transform_image_edit_response(
+            model="amazon.nova-canvas-v1:0",
+            raw_response=resp,
+            logging_obj=None,  # type: ignore[arg-type]
+        )
