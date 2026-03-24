@@ -18,7 +18,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
 
     Note: MiniMax's Claude-compatible `/anthropic/v1/messages` support is implemented
     separately in `litellm/llms/minimax/messages/transformation.py`.
-    
+
     Supported models:
     - MiniMax-M2.1
     - MiniMax-M2.1-highspeed
