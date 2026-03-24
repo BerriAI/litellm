@@ -4,12 +4,12 @@ import { Button } from "@tremor/react";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult } from "./types";
 import { testPipelineCall } from "../networking";
 import type { CompliancePrompt } from "../../data/compliancePrompts";
-import { getFrameworks } from "../../data/compliancePrompts";
 import {
   TEST_SOURCE_QUICK,
   TEST_SOURCE_ALL,
   ACTION_LABELS,
   getPromptsForTestSource,
+  getTestSourceOptions,
   complianceMatchExpected,
 } from "./pipeline_utils";
 
@@ -62,14 +62,10 @@ export const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
 
-  const testSourceOptions = useMemo(() => [
-    { value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" },
-    ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
-    { value: TEST_SOURCE_ALL, label: "All compliance datasets" },
-  ], []);
+  const testSourceOptions = useMemo(() => getTestSourceOptions(), []);
 
   const isQuickChat = testSource === TEST_SOURCE_QUICK;
-  const promptsForSource = getPromptsForTestSource(testSource);
+  const promptsForSource = useMemo(() => getPromptsForTestSource(testSource), [testSource]);
   const isDataset = promptsForSource.length > 0;
 
   const handleRunTest = async () => {

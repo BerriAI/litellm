@@ -37,6 +37,14 @@ export function getPromptsForTestSource(source: string): CompliancePrompt[] {
   return fw ? fw.categories.flatMap((c) => c.prompts) : [];
 }
 
+export function getTestSourceOptions(): { value: string; label: string }[] {
+  return [
+    { value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" },
+    ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
+    { value: TEST_SOURCE_ALL, label: "All compliance datasets" },
+  ];
+}
+
 export function createDefaultStep(): PipelineStep {
   return {
     guardrail: "",
