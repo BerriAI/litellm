@@ -434,6 +434,56 @@ async def retrieve_batch(  # noqa: PLR0915
                     response, model=model_for_file_encoding
                 )
 
+            # Managed batches returned from DB skip litellm.aretrieve_batch, so the @client
+            # wrapper never runs async_success_handler — spend/S3 callbacks would be missing.
+            # Mirror litellm.utils._client_async_logging_helper for this path.
+            try:
+                if model_for_file_encoding and llm_router is not None:
+                    from litellm.litellm_core_utils.litellm_params import (
+                        get_litellm_params,
+                    )
+                    from litellm.litellm_core_utils.logging_worker import (
+                        GLOBAL_LOGGING_WORKER,
+                    )
+                    from litellm.types.router import GenericLiteLLMParams
+
+                    _creds = get_credentials_for_model(
+                        llm_router=llm_router,
+                        model_id=model_for_file_encoding,
+                        operation_context="batch retrieval (managed DB cache)",
+                    )
+                    _enriched: Dict = {**data, **_creds}
+                    _optional = GenericLiteLLMParams(**_enriched)
+                    _litellm_params = get_litellm_params(
+                        custom_llm_provider=_creds["custom_llm_provider"],
+                        **_enriched,
+                    )
+                    litellm_logging_obj.update_from_kwargs(
+                        kwargs=_enriched,
+                        model=model_for_file_encoding,
+                        user=None,
+                        optional_params=_optional.model_dump(exclude_none=True),
+                        litellm_params=_litellm_params,
+                        custom_llm_provider=_creds["custom_llm_provider"],
+                    )
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                        async_coroutine=litellm_logging_obj.async_success_handler(
+                            result=response,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+                    litellm_logging_obj.handle_sync_success_callbacks_for_async_calls(
+                        result=response,
+                        start_time=None,
+                        end_time=None,
+                    )
+            except Exception as _db_cache_log_err:
+                verbose_proxy_logger.warning(
+                    "retrieve_batch: managed DB-cache success logging failed: %s",
+                    _db_cache_log_err,
+                )
+
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
                     litellm_call_id=data.get("litellm_call_id", ""), status="success"

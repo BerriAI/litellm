@@ -23,6 +23,7 @@ from typing import (
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -105,22 +106,24 @@ class MistralConfig(OpenAIGPTConfig):
         Reasoning uses Mistral's thinking/reasoning contract (system prompt + content blocks).
         Enabled for models with supports_reasoning in model_cost (e.g. Magistral, Mistral Small 4).
 
-        Prefer litellm.supports_reasoning; fall back to scanning model_cost by resolved keys
-        when the generic path returns False (provider/name edge cases; see #24416).
+        Only the Mistral provider is considered: we never call supports_reasoning with
+        custom_llm_provider=None, which could match other providers' reasoning models and
+        incorrectly expose reasoning_effort on MistralConfig.
+
+        Falls back to a direct model_cost scan (mistral entries only) when supports_reasoning
+        returns False (#24416).
         """
         import litellm as _litellm
 
         if not model:
             return False
 
-        if _litellm.supports_reasoning(
-            model=model, custom_llm_provider="mistral"
-        ) or _litellm.supports_reasoning(model=model, custom_llm_provider=None):
+        if _litellm.supports_reasoning(model=model, custom_llm_provider="mistral"):
             return True
 
         try:
             potential = _get_potential_model_names(
-                model=model, custom_llm_provider=None
+                model=model, custom_llm_provider="mistral"
             )
             candidates: List[str] = []
             seen: set[str] = set()
@@ -152,8 +155,14 @@ class MistralConfig(OpenAIGPTConfig):
                     and entry.get("supports_reasoning") is True
                 ):
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_logger.debug(
+                "MistralConfig._mistral_model_supports_reasoning: model_cost fallback failed "
+                "for model=%r: %s",
+                model,
+                e,
+                exc_info=True,
+            )
         return False
 
     def get_supported_openai_params(self, model: str) -> List[str]:

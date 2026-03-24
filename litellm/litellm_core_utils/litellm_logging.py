@@ -2495,10 +2495,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 x is not None for x in (batch_cost, batch_usage, batch_models)
             )
 
-            should_compute_batch_data = (
-                not is_base64_unified_file_id
-                or not has_explicit_batch_data
-                and result.status == "completed"
+            # OpenAI uses "completed"; ManagedObjectTable may persist "complete" (see update_batch_in_database).
+            _batch_terminal_completed = result.status in ("completed", "complete")
+            should_compute_batch_data = (not is_base64_unified_file_id) or (
+                not has_explicit_batch_data and _batch_terminal_completed
             )
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost

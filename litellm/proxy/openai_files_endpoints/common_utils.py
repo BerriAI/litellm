@@ -820,6 +820,9 @@ async def get_batch_from_database(
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
+        # Prisma stores terminal batches as status "complete"; OpenAI + spend logs expect "completed".
+        if isinstance(batch_data, dict) and batch_data.get("status") == "complete":
+            batch_data = {**batch_data, "status": "completed"}
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
 
