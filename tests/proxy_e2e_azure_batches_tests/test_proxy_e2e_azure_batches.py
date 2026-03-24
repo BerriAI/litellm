@@ -29,17 +29,30 @@ pytestmark = [
     pytest.mark.usefixtures("mock_azure_server", "litellm_proxy_server"),
     pytest.mark.skipif(
         os.environ.get("SKIP_E2E_TESTS", "false").lower() == "true",
-        reason="E2E tests disabled via SKIP_E2E_TESTS env var"
+        reason="E2E tests disabled via SKIP_E2E_TESTS env var",
     ),
 ]
 
 
 def is_managed_id(file_id: str) -> bool:
-    """Check if a file ID is a base64-encoded LiteLLM managed/unified ID."""
+    """
+    True for LiteLLM managed (litellm_proxy...) or proxy model-routed IDs
+    (litellm:...;model,...) after base64 decode. Strips file-/batch_ prefix first.
+    """
     try:
-        padded = file_id + "=" * (-len(file_id) % 4)
+        b64_part = file_id
+        if file_id.startswith("file-"):
+            b64_part = file_id[5:]
+        elif file_id.startswith("batch_"):
+            b64_part = file_id[6:]
+        padded = b64_part + "=" * (-len(b64_part) % 4)
         decoded = base64.urlsafe_b64decode(padded).decode()
-        return decoded.startswith(MANAGED_FILE_ID_PREFIX)
+        if decoded.startswith(MANAGED_FILE_ID_PREFIX):
+            return True
+        # encode_file_id_with_model output: litellm:<provider_id>;model,<name>
+        if decoded.startswith("litellm:") and ";model," in decoded:
+            return True
+        return False
     except Exception:
         return False
 
@@ -92,9 +105,9 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
         print("Retrieving batch input file metadata...")
         metadata = self.openai_client.files.retrieve(batch_input_file.id)
         assert_managed_id(metadata.id, "files.retrieve(input).id")
-        assert metadata.id == batch_input_file.id, (
-            f"Input file ID mismatch: retrieve returned '{metadata.id}' but expected '{batch_input_file.id}'"
-        )
+        assert (
+            metadata.id == batch_input_file.id
+        ), f"Input file ID mismatch: retrieve returned '{metadata.id}' but expected '{batch_input_file.id}'"
         assert metadata.object == "file"
         assert metadata.bytes > 0, "bytes not set"
         assert metadata.filename == "modified_file.jsonl"
@@ -170,9 +183,9 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
             raise TimeoutError("Timed out waiting for batch to be in state: completed")
 
         assert_managed_id(batch_response.id, "batch_response.id")
-        assert batch_response.id == batch_id, (
-            f"batch_response.id mismatch: got '{batch_response.id}' but expected '{batch_id}'"
-        )
+        assert (
+            batch_response.id == batch_id
+        ), f"batch_response.id mismatch: got '{batch_response.id}' but expected '{batch_id}'"
         assert_managed_id(batch_response.input_file_id, "batch_response.input_file_id")
         assert_managed_id(
             batch_response.output_file_id,
@@ -185,9 +198,9 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
         print("\nRetrieving batch output file metadata...")
         metadata = self.openai_client.files.retrieve(output_file_id)
         assert_managed_id(metadata.id, "files.retrieve(output_file_id).id")
-        assert metadata.id == output_file_id, (
-            f"Output file ID mismatch: retrieve returned '{metadata.id}' but expected '{output_file_id}'"
-        )
+        assert (
+            metadata.id == output_file_id
+        ), f"Output file ID mismatch: retrieve returned '{metadata.id}' but expected '{output_file_id}'"
         assert metadata.object == "file"
         assert metadata.bytes > 0, "bytes not set"
         assert metadata.filename, "filename not set"
@@ -290,10 +303,12 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
                 password="dbpassword9090",
             )
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     DELETE FROM "LiteLLM_ManagedObjectTable"
                     WHERE file_purpose = 'batch' AND status = 'validating'
-                """)
+                """
+                )
                 deleted = cur.rowcount
                 conn.commit()
                 if deleted > 0:
@@ -304,9 +319,9 @@ class TestManagedFilesAPI(ManagedFilesBase, UserKeyTestMixin):
 
     def clear_s3_callbacks(self):
         clear_response = httpx.delete(f"{get_mock_server_base_url()}/mock-s3/callbacks")
-        assert clear_response.status_code == 200, (
-            f"Failed to clear callbacks: {clear_response.text}"
-        )
+        assert (
+            clear_response.status_code == 200
+        ), f"Failed to clear callbacks: {clear_response.text}"
         return clear_response.json()
 
     @pytest.mark.skipif(

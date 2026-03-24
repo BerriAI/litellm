@@ -116,6 +116,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_org_id=_meta.get("user_api_key_org_id"),
                 user_api_key_team_id=_meta.get("user_api_key_team_id"),
                 user_api_key_project_id=_meta.get("user_api_key_project_id"),
+                user_api_key_project_alias=_meta.get("user_api_key_project_alias"),
                 user_api_key_user_id=_meta.get("user_api_key_user_id"),
                 user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
@@ -197,6 +198,9 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_org_id=user_api_key_dict.org_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_project_id=user_api_key_dict.project_id,
+                user_api_key_project_alias=getattr(
+                    user_api_key_dict, "project_alias", None
+                ),
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,

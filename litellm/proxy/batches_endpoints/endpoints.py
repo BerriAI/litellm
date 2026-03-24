@@ -25,12 +25,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
+    get_model_id_for_batch_file_id_encoding,
     get_batch_from_database,
     get_credentials_for_model,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
+    encode_raw_batch_output_error_file_ids,
     resolve_input_file_id_to_unified,
     resolve_output_file_ids_to_unified,
     update_batch_in_database,
@@ -426,6 +428,12 @@ async def retrieve_batch(  # noqa: PLR0915
                 await resolve_input_file_id_to_unified(response, prisma_client)
                 await resolve_output_file_ids_to_unified(response, prisma_client)
 
+            model_for_file_encoding = get_model_id_for_batch_file_id_encoding(batch_id)
+            if model_for_file_encoding:
+                encode_raw_batch_output_error_file_ids(
+                    response, model=model_for_file_encoding
+                )
+
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
                     litellm_call_id=data.get("litellm_call_id", ""), status="success"
@@ -541,6 +549,12 @@ async def retrieve_batch(  # noqa: PLR0915
         if unified_batch_id:
             await resolve_input_file_id_to_unified(response, prisma_client)
             await resolve_output_file_ids_to_unified(response, prisma_client)
+
+        model_for_file_encoding = get_model_id_for_batch_file_id_encoding(batch_id)
+        if model_for_file_encoding:
+            encode_raw_batch_output_error_file_ids(
+                response, model=model_for_file_encoding
+            )
 
         ### ALERTING ###
         asyncio.create_task(

@@ -72,6 +72,35 @@ def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
         return None
 
 
+def get_model_id_for_batch_file_id_encoding(batch_id: str) -> Optional[str]:
+    """
+    Resolve routing model from a batch id for encoding nested file IDs.
+
+    Supports:
+    - encode_file_id_with_model style (decoded payload ``litellm:...;model,<name>``)
+    - unified managed batch ids (decoded payload ``litellm_proxy;model_id:...``)
+    """
+    model = decode_model_from_file_id(batch_id)
+    if model:
+        return model
+    try:
+        if not isinstance(batch_id, str):
+            return None
+        if batch_id.startswith("file-"):
+            b64_part = batch_id[5:]
+        elif batch_id.startswith("batch_"):
+            b64_part = batch_id[6:]
+        else:
+            b64_part = batch_id
+        padded = b64_part + "=" * (-len(b64_part) % 4)
+        decoded = base64.urlsafe_b64decode(padded).decode()
+    except Exception:
+        return None
+    if decoded.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+        return get_model_id_from_unified_batch_id(decoded)
+    return None
+
+
 def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     ## use regex to get the batch_id from the file_id
     # Ensure file_id is a string and not a mock object
@@ -143,6 +172,33 @@ def encode_batch_response_ids(response, model: str) -> None:
                 attr,
                 encode_file_id_with_model(file_id=getattr(response, attr), model=model),
             )
+
+
+def encode_raw_batch_output_error_file_ids(response, model: str) -> None:
+    """
+    Encode output_file_id / error_file_id when they are still raw provider IDs.
+
+    ManagedObjectTable can return a terminal batch whose output file was never
+    registered in LiteLLM_ManagedFileTable; resolve_output_file_ids_to_unified
+    then leaves raw IDs. Model-embedded batch_id still carries routing via
+    decode_model_from_file_id, so we can encode file IDs the same way as
+    create_batch / live retrieve_batch.
+    """
+    if not response or not model:
+        return
+    for attr in ("output_file_id", "error_file_id"):
+        val = getattr(response, attr, None)
+        if not val or not isinstance(val, str):
+            continue
+        if _is_base64_encoded_unified_file_id(val):
+            continue
+        if is_model_embedded_id(val):
+            continue
+        setattr(
+            response,
+            attr,
+            encode_file_id_with_model(file_id=val, model=model),
+        )
 
 
 def decode_model_from_file_id(encoded_id: str) -> Optional[str]:
