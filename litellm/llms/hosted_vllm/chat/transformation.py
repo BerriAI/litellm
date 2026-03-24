@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Coroutine, Dict, List, Literal, Optional, Tuple, Union, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -12,6 +12,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
+    ChatCompletionToolMessage,
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
 )
@@ -118,6 +119,30 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             )
         raise ValueError("file_id or file_data is required")
 
+    @staticmethod
+    def _extract_tool_result_content(content: Any) -> str:
+        """
+        Extract text content from an Anthropic tool_result content field.
+
+        The content field can be:
+        - a string
+        - a list of content blocks (each with type "text" and a "text" field)
+        - missing/None (empty string)
+        """
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+            return " ".join(text_parts) if text_parts else ""
+        return str(content)
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -140,7 +165,17 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         Support translating:
         - video files from file_id or file_data to video_url
         - thinking_blocks on assistant messages to content blocks
+        - Anthropic tool_result content blocks to OpenAI tool messages
+
+        When Claude Code sends tool results (e.g. from WebFetch) through LiteLLM
+        to hosted_vllm, they arrive as Anthropic-format tool_result blocks inside
+        user messages. vLLM (OpenAI-compatible) expects these as separate messages
+        with role="tool". This method extracts tool_result blocks and converts them
+        to proper OpenAI tool messages.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/24491
         """
+        transformed_messages: List[AllMessageValues] = []
         for message in messages:
             if message["role"] == "assistant":
                 thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
@@ -157,21 +192,70 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     elif isinstance(existing_content, list):
                         new_content.extend(existing_content)
                     message["content"] = new_content  # type: ignore
+                transformed_messages.append(message)
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
-                    replaced_content_items: List[
-                        Tuple[int, ChatCompletionFileObject]
-                    ] = []
-                    for idx, content_item in enumerate(message_content):
-                        if content_item.get("type") == "file":
-                            content_item = cast(ChatCompletionFileObject, content_item)
-                            if self._is_video_file(content_item):
-                                replaced_content_items.append((idx, content_item))
-                    for idx, content_item in replaced_content_items:
-                        message_content[idx] = self._convert_file_to_video_url(
-                            content_item
-                        )
+                    # Separate Anthropic tool_result blocks from regular content
+                    tool_messages: List[AllMessageValues] = []
+                    remaining_content: List[Dict[str, Any]] = []
+
+                    for content_item in message_content:
+                        if isinstance(content_item, dict) and content_item.get("type") == "tool_result":
+                            # Convert Anthropic tool_result to OpenAI tool message
+                            tool_content = self._extract_tool_result_content(
+                                content_item.get("content", "")
+                            )
+                            tool_msg: ChatCompletionToolMessage = {
+                                "role": "tool",
+                                "tool_call_id": content_item.get("tool_use_id", ""),
+                                "content": tool_content,
+                            }
+                            tool_messages.append(tool_msg)  # type: ignore[arg-type]
+                        else:
+                            remaining_content.append(content_item)
+
+                    # Add extracted tool messages before the user message
+                    if tool_messages:
+                        transformed_messages.extend(tool_messages)
+
+                    if remaining_content:
+                        message["content"] = remaining_content  # type: ignore
+                        # Handle video file replacements on remaining content
+                        for idx, ci in enumerate(remaining_content):
+                            if ci.get("type") == "file":
+                                file_item = cast(ChatCompletionFileObject, ci)
+                                if self._is_video_file(file_item):
+                                    remaining_content[idx] = self._convert_file_to_video_url(file_item)  # type: ignore
+                        transformed_messages.append(message)
+                    elif not tool_messages:
+                        # No content at all, keep the message as-is
+                        transformed_messages.append(message)
+                    # If only tool_results were present and no remaining content,
+                    # skip the now-empty user message
+                else:
+                    # String content or empty — handle video files in the old path
+                    if message_content and isinstance(message_content, list):
+                        replaced_content_items: List[
+                            Tuple[int, ChatCompletionFileObject]
+                        ] = []
+                        for idx, content_item in enumerate(message_content):
+                            if content_item.get("type") == "file":
+                                content_item = cast(ChatCompletionFileObject, content_item)
+                                if self._is_video_file(content_item):
+                                    replaced_content_items.append((idx, content_item))
+                        for idx, content_item in replaced_content_items:
+                            message_content[idx] = self._convert_file_to_video_url(
+                                content_item
+                            )
+                    transformed_messages.append(message)
+            else:
+                transformed_messages.append(message)
+
+        # Replace original messages list in-place for compatibility with callers
+        messages.clear()
+        messages.extend(transformed_messages)
+
         if is_async:
             return super()._transform_messages(
                 messages, model, is_async=cast(Literal[True], True)
