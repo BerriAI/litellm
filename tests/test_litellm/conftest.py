@@ -15,6 +15,11 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
+# Load bundled model_prices (capabilities like supports_reasoning) instead of
+# fetching GitHub main at import time, so unit tests match this repo/branch (#24416).
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
 import asyncio
 
 import litellm

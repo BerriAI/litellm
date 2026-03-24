@@ -36,7 +36,11 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import (
+    _get_model_cost_key,
+    _get_potential_model_names,
+    convert_to_model_response_object,
+)
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -100,15 +104,57 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Reasoning uses Mistral's thinking/reasoning contract (system prompt + content blocks).
         Enabled for models with supports_reasoning in model_cost (e.g. Magistral, Mistral Small 4).
+
+        Prefer litellm.supports_reasoning; fall back to scanning model_cost by resolved keys
+        when the generic path returns False (provider/name edge cases; see #24416).
         """
         import litellm as _litellm
 
-        try:
-            return _litellm.supports_reasoning(
-                model=model, custom_llm_provider="mistral"
-            )
-        except Exception:
+        if not model:
             return False
+
+        if _litellm.supports_reasoning(
+            model=model, custom_llm_provider="mistral"
+        ) or _litellm.supports_reasoning(model=model, custom_llm_provider=None):
+            return True
+
+        try:
+            potential = _get_potential_model_names(
+                model=model, custom_llm_provider=None
+            )
+            candidates: List[str] = []
+            seen: set[str] = set()
+
+            def _add(name: Optional[str]) -> None:
+                if name and name not in seen:
+                    seen.add(name)
+                    candidates.append(name)
+
+            _add(model)
+            if "/" in model:
+                suffix = model.split("/")[-1]
+                _add(suffix)
+                _add(f"mistral/{suffix}")
+            for field in (
+                "combined_model_name",
+                "combined_stripped_model_name",
+                "stripped_model_name",
+                "split_model",
+            ):
+                _add(potential[field])
+            for name in candidates:
+                key = _get_model_cost_key(name)
+                if key is None:
+                    continue
+                entry = _litellm.model_cost.get(key) or {}
+                if (
+                    entry.get("litellm_provider") == "mistral"
+                    and entry.get("supports_reasoning") is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
