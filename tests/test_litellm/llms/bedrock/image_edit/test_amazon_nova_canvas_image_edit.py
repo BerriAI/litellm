@@ -53,6 +53,19 @@ def test_get_config_class_us_cross_region_nova_canvas():
     assert cls is BedrockAmazonNovaCanvasImageEditConfig
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "eu.amazon.nova-canvas-v1:0",
+        "ap.amazon.nova-canvas-v1:0",
+    ],
+)
+def test_get_config_class_cross_region_nova_canvas(model):
+    """EU and AP cross-region inference IDs map to Nova Canvas config."""
+    cls = BedrockImageEdit.get_config_class(model)
+    assert cls is BedrockAmazonNovaCanvasImageEditConfig
+
+
 def test_get_config_class_stability_unchanged():
     """Stability edit models still use stability config."""
     cls = BedrockImageEdit.get_config_class(
