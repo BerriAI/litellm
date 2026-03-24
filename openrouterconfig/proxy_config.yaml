@@ -1,0 +1,14 @@
+general_settings:
+  user_header_mappings:
+  - header_name: X-OpenWebUI-User-Email
+    litellm_user_role: customer
+  - header_name: X-OpenWebUI-User-Email
+    litellm_user_role: internal_user
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+  maximum_spend_logs_retention_period: 7d
+litellm_settings:
+  callbacks:
+  - smtp_email
+  - langfuse
+  - openmeter

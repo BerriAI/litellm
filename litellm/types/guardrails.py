@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
+    BlockCodeExecutionGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -13,6 +16,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
@@ -30,7 +36,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -41,6 +47,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
+    DYNAMOAI = "dynamoai"
     GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
@@ -49,6 +56,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
+    CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
@@ -58,6 +66,7 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
+    NOMA_V2 = "noma_v2"
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
     JAVELIN = "javelin"
@@ -72,6 +81,9 @@ class SupportedGuardrailIntegrations(Enum):
     CUSTOM_CODE = "custom_code"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
+    BLOCK_CODE_EXECUTION = "block_code_execution"
+    AKTO = "akto"
+    MCP_JWT_SIGNER = "mcp_jwt_signer"
 
 
 class Role(Enum):
@@ -258,6 +270,8 @@ class PiiEntityCategoryMap(TypedDict):
 class GuardrailParamUITypes(str, Enum):
     BOOL = "bool"
     STR = "str"
+    MULTISELECT = "multiselect"
+    PERCENTAGE = "percentage"
 
 
 class PresidioPresidioConfigModelUserInterface(BaseModel):
@@ -306,6 +320,14 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         description=(
             "Optional per-entity minimum confidence scores for Presidio detections. "
             "Entities below the threshold are ignored."
+        ),
+    )
+    presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = Field(
+        default=None,
+        description=(
+            "List of entity types to exclude from Presidio detection results. "
+            "Detections of these types will be silently dropped. "
+            "Useful for suppressing false positives (e.g., US_DRIVER_LICENSE on coding routes)."
         ),
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
@@ -436,6 +458,10 @@ class PillarGuardrailConfigModel(BaseModel):
 class NomaGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Noma Security guardrail"""
 
+    use_v2: Optional[bool] = Field(
+        default=False,
+        description="If True and guardrail='noma', route to the new Noma v2 implementation instead of the legacy implementation.",
+    )
     application_id: Optional[str] = Field(
         default=None,
         description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
@@ -630,6 +656,21 @@ class BaseLitellmParams(
         description="Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
     )
 
+    ################## Realtime API params ################
+    ########################################################
+    end_session_after_n_fails: Optional[int] = Field(
+        default=None,
+        description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
+    )
+    on_violation: Optional[Literal["warn", "end_session"]] = Field(
+        default=None,
+        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+    )
+    realtime_violation_message: Optional[str] = Field(
+        default=None,
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+    )
+
     # Model Armor params
     template_id: Optional[str] = Field(
         default=None, description="The ID of your Model Armor template"
@@ -663,6 +704,15 @@ class BaseLitellmParams(
         ),
     )
 
+    extra_headers: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Header names to forward from the client request to the guardrail (e.g. x-request-id). "
+            "Only these headers' values are sent; others may be omitted or sent as [present]. "
+            "Used by generic_guardrail_api (similar to MCP extra_headers)."
+        ),
+    )
+
     # Custom code guardrail params
     custom_code: Optional[str] = Field(
         default=None,
@@ -673,8 +723,10 @@ class BaseLitellmParams(
 
 
 class Mode(BaseModel):
-    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
-    default: Optional[str] = Field(
+    tags: Dict[str, Union[str, List[str]]] = Field(
+        description="Tags for the guardrail mode"
+    )
+    default: Optional[Union[str, List[str]]] = Field(
         default=None, description="Default mode when no tags match"
     )
 
@@ -689,11 +741,13 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
+    AktoConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
+    BlockCodeExecutionGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -760,6 +814,7 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):

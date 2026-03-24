@@ -7,6 +7,7 @@ on:
 
 jobs:
   create-staging-branch:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
 
     steps:
@@ -25,6 +26,43 @@ jobs:
 
           # Generate branch name with MM_DD_YYYY format
           BRANCH_NAME="litellm_oss_staging_$(date +'%m_%d_%Y')"
+          echo "Creating branch: $BRANCH_NAME"
+
+          # Fetch all branches
+          git fetch --all
+
+          # Check if the branch already exists
+          if git show-ref --verify --quiet refs/remotes/origin/$BRANCH_NAME; then
+            echo "Branch $BRANCH_NAME already exists. Skipping creation."
+          else
+            echo "Creating new branch: $BRANCH_NAME"
+            # Create the new branch from main
+            git checkout -b $BRANCH_NAME origin/main
+            # Push the new branch
+            git push origin $BRANCH_NAME
+            echo "Successfully created and pushed branch: $BRANCH_NAME"
+          fi
+
+  create-internal-dev-branch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Create internal dev branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure Git user
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Generate branch name with MM_DD_YYYY format
+          BRANCH_NAME="litellm_internal_dev_$(date +'%m_%d_%Y')"
           echo "Creating branch: $BRANCH_NAME"
 
           # Fetch all branches

@@ -49,6 +49,27 @@ def get_cached_model_info():
     return _get_model_info
 
 
+def remove_custom_field_from_tools(request_body: dict) -> None:
+    """
+    Remove ``custom`` field from each tool in the request body.
+
+    Claude Code (v2.1.69+) sends ``custom: {defer_loading: true}`` on tool
+    definitions, which Anthropic's API accepts but Bedrock rejects with
+    ``"Extra inputs are not permitted"``.
+
+    Args:
+        request_body: The request dictionary to modify in-place.
+
+    Ref: https://github.com/BerriAI/litellm/issues/22847
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for tool in tools:
+        if isinstance(tool, dict):
+            tool.pop("custom", None)
+
+
 class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass
@@ -434,7 +455,7 @@ def get_bedrock_base_model(model: str) -> str:
     stripped = model
     for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
         if stripped.startswith(rp):
-            stripped = stripped[len(rp):]
+            stripped = stripped[len(rp) :]
             break
     if stripped.startswith("nova-2/"):
         return "amazon.nova-2-custom"
@@ -617,7 +638,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock = model.replace("bedrock/", "", 1)
-        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+        if _model_after_bedrock.startswith(
+            "nova-2/"
+        ) or _model_after_bedrock.startswith("nova/"):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)

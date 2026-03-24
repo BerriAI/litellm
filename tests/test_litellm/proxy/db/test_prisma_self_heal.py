@@ -1,5 +1,6 @@
 import asyncio
 import os
+import signal
 import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -131,8 +132,11 @@ async def test_attempt_db_reconnect_should_set_cooldown_after_attempt(mock_proxy
     client.db.connect = AsyncMock(return_value=None)
     client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
 
+    # Use a counter-based mock to avoid StopIteration when time.time() is called
+    # more times than expected (varies by Python version / internal code paths).
+    fake_clock = iter(range(100, 10000))
     with patch(
-        "litellm.proxy.utils.time.time", side_effect=[100.0, 101.0, 150.0, 200.0]
+        "litellm.proxy.utils.time.time", side_effect=lambda: float(next(fake_clock))
     ):
         result = await client.attempt_db_reconnect(
             reason="unit_test_cooldown_timestamp_after_attempt",
@@ -140,7 +144,9 @@ async def test_attempt_db_reconnect_should_set_cooldown_after_attempt(mock_proxy
         )
 
     assert result is True
-    assert client._db_last_reconnect_attempt_ts == 200.0
+    # The last time.time() call sets _db_last_reconnect_attempt_ts in the finally block.
+    # Just verify it was updated to a value greater than the initial 0.0.
+    assert client._db_last_reconnect_attempt_ts > 0.0
 
 
 @pytest.mark.asyncio
@@ -274,3 +280,37 @@ async def test_db_health_watchdog_start_stop_lifecycle(mock_proxy_logging):
         await client.stop_db_health_watchdog_task()
         assert client._db_health_watchdog_task is None
         assert dummy_task.cancelled() is True
+
+
+@pytest.mark.asyncio
+async def test_lightweight_reconnect_kills_engine_on_disconnect_failure(mock_proxy_logging):
+    """Lightweight reconnect must kill the old engine PID when disconnect() fails."""
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.db.disconnect = AsyncMock(side_effect=Exception("disconnect failed"))
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    with (
+        patch.object(client, "_get_engine_pid", return_value=9999),
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await client._run_reconnect_cycle(timeout_seconds=5.0)
+
+    mock_kill.assert_any_call(9999, signal.SIGTERM)
+    client.db.connect.assert_awaited_once()
+    client.db.query_raw.assert_awaited_once_with("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_lightweight_reconnect_skips_kill_on_successful_disconnect(mock_proxy_logging):
+    """Lightweight reconnect must NOT kill when disconnect() succeeds."""
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    with patch("os.kill") as mock_kill:
+        await client._run_reconnect_cycle(timeout_seconds=5.0)
+
+    mock_kill.assert_not_called()

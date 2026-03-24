@@ -8,6 +8,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import MCPLogoSelector from "./MCPLogoSelector";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -20,8 +21,8 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -38,7 +39,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const transportType = Form.useWatch("transport", form) as string | undefined;
   const isStdioTransport = transportType === "stdio";
@@ -46,10 +50,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
 
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
+
+  // Watch form fields that affect tool fetching
+  const currentUrl = Form.useWatch("url", form);
+  const currentSpecPath = Form.useWatch("spec_path", form);
+  const currentServerName = Form.useWatch("server_name", form);
+  const currentAuthType = Form.useWatch("auth_type", form);
+  const currentStaticHeaders = Form.useWatch("static_headers", form);
+  const currentCredentials = Form.useWatch("credentials", form);
+  const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
+  const currentTokenUrl = Form.useWatch("token_url", form);
+  const currentRegistrationUrl = Form.useWatch("registration_url", form);
 
   const persistEditUiState = () => {
     if (typeof window === "undefined") {
@@ -117,6 +133,21 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     },
     onTokenReceived: (token) => {
       setOauthAccessToken(token?.access_token ?? null);
+      
+      if (token?.access_token) {
+        const credentials = {
+          access_token: token.access_token,
+          ...(token.refresh_token && { refresh_token: token.refresh_token }),
+          ...(token.expires_in && { expires_in: token.expires_in }),
+          ...(token.scope && { scope: token.scope }),
+        };
+        
+        form.setFieldsValue({ credentials });
+        
+        NotificationsManager.success(
+          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials."
+        );
+      }
     },
     onBeforeRedirect: persistEditUiState,
   });
@@ -144,9 +175,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   }, [mcpServer.env]);
 
 
-  // If server has spec_path and no url, show it as "openapi" transport in the UI
+  // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
-    if (mcpServer.spec_path && !mcpServer.url && mcpServer.transport !== "stdio") {
+    if (mcpServer.spec_path && mcpServer.transport !== "stdio") {
       return TRANSPORT.OPENAPI;
     }
     return mcpServer.transport;
@@ -169,11 +200,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Initialize allowed tools from existing server data
+  // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
     if (mcpServer.allowed_tools) {
       setAllowedTools(mcpServer.allowed_tools);
     }
+    setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
+    setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
   }, [mcpServer]);
 
   useEffect(() => {
@@ -234,8 +267,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts
+  // Fetch tools when component mounts or when OAuth token is received
+  // But only if the server has been properly saved (has a permanent server_id)
   useEffect(() => {
+    // Don't fetch if server hasn't been saved yet (no permanent server_id)
+    if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
+      return;
+    }
     fetchTools();
   }, [mcpServer, accessToken, oauthAccessToken]);
 
@@ -503,6 +541,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcp_info: {
           server_name: mcpInfoServerName,
           description: restValues.description,
+          logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
@@ -510,6 +549,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
+        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
@@ -567,6 +608,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <Form.Item label="Description" name="description">
               <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
             </Form.Item>
+            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
                 <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
@@ -621,8 +663,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Select.Option value="none">None</Select.Option>
                   <Select.Option value="api_key">API Key</Select.Option>
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                  <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
+                  <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                 </Select>
               </Form.Item>
             )}
@@ -841,6 +885,100 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               </>
             )}
 
+            {!isStdioTransport && isAwsSigV4AuthType && (
+              <>
+                <p className="text-sm text-gray-500 mb-2">
+                  For MCP servers hosted on AWS Bedrock AgentCore.{" "}
+                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                    View docs &rarr;
+                  </a>
+                </p>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Region
+                      <Tooltip title="AWS region for SigV4 signing (e.g., us-east-1)">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_region_name"]}
+                  rules={[]}
+                >
+                  <Input
+                    placeholder="us-east-1 (leave blank to keep existing)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Service Name
+                      <Tooltip title="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_service_name"]}
+                >
+                  <Input
+                    placeholder="bedrock-agentcore (leave blank to keep existing)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Access Key ID
+                      <Tooltip title="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_access_key_id"]}
+                  rules={[]}
+                >
+                  <Input.Password
+                    placeholder="Leave blank to keep existing"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Secret Access Key
+                      <Tooltip title="Optional. Required if AWS Access Key ID is provided.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_secret_access_key"]}
+                  rules={[]}
+                >
+                  <Input.Password
+                    placeholder="Leave blank to keep existing"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Session Token
+                      <Tooltip title="Optional. Only needed for temporary STS credentials.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_session_token"]}
+                >
+                  <Input.Password
+                    placeholder="Leave blank to keep existing"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+              </>
+            )}
+
             {/* Permission Management / Access Control Section */}
             <div className="mt-6">
               <MCPPermissionManagement
@@ -859,16 +997,26 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 oauthAccessToken={oauthAccessToken}
                 formValues={{
                   server_id: mcpServer.server_id,
-                  server_name: mcpServer.server_name,
-                  url: mcpServer.url,
-                  transport: mcpServer.transport,
-                  auth_type: mcpServer.auth_type,
+                  server_name: currentServerName ?? mcpServer.server_name,
+                  url: currentUrl ?? mcpServer.url,
+                  spec_path: currentSpecPath ?? mcpServer.spec_path,
+                  transport: transportType ?? mcpServer.transport,
+                  auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type: (currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  static_headers: currentStaticHeaders ?? mcpServer.static_headers,
+                  credentials: currentCredentials,
+                  authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
+                  token_url: currentTokenUrl ?? mcpServer.token_url,
+                  registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
                 }}
                 allowedTools={allowedTools}
                 existingAllowedTools={mcpServer.allowed_tools || null}
                 onAllowedToolsChange={setAllowedTools}
+                toolNameToDisplayName={toolNameToDisplayName}
+                toolNameToDescription={toolNameToDescription}
+                onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                onToolNameToDescriptionChange={setToolNameToDescription}
               />
             </div>
 

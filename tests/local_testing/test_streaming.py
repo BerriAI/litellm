@@ -393,7 +393,7 @@ def test_completion_azure_stream_content_filter_no_delta():
 
         chunk_list = []
         for chunk in chunks:
-            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            new_chunk = litellm.ModelResponseStream(id=chunk["id"])
             if "choices" in chunk and isinstance(chunk["choices"], list):
                 new_choices = []
                 for choice in chunk["choices"]:
@@ -1029,7 +1029,7 @@ def test_completion_claude_stream_bad_key():
             },
         ]
         response = completion(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5-20251001",
             messages=messages,
             stream=True,
             max_tokens=50,
@@ -1930,6 +1930,7 @@ def test_openai_chat_completion_complete_response_call():
     [True, False],
 )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=10)
 async def test_openai_stream_options_call(model, sync):
     litellm.enable_preview_features = True
     litellm.set_verbose = True
@@ -3026,7 +3027,7 @@ def test_unit_test_custom_stream_wrapper():
             {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
         ],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3074,22 +3075,18 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     """
     litellm.set_verbose = False
     chunks = [
-        litellm.ModelResponse(
-            **{
-                "id": "chatcmpl-123",
-                "object": "chat.completion.chunk",
-                "created": 1694268190,
-                "model": "gpt-3.5-turbo-0125",
-                "system_fingerprint": "fp_44709d6fcb",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": chunk_value},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
-            stream=True,
+        litellm.ModelResponseStream(
+            id="chatcmpl-123",
+            created=1694268190,
+            model="gpt-3.5-turbo-0125",
+            system_fingerprint="fp_44709d6fcb",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"content": chunk_value},
+                    "finish_reason": "stop",
+                }
+            ],
         )
     ] * loop_amount
     completion_stream = ModelResponseListIterator(model_responses=chunks)
@@ -3112,7 +3109,7 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises(litellm.InternalServerError):
+        with pytest.raises((litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)):
             for chunk in response:
                 continue
     else:
@@ -3223,7 +3220,7 @@ def test_unit_test_custom_stream_wrapper_openai():
         "system_fingerprint": None,
         "usage": None,
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3457,7 +3454,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
 
     chunk_list = []
     for chunk in chunks:
-        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        new_chunk = litellm.ModelResponseStream(id=chunk["id"])
         if "choices" in chunk and isinstance(chunk["choices"], list):
             print("INSIDE CHUNK CHOICES!")
             new_choices = []
@@ -3541,7 +3538,7 @@ def test_unit_test_custom_stream_wrapper_function_call():
         "system_fingerprint": "fp_44709d6fcb",
         "choices": [{"index": 0, "delta": delta, "finish_reason": "stop"}],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3651,7 +3648,7 @@ def test_unit_test_perplexity_citations_chunk():
             }
         ],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 

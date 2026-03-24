@@ -61,6 +61,52 @@ async def test_async_ocr():
 asyncio.run(test_async_ocr())
 ```
 
+### Using Local Files
+
+LiteLLM can read local files directly — no manual base64 encoding needed:
+
+```python
+from litellm import ocr
+
+# OCR with a local PDF file path
+response = ocr(
+    model="mistral/mistral-ocr-latest",
+    document={
+        "type": "file",
+        "file": "/path/to/document.pdf"
+    }
+)
+
+# OCR with a file object
+response = ocr(
+    model="mistral/mistral-ocr-latest",
+    document={
+        "type": "file",
+        "file": open("document.pdf", "rb")
+    }
+)
+
+# OCR with raw bytes
+with open("document.pdf", "rb") as f:
+    pdf_bytes = f.read()
+
+response = ocr(
+    model="mistral/mistral-ocr-latest",
+    document={
+        "type": "file",
+        "file": pdf_bytes,
+        "mime_type": "application/pdf"  # recommended for raw bytes (auto-detected from extension for file paths)
+    }
+)
+```
+
+The `file` field accepts:
+- **File path** (`str` or `pathlib.Path`) — LiteLLM reads the file and detects the MIME type from the extension
+- **File object** (binary file-like object) — e.g. `open("doc.pdf", "rb")`
+- **Raw bytes** (`bytes`) — use `mime_type` to specify the content type
+
+LiteLLM automatically converts file inputs to base64 data URIs internally, so all providers work seamlessly.
+
 ### Using Base64 Encoded Documents
 
 ```python
@@ -121,7 +167,7 @@ litellm --config /path/to/config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-Test request
+**Test request — JSON body**
 
 ```bash
 curl http://0.0.0.0:4000/v1/ocr \
@@ -136,6 +182,27 @@ curl http://0.0.0.0:4000/v1/ocr \
   }'
 ```
 
+**Test request — multipart file upload**
+
+Upload a file directly using multipart form data. No need to base64-encode the file yourself.
+
+```bash
+curl http://0.0.0.0:4000/v1/ocr \
+  -H "Authorization: Bearer sk-1234" \
+  -F "model=mistral-ocr" \
+  -F "file=@/path/to/document.pdf"
+```
+
+You can also pass optional parameters as additional form fields:
+
+```bash
+curl http://0.0.0.0:4000/v1/ocr \
+  -H "Authorization: Bearer sk-1234" \
+  -F "model=mistral-ocr" \
+  -F "file=@screenshot.png" \
+  -F 'pages=[0,1,2]' \
+  -F "include_image_base64=true"
+```
 
 ## **Request/Response Format**
 
@@ -168,10 +235,12 @@ See the [official Mistral OCR documentation](https://docs.mistral.ai/capabilitie
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `model` | string | Yes | The OCR model to use (e.g., `"mistral/mistral-ocr-latest"`) |
-| `document` | object | Yes | Document to process. Must contain `type` and URL field |
-| `document.type` | string | Yes | Either `"document_url"` for PDFs/docs or `"image_url"` for images |
-| `document.document_url` | string | Conditional | URL to the document (required if `type` is `"document_url"`) |
-| `document.image_url` | string | Conditional | URL to the image (required if `type` is `"image_url"`) |
+| `document` | object | Yes | Document to process. Must contain `type` and the corresponding field |
+| `document.type` | string | Yes | `"document_url"` for PDFs/docs, `"image_url"` for images, or `"file"` for local files |
+| `document.document_url` | string | Conditional | URL or data URI to the document (required if `type` is `"document_url"`) |
+| `document.image_url` | string | Conditional | URL or data URI to the image (required if `type` is `"image_url"`) |
+| `document.file` | string/bytes/file | Conditional | File path, bytes, or file-like object (required if `type` is `"file"`) |
+| `document.mime_type` | string | No | Explicit MIME type for file inputs (auto-detected from extension if not provided) |
 | `pages` | array | No | List of specific page indices to process (0-indexed) |
 | `include_image_base64` | boolean | No | Whether to include extracted images as base64 strings |
 | `image_limit` | integer | No | Maximum number of images to return |
@@ -179,7 +248,7 @@ See the [official Mistral OCR documentation](https://docs.mistral.ai/capabilitie
 
 #### Document Format Examples
 
-**For PDFs and documents:**
+**For PDFs and documents (URL):**
 ```json
 {
   "type": "document_url",
@@ -187,7 +256,7 @@ See the [official Mistral OCR documentation](https://docs.mistral.ai/capabilitie
 }
 ```
 
-**For images:**
+**For images (URL):**
 ```json
 {
   "type": "image_url",
@@ -201,6 +270,21 @@ See the [official Mistral OCR documentation](https://docs.mistral.ai/capabilitie
   "type": "document_url",
   "document_url": "data:application/pdf;base64,JVBERi0xLjQKJ..."
 }
+```
+
+**For local files (SDK):**
+```python
+{"type": "file", "file": "/path/to/document.pdf"}
+{"type": "file", "file": open("image.png", "rb")}
+{"type": "file", "file": pdf_bytes, "mime_type": "application/pdf"}
+```
+
+**For file uploads (Proxy — multipart form):**
+```bash
+curl http://0.0.0.0:4000/v1/ocr \
+  -H "Authorization: Bearer sk-1234" \
+  -F "model=mistral-ocr" \
+  -F "file=@document.pdf"
 ```
 
 ### Response Format

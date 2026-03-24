@@ -54,6 +54,7 @@ response = completion(
 - stream
 - tools
 - tool_choice
+- include_server_side_tool_invocations
 - functions
 - response_format
 - n
@@ -856,7 +857,112 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
-### URL Context 
+### Context Circulation (Server-Side Tool Combination)
+
+Context circulation allows Gemini 3+ models to combine **built-in tools** (like Google Search) with **your custom functions** in the same request. Without it, Gemini returns an error if you try to use both.
+
+When enabled, Gemini can execute Google Search server-side, use those results to decide whether to call your custom functions, and return the full chain of reasoning.
+
+**How it works:**
+1. You pass `include_server_side_tool_invocations=True` along with both Google Search and your function tools
+2. Gemini executes server-side tools internally and returns `toolCall`/`toolResponse` parts alongside any `functionCall` parts
+3. LiteLLM extracts the server-side invocations into `provider_specific_fields["server_side_tool_invocations"]`
+4. On subsequent turns, include the full assistant message in your conversation history — LiteLLM re-injects the server-side parts automatically
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=[{"role": "user", "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting."}],
+    tools=[
+        {"type": "web_search_preview"},  # Google Search (server-side)
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_meeting",
+                "description": "Schedule a meeting",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                },
+            },
+        },
+    ],
+    include_server_side_tool_invocations=True,
+)
+
+msg = response.choices[0].message
+
+# Server-side tool results are in provider_specific_fields
+psf = msg.provider_specific_fields or {}
+for invocation in psf.get("server_side_tool_invocations", []):
+    print(invocation["tool_type"])  # e.g. "GOOGLE_SEARCH_WEB"
+    print(invocation["id"])
+    print(invocation["args"])       # e.g. {"queries": ["weather Buenos Aires"]}
+    print(invocation["response"])   # Search results from Google
+
+# For multi-turn: just append the full message to history
+messages.append(msg)
+messages.append({"role": "user", "content": "Thanks!"})
+# LiteLLM automatically re-injects the server-side parts + thought signatures
+response2 = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=messages,
+    tools=tools,
+    include_server_side_tool_invocations=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-3-flash",
+  "messages": [{"role": "user", "content": "What is the weather in Buenos Aires?"}],
+  "tools": [
+    {"type": "web_search_preview"},
+    {"type": "function", "function": {"name": "schedule_meeting", "description": "Schedule a meeting", "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}}
+  ],
+  "include_server_side_tool_invocations": true
+}'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+- Context circulation requires **Gemini 3+** models
+- Server-side tool invocations (`toolCall`/`toolResponse`) are **not** included in `tool_calls` — they are in `provider_specific_fields["server_side_tool_invocations"]` because they were already executed by Google, not by your code
+- `thought_signatures` are automatically preserved alongside server-side invocations for multi-turn coherence
+
+:::
+
+### URL Context
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1562,13 +1668,18 @@ LiteLLM Supports the following image types passed in `url`
 
 ## Media Resolution Control (Images & Videos)
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
+LiteLLM supports OpenAI's `detail` parameter for specifying the image resolution when using Gemini models. The behavior differs between Gemini versions:
+
+| Gemini Version | Resolution Control | Behavior |
+|----------------|-------------------|----------|
+| Gemini 3+ | Per-part | Each image/video can have its own `detail` setting |
+| Gemini 2.x (2.0, 2.5) | Global | The highest `detail` from all images is applied globally via `mediaResolution` in `generationConfig` |
 
 **Supported `detail` values:**
-- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
-- `"medium"` - Maps to `media_resolution: "medium"`
-- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
-- `"ultra_high"` - Maps to `media_resolution: "ultra_high"`
+- `"low"` - Maps to `MEDIA_RESOLUTION_LOW` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `MEDIA_RESOLUTION_MEDIUM`
+- `"high"` - Maps to `MEDIA_RESOLUTION_HIGH` (1120 tokens for images)
+- `"ultra_high"` - Maps to `MEDIA_RESOLUTION_ULTRA_HIGH`
 - `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
 
 **Usage Examples:**
@@ -1605,8 +1716,9 @@ messages = [
     }
 ]
 
+# Works with both Gemini 2.x and 3+
 response = completion(
-    model="gemini/gemini-3-pro-preview",
+    model="gemini/gemini-2.5-flash",  # or gemini-3-pro-preview
     messages=messages,
 )
 ```
@@ -1647,7 +1759,9 @@ response = completion(
 </Tabs>
 
 :::info
-**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
+**Gemini 3+ Per-Part Resolution:** Each image or video can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This works with both `image_url` and `file` content types.
+
+**Gemini 2.x Global Resolution:** When multiple images have different `detail` values, LiteLLM uses the highest resolution found and applies it globally via `mediaResolution` in `generationConfig` (e.g., if one image has `"low"` and another has `"high"`, all images will use `"high"`).
 :::
 
 ## Video Metadata Control
@@ -2041,6 +2155,7 @@ response = litellm.completion(
 | gemini-2.0-flash-lite-preview-02-05	     | `completion(model='gemini/gemini-2.0-flash-lite-preview-02-05', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-2.5-flash-lite-preview-09-2025     | `completion(model='gemini/gemini-2.5-flash-lite-preview-09-2025', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-3.1-flash-lite-preview     | `completion(model='gemini/gemini-3.1-flash-lite-preview', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-latest     | `completion(model='gemini/gemini-flash-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 | gemini-flash-lite-latest     | `completion(model='gemini/gemini-flash-lite-latest', messages)`     | `os.environ['GEMINI_API_KEY']` |
 

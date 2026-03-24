@@ -931,10 +931,14 @@ class PrometheusLogger(CustomLogger):
         user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
             "metadata"
         ].get("user_api_key_auth_metadata")
+        spend_logs_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
+            "spend_logs_metadata"
+        )
 
         combined_metadata: Dict[str, Any] = {
             **(_requester_metadata if _requester_metadata else {}),
             **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
+            **(spend_logs_metadata if spend_logs_metadata else {}),
         }
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
@@ -974,6 +978,9 @@ class PrometheusLogger(CustomLogger):
             ),
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
+            stream=str(standard_logging_payload.get("stream"))
+            if litellm.prometheus_emit_stream_label
+            else None,
         )
 
         if (
@@ -1414,7 +1421,9 @@ class PrometheusLogger(CustomLogger):
                 _sanitize_prometheus_label_value(user_api_team),
                 _sanitize_prometheus_label_value(user_api_team_alias),
                 _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
+                _sanitize_prometheus_label_value(
+                    standard_logging_payload.get("model_id", "")
+                ),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -1624,6 +1633,9 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                stream=str(request_data.get("stream"))
+                if litellm.prometheus_emit_stream_label
+                else None,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
@@ -2680,6 +2692,8 @@ class PrometheusLogger(CustomLogger):
 
         if team_info:
             team_object.budget_reset_at = team_info.budget_reset_at
+            if team_object.max_budget is None and team_info.max_budget is not None:
+                team_object.max_budget = team_info.max_budget
 
         return team_object
 
@@ -2897,6 +2911,8 @@ class PrometheusLogger(CustomLogger):
 
         if user_info:
             user_object.budget_reset_at = user_info.budget_reset_at
+            if user_object.max_budget is None and user_info.max_budget is not None:
+                user_object.max_budget = user_info.max_budget
 
         return user_object
 

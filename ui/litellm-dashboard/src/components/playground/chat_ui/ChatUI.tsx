@@ -28,11 +28,11 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
-import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
 import PolicySelector from "../../policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/MCPToolArgumentsForm";
 import { MCPServer } from "../../mcp_tools/types";
+import { ByokCredentialModal } from "../../mcp_tools/ByokCredentialModal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { callMCPTool, fetchMCPServers, listMCPTools } from "../../networking";
 import TagSelector from "../../tag_management/TagSelector";
@@ -59,7 +59,9 @@ import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
+import FilePreviewCard from "./FilePreviewCard";
+import ChatMessageBubble from "./ChatMessageBubble";
+import MCPEventsDisplay from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
@@ -68,8 +70,10 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
+import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
+import { useChatHistory } from "./useChatHistory";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -107,6 +111,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   fixedModel,
 }) => {
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
+  const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedMCPServers");
     try {
@@ -129,6 +134,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return {};
     }
   });
+  const {
+    chatHistory,
+    setChatHistory,
+    mcpEvents,
+    setMCPEvents,
+    messageTraceId,
+    setMessageTraceId,
+    responsesSessionId,
+    setResponsesSessionId,
+    useApiSessionManagement,
+    setUseApiSessionManagement,
+    updateTextUI,
+    updateReasoningContent,
+    updateTimingData,
+    updateUsageData,
+    updateA2AMetadata,
+    updateTotalLatency,
+    updateSearchResults,
+    handleResponseId,
+    handleToggleSessionManagement,
+    handleMCPEvent,
+    updateImageUI,
+    updateEmbeddingsUI,
+    updateAudioUI,
+    updateChatImageUI,
+    clearChatHistory: clearChatHistoryHook,
+    clearMCPEvents,
+  } = useChatHistory({ simplified });
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
     const saved = sessionStorage.getItem("apiKeySource");
     if (saved) {
@@ -145,16 +178,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
-    if (simplified) return [];
-    try {
-      const saved = sessionStorage.getItem("chatHistory");
-      return saved ? JSON.parse(saved) : [];
-    } catch (error) {
-      console.error("Error parsing chatHistory from sessionStorage", error);
-      return [];
-    }
-  });
   const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -212,16 +235,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(
-    () => sessionStorage.getItem("messageTraceId") || null,
-  );
-  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(
-    () => sessionStorage.getItem("responsesSessionId") || null,
-  );
-  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
-    const saved = sessionStorage.getItem("useApiSessionManagement");
-    return saved ? JSON.parse(saved) : true; // Default to API session management
-  });
   const [uploadedImages, setUploadedImages] = useState<File[]>([]);
   const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
   const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
@@ -232,7 +245,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
-  const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
@@ -327,17 +339,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    if (simplified) return; // Do not persist chat history in simplified (embedded) mode
-    const handler = setTimeout(() => {
-      sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
-    }, 500); // Debounce by 500ms
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [chatHistory, simplified]);
-
-  useEffect(() => {
     sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
     sessionStorage.setItem("apiKey", apiKey);
     sessionStorage.setItem("endpointType", endpointType);
@@ -357,17 +358,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
         sessionStorage.removeItem("selectedModel");
       }
     }
-    if (messageTraceId) {
-      sessionStorage.setItem("messageTraceId", messageTraceId);
-    } else {
-      sessionStorage.removeItem("messageTraceId");
-    }
-    if (responsesSessionId) {
-      sessionStorage.setItem("responsesSessionId", responsesSessionId);
-    } else {
-      sessionStorage.removeItem("responsesSessionId");
-    }
-    sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
     // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
     simplified,
@@ -379,9 +369,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedVectorStores,
     selectedGuardrails,
     selectedPolicies,
-    messageTraceId,
-    responsesSessionId,
-    useApiSessionManagement,
     selectedMCPServers,
     mcpServerToolRestrictions,
     selectedVoice,
@@ -472,264 +459,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }, 100);
     }
   }, [chatHistory]);
-
-  const updateTextUI = (role: string, chunk: string, model?: string) => {
-    console.log("updateTextUI called with:", role, chunk, model);
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // if the last message is already from this same role, append
-      if (last && last.role === role && !last.isImage && !last.isAudio) {
-        // build a new object, but only set `model` if it wasn't there already
-        const updated: MessageType = {
-          ...last,
-          content: last.content + chunk,
-          model: last.model ?? model, // ← only use the passed‐in model on the first chunk
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // otherwise start a brand new assistant bubble
-        return [
-          ...prev,
-          {
-            role,
-            content: chunk,
-            model, // model set exactly once here
-          },
-        ];
-      }
-    });
-  };
-
-  const updateReasoningContent = (chunk: string) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage && !lastMessage.isAudio) {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            reasoningContent: (lastMessage.reasoningContent || "") + chunk,
-          },
-        ];
-      } else {
-        // If there's no assistant message yet, we'll create one with empty content
-        // but with reasoning content
-        if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
-          return [
-            ...prevHistory,
-            {
-              role: "assistant",
-              content: "",
-              reasoningContent: chunk,
-            },
-          ];
-        }
-
-        return prevHistory;
-      }
-    });
-  };
-
-  const updateTimingData = (timeToFirstToken: number) => {
-    console.log("updateTimingData called with:", timeToFirstToken);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-      console.log("Current last message:", lastMessage);
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
-        const updatedHistory = [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            timeToFirstToken,
-          },
-        ];
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
-      }
-      // If the last message is a user message and no assistant message exists yet,
-      // create a new assistant message with empty content
-      else if (lastMessage && lastMessage.role === "user") {
-        console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
-        return [
-          ...prevHistory,
-          {
-            role: "assistant",
-            content: "",
-            timeToFirstToken,
-          },
-        ];
-      }
-
-      console.log("No appropriate message found to update timing");
-      return prevHistory;
-    });
-  };
-
-  const updateUsageData = (usage: TokenUsage, toolName?: string) => {
-    console.log("Received usage data:", usage);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with usage data:", usage);
-        const updatedMessage = {
-          ...lastMessage,
-          usage,
-          toolName,
-        };
-        console.log("Updated message:", updatedMessage);
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateA2AMetadata = (a2aMetadata: A2ATaskMetadata) => {
-    console.log("Received A2A metadata:", a2aMetadata);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        const updatedMessage = {
-          ...lastMessage,
-          a2aMetadata,
-        };
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateTotalLatency = (totalLatency: number) => {
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
-          {
-            ...lastMessage,
-            totalLatency,
-          },
-        ];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const updateSearchResults = (searchResults: any[]) => {
-    console.log("Received search results:", searchResults);
-    setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-
-      if (lastMessage && lastMessage.role === "assistant") {
-        console.log("Updating message with search results");
-        const updatedMessage = {
-          ...lastMessage,
-          searchResults,
-        };
-
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
-      }
-
-      return prevHistory;
-    });
-  };
-
-  const handleResponseId = (responseId: string) => {
-    console.log("Received response ID for session management:", responseId);
-    if (useApiSessionManagement) {
-      setResponsesSessionId(responseId);
-    }
-  };
-
-  const handleToggleSessionManagement = (useApi: boolean) => {
-    setUseApiSessionManagement(useApi);
-    if (!useApi) {
-      // Clear API session when switching to UI mode
-      setResponsesSessionId(null);
-    }
-  };
-
-  const handleMCPEvent = (event: MCPEvent) => {
-    console.log("ChatUI: Received MCP event:", event);
-    setMCPEvents((prev) => {
-      // Check if this is a duplicate event (same item_id and type)
-      // Only check for duplicates if item_id is defined (for mcp_list_tools, item_id is "mcp_list_tools")
-      const isDuplicate = event.item_id
-        ? prev.some(
-            (existingEvent) =>
-              existingEvent.item_id === event.item_id &&
-              existingEvent.type === event.type &&
-              (existingEvent.sequence_number === event.sequence_number ||
-                (existingEvent.sequence_number === undefined && event.sequence_number === undefined)),
-          )
-        : false;
-
-      if (isDuplicate) {
-        console.log("ChatUI: Duplicate MCP event, skipping");
-        return prev;
-      }
-
-      const newEvents = [...prev, event];
-      console.log("ChatUI: Updated MCP events:", newEvents);
-      return newEvents;
-    });
-  };
-
-  const updateImageUI = (imageUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
-  };
-
-  const updateEmbeddingsUI = (embeddings: string, model?: string) => {
-    setChatHistory((prevHistory) => [
-      ...prevHistory,
-      { role: "assistant", content: truncateString(embeddings, 100), model, isEmbeddings: true },
-    ]);
-  };
-
-  const updateAudioUI = (audioUrl: string, model: string) => {
-    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: audioUrl, model, isAudio: true }]);
-  };
-
-  const updateChatImageUI = (imageUrl: string, model?: string) => {
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // If the last message is from assistant and has content, add image to it
-      if (last && last.role === "assistant" && !last.isImage && !last.isAudio) {
-        const updated = {
-          ...last,
-          image: {
-            url: imageUrl,
-            detail: "auto",
-          },
-          model: last.model ?? model,
-        };
-        return [...prev.slice(0, -1), updated];
-      } else {
-        // Otherwise create a new assistant message with just the image
-        return [
-          ...prev,
-          {
-            role: "assistant",
-            content: "",
-            model,
-            image: {
-              url: imageUrl,
-              detail: "auto",
-            },
-          },
-        ];
-      }
-    });
-  };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -961,7 +690,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
 
     setChatHistory([...chatHistory, displayMessage]);
-    setMCPEvents([]); // Clear previous MCP events for new conversation turn
+    clearMCPEvents(); // Clear previous MCP events for new conversation turn
     codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
@@ -1217,26 +946,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const clearChatHistory = () => {
-    // Clean up audio object URLs before clearing history
-    chatHistory.forEach((message) => {
-      if (message.isAudio && typeof message.content === "string") {
-        URL.revokeObjectURL(message.content);
-      }
-    });
-
-    setChatHistory([]);
-    setMessageTraceId(null);
-    setResponsesSessionId(null); // Clear responses session ID
-    setMCPEvents([]); // Clear MCP events
-    handleRemoveAllImages(); // Clear any uploaded images for image edits
-    handleRemoveResponsesImage(); // Clear any uploaded images for responses
-    handleRemoveChatImage(); // Clear any uploaded images for chat completions
-    handleRemoveAudio(); // Clear any uploaded audio for transcription
-    if (!simplified) {
-      sessionStorage.removeItem("chatHistory");
-      sessionStorage.removeItem("messageTraceId");
-      sessionStorage.removeItem("responsesSessionId");
-    }
+    clearChatHistoryHook();
+    handleRemoveAllImages();
+    handleRemoveResponsesImage();
+    handleRemoveChatImage();
+    handleRemoveAudio();
     NotificationsManager.success("Chat history cleared.");
   };
 
@@ -1635,9 +1349,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   loading={isLoadingMCPServers}
                   className="mb-2"
                   allowClear
+                  showSearch
                   optionLabelProp="label"
                   disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount={endpointType === EndpointType.MCP ? 1 : "responsive"}
+                  filterOption={(input, option) => {
+                    if (option?.value === "__all__") {
+                      return "All MCP Servers".toLowerCase().includes(input.toLowerCase());
+                    }
+                    const server = mcpServers.find((s) => s.server_id === option?.value);
+                    if (!server) return false;
+                    const searchText = [
+                      server.server_name,
+                      server.alias,
+                      server.server_id,
+                      server.description,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase();
+                    return searchText.includes(input.toLowerCase());
+                  }}
                 >
                   {/* All MCP Servers option - hidden for MCP direct mode */}
                   {endpointType !== EndpointType.MCP && (
@@ -1722,6 +1454,49 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               }))}
                               maxTagCount={2}
                             />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                {/* BYOK credential status for selected servers */}
+                {selectedMCPServers.length > 0 &&
+                  !selectedMCPServers.includes("__all__") &&
+                  selectedMCPServers.some((serverId) => {
+                    const server = mcpServers.find((s) => s.server_id === serverId);
+                    return server?.is_byok;
+                  }) && (
+                    <div className="mt-3 space-y-2">
+                      {selectedMCPServers.map((serverId) => {
+                        const server = mcpServers.find((s) => s.server_id === serverId);
+                        if (!server?.is_byok) return null;
+                        const serverName = server.alias || server.server_name || serverId;
+                        return (
+                          <div key={serverId} className="border border-blue-100 rounded p-2 bg-blue-50 flex items-center justify-between">
+                            <Text className="text-xs text-blue-700">
+                              {serverName} requires your API key
+                            </Text>
+                            {server.has_user_credential ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-green-600 text-xs font-medium flex items-center gap-1">
+                                  <KeyOutlined /> Connected
+                                </span>
+                                <button
+                                  className="text-xs text-gray-400 hover:text-blue-500 underline"
+                                  onClick={() => setByokModalServer(server)}
+                                >
+                                  Reconnect
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg font-medium"
+                                onClick={() => setByokModalServer(server)}
+                              >
+                                Connect
+                              </button>
+                            )}
                           </div>
                         );
                       })}
@@ -1826,6 +1601,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           {/* Main Chat Area */}
           <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
+            {endpointType === EndpointType.REALTIME ? (
+              <RealtimePlayground
+                accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                selectedModel={selectedModel || ""}
+                customProxyBaseUrl={customProxyBaseUrl || undefined}
+                selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
+              />
+            ) : (
+            <>
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
               <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
               <div className="flex gap-2">
@@ -1857,168 +1641,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {chatHistory.map((message, index) => (
                 <div key={index}>
-                  <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
-                    <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-                        border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
-                        >
-                          {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
-                          ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
-                          )}
-                        </div>
-                        <strong className="text-sm capitalize">{message.role}</strong>
-                        {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                            {message.model}
-                          </span>
-                        )}
-                      </div>
-                      {message.reasoningContent && <ReasoningContent reasoningContent={message.reasoningContent} />}
-
-                      {/* Show MCP events at the start of assistant messages */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        mcpEvents.length > 0 &&
-                        (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) && (
-                          <div className="mb-3">
-                            <MCPEventsDisplay events={mcpEvents} />
-                          </div>
-                        )}
-
-                      {/* Show search results at the start of assistant messages */}
-                      {message.role === "assistant" && message.searchResults && (
-                        <SearchResultsDisplay searchResults={message.searchResults} />
-                      )}
-
-                      {/* Show Code Interpreter output for the last assistant message */}
-                      {message.role === "assistant" &&
-                        index === chatHistory.length - 1 &&
-                        codeInterpreter.result &&
-                        endpointType === EndpointType.RESPONSES && (
-                          <CodeInterpreterOutput
-                            code={codeInterpreter.result.code}
-                            containerId={codeInterpreter.result.containerId}
-                            annotations={codeInterpreter.result.annotations}
-                            accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
-                          />
-                        )}
-
-                      <div
-                        className="whitespace-pre-wrap break-words max-w-full message-content"
-                        style={{
-                          wordWrap: "break-word",
-                          overflowWrap: "break-word",
-                          wordBreak: "break-word",
-                          hyphens: "auto",
-                        }}
-                      >
-                        {message.isImage ? (
-                          <img
-                            src={typeof message.content === "string" ? message.content : ""}
-                            alt="Generated image"
-                            className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                            style={{ maxHeight: "500px" }}
-                          />
-                        ) : message.isAudio ? (
-                          <AudioRenderer message={message} />
-                        ) : (
-                          <>
-                            {/* Show attached image for user messages based on current endpoint */}
-                            {endpointType === EndpointType.RESPONSES && <ResponsesImageRenderer message={message} />}
-                            {endpointType === EndpointType.CHAT && <ChatImageRenderer message={message} />}
-
-                            <ReactMarkdown
-                              components={{
-                                code({
-                                  node,
-                                  inline,
-                                  className,
-                                  children,
-                                  ...props
-                                }: React.ComponentPropsWithoutRef<"code"> & {
-                                  inline?: boolean;
-                                  node?: any;
-                                }) {
-                                  const match = /language-(\w+)/.exec(className || "");
-                                  return !inline && match ? (
-                                    <SyntaxHighlighter
-                                      style={coy as any}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="rounded-md my-2"
-                                      wrapLines={true}
-                                      wrapLongLines={true}
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, "")}
-                                    </SyntaxHighlighter>
-                                  ) : (
-                                    <code
-                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-                                      style={{ wordBreak: "break-word" }}
-                                      {...props}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                pre: ({ node, ...props }) => (
-                                  <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />
-                                ),
-                              }}
-                            >
-                              {typeof message.content === "string" ? message.content : ""}
-                            </ReactMarkdown>
-
-                            {/* Show generated image from chat completions */}
-                            {message.image && (
-                              <div className="mt-3">
-                                <img
-                                  src={message.image.url}
-                                  alt="Generated image"
-                                  className="max-w-full rounded-md border border-gray-200 shadow-sm"
-                                  style={{ maxHeight: "500px" }}
-                                />
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) &&
-                          !message.a2aMetadata && (
-                            <ResponseMetrics
-                              timeToFirstToken={message.timeToFirstToken}
-                              totalLatency={message.totalLatency}
-                              usage={message.usage}
-                              toolName={message.toolName}
-                            />
-                          )}
-
-                        {/* A2A Metrics - show for A2A agent responses */}
-                        {message.role === "assistant" && message.a2aMetadata && (
-                          <A2AMetrics
-                            a2aMetadata={message.a2aMetadata}
-                            timeToFirstToken={message.timeToFirstToken}
-                            totalLatency={message.totalLatency}
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <ChatMessageBubble
+                    message={message}
+                    isLastMessage={index === chatHistory.length - 1}
+                    endpointType={endpointType as EndpointType}
+                    mcpEvents={mcpEvents}
+                    codeInterpreterResult={codeInterpreter.result}
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                  />
                 </div>
               ))}
 
@@ -2157,67 +1787,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {/* Show file previews above input when files are uploaded */}
               {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
-                      ) : (
-                        <img
-                          src={responsesImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{responsesUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveResponsesImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
-                    </button>
-                  </div>
-                </div>
+                <FilePreviewCard
+                  file={responsesUploadedImage}
+                  previewUrl={responsesImagePreviewUrl}
+                  onRemove={handleRemoveResponsesImage}
+                />
               )}
 
               {endpointType === EndpointType.CHAT && chatUploadedImage && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    <div className="relative inline-block">
-                      {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
-                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
-                        </div>
-                      ) : (
-                        <img
-                          src={chatImagePreviewUrl || ""}
-                          alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{chatUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
-                        {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
-                      </div>
-                    </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
-                      onClick={handleRemoveChatImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: "12px" }} />
-                    </button>
-                  </div>
-                </div>
+                <FilePreviewCard
+                  file={chatUploadedImage}
+                  previewUrl={chatImagePreviewUrl}
+                  onRemove={handleRemoveChatImage}
+                />
               )}
 
               {/* Code Interpreter indicator and sample prompts when enabled */}
@@ -2422,6 +2004,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             </div>
+          </>
+          )}
           </div>
         </div>
       </Card>
@@ -2468,6 +2052,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           {generatedCode}
         </SyntaxHighlighter>
       </Modal>
+
+      {byokModalServer && (
+        <ByokCredentialModal
+          server={byokModalServer}
+          open={!!byokModalServer}
+          onClose={() => setByokModalServer(null)}
+          onSuccess={(_serverId) => {
+            // Refresh MCP servers to pick up updated has_user_credential
+            loadMCPServers();
+            setByokModalServer(null);
+          }}
+          accessToken={accessToken || ""}
+        />
+      )}
     </div>
   );
 };

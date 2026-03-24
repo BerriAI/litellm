@@ -1813,6 +1813,51 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
     assert anthropic_response["usage"]["output_tokens"] == 50
 
 
+def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_details():
+    """
+    OpenAI/Azure providers set prompt_tokens_details.cached_tokens but not
+    _cache_read_input_tokens.  The adapter should populate cache_read_input_tokens
+    from prompt_tokens_details.cached_tokens directly.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # OpenAI-style usage: only prompt_tokens_details, no cache_read_input_tokens kwarg
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="gpt-4o-2024-08-06",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
 # =====================================================================
 # Web Search Tool Transformation Tests
 # =====================================================================
@@ -1939,3 +1984,130 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
 
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
+
+
+class TestTranslateAnthropicOutputFormatToOpenAI:
+    """Tests for translate_anthropic_output_format_to_openai adding additionalProperties: false."""
+
+    def setup_method(self):
+        self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    def test_simple_object_adds_additional_properties_false(self):
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert schema["required"] == ["name"]
+
+    def test_nested_objects_adds_additional_properties_false(self):
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "address": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                            },
+                        },
+                    }
+                },
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert schema["required"] == ["user"]
+        assert schema["properties"]["user"]["additionalProperties"] is False
+        assert schema["properties"]["user"]["required"] == ["name", "address"]
+        assert schema["properties"]["user"]["properties"]["address"]["additionalProperties"] is False
+        assert schema["properties"]["user"]["properties"]["address"]["required"] == ["city"]
+
+    def test_array_items_object_adds_additional_properties_false(self):
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"id": {"type": "integer"}},
+                        },
+                    }
+                },
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["items"]["items"]["additionalProperties"] is False
+
+    def test_does_not_mutate_original_schema(self):
+        original_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+        output_format = {"type": "json_schema", "schema": original_schema}
+        self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert "additionalProperties" not in original_schema
+        assert "required" not in original_schema
+
+    def test_defs_adds_additional_properties_false(self):
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"ref": {"$ref": "#/$defs/Item"}},
+                "$defs": {
+                    "Item": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                    }
+                },
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["$defs"]["Item"]["additionalProperties"] is False
+        assert schema["$defs"]["Item"]["required"] == ["value"]
+
+    def test_incomplete_required_gets_completed(self):
+        """OpenAI strict mode requires ALL properties in required."""
+        output_format = {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                    "email": {"type": "string"},
+                },
+                "required": ["name"],  # only 1 of 3
+            },
+        }
+        result = self.adapter.translate_anthropic_output_format_to_openai(output_format)
+        assert result is not None
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert sorted(schema["required"]) == ["age", "email", "name"]
+
+    def test_invalid_output_format_returns_none(self):
+        assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
+        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
+        assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
