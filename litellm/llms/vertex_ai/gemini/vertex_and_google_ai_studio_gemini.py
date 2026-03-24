@@ -2198,6 +2198,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
                 )
+            else:
+                # Handle case where finish_reason=STOP but no parts/content
+                # e.g. gemini-2.5-flash-lite in long-running agentic tasks
+                finish_reason = candidate.get("finishReason")
+                if finish_reason == "STOP":
+                    chat_completion_message["content"] = ""
 
             if "logprobsResult" in candidate:
                 chat_completion_logprobs = VertexGeminiConfig._transform_logprobs(
