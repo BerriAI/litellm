@@ -5,6 +5,11 @@ permissions:
   pull-requests: write
 
 on:
+  pull_request:
+    paths:
+      - 'schema.prisma'
+    branches:
+      - main
   push:
     paths:
       - 'schema.prisma'  # Check root schema.prisma
@@ -183,7 +188,7 @@ jobs:
           git status
 
       - name: Create Pull Request
-        if: success()
+        if: success() && github.event_name == 'push'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
