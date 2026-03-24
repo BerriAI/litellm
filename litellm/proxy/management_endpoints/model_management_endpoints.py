@@ -329,17 +329,19 @@ async def _add_team_model_to_db(
     _team_id = model_params.model_info.team_id
     if _team_id is None:
         return None
-    # Capture the original public name before mutating model_params.model_name
+
+    # Capture the original public name FIRST, before any mutations
     original_model_name = model_params.model_name
 
-    # Generate unique internal model_name for team-scoped deployment
-    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
-
-    # Store public name in model_info BEFORE overwriting model_name
-    # so _add_model_to_db serializes the correct team_public_model_name
+    # Set team_public_model_name in model_info using the captured original_model_name
+    # This must happen BEFORE mutating model_params.model_name so _add_model_to_db
+    # serializes the correct team_public_model_name (not the internal UUID name)
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
 
+    # Generate and assign unique internal model_name LAST
+    # (after team_public_model_name is safely stored)
+    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
     model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
@@ -571,7 +573,11 @@ async def _update_existing_team_model_assignment(
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=user_api_key_dict,
         )
+    # else: old_public_name == public_model_name (no rename needed)
+    # No team_model_add/delete calls required; public name is already registered
 
+    # Always clear patch_data.model_name to prevent caller from overwriting
+    # the internal UUID-based model_name in the DB with the user-supplied public name
     patch_data.model_name = None
 
 
