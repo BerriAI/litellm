@@ -6,7 +6,7 @@ from litellm.llms.sap.embed.transformation import GenAIHubEmbeddingConfig
 
 @pytest.fixture
 def fake_token_creator():
-    return lambda: "Bearer FAKE_TOKEN", "https://api.ai.moke-sap.com", "fake-group"
+    return (lambda: "Bearer FAKE_TOKEN", "https://api.ai.moke-sap.com", "fake-group")
 
 
 @pytest.fixture
