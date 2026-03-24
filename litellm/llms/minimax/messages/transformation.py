@@ -1,7 +1,7 @@
 """
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -16,7 +16,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     MiniMax provides an Anthropic-compatible API at:
     - International: https://api.minimax.io/anthropic
     - China: https://api.minimaxi.com/anthropic
-
+    
     Supported models:
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
@@ -32,7 +32,11 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         """
         Get MiniMax API key from environment or parameters.
         """
-        return api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
+        return (
+            api_key
+            or get_secret_str("MINIMAX_API_KEY")
+            or litellm.api_key
+        )
 
     @staticmethod
     def get_api_base(
@@ -64,13 +68,46 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         """
         # Get the base URL (either provided or default MiniMax endpoint)
         base_url = self.get_api_base(api_base=api_base)
-
+        
         # If the base URL already includes the full path, return it
         if base_url.endswith("/v1/messages"):
             return base_url
-
+        
         # Otherwise append the messages endpoint
         if base_url.endswith("/"):
             return f"{base_url}v1/messages"
         else:
             return f"{base_url}/v1/messages"
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[Any],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Tuple[dict, Optional[str]]:
+        """
+        Validate MiniMax environment and set up authentication headers.
+
+        MiniMax requires ``Authorization: Bearer <api_key>`` format, unlike
+        Anthropic which uses the ``x-api-key`` header.  Override the parent
+        implementation so we always send the correct header.
+        """
+        api_key = self.get_api_key(api_key=api_key)
+
+        if api_key is None:
+            raise ValueError(
+                "MiniMax API key is required. "
+                "Set the MINIMAX_API_KEY environment variable or pass api_key parameter."
+            )
+
+        # MiniMax expects Bearer token authentication, not Anthropic's x-api-key
+        headers["Authorization"] = f"Bearer {api_key}"
+
+        if "content-type" not in headers:
+            headers["content-type"] = "application/json"
+
+        return headers, api_base
