@@ -49,6 +49,11 @@ def _nova_canvas_task_body(
             "backgroundRemovalParams": {"image": image_b64},
         }
     if task_type == "OUTPAINTING":
+        if mask_prompt is None and mask_b64 is None:
+            raise ValueError(
+                "OUTPAINTING requires either a mask image or a mask prompt. "
+                "Pass mask=<file> or maskPrompt=<str> in the request."
+            )
         out_params: Dict[str, Any] = {
             "image": image_b64,
             "text": text,
@@ -61,12 +66,6 @@ def _nova_canvas_task_body(
             out_params["negativeText"] = negative_text
         if out_painting_mode is not None:
             out_params["outPaintingMode"] = out_painting_mode
-        if "maskPrompt" not in out_params and "maskImage" not in out_params:
-            raise ValueError(
-                "Amazon Nova Canvas OUTPAINTING requires either maskPrompt or maskImage "
-                "(use OpenAI mask= for maskImage, or pass maskPrompt in optional params). "
-                "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
-            )
         return {
             "taskType": "OUTPAINTING",
             "outPaintingParams": out_params,
@@ -320,13 +319,19 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 def get_bedrock_image_edit_config_for_model(
     model: str,
 ) -> BaseImageEditConfig:
-    """Return the correct Bedrock image-edit config for the model id."""
-    if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
-        return BedrockAmazonNovaCanvasImageEditConfig()
+    """
+    Return the correct Bedrock image-edit config for the model id.
+
+    Same routing and errors as ``BedrockImageEdit.get_config_class`` (handler path):
+    Stability edit models and Nova Canvas only; anything else raises ``ValueError``
+    so ProviderConfigManager / SDK callers do not silently use Stability config.
+    """
     from litellm.llms.bedrock.image_edit.stability_transformation import (
         BedrockStabilityImageEditConfig,
     )
 
     if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
         return BedrockStabilityImageEditConfig()
+    if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+        return BedrockAmazonNovaCanvasImageEditConfig()
     raise ValueError(f"Unsupported model for bedrock image edit: {model}")
