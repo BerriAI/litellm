@@ -23,7 +23,10 @@ export const LicenseExpiryBanner: React.FC = () => {
     return null;
   }
 
-  const expDate = new Date(licenseInfo.expiration_date + "T23:59:59");
+  // Strip any existing time component so we always get a valid date-only base,
+  // then append end-of-day in UTC to avoid timezone-dependent parsing.
+  const dateOnly = licenseInfo.expiration_date.split("T")[0];
+  const expDate = new Date(dateOnly + "T23:59:59Z");
   const now = new Date();
   const diffMs = expDate.getTime() - now.getTime();
   const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));

@@ -19,6 +19,7 @@ const mockGetLicenseInfo = vi.mocked(getLicenseInfo);
 
 const FIXED_NOW = new Date("2026-03-15T12:00:00Z").getTime();
 let realDateNow: () => number;
+let OrigDate: typeof Date;
 
 function makeLicense(expirationDate: string) {
   return {
@@ -34,9 +35,8 @@ describe("LicenseExpiryBanner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     realDateNow = Date.now;
+    OrigDate = Date; // capture before patching so we can restore in afterEach
     Date.now = () => FIXED_NOW;
-    // Also override new Date() with no args
-    const OrigDate = Date;
     const MockDate = class extends OrigDate {
       constructor(...args: any[]) {
         if (args.length === 0) {
@@ -70,6 +70,7 @@ describe("LicenseExpiryBanner", () => {
   });
 
   afterEach(() => {
+    global.Date = OrigDate;
     Date.now = realDateNow;
   });
 
@@ -143,6 +144,18 @@ describe("LicenseExpiryBanner", () => {
       expect(mockGetLicenseInfo).not.toHaveBeenCalled();
     });
     expect(container.innerHTML).toBe("");
+  });
+
+  it("should handle expiration_date with a full ISO timestamp (not just date-only)", async () => {
+    // Backend might return "2026-03-22T15:00:00Z" instead of "2026-03-22"
+    // The component should strip the time part and still render correctly.
+    mockGetLicenseInfo.mockResolvedValue(makeLicense("2026-03-22T15:00:00Z"));
+
+    render(<LicenseExpiryBanner />);
+
+    expect(
+      await screen.findByText("Enterprise License Expiring in 8 days")
+    ).toBeInTheDocument();
   });
 
   it("should not render when has_license is false", async () => {
