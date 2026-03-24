@@ -221,7 +221,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" style={{ marginTop: 32 }}>
             <Input placeholder="" />
           </Form.Item>
-          <Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </Text>
           {newExpiryTime && (
