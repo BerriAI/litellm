@@ -61,6 +61,12 @@ def _nova_canvas_task_body(
             out_params["negativeText"] = negative_text
         if out_painting_mode is not None:
             out_params["outPaintingMode"] = out_painting_mode
+        if "maskPrompt" not in out_params and "maskImage" not in out_params:
+            raise ValueError(
+                "Amazon Nova Canvas OUTPAINTING requires either maskPrompt or maskImage "
+                "(use OpenAI mask= for maskImage, or pass maskPrompt in optional params). "
+                "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
+            )
         return {
             "taskType": "OUTPAINTING",
             "outPaintingParams": out_params,
@@ -73,6 +79,12 @@ def _nova_canvas_task_body(
             in_params["maskImage"] = mask_b64
         if negative_text is not None:
             in_params["negativeText"] = negative_text
+        if "maskPrompt" not in in_params and "maskImage" not in in_params:
+            raise ValueError(
+                "Amazon Nova Canvas INPAINTING requires either maskPrompt or maskImage "
+                "(use OpenAI mask= for maskImage, or pass maskPrompt in optional params). "
+                "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
+            )
         return {"taskType": "INPAINTING", "inPaintingParams": in_params}
     var_params: Dict[str, Any] = {
         "images": [image_b64],
@@ -315,4 +327,6 @@ def get_bedrock_image_edit_config_for_model(
         BedrockStabilityImageEditConfig,
     )
 
-    return BedrockStabilityImageEditConfig()
+    if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
+        return BedrockStabilityImageEditConfig()
+    raise ValueError(f"Unsupported model for bedrock image edit: {model}")

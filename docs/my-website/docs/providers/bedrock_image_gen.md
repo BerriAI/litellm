@@ -119,7 +119,7 @@ Use OpenAI-compatible `image_edit()` with Bedrock Nova Canvas (`amazon.nova-canv
 |----------|----------------------------|
 | Image + prompt (no mask) | `IMAGE_VARIATION` |
 | Image + prompt + mask | `INPAINTING` (`inPaintingParams.image`, `maskImage` or `maskPrompt`) |
-| `taskType: OUTPAINTING` in optional params | `OUTPAINTING` |
+| `taskType: OUTPAINTING` + `mask` or `maskPrompt` | `OUTPAINTING` (Bedrock requires one; LiteLLM raises a clear error if both are missing) |
 | `taskType: BACKGROUND_REMOVAL` | `BACKGROUND_REMOVAL` |
 
 ```python
@@ -132,7 +132,7 @@ response = image_edit(
 )
 ```
 
-Pass `mask=...` for inpainting. For advanced tasks, set `taskType` and related fields via kwargs (e.g. `outPaintingMode` for outpainting).
+Pass `mask=...` for inpainting. For **outpainting**, use `taskType="OUTPAINTING"` with `mask=...` or `maskPrompt="..."`. For `taskType="INPAINTING"`, supply a mask or `maskPrompt` as well. Unsupported Bedrock models for image edit raise `ValueError` (no silent fallback to another provider config).
 
 ## Using Inference Profiles with Image Generation
 
