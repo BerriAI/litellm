@@ -156,8 +156,7 @@ class DockerSecretManager(BaseSecretManager):
         """Synchronously read a Docker secret by name.
 
         Returns the secret value (trailing whitespace stripped), or ``None``
-        if the secret file does not exist.  Never raises for a missing secret
-        so that ``get_secret()`` can fall back to environment variables.
+        if the secret file does not exist or cannot be read.
         """
         try:
             path = self._resolve_secret_path(secret_name)

@@ -274,7 +274,6 @@ def test_load_factory_secrets_path_none_uses_default():
     # cleanup
     litellm.secret_manager_client = None
     litellm._key_management_system = None
-    litellm._key_management_system = None
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +306,12 @@ def test_e2e_get_secret_reads_from_docker(populated_secrets_dir):
         litellm._key_management_settings = None
 
 
-def test_e2e_get_secret_returns_none_when_not_in_docker(populated_secrets_dir, monkeypatch):
+def test_e2e_get_secret_falls_back_to_env_when_not_in_docker(populated_secrets_dir, monkeypatch):
     """
     End-to-end: when a secret is not in the Docker secrets dir, get_secret()
-    returns None.  get_secret() only falls back to env vars on exceptions, not
-    on None returns — intentional so operators aren't silently served stale env vars.
+    falls back to the process environment variable of the same name.
+    The handler raises ValueError for a missing Docker secret, which causes
+    get_secret() to catch the exception and read from os.environ.
     """
     from litellm.secret_managers.main import get_secret
 
@@ -325,8 +325,8 @@ def test_e2e_get_secret_returns_none_when_not_in_docker(populated_secrets_dir, m
 
     try:
         result = get_secret("MY_FALLBACK_KEY")
-        # Not in /run/secrets → None; env var is NOT silently substituted
-        assert result is None
+        # Not in Docker secrets → handler raises → get_secret() falls back to env var
+        assert result == "env-fallback-value"
     finally:
         litellm.secret_manager_client = None
         litellm._key_management_system = None

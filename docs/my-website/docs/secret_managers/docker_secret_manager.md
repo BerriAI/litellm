@@ -86,19 +86,21 @@ This means you can use either `OPENAI_API_KEY` or `openai_api_key` in your confi
 /run/secrets/openai_api_key   # ← lowercase fallback
 ```
 
-## Using `os.environ/` as a fallback
+## Using `os.environ/` to reference secrets
 
-If you want a specific key to fall back to an environment variable when the Docker secret isn't present, use the `os.environ/` prefix:
+Use the `os.environ/` prefix in your config to tell LiteLLM to resolve a value as a secret rather than a literal string:
 
 ```yaml
 model_list:
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY  # reads $OPENAI_API_KEY from env
+      api_key: os.environ/OPENAI_API_KEY  # resolved from Docker secrets or env var
 ```
 
-Without the `os.environ/` prefix, a value that isn't found as a Docker secret file is returned as-is (the literal string), so use literal values only when you intend to pass them directly.
+When the Docker secret manager is active, LiteLLM looks up the name (e.g. `OPENAI_API_KEY`) in the Docker secrets directory first. If the secret file is not found there, LiteLLM automatically falls back to the process environment variable of the same name. This means `os.environ/OPENAI_API_KEY` works whether the key is stored as a Docker secret or as a plain environment variable.
+
+Without the `os.environ/` prefix, a value that is not found as a Docker secret is returned as-is (the literal string), so only omit the prefix when you intend to pass a literal value directly.
 
 ## Configuration options
 

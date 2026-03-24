@@ -159,7 +159,11 @@ def get_secret_from_manager(  # noqa: PLR0915
         if isinstance(client, DockerSecretManager):
             try:
                 secret = client.sync_read_secret(secret_name=secret_name)
-                # None is valid — secret not found, caller falls back to env vars
+                if secret is None:
+                    raise ValueError(
+                        f"No secret found in Docker secrets for {secret_name!r}. "
+                        f"Falling back to environment variable."
+                    )
             except Exception as e:
                 print_verbose(f"An error occurred - {str(e)}")
                 raise e
