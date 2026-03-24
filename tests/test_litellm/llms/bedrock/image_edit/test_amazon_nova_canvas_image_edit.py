@@ -37,7 +37,10 @@ def _ensure_nova_canvas_model_cost_entries(monkeypatch):
         "eu.amazon.nova-canvas-v1:0",
         "ap.amazon.nova-canvas-v1:0",
     ):
-        merged = {**(litellm.model_cost.get(key) or {}), **_NOVA_CANVAS_MODEL_COST_PATCH}
+        merged = {
+            **(litellm.model_cost.get(key) or {}),
+            **_NOVA_CANVAS_MODEL_COST_PATCH,
+        }
         monkeypatch.setitem(litellm.model_cost, key, merged)
 
 
@@ -378,6 +381,36 @@ def test_transform_request_unknown_task_type_raises():
             litellm_params={},  # type: ignore[arg-type]
             headers={},
         )
+
+
+def test_transform_request_empty_prompt_raises():
+    """IMAGE_VARIATION (default) requires a non-empty prompt; avoid opaque AWS errors."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"x")
+    with pytest.raises(ValueError, match="IMAGE_VARIATION requires a non-empty prompt"):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="",
+            image=img,
+            image_edit_optional_request_params={},
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
+def test_transform_request_background_removal_accepts_empty_prompt():
+    """BACKGROUND_REMOVAL ignores prompt; empty string must not raise."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"x")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="",
+        image=img,
+        image_edit_optional_request_params={"taskType": "BACKGROUND_REMOVAL"},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "BACKGROUND_REMOVAL"
 
 
 def test_transform_request_background_removal():

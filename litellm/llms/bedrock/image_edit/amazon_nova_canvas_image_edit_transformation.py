@@ -339,10 +339,18 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         if seed is not None:
             image_generation_config["seed"] = seed
 
-        text = prompt if prompt is not None and prompt != "" else " "
+        task_type = op.pop("taskType", None)
+        if task_type == "BACKGROUND_REMOVAL":
+            text = " "  # prompt unused for this task; AWS still expects a string in some paths
+        elif not prompt or (isinstance(prompt, str) and not prompt.strip()):
+            raise ValueError(
+                f"Nova Canvas {task_type or 'IMAGE_VARIATION'} requires a non-empty prompt."
+            )
+        else:
+            text = prompt.strip() if isinstance(prompt, str) else prompt
+
         negative_text = op.pop("negativeText", None)
         similarity_strength = op.pop("similarityStrength", None)
-        task_type = op.pop("taskType", None)
         mask_prompt = op.pop("maskPrompt", None)
         out_painting_mode = op.pop("outPaintingMode", None)
 
