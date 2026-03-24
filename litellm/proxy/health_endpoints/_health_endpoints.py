@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -150,6 +150,11 @@ async def _run_test_connection_attempt(
         response_headers: dict = (
             getattr(response, "_hidden_params", {}).get("headers", {}) or {}
         )
+        try:
+            async for _chunk in response:
+                break
+        finally:
+            await response.aclose()
         return _create_health_check_response(response_headers)
 
     return await _run_single_health_check_attempt(

@@ -198,13 +198,13 @@ async def _run_single_health_check_attempt(
     timeout: float,
 ) -> dict:
     try:
+        params_with_stream = {**litellm_params, "stream": stream}
         return await run_with_timeout(
             litellm.ahealth_check(
-                litellm_params,
+                params_with_stream,
                 mode=mode,
                 prompt=DEFAULT_HEALTH_CHECK_PROMPT,
                 input=["test from litellm"],
-                stream=stream,
             ),
             timeout,
         )
