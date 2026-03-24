@@ -131,13 +131,7 @@ response = image_edit(
     model="bedrock/amazon.nova-canvas-v1:0",
 )
 ```
-
 For **`BACKGROUND_REMOVAL`**, the AWS request must not include `imageGenerationConfig`; LiteLLM omits it for that task even if you pass `size`, `n`, `seed`, etc. Additional Nova Canvas inference IDs for image edit should set **`supports_nova_canvas_image_edit`: true** in `model_prices_and_context_window.json` (see `amazon.nova-canvas-v1:0`). Unrecognized Bedrock image-edit models fall back to the Stability adapter with a logged warning — add `supports_nova_canvas_image_edit: true` to `model_prices_and_context_window.json` for new Nova Canvas variants.
-
-For **`BACKGROUND_REMOVAL`**, the AWS request must not include `imageGenerationConfig`; LiteLLM omits it for that task even if you pass `size`, `n`, `seed`, etc. Additional Nova Canvas inference IDs for image edit should set **`supports_nova_canvas_image_edit`: true** in `model_prices_and_context_window.json` (see `amazon.nova-canvas-v1:0`).
-
-## Using Inference Profiles with Image Generation
-
 For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
 
 <Tabs>
