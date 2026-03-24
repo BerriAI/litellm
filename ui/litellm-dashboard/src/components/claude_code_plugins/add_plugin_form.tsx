@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Modal, Form, Input, Select, message } from "antd";
+import { Modal, Form, Input, Select } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
 import {
@@ -39,17 +40,17 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [sourceType, setSourceType] = useState<"github" | "url">("github");
+  const [sourceType, setSourceType] = useState<"github" | "url" | "git-subdir">("github");
 
   const handleSubmit = async (values: any) => {
     if (!accessToken) {
-      message.error("No access token available");
+      MessageManager.error("No access token available");
       return;
     }
 
     // Validate plugin name
     if (!validatePluginName(values.name)) {
-      message.error(
+      MessageManager.error(
         "Plugin name must be kebab-case (lowercase letters, numbers, and hyphens only)"
       );
       return;
@@ -57,7 +58,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
     // Validate semantic version if provided
     if (values.version && !isValidSemanticVersion(values.version)) {
-      message.error(
+      MessageManager.error(
         "Version must be in semantic versioning format (e.g., 1.0.0)"
       );
       return;
@@ -65,13 +66,19 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
 
     // Validate email if provided
     if (values.authorEmail && !isValidEmail(values.authorEmail)) {
-      message.error("Invalid email format");
+      MessageManager.error("Invalid email format");
       return;
     }
 
     // Validate homepage URL if provided
     if (values.homepage && !isValidUrl(values.homepage)) {
-      message.error("Invalid homepage URL format");
+      MessageManager.error("Invalid homepage URL format");
+      return;
+    }
+
+    // Validate git URL for url/git-subdir source types
+    if ((sourceType === "url" || sourceType === "git-subdir") && values.url && !isValidUrl(values.url)) {
+      MessageManager.error("Invalid git URL format");
       return;
     }
 
@@ -85,6 +92,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
             ? {
                 source: "github",
                 repo: values.repo.trim(),
+              }
+            : sourceType === "git-subdir"
+            ? {
+                source: "git-subdir",
+                url: values.url.trim(),
+                path: values.path.trim(),
               }
             : {
                 source: "url",
@@ -119,14 +132,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
       }
 
       await registerClaudeCodePlugin(accessToken, pluginData);
-      message.success("Plugin registered successfully");
+      MessageManager.success("Plugin registered successfully");
       form.resetFields();
       setSourceType("github");
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error registering plugin:", error);
-      message.error("Failed to register plugin");
+      MessageManager.error("Failed to register plugin");
     } finally {
       setIsSubmitting(false);
     }
@@ -138,10 +151,10 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
     onClose();
   };
 
-  const handleSourceTypeChange = (value: "github" | "url") => {
+  const handleSourceTypeChange = (value: "github" | "url" | "git-subdir") => {
     setSourceType(value);
-    // Clear repo/url fields when switching
-    form.setFieldsValue({ repo: undefined, url: undefined });
+    // Clear repo/url/path fields when switching
+    form.setFieldsValue({ repo: undefined, url: undefined, path: undefined });
   };
 
   return (
@@ -185,7 +198,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         >
           <Select onChange={handleSourceTypeChange} className="rounded-lg">
             <Option value="github">GitHub</Option>
-            <Option value="url">URL</Option>
+            <Option value="url">Git URL</Option>
+            <Option value="git-subdir">Git Subdir</Option>
           </Select>
         </Form.Item>
 
@@ -208,7 +222,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         )}
 
         {/* Git URL */}
-        {sourceType === "url" && (
+        {(sourceType === "url" || sourceType === "git-subdir") && (
           <Form.Item
             label="Git URL"
             name="url"
@@ -218,6 +232,28 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
             <Input
               type="url"
               placeholder="https://github.com/org/repo.git"
+              className="rounded-lg"
+            />
+          </Form.Item>
+        )}
+
+        {/* Git Subdir Path */}
+        {sourceType === "git-subdir" && (
+          <Form.Item
+            label="Subdirectory Path"
+            name="path"
+            rules={[
+              { required: true, message: "Please enter subdirectory path" },
+              {
+                pattern: /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/,
+                message:
+                  "Path must be relative segments (alphanumeric, dots, hyphens, underscores), e.g. plugins/plugin-name",
+              },
+            ]}
+            tooltip="Path to the plugin directory within the repository (e.g., plugins/plugin-name)"
+          >
+            <Input
+              placeholder="plugins/plugin-name"
               className="rounded-lg"
             />
           </Form.Item>

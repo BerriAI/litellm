@@ -7,6 +7,7 @@ from typing import (
     Any,
     AsyncIterator,
     Coroutine,
+    Dict,
     Iterator,
     List,
     Literal,
@@ -805,8 +806,8 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
 
-            kwargs = {
-                "id": chunk["id"],
+            kwargs: Dict[str, Any] = {
+                "id": chunk.get("id"),
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),

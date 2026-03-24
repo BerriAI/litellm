@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { message } from 'antd';
+import MessageManager from "@/components/molecules/message_manager";
 import { ParsedMessage } from './prettyMessagesTypes';
 import { SectionHeader } from './SectionHeader';
 import { CollapsibleMessage } from './CollapsibleMessage';
@@ -33,7 +33,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   const handleCopy = () => {
     const content = lastMessage?.content || '';
     navigator.clipboard.writeText(content);
-    message.success('Input copied');
+    MessageManager.success('Input copied');
   };
 
   return (

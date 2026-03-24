@@ -18,8 +18,8 @@ vi.mock("./networking", () => ({
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
 }));
 
-vi.mock("./common_components/fetch_teams", () => ({
-  fetchTeams: vi.fn(),
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  teamListCall: vi.fn().mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 0 }),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -375,6 +375,9 @@ describe("OldTeams - handleCreate organization handling", () => {
         organizations={[]}
       />,
     );
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
+    });
     const deleteTeamButton = screen.getByTestId("delete-team-button");
     act(() => {
       fireEvent.click(deleteTeamButton);
@@ -389,7 +392,7 @@ describe("OldTeams - empty state", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("should display empty state message when teams array is empty", () => {
+  it("should display empty state message when teams array is empty", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={[]}
@@ -402,11 +405,13 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.getByText("No teams found")).toBeInTheDocument();
-    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("No teams yet")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
   });
 
-  it("should display empty state message when teams is null", () => {
+  it("should display empty state message when teams is null", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={null}
@@ -419,11 +424,13 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.getByText("No teams found")).toBeInTheDocument();
-    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("No teams yet")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
   });
 
-  it("should not display empty state when teams array has items", () => {
+  it("should not display empty state when teams array has items", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={[
@@ -451,9 +458,11 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.queryByText("No teams found")).not.toBeInTheDocument();
-    expect(screen.queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
-    expect(screen.getByText("Test Team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Test Team")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("No teams yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create your first team to organize members and manage access to models.")).not.toBeInTheDocument();
   });
 });
 
@@ -621,12 +630,9 @@ describe("OldTeams - premium props", () => {
       />,
     );
 
-    const truncatedTeamId = "team-123456789".slice(0, 7);
-    const teamButton = await screen.findByRole("button", {
-      name: new RegExp(`${truncatedTeamId}\\.\\.\\.`),
-    });
+    const teamIdElement = await screen.findByText("team-123456789");
     act(() => {
-      fireEvent.click(teamButton);
+      fireEvent.click(teamIdElement);
     });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
@@ -798,7 +804,7 @@ describe("OldTeams - access_group_ids in team create", () => {
       />,
     );
 
-    const createButton = screen.getByRole("button", { name: /create new team/i });
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
     act(() => {
       fireEvent.click(createButton);
     });
@@ -823,7 +829,8 @@ describe("OldTeams - access_group_ids in team create", () => {
     const accessGroupInput = screen.getByTestId("access-group-selector");
     fireEvent.change(accessGroupInput, { target: { value: "ag-1,ag-2" } });
 
-    const createTeamSubmitButton = screen.getByRole("button", { name: /create team/i });
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    const createTeamSubmitButton = createTeamSubmitButtons[createTeamSubmitButtons.length - 1];
     fireEvent.click(createTeamSubmitButton);
 
     await waitFor(() => {
@@ -865,7 +872,7 @@ describe("OldTeams - models dropdown options", () => {
       expect(fetchAvailableModelsForTeamOrKey).toHaveBeenCalled();
     });
 
-    const createButton = screen.getByRole("button", { name: /create new team/i });
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
     act(() => {
       fireEvent.click(createButton);
     });
@@ -884,7 +891,7 @@ describe("OldTeams - organization alias display", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("should display organization alias instead of organization id", () => {
+  it("should display organization alias instead of organization id", async () => {
     const mockOrganizations = [
       {
         organization_id: "org-123",
@@ -934,11 +941,13 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("Test Organization")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Test Organization")).toBeInTheDocument();
+    });
     expect(screen.queryByText("org-123")).not.toBeInTheDocument();
   });
 
-  it("should display organization id when alias is not found", () => {
+  it("should display organization id when alias is not found", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
 
     renderWithQueryClient(
@@ -968,10 +977,12 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("org-unknown")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("org-unknown")).toBeInTheDocument();
+    });
   });
 
-  it("should display N/A when organization_id is null", () => {
+  it("should display N/A when organization_id is null", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
 
     renderWithQueryClient(
@@ -1001,6 +1012,9 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("N/A")).toBeInTheDocument();
+    await waitFor(() => {
+      // When organization_id is null, the table shows "—" in the Organization column
+      expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    });
   });
 });

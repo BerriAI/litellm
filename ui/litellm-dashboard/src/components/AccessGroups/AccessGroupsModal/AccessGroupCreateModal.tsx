@@ -1,5 +1,6 @@
 import React from "react";
-import { Modal, Form, message } from "antd";
+import { Modal, Form } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   AccessGroupBaseForm,
   AccessGroupFormValues,
@@ -37,7 +38,7 @@ export function AccessGroupCreateModal({
 
         createMutation.mutate(params, {
           onSuccess: () => {
-            message.success("Access group created successfully");
+            MessageManager.success("Access group created successfully");
             form.resetFields();
             onSuccess?.();
             onCancel();
