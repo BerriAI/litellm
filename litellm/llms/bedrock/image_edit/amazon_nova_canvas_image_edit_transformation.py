@@ -116,10 +116,11 @@ def _nova_canvas_task_body(
         return {"taskType": "INPAINTING", "inPaintingParams": in_params}
     var_params: Dict[str, Any] = {
         "images": [image_b64],
-        "text": text,
-    }
-    if negative_text is not None:
-        var_params["negativeText"] = negative_text
+    if hasattr(image, "read") and callable(getattr(image, "read", None)):
+        if hasattr(image, "seek"):
+            image.seek(0)
+        image_bytes = image.read()  # type: ignore[union-attr]
+        return base64.b64encode(image_bytes).decode("utf-8")
     if similarity_strength is not None:
         var_params["similarityStrength"] = similarity_strength
     return {
