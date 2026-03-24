@@ -1,3 +1,4 @@
+import warnings
 import pytest
 from pydantic import ValidationError
 
@@ -448,6 +449,34 @@ class TestSAPTransformationIntegration:
             )
 
         assert "must set exactly one of: 'providers' or 'masking_providers'" in str(exc_info.value)
+
+    def test_masking_providers_deprecated_emits_warning(self, mock_config):
+        masking_config = {
+            'masking_providers':
+            [
+                {
+                    'type': 'sap_data_privacy_integration',
+                    'method': 'anonymization',
+                    'entities': [
+                        {'type': 'profile-address'}
+                    ]
+                }
+            ]
+        }
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hi"}],
+                optional_params={"masking": masking_config},
+                litellm_params={},
+                headers={},
+            )
+        assert any(
+            issubclass(warning.category, DeprecationWarning)
+            and "masking_providers" in str(warning.message)
+            for warning in w
+        ), "Expected DeprecationWarning for 'masking_providers'"
 
     def test_sap_translation(self, mock_config):
         translation_config = {

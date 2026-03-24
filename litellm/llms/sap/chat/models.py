@@ -402,7 +402,7 @@ class MaskingModuleConfig(BaseModel):
                 "The 'masking_providers' parameter is deprecated and will be removed on Sept 15, 2026. "
                 "Use 'providers' instead.",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=5,
             )
 
         return self
