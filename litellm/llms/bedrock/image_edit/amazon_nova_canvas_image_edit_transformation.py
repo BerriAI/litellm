@@ -260,6 +260,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 mapped["quality"] = "premium"
             elif _quality == "standard":
                 mapped["quality"] = "standard"
+            else:
+                from litellm._logging import verbose_logger
+                verbose_logger.warning(
+                    "Nova Canvas: unrecognized quality value %r — dropping from request. "
+                    "Supported values: 'standard', 'premium' (or 'hd').",
+                    _quality,
+                )
         for k in ("response_format",):
             mapped.pop(k, None)
         # Drop unknown keys if drop_params
