@@ -743,6 +743,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return "required"
         elif tool_choice["type"] == "auto":
             return "auto"
+        elif tool_choice["type"] == "none":
+            return "none"
         elif tool_choice["type"] == "tool":
             # Truncate tool name if it exceeds OpenAI's 64-char limit
             original_name = tool_choice.get("name", "")
