@@ -297,20 +297,24 @@ class PrometheusLogger(CustomLogger):
             self.litellm_guardrail_latency_metric = self._histogram_factory(
                 "litellm_guardrail_latency_seconds",
                 "Latency (seconds) for guardrail execution",
-                labelnames=["guardrail_name", "status", "error_type", "hook_type"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_guardrail_latency_seconds"
+                ),
                 buckets=self._get_latency_buckets(),
             )
 
             self.litellm_guardrail_errors_total = self._counter_factory(
                 "litellm_guardrail_errors_total",
                 "Total number of errors encountered during guardrail execution",
-                labelnames=["guardrail_name", "error_type", "hook_type"],
+                labelnames=self.get_labels_for_metric("litellm_guardrail_errors_total"),
             )
 
             self.litellm_guardrail_requests_total = self._counter_factory(
                 "litellm_guardrail_requests_total",
                 "Total number of guardrail invocations",
-                labelnames=["guardrail_name", "status", "hook_type"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_guardrail_requests_total"
+                ),
             )
             # llm api provider budget metrics
             self.litellm_provider_remaining_budget_metric = self._gauge_factory(

@@ -292,9 +292,22 @@ class PrometheusMetricLabels:
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
     # which are not part of UserAPIKeyLabelNames
-    litellm_guardrail_latency_seconds: List[str] = []
-    litellm_guardrail_errors_total: List[str] = []
-    litellm_guardrail_requests_total: List[str] = []
+    litellm_guardrail_latency_seconds: List[str] = [
+        "guardrail_name",
+        "status",
+        "error_type",
+        "hook_type",
+    ]
+    litellm_guardrail_errors_total: List[str] = [
+        "guardrail_name",
+        "error_type",
+        "hook_type",
+    ]
+    litellm_guardrail_requests_total: List[str] = [
+        "guardrail_name",
+        "status",
+        "hook_type",
+    ]
 
     litellm_proxy_total_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
