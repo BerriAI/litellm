@@ -397,7 +397,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_callback_logging_failures_metric = self._counter_factory(
                 name="litellm_callback_logging_failures_metric",
                 documentation="Total number of failures when emitting logs to callbacks (e.g. s3_v2, langfuse, etc)",
-                labelnames=["callback_name"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_callback_logging_failures_metric"
+                ),
             )
 
             self.litellm_llm_api_failed_requests_metric = self._counter_factory(
@@ -2432,7 +2434,10 @@ class PrometheusLogger(CustomLogger):
         Increment metric when logging to a callback fails (e.g., s3_v2, langfuse, etc.)
         """
         self.litellm_callback_logging_failures_metric.labels(
-            callback_name=callback_name
+            **self._safe_labels(
+                self.litellm_callback_logging_failures_metric,
+                callback_name=callback_name,
+            )
         ).inc()
 
     def track_provider_remaining_budget(
