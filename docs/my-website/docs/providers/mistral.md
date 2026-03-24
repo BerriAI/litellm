@@ -207,7 +207,7 @@ assert isinstance(
 
 ## Reasoning
 
-Mistral does not directly support reasoning, instead it recommends a specific [system prompt](https://docs.mistral.ai/capabilities/reasoning/) to use with their magistral models. By setting the `reasoning_effort` parameter, LiteLLM will prepend the system prompt to the request. 
+Mistral does not use a separate OpenAI-style `reasoning_effort` API field; it recommends a specific [system prompt](https://docs.mistral.ai/capabilities/reasoning/) for reasoning-capable models. By setting the `reasoning_effort` parameter, LiteLLM will prepend that system prompt to the request. Models that support this are marked with `supports_reasoning` in LiteLLM's model map (Magistral series, **Mistral Small 4** `mistral/mistral-small-2603`, etc.).
 
 If an existing system message is provided, LiteLLM will send both as a list of system messages (you can verify this by enabling `litellm._turn_on_debug()`).
 
@@ -217,10 +217,11 @@ If an existing system message is provided, LiteLLM will send both as a list of s
 |----------------|--------------------------------------------------------------|
 | Magistral Small  | `completion(model="mistral/magistral-small-2506", messages)` |
 | Magistral Medium | `completion(model="mistral/magistral-medium-2506", messages)`|
+| Mistral Small 4  | `completion(model="mistral/mistral-small-2603", messages)`    |
 
 ### Using Reasoning Effort
 
-The `reasoning_effort` parameter controls how much effort the model puts into reasoning. When used with magistral models.
+The `reasoning_effort` parameter controls how much effort the model puts into reasoning. When used with models that support Mistral-style reasoning in LiteLLM (see table above).
 
 ```python
 from litellm import completion
@@ -308,8 +309,8 @@ print(response)
 
 ### Important Notes
 
-- **Model Compatibility**: Reasoning parameters only work with magistral models
-- **Backward Compatibility**: Non-magistral models will ignore reasoning parameters and work normally
+- **Model Compatibility**: Reasoning parameters are only accepted for models with `supports_reasoning` in LiteLLM's model map (not only names containing `magistral`).
+- **Backward Compatibility**: Other Mistral models will reject unknown params unless you set `litellm.drop_params=True` (or proxy `drop_params: true`).
 
 ## Audio Transcription
 

@@ -103,6 +103,23 @@ class TestMistralReasoningSupport:
 
         assert result.get("_add_reasoning_prompt") is True
 
+    def test_reasoning_params_mistral_small_2603(self):
+        """Mistral Small 4 uses supports_reasoning in model_cost, not 'magistral' in name (#24416)."""
+        mistral_config = MistralConfig()
+        model = "mistral/mistral-small-2603"
+        params = mistral_config.get_supported_openai_params(model)
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+        optional_params: dict = {}
+        out = mistral_config.map_openai_params(
+            non_default_params={"reasoning_effort": "medium"},
+            optional_params=optional_params,
+            model=model,
+            drop_params=False,
+        )
+        assert out.get("_add_reasoning_prompt") is True
+
     def test_get_mistral_reasoning_system_prompt(self):
         """Test that the reasoning system prompt is properly formatted."""
         prompt = MistralConfig._get_mistral_reasoning_system_prompt()

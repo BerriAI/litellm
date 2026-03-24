@@ -95,6 +95,21 @@ class MistralConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    @staticmethod
+    def _mistral_model_supports_reasoning(model: str) -> bool:
+        """
+        Reasoning uses Mistral's thinking/reasoning contract (system prompt + content blocks).
+        Enabled for models with supports_reasoning in model_cost (e.g. Magistral, Mistral Small 4).
+        """
+        import litellm as _litellm
+
+        try:
+            return _litellm.supports_reasoning(
+                model=model, custom_llm_provider="mistral"
+            )
+        except Exception:
+            return False
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "stream",
@@ -110,8 +125,7 @@ class MistralConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
         ]
 
-        # Add reasoning support for magistral models
-        if "magistral" in model.lower():
+        if self._mistral_model_supports_reasoning(model):
             supported_params.extend(["thinking", "reasoning_effort"])
 
         return supported_params
@@ -184,11 +198,11 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
+            if param == "reasoning_effort" and self._mistral_model_supports_reasoning(
+                model
+            ):
                 optional_params["_add_reasoning_prompt"] = True
-            if param == "thinking" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
+            if param == "thinking" and self._mistral_model_supports_reasoning(model):
                 optional_params["_add_reasoning_prompt"] = True
             if param == "parallel_tool_calls":
                 optional_params["parallel_tool_calls"] = value
@@ -326,7 +340,7 @@ class MistralConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], optional_params: dict
     ) -> List[AllMessageValues]:
         """
-        Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
+        Add reasoning system prompt for Mistral reasoning models when reasoning_effort/thinking is used.
         """
         if not optional_params.get("_add_reasoning_prompt", False):
             return messages
@@ -548,13 +562,13 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
-        For magistral models, adds reasoning system prompt when reasoning_effort is specified.
+        For models with supports_reasoning (e.g. Magistral, Mistral Small 4), adds the
+        reasoning system prompt when reasoning_effort / thinking triggers _add_reasoning_prompt.
 
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        # Add reasoning system prompt if needed (for magistral models)
-        if "magistral" in model.lower() and optional_params.get(
+        if self._mistral_model_supports_reasoning(model) and optional_params.get(
             "_add_reasoning_prompt", False
         ):
             messages = self._add_reasoning_system_prompt_if_needed(
@@ -652,7 +666,7 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
         content_blocks: List[dict],
     ) -> Tuple[Optional[str], List[dict], Optional[str]]:
         """
-        Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
+        Convert Mistral reasoning content blocks into OpenAI-compatible content + thinking_blocks.
         """
         text_segments: List[str] = []
         thinking_blocks: List[dict] = []
