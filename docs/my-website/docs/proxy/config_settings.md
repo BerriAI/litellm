@@ -206,7 +206,7 @@ router_settings:
 
 | Name | Type | Description |
 |------|------|-------------|
-| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| completion_model | string | The model to use for all completions, overriding any `model` specified in the request |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
