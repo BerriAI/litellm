@@ -3504,6 +3504,64 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
     assert result._hidden_params["provider_specific_fields"]["traffic_type"] == "PROVISIONED_THROUGHPUT"
 
 
+def test_vertex_ai_service_tier_streaming():
+    """Test serviceTier is preserved in model_response for streaming."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "serviceTier": "FLEX",
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    result = iterator.chunk_parser(chunk)
+
+    assert result.service_tier == "FLEX"
+
+
+def test_vertex_ai_service_tier_non_streaming():
+    """Test serviceTier is preserved in model_response for non-streaming."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    completion_response = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 50,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 150,
+        },
+        "serviceTier": "FLEX",
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-pro",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.service_tier == "FLEX"
+
+
 def test_vertex_ai_traffic_type_surfaced_in_responses_api():
     """Test trafficType is surfaced as provider_specific_fields in ResponsesAPIResponse."""
     from litellm.responses.litellm_completion_transformation.transformation import (
@@ -3607,6 +3665,26 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert "googleSearch" in optional_params["tools"][0], "Tool should be googleSearch"
     assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
     assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
+
+
+def test_vertex_ai_service_tier_in_map_openai_params():
+    """Test that service_tier is correctly mapped to optional_params."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    optional_params = {}
+    non_default_params = {"service_tier": "FLEX"}
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-pro",
+        drop_params=True,
+    )
+
+    assert result["service_tier"] == "FLEX"
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
