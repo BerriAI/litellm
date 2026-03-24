@@ -89,6 +89,14 @@ def _nova_canvas_task_body(
             "taskType": "IMAGE_VARIATION",
             "imageVariationParams": var_params_explicit,
         }
+    # Explicit taskType must be INPAINTING or omitted from here on; anything else is invalid.
+    if task_type is not None and str(task_type).strip() != "":
+        if task_type != "INPAINTING":
+            raise ValueError(
+                f"Unsupported Amazon Nova Canvas taskType: {task_type!r}. "
+                "Use BACKGROUND_REMOVAL, OUTPAINTING, IMAGE_VARIATION, INPAINTING, "
+                "or omit taskType for automatic routing (mask → INPAINTING, else IMAGE_VARIATION)."
+            )
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
         in_params: Dict[str, Any] = {"image": image_b64, "text": text}
         if mask_prompt is not None:
@@ -166,6 +174,18 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
         suffix = model.split("/")[-1]
         _add(suffix)
         _add(f"bedrock/{suffix}")
+
+    # Cross-region inference ids (e.g. us.amazon.nova-canvas-v1:0) share pricing with
+    # the base model id (amazon.nova-canvas-v1:0) in model_cost.
+    try:
+        from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+        base_model = BedrockModelInfo.get_base_model(model)
+        if base_model and base_model != model:
+            _add(base_model)
+            _add(f"bedrock/{base_model}")
+    except Exception:
+        pass
 
     try:
         potential = _get_potential_model_names(model=model, custom_llm_provider=None)
@@ -422,10 +442,11 @@ def get_bedrock_image_edit_config_for_model(
     """
     Return the correct Bedrock image-edit config for the model id.
 
-    Same routing and errors as ``BedrockImageEdit.get_config_class`` (handler path):
-    Stability edit models and Nova Canvas only; anything else raises ``ValueError``
-    so ProviderConfigManager / SDK callers do not silently use Stability config.
+    Same routing as ``BedrockImageEdit.get_config_class``: Stability edit models,
+    Nova Canvas when marked in model_cost, otherwise **Stability config** (legacy
+    compatibility; a warning is logged — prefer explicit model map entries).
     """
+    from litellm._logging import verbose_logger
     from litellm.llms.bedrock.image_edit.stability_transformation import (
         BedrockStabilityImageEditConfig,
     )
@@ -434,4 +455,11 @@ def get_bedrock_image_edit_config_for_model(
         return BedrockStabilityImageEditConfig()
     if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
         return BedrockAmazonNovaCanvasImageEditConfig()
-    raise ValueError(f"Unsupported model for bedrock image edit: {model}")
+    verbose_logger.warning(
+        "Bedrock image edit: model %r is not a known Stability edit model and is not "
+        "marked for Nova Canvas; using Stability image-edit config for compatibility. "
+        "Add supports_nova_canvas_image_edit or use a stability.* edit model id if this "
+        "is incorrect.",
+        model,
+    )
+    return BedrockStabilityImageEditConfig()

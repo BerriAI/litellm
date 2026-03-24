@@ -22,6 +22,12 @@ def test_get_config_class_nova_canvas():
     assert cls is BedrockAmazonNovaCanvasImageEditConfig
 
 
+def test_get_config_class_us_cross_region_nova_canvas():
+    """Cross-region inference id us.amazon.nova-canvas-v1:0 maps via model_prices."""
+    cls = BedrockImageEdit.get_config_class("us.amazon.nova-canvas-v1:0")
+    assert cls is BedrockAmazonNovaCanvasImageEditConfig
+
+
 def test_get_config_class_stability_unchanged():
     """Stability edit models still use stability config."""
     cls = BedrockImageEdit.get_config_class(
@@ -44,10 +50,10 @@ def test_provider_config_router_returns_stability_for_sd():
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
-def test_get_bedrock_image_edit_config_unsupported_model_raises():
-    """Unknown Bedrock model must raise (same as BedrockImageEdit.get_config_class)."""
-    with pytest.raises(ValueError, match="Unsupported model for bedrock image edit"):
-        get_bedrock_image_edit_config_for_model("amazon.titan-image-generator-v1")
+def test_get_bedrock_image_edit_config_unknown_model_falls_back_to_stability():
+    """Unknown Bedrock image-edit models keep legacy Stability adapter (with warning)."""
+    cfg = get_bedrock_image_edit_config_for_model("amazon.titan-image-generator-v1")
+    assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
 def test_get_bedrock_helper_matches_handler_get_config_class():
@@ -61,13 +67,14 @@ def test_get_bedrock_helper_matches_handler_get_config_class():
         assert isinstance(helper_cfg, handler_cls)
 
 
-def test_handler_and_helper_raise_same_error_for_unknown_bedrock_image_model():
-    """Unsupported models fail the same way on handler vs ProviderConfigManager helper paths."""
+def test_handler_and_helper_agree_for_unknown_bedrock_image_model():
+    """Handler and helper both fall back to Stability for unrecognized Bedrock models."""
     model = "amazon.titan-image-generator-v1"
-    with pytest.raises(ValueError, match="Unsupported model for bedrock image edit"):
-        BedrockImageEdit.get_config_class(model)
-    with pytest.raises(ValueError, match="Unsupported model for bedrock image edit"):
-        get_bedrock_image_edit_config_for_model(model)
+    assert BedrockImageEdit.get_config_class(model) is BedrockStabilityImageEditConfig
+    assert isinstance(
+        get_bedrock_image_edit_config_for_model(model),
+        BedrockStabilityImageEditConfig,
+    )
 
 
 def test_provider_config_manager_bedrock_nova_canvas():
@@ -92,15 +99,15 @@ def test_provider_config_manager_bedrock_stability_inpaint():
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
-def test_provider_config_manager_bedrock_unsupported_raises():
-    """Provider path must not silently fall back to Stability for unrelated models."""
+def test_provider_config_manager_bedrock_unknown_falls_back_to_stability():
+    """Provider path keeps legacy Stability adapter for unrecognized Bedrock models."""
     from litellm.utils import ProviderConfigManager
 
-    with pytest.raises(ValueError, match="Unsupported model for bedrock image edit"):
-        ProviderConfigManager.get_provider_image_edit_config(
-            "amazon.titan-image-generator-v1",
-            litellm.LlmProviders.BEDROCK,
-        )
+    cfg = ProviderConfigManager.get_provider_image_edit_config(
+        "amazon.titan-image-generator-v1",
+        litellm.LlmProviders.BEDROCK,
+    )
+    assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
 def test_provider_config_manager_bedrock_dispatches_to_nova_transform_outpainting():
@@ -320,6 +327,21 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
         )
 
 
+def test_transform_request_unknown_task_type_raises():
+    """Unknown taskType must not silently map to IMAGE_VARIATION or INPAINTING."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"img")
+    with pytest.raises(ValueError, match="Unsupported Amazon Nova Canvas taskType"):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="x",
+            image=img,
+            image_edit_optional_request_params={"taskType": "TEXT_IMAGE"},
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
 def test_transform_request_background_removal():
     """taskType BACKGROUND_REMOVAL builds minimal body."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
@@ -390,7 +412,10 @@ def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
             "supports_nova_canvas_image_edit": True,
         },
     )
-    assert BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id) is True
+    assert (
+        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(fake_id)
+        is True
+    )
 
     monkeypatch.setitem(
         litellm.model_cost,

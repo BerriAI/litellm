@@ -62,7 +62,18 @@ class BedrockImageEdit(BaseAWSLLM):
             model
         ):
             return BedrockAmazonNovaCanvasImageEditConfig
-        raise ValueError(f"Unsupported model for bedrock image edit: {model}")
+        # Legacy: unknown Bedrock image-edit model ids used the Stability adapter.
+        # Prefer explicit stability.* or Nova Canvas entries in model_prices.
+        from litellm._logging import verbose_logger
+
+        verbose_logger.warning(
+            "Bedrock image edit: model %r is not a known Stability edit model and is not "
+            "marked for Nova Canvas; using Stability image-edit config for compatibility. "
+            "Add supports_nova_canvas_image_edit or use a stability.* edit model id if this "
+            "is incorrect.",
+            model,
+        )
+        return BedrockStabilityImageEditConfig
 
     def image_edit(
         self,
