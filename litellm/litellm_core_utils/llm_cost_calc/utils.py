@@ -677,7 +677,9 @@ def generic_cost_per_token(  # noqa: PLR0915
     # without being included in the per-token detail fields. When any of these are
     # active, a gap between accounted_tokens and prompt_tokens is expected and must
     # NOT be filled:
-    #   - character_count / video_length_seconds: replace per-token billing entirely
+    #   - character_count / video_length_seconds: the token gap between accounted_tokens
+    #     and prompt_tokens is already covered by character/video-second billing; filling
+    #     the gap into text_tokens would double-bill that content at the text rate.
     #   - image_count: additive flat-rate billing; the image-URL tokens are already
     #     reflected in prompt_tokens and billed separately via input_cost_per_image
     has_non_token_alternative_billing = (
