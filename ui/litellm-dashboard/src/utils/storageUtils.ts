@@ -14,11 +14,13 @@
  */
 function utf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
-  let binary = "";
-  for (const b of bytes) {
-    binary += String.fromCharCode(b);
+  // Use chunked String.fromCharCode to avoid O(n²) string concatenation
+  const chunks: string[] = [];
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
   }
-  return btoa(binary);
+  return btoa(chunks.join(""));
 }
 
 /**

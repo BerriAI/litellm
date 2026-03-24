@@ -21,9 +21,11 @@ export const sanitizeImageSrc = (url: string | undefined): string => {
     ) {
       return parsed.href;
     }
-    // Restrict data: URIs to image and PDF MIME types only
+    // Restrict data: URIs to image and PDF MIME types only.
+    // Split on both ';' and ',' to handle both `data:type;base64,...`
+    // and `data:type,...` (non-base64 inline) formats.
     if (proto === "data:") {
-      const mime = parsed.pathname.split(";")[0].toLowerCase();
+      const mime = parsed.pathname.split(/[;,]/)[0].toLowerCase();
       if (mime.startsWith("image/") || mime === "application/pdf") {
         return parsed.href;
       }
