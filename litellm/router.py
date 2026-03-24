@@ -7191,7 +7191,8 @@ class Router:
             key = (team_id, team_public_model_name)
             if key not in self.team_model_to_deployment_indices:
                 self.team_model_to_deployment_indices[key] = []
-            self.team_model_to_deployment_indices[key].append(idx)
+            if idx not in self.team_model_to_deployment_indices[key]:
+                self.team_model_to_deployment_indices[key].append(idx)
 
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
@@ -8217,6 +8218,8 @@ class Router:
             if model.get("model_info", {}).get("team_id") == team_id:
                 return team_model_name
 
+        # No team-scoped deployment found; wildcard/pattern routes are
+        # handled downstream by the pattern_router in _common_checks_available_deployment.
         return None
 
     def should_include_deployment(
