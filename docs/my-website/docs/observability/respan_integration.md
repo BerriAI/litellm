@@ -47,12 +47,12 @@ Register the Respan callback to log all completions automatically. Requests go d
 <TabItem value="sdk" label="SDK">
 
 ```python
-import litellm
 import os
+import litellm
 from respan_exporter_litellm import RespanLiteLLMCallback
 
-os.environ["RESPAN_API_KEY"] = "your-respan-api-key"  # from https://platform.respan.ai
-os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+os.environ["RESPAN_API_KEY"] = ""  # from https://platform.respan.ai
+os.environ["OPENAI_API_KEY"] = ""
 
 # Set Respan as a callback
 litellm.callbacks = [RespanLiteLLMCallback()]
@@ -81,7 +81,7 @@ litellm_settings:
   callbacks: ["custom_callbacks.respan_handler"]
 
 environment_variables:
-  RESPAN_API_KEY: "your-respan-api-key"
+  RESPAN_API_KEY: ""
 ```
 
 2. Create the callback file (`custom_callbacks.py`):
@@ -143,6 +143,9 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/RESPAN_API_KEY
       api_base: https://api.respan.ai/api
+
+environment_variables:
+  RESPAN_API_KEY: ""
 ```
 
 ```bash
@@ -160,8 +163,12 @@ litellm --config config.yaml
 Pass Respan-specific parameters via `metadata.respan_params`:
 
 ```python
+import os
 import litellm
 from respan_exporter_litellm import RespanLiteLLMCallback
+
+os.environ["RESPAN_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 litellm.callbacks = [RespanLiteLLMCallback()]
 
@@ -196,6 +203,7 @@ response = litellm.completion(
         "customer_identifier": "user-123",
         "metadata": {"session_id": "abc123"},
         "thread_identifier": "conversation_456",
+        "fallback_models": ["gpt-4o", "claude-sonnet-4-20250514"],
     },
 )
 ```
@@ -209,8 +217,12 @@ The callback automatically handles async completions:
 
 ```python
 import asyncio
+import os
 import litellm
 from respan_exporter_litellm import RespanLiteLLMCallback
+
+os.environ["RESPAN_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 litellm.callbacks = [RespanLiteLLMCallback()]
 
@@ -231,7 +243,7 @@ Uses OpenTelemetry-based auto-instrumentation for richer trace hierarchies with 
 ### Installation
 
 ```shell
-pip install respan-ai openinference-instrumentation-litellm litellm python-dotenv
+pip install respan-ai openinference-instrumentation-litellm litellm
 ```
 
 ### Tracing Mode
@@ -244,9 +256,9 @@ import litellm
 from respan import Respan
 from openinference.instrumentation.litellm import LiteLLMInstrumentor
 
-# Set environment variables (or use a .env file with load_dotenv())
-os.environ["RESPAN_API_KEY"] = "your-respan-api-key"
-os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+# Set environment variables (or use a .env file with python-dotenv)
+os.environ["RESPAN_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 respan = Respan(instrumentations=[LiteLLMInstrumentor()])
 
@@ -265,17 +277,16 @@ Combine gateway routing with auto-instrumented tracing:
 
 ```python
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
 import litellm
 from respan import Respan
 from openinference.instrumentation.litellm import LiteLLMInstrumentor
 
+os.environ["RESPAN_API_KEY"] = ""
+
 respan = Respan(instrumentations=[LiteLLMInstrumentor()])
 
 response = litellm.completion(
-    api_key=os.getenv("RESPAN_API_KEY"),
+    api_key=os.environ["RESPAN_API_KEY"],
     api_base="https://api.respan.ai/api",
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Say hello in three languages."}],
@@ -354,6 +365,8 @@ respan.flush()
 
 ## Respan Parameters Reference
 
+Parameters can be passed via `extra_body` (gateway mode) or `metadata.respan_params` (logging mode).
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `customer_identifier` | `str` | Identifies the end user for per-user analytics and budget controls |
@@ -362,7 +375,7 @@ respan.flush()
 | `workflow_name` | `str` | Name for the workflow span (logging mode) |
 | `span_name` | `str` | Name for the individual span (logging mode) |
 | `disable_log` | `bool` | Set to `True` to disable logging for sensitive data |
-| `fallback_models` | `list` | Models to fall back to if primary fails (gateway mode) |
+| `fallback_models` | `list` | Models to fall back to if primary fails (gateway mode), e.g. `["gpt-4o", "claude-sonnet-4-20250514"]` |
 
 ## Environment Variables
 
