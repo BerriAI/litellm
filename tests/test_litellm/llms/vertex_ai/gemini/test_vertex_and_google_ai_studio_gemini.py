@@ -687,14 +687,11 @@ def test_vertex_ai_empty_content_with_stop_finish_reason():
 
     v = VertexGeminiConfig()
 
-    # Simulate the raw API response that has finishReason=STOP but no parts
+    # Simulate the raw API response that has finishReason=STOP but no content
     raw_response = {
         "candidates": [
             {
-                "content": {
-                    "role": "model"
-                    # Note: no "parts" key - this is the bug condition
-                },
+                # No "content" field at all - this triggers the fallback path
                 "finishReason": "STOP",
                 "index": 0,
             }
@@ -717,10 +714,6 @@ def test_vertex_ai_empty_content_with_stop_finish_reason():
     # Transform the response
     model_response = ModelResponse()
     model_response._hidden_params = {}
-
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
 
     result = v._transform_google_generate_content_to_openai_model_response(
         completion_response=GenerateContentResponseBody(**raw_response),

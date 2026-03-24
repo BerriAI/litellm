@@ -2383,16 +2383,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if not model_response.choices and _candidates:
                 for candidate in _candidates:
                     finish_reason_str = candidate.get("finishReason")
-                    choice = litellm.Choices(
-                        finish_reason=VertexGeminiConfig._check_finish_reason(
-                            None, finish_reason_str
-                        ),
-                        index=candidate.get("index", 0),
-                        message={"role": "assistant", "content": None},
-                        logprobs=None,
-                        enhancements=None,
-                    )
-                    model_response.choices.append(choice)
+                    if finish_reason_str is not None:
+                        choice = litellm.Choices(
+                            finish_reason=VertexGeminiConfig._check_finish_reason(
+                                None, finish_reason_str
+                            ),
+                            index=candidate.get("index", 0),
+                            message={"role": "assistant", "content": None},
+                            logprobs=None,
+                            enhancements=None,
+                        )
+                        model_response.choices.append(choice)
 
             usage = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response
