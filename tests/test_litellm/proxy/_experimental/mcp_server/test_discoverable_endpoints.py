@@ -263,10 +263,14 @@ async def test_token_endpoint_forwards_code_verifier():
     )
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
+    # Mock the async httpx client with AsyncMock for async methods
+    from unittest.mock import AsyncMock
+
     # Mock request
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm-proxy.example.com/"
     mock_request.headers = {}
+    mock_request.body = AsyncMock(return_value=b"")
 
     # Mock httpx client response
     mock_response = MagicMock()
@@ -277,9 +281,6 @@ async def test_token_endpoint_forwards_code_verifier():
         "scope": "openid email https://www.googleapis.com/auth/drive",
     }
     mock_response.raise_for_status = MagicMock()
-
-    # Mock the async httpx client with AsyncMock for async methods
-    from unittest.mock import AsyncMock
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
@@ -609,6 +610,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://litellm-proxy.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
+    mock_request.body = AsyncMock(return_value=b"")
 
     # Mock httpx client response
     mock_response = MagicMock()
@@ -910,6 +912,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": "proxy.example.com",
     }
+    mock_request.body = AsyncMock(return_value=b"")
 
     # Mock httpx client response
     mock_response = MagicMock()
@@ -1370,6 +1373,7 @@ async def test_token_root_resolves_single_oauth2_server():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
+    mock_request.body = AsyncMock(return_value=b"")
 
     mock_response = MagicMock()
     mock_response.json.return_value = {
@@ -1708,6 +1712,7 @@ async def test_token_endpoint_refresh_token_grant():
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
+    mock_request.body = AsyncMock(return_value=b"")
 
     # Mock httpx client response with new tokens
     mock_response = MagicMock()

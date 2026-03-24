@@ -2,7 +2,7 @@ import json
 from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm.llms.custom_httpx.http_handler import (
@@ -435,15 +435,17 @@ async def token_endpoint(
         parsed = parse_qs(raw_body.decode() if raw_body else "")
         form_data = {key: values[0] if values else None for key, values in parsed.items()}
 
-    grant_type = form_data.get("grant_type")
-    client_id = form_data.get("client_id")
+    grant_type = form_data.get("grant_type") or grant_type
+    client_id = form_data.get("client_id") or client_id
     if not grant_type or not client_id:
         raise HTTPException(status_code=400, detail="Missing required form fields")
 
-    code = form_data.get("code")
-    redirect_uri = form_data.get("redirect_uri")
-    client_secret = form_data.get("client_secret")
-    code_verifier = form_data.get("code_verifier")
+    code = form_data.get("code") or code
+    redirect_uri = form_data.get("redirect_uri") or redirect_uri
+    client_secret = form_data.get("client_secret") or client_secret
+    code_verifier = form_data.get("code_verifier") or code_verifier
+    refresh_token = form_data.get("refresh_token") or refresh_token
+    scope = form_data.get("scope") or scope
 
     lookup_name = mcp_server_name or client_id
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
