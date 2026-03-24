@@ -182,14 +182,14 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         sanitized: List[AllMessageValues] = []
         for message in data.get("messages", []):
             if hasattr(message, "model_dump"):
-                message = message.model_dump(exclude_none=True)
+                message = message.model_dump(exclude_unset=True)
             if isinstance(message, dict):
                 role = message.get("role")
                 if role == "assistant" and message.get("tool_calls"):
                     cleaned_tool_calls = [
                         {k: v for k, v in tc.items() if k != "index"}
                         if isinstance(tc, dict)
-                        else {k: v for k, v in tc.model_dump(exclude_none=True).items() if k != "index"}
+                        else {k: v for k, v in tc.model_dump(exclude_unset=True).items() if k != "index"}
                         for tc in message["tool_calls"]
                     ]
                     message = {**message, "tool_calls": cleaned_tool_calls}

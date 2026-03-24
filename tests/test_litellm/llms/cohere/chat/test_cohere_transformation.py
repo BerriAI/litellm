@@ -8,6 +8,7 @@ sys.path.insert(
 
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class TestCohereTransform:
@@ -59,7 +60,7 @@ class TestCohereV2Transform:
 
     def _make_transform_request(self, messages):
         with patch.object(
-            self.config.__class__.__bases__[0],
+            OpenAIGPTConfig,
             "transform_request",
             return_value={"model": self.model, "messages": messages},
         ):
@@ -109,6 +110,29 @@ class TestCohereV2Transform:
         assert "name" not in tool_msg
         assert tool_msg["tool_call_id"] == "call_abc"
         assert tool_msg["content"] == "12:00"
+
+    def test_strips_index_from_pydantic_tool_calls(self):
+        """Pydantic model tool call objects also have index stripped."""
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tool_call_obj = ChatCompletionMessageToolCall(
+            index=0,
+            id="call_abc",
+            type="function",
+            function=Function(name="get_time", arguments="{}"),
+        )
+        messages = [
+            {"role": "user", "content": "What time is it?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call_obj],
+            },
+        ]
+        result = self._make_transform_request(messages)
+        assistant_msg = result["messages"][1]
+        assert "index" not in assistant_msg["tool_calls"][0]
+        assert assistant_msg["tool_calls"][0]["id"] == "call_abc"
 
     def test_preserves_messages_without_offending_fields(self):
         """Messages that don't have index or name are passed through unchanged."""
