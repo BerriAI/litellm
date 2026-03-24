@@ -815,7 +815,7 @@ if MCP_AVAILABLE:
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
-                status_code=400,
+                status_code=getattr(e, "status_code", 400),
                 detail={
                     "error": "blocked_pii_entity",
                     "message": str(e),
@@ -826,7 +826,7 @@ if MCP_AVAILABLE:
         except GuardrailRaisedException as e:
             verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
             raise HTTPException(
-                status_code=400,
+                status_code=getattr(e, "status_code", 400),
                 detail={
                     "error": "guardrail_violation",
                     "message": str(e),
