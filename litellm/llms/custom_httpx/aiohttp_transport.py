@@ -59,6 +59,13 @@ except ImportError:
 def map_aiohttp_exceptions() -> typing.Iterator[None]:
     try:
         yield
+    except asyncio.CancelledError:
+        # CancelledError is a BaseException in Python 3.8+; it must propagate
+        # untouched so that asyncio task-cancellation works correctly.
+        # It would not be caught by `except Exception` below, but being
+        # explicit here prevents future refactors from accidentally swallowing
+        # it. See issue #22100.
+        raise
     except Exception as exc:
         mapped_exc = None
 
@@ -112,6 +119,10 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # Handle transfer encoding errors gracefully
             verbose_logger.debug(f"Transfer encoding error, but continuing: {e}")
             return
+        except asyncio.CancelledError:
+            # Re-raise CancelledError so that task-cancellation is not swallowed
+            # mid-stream. See issue #22100.
+            raise
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
@@ -312,6 +323,12 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     sni_hostname=sni_hostname,
                     ssl_verify=ssl_config,
                 )
+        except asyncio.CancelledError:
+            # Propagate task cancellation without mapping or retrying.
+            # CancelledError is a BaseException in Python 3.8+ and must not be
+            # silently dropped or converted to an httpx exception. See issue #22100.
+            verbose_logger.debug("aiohttp request cancelled via asyncio.CancelledError")
+            raise
         except RuntimeError as e:
             # Handle the case where session was closed between our check and actual use
             if "Session is closed" in str(e):
