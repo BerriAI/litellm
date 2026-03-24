@@ -53,7 +53,7 @@ pip install litellm==1.82.6.rc.1
 
 ## New Models / Updated Models
 
-#### New Model Support (11 new models)
+#### New Model Support (12 new models)
 
 | Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
@@ -62,6 +62,7 @@ pip install litellm==1.82.6.rc.1
 | Azure OpenAI | `azure/gpt-5.4-mini` | 1.05M | $0.75 | $4.50 | chat, vision, tools, reasoning |
 | Azure OpenAI | `azure/gpt-5.4-nano` | 1.05M | $0.20 | $1.25 | chat, vision, tools, reasoning |
 | OpenAI | `gpt-4-0314` | 8K | $30.00 | $60.00 | chat (restored; deprecation 2026-03-26) |
+| xAI | `xai/grok-4.20-beta-0309-reasoning` | 2M | $2.00 | $6.00 | chat, vision, tools, web search, reasoning |
 | xAI | `xai/grok-4.20-beta-0309-non-reasoning` | 2M | $2.00 | $6.00 | chat, vision, tools, web search |
 | xAI | `xai/grok-4.20-multi-agent-beta-0309` | 2M | - | - | chat, vision, tools, web search |
 | Volcengine | `volcengine/doubao-seed-2-0-pro-260215` | 256K | tiered | tiered | chat, vision, reasoning |
@@ -72,8 +73,8 @@ pip install litellm==1.82.6.rc.1
 #### Updated Models
 
 - **[OpenAI](../../docs/providers/openai)**
-    - Add `supports_minimal_reasoning_effort` to `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-chat-latest`, and related Azure variants
-    - Add `supports_xhigh_reasoning_effort` to select `gpt-5.4` and `gpt-5.3` variants
+    - Add `supports_minimal_reasoning_effort` to entire `gpt-5.x` model series (gpt-5.1 through gpt-5.4, including codex, pro, nano, and mini variants) and `azure/gpt-5.1-2025-11-13`
+    - Add `supports_minimal_reasoning_effort` to `xai/grok-beta`
 
 - **[Azure AI](../../docs/providers/azure_ai)**
     - Add Cohere Rerank 4.0 models (`azure_ai/cohere-rerank-v4`, `azure_ai/cohere-rerank-v4-multilingual`) to model cost map
@@ -99,7 +100,7 @@ pip install litellm==1.82.6.rc.1
     - Support `cache_control_injection_points` for `tool_config` location in Bedrock requests - [PR #24076](https://github.com/BerriAI/litellm/pull/24076)
     - Support batch cancel via Vertex AI / Bedrock batch API - [PR #23957](https://github.com/BerriAI/litellm/pull/23957)
 
-### Bug Fixes
+#### Bugs
 
 - **[Anthropic](../../docs/providers/anthropic)**
     - Align `translate_thinking_for_model` with default reasoning summary injection — fixes cases where summary was injected inconsistently - [PR #22909](https://github.com/BerriAI/litellm/pull/22909)
@@ -180,6 +181,9 @@ pip install litellm==1.82.6.rc.1
 - **Virtual Keys**
     - Disable custom virtual key values via UI setting — prevent users from specifying their own key strings - [PR #23812](https://github.com/BerriAI/litellm/pull/23812)
 
+- **Setup Wizard**
+    - Interactive `litellm --setup` wizard for configuring providers, API keys, and proxy settings from the CLI - [PR #23644](https://github.com/BerriAI/litellm/pull/23644)
+
 #### Bugs
 
 - Fix empty filter results showing stale data in UI Logs view - [PR #23792](https://github.com/BerriAI/litellm/pull/23792)
@@ -218,6 +222,9 @@ pip install litellm==1.82.6.rc.1
 
 ### Guardrails
 
+- **[Akto](../../docs/proxy/guardrails/akto)** — New Akto guardrail integration for API security testing and threat detection - [PR #23250](https://github.com/BerriAI/litellm/pull/23250)
+- **MCP JWT Signer** — Built-in guardrail for zero-trust MCP authentication — automatically signs outbound MCP requests with JWT tokens - [PR #23897](https://github.com/BerriAI/litellm/pull/23897)
+- **`pre_mcp_call` header mutation** — `pre_mcp_call` guardrail hooks can now mutate outbound MCP request headers - [PR #23889](https://github.com/BerriAI/litellm/pull/23889)
 - **Fix model-level guardrails not executing for non-streaming post_call** — guardrails configured at the model level were silently skipped on synchronous (non-streaming) responses - [PR #23774](https://github.com/BerriAI/litellm/pull/23774)
 - **Defer logging until post-call guardrails complete** — logging callbacks were firing before guardrail post_call hooks finished, causing incomplete log entries - [PR #24135](https://github.com/BerriAI/litellm/pull/24135)
 
@@ -264,6 +271,12 @@ No major secret manager changes in this release.
 
 ---
 
+## Documentation Updates
+
+- No major documentation-only changes in this release.
+
+---
+
 ## New Contributors
 
 * @Chesars made their first contribution in [PR #21441](https://github.com/BerriAI/litellm/pull/21441)
@@ -288,10 +301,10 @@ No major secret manager changes in this release.
 ## Diff Summary
 
 ## 03/23/2026
-* New Models / Updated Models: 11 new
+* New Models / Updated Models: 12 new
 * LLM API Endpoints: 6
-* Management Endpoints / UI: 16
-* AI Integrations: 6
+* Management Endpoints / UI: 17
+* Logging / Guardrail / Prompt Management Integrations: 9
 * MCP Gateway: 2
 * Spend Tracking, Budgets and Rate Limiting: 2
 * Performance / Loadbalancing / Reliability improvements: 4
