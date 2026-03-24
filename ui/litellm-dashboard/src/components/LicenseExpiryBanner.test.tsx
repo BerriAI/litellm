@@ -147,8 +147,9 @@ describe("LicenseExpiryBanner", () => {
   });
 
   it("should handle expiration_date with a full ISO timestamp (not just date-only)", async () => {
-    // Backend might return "2026-03-22T15:00:00Z" instead of "2026-03-22"
-    // The component should strip the time part and still render correctly.
+    // Backend might return "2026-03-22T15:00:00Z" instead of "2026-03-22".
+    // The component strips the time part ("2026-03-22") and appends "T23:59:59Z",
+    // so the result is the same 8-day countdown as the date-only input.
     mockGetLicenseInfo.mockResolvedValue(makeLicense("2026-03-22T15:00:00Z"));
 
     render(<LicenseExpiryBanner />);
@@ -173,14 +174,17 @@ describe("LicenseExpiryBanner", () => {
     });
   });
 
-  it("should show a warning when getLicenseInfo API call fails", async () => {
+  it("should not show error banner on first fetch failure for non-enterprise users", async () => {
     mockGetLicenseInfo.mockRejectedValue(new Error("Network error"));
 
-    render(<LicenseExpiryBanner />);
-
-    expect(
-      await screen.findByText("Unable to verify enterprise license")
-    ).toBeInTheDocument();
+    const { container } = render(<LicenseExpiryBanner />);
+    await waitFor(() => {
+      expect(mockGetLicenseInfo).toHaveBeenCalled();
+    });
+    // Non-enterprise users (no prior license info) should not see the error banner
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
   });
 
   it("should render nothing when expiration_date is unparseable", async () => {

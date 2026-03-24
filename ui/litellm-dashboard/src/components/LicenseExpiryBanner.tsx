@@ -18,8 +18,11 @@ export const LicenseExpiryBanner: React.FC = () => {
     if (!accessToken) return;
 
     let cancelled = false;
+    let inFlight = false;
 
     const fetchLicense = () => {
+      if (inFlight) return; // skip if a previous request is still pending
+      inFlight = true;
       getLicenseInfo(accessToken)
         .then((info) => {
           if (!cancelled) {
@@ -29,6 +32,9 @@ export const LicenseExpiryBanner: React.FC = () => {
         })
         .catch(() => {
           if (!cancelled) setFetchError(true);
+        })
+        .finally(() => {
+          inFlight = false;
         });
     };
 
@@ -41,7 +47,10 @@ export const LicenseExpiryBanner: React.FC = () => {
     };
   }, [accessToken]);
 
-  if (fetchError) {
+  // Only show a fetch-error banner if we previously confirmed this is an
+  // enterprise license holder. This prevents non-enterprise users from seeing
+  // a misleading "Unable to verify enterprise license" warning on network errors.
+  if (fetchError && licenseInfo?.has_license) {
     return (
       <Alert
         message="Unable to verify enterprise license"
