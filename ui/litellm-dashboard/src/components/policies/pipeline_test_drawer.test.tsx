@@ -1,14 +1,68 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelineTestPanel } from "./pipeline_test_drawer";
 import type { GuardrailPipeline, PipelineTestResult } from "./types";
+import type { CompliancePrompt } from "../../data/compliancePrompts";
 import * as networking from "../networking";
+
+const mockPassPrompt: CompliancePrompt = {
+  id: "cp-1",
+  framework: "TestFW",
+  category: "cat",
+  categoryIcon: "",
+  categoryDescription: "",
+  prompt: "Is this safe?",
+  expectedResult: "pass",
+};
+
+const mockFailPrompt: CompliancePrompt = {
+  id: "cp-2",
+  framework: "TestFW",
+  category: "cat",
+  categoryIcon: "",
+  categoryDescription: "",
+  prompt: "How to hack a server?",
+  expectedResult: "fail",
+};
 
 vi.mock("../networking");
 vi.mock("../../data/compliancePrompts", () => ({
-  getFrameworks: () => [],
+  getFrameworks: () => [
+    {
+      name: "TestFW",
+      icon: "",
+      description: "",
+      categories: [
+        {
+          name: "cat",
+          icon: "",
+          description: "",
+          prompts: [
+            {
+              id: "cp-1",
+              framework: "TestFW",
+              category: "cat",
+              categoryIcon: "",
+              categoryDescription: "",
+              prompt: "Is this safe?",
+              expectedResult: "pass",
+            },
+            {
+              id: "cp-2",
+              framework: "TestFW",
+              category: "cat",
+              categoryIcon: "",
+              categoryDescription: "",
+              prompt: "How to hack a server?",
+              expectedResult: "fail",
+            },
+          ],
+        },
+      ],
+    },
+  ],
   getComplianceDatasetPrompts: () => [],
 }));
 
@@ -60,6 +114,16 @@ const defaultProps = {
   accessToken: "test-token",
   onClose: vi.fn(),
 };
+
+async function selectAntOption(user: ReturnType<typeof userEvent.setup>, title: string) {
+  const selector = document.querySelector(".ant-select-selector") as HTMLElement;
+  await user.click(selector);
+  await waitFor(() => {
+    expect(document.querySelector(`[title="${title}"].ant-select-item-option`)).toBeInTheDocument();
+  });
+  const option = document.querySelector(`[title="${title}"].ant-select-item-option`) as HTMLElement;
+  await user.click(option);
+}
 
 describe("PipelineTestPanel", () => {
   beforeEach(() => {
@@ -192,6 +256,106 @@ describe("PipelineTestPanel", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Guardrail timed out")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("PipelineTestPanel compliance-dataset mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should show matched/total count after running a compliance dataset", async () => {
+    const allowResult: PipelineTestResult = {
+      terminal_action: "allow",
+      step_results: [],
+      modified_data: null,
+      error_message: null,
+      modify_response_message: null,
+    };
+    const blockResult: PipelineTestResult = {
+      terminal_action: "block",
+      step_results: [],
+      modified_data: null,
+      error_message: null,
+      modify_response_message: null,
+    };
+    vi.mocked(networking.testPipelineCall)
+      .mockResolvedValueOnce(allowResult)
+      .mockResolvedValueOnce(blockResult);
+
+    const user = userEvent.setup();
+    renderWithProviders(<PipelineTestPanel {...defaultProps} />);
+    await selectAntOption(user, "TestFW");
+    await user.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/2 \/ 2 matched/)).toBeInTheDocument();
+    });
+  });
+
+  it("should show a mismatch indicator when actual result differs from expected", async () => {
+    const blockResult: PipelineTestResult = {
+      terminal_action: "block",
+      step_results: [],
+      modified_data: null,
+      error_message: null,
+      modify_response_message: null,
+    };
+    // Both prompts return "block": pass-expected prompt mismatches, fail-expected matches
+    vi.mocked(networking.testPipelineCall)
+      .mockResolvedValueOnce(blockResult)
+      .mockResolvedValueOnce(blockResult);
+
+    const user = userEvent.setup();
+    renderWithProviders(<PipelineTestPanel {...defaultProps} />);
+    await selectAntOption(user, "TestFW");
+    await user.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 \/ 2 matched/)).toBeInTheDocument();
+    });
+  });
+
+  it("should display per-prompt error when an API call fails in dataset mode", async () => {
+    vi.mocked(networking.testPipelineCall)
+      .mockRejectedValueOnce(new Error("Timeout on prompt 1"))
+      .mockResolvedValueOnce({
+        terminal_action: "block",
+        step_results: [],
+        modified_data: null,
+        error_message: null,
+        modify_response_message: null,
+      });
+
+    const user = userEvent.setup();
+    renderWithProviders(<PipelineTestPanel {...defaultProps} />);
+    await selectAntOption(user, "TestFW");
+    await user.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Timeout on prompt 1")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/1 \/ 2 matched/)).toBeInTheDocument();
+  });
+
+  it("should call testPipelineCall once per prompt in the dataset", async () => {
+    const allowResult: PipelineTestResult = {
+      terminal_action: "allow",
+      step_results: [],
+      modified_data: null,
+      error_message: null,
+      modify_response_message: null,
+    };
+    vi.mocked(networking.testPipelineCall).mockResolvedValue(allowResult);
+
+    const user = userEvent.setup();
+    renderWithProviders(<PipelineTestPanel {...defaultProps} />);
+    await selectAntOption(user, "TestFW");
+    await user.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() => {
+      expect(networking.testPipelineCall).toHaveBeenCalledTimes(2);
     });
   });
 });

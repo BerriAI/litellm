@@ -107,25 +107,28 @@ export const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
     }
 
     const entries: ComplianceRunEntry[] = [];
-    for (const prompt of promptsForSource) {
-      try {
-        const data = await testPipelineCall(accessToken, pipeline, [
-          { role: "user", content: prompt.prompt },
-        ]);
-        const matched = complianceMatchExpected(prompt.expectedResult, data.terminal_action);
-        entries.push({ prompt, result: data, matched });
-      } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        entries.push({
-          prompt,
-          result: null,
-          error: errMsg,
-          matched: false,
-        });
+    try {
+      for (const prompt of promptsForSource) {
+        try {
+          const data = await testPipelineCall(accessToken, pipeline, [
+            { role: "user", content: prompt.prompt },
+          ]);
+          const matched = complianceMatchExpected(prompt.expectedResult, data.terminal_action);
+          entries.push({ prompt, result: data, matched });
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          entries.push({
+            prompt,
+            result: null,
+            error: errMsg,
+            matched: false,
+          });
+        }
       }
+      setComplianceResults(entries);
+    } finally {
+      setIsRunning(false);
     }
-    setComplianceResults(entries);
-    setIsRunning(false);
   };
 
   return (
