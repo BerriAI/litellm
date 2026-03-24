@@ -2044,7 +2044,8 @@ def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_mod
     assert test_data.get("model") == expected_model
 
 
-def test_team_alias_stale_bypass_disabled_by_default():
+def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
 
     class _MockRouter:
