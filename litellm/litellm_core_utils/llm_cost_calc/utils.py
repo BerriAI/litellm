@@ -709,9 +709,9 @@ def generic_cost_per_token(  # noqa: PLR0915
         # This handles both cases:
         # 1. text_tokens=0 (provider didn't set it) - gap fills the entire remainder
         # 2. text_tokens>0 but < total (mixed content like PDF+text) - gap fills remainder
-        #
-        # Skip filling when has_alternative_billing is True (character_count,
+        # Skip filling when has_non_token_alternative_billing is True (character_count,
         # video_length_seconds, or image_count are active) - those dimensions
+        # already account for the prompt_tokens gap.
         # already account for the prompt_tokens gap.
         unaccounted_tokens = usage.prompt_tokens - accounted_tokens
         prompt_tokens_details["text_tokens"] += unaccounted_tokens
