@@ -16,10 +16,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-# Prefer bundled model_prices for this tree so capability flags match the checkout.
-# setdefault only applies when unset (CI can still force remote map explicitly).
-# Note: this runs before `import litellm` below; a narrower scope would require
-# deferring that import across this conftest (large refactor).
+# Bundled model_prices (setdefault, unset-only). Applies to all tests/test_litellm;
+# scoping to mistral/ only would need deferring `import litellm` here.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
 import asyncio

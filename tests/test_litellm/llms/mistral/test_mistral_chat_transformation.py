@@ -329,10 +329,10 @@ class TestMistralReasoningSupport:
         assert result["messages"][0]["role"] == "user"
 
     def test_case_insensitive_magistral_detection(self):
-        """Test that magistral model detection is case-insensitive."""
+        """Reasoning params appear when model_cost / name supports reasoning (incl. mixed-case magistral)."""
         mistral_config = MistralConfig()
 
-        # Test various case combinations
+        # Mixed-case and alternate shapes that still resolve as reasoning-capable Mistral models
         models_to_test = [
             "mistral/Magistral-medium-2506",
             "mistral/MAGISTRAL-MEDIUM-2506",
