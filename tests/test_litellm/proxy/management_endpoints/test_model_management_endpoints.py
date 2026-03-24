@@ -802,7 +802,9 @@ class TestTeamModelUpdate:
             True,
         ), patch(
             "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_team_model_add:
+        ) as mock_team_model_add, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
+        ) as mock_update_team:
             result = await _update_team_model_in_db(
                 db_model=db_model,
                 patch_data=patch_data,
@@ -814,6 +816,8 @@ class TestTeamModelUpdate:
             assert "team_public_model_name" in str(result.get("model_info", ""))
             # team_model_add must be called to add public name to team's models list
             mock_team_model_add.assert_called_once()
+            # update_team (model_aliases write) must NOT be called in the new implementation
+            mock_update_team.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rename_preserves_old_name_when_siblings_exist(self):

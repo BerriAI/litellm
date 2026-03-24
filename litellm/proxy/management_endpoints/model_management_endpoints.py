@@ -470,6 +470,10 @@ async def _get_team_deployments(
     Fetch all deployments for a given team_id from the database.
 
     Centralizes team deployment queries to ensure consistent filtering and error handling.
+    This is the established helper pattern for team deployment DB access in this module.
+
+    Note: Direct Prisma call is intentional here as this IS the helper function that
+    encapsulates the DB access pattern for team deployments.
     """
     response = await prisma_client.db.litellm_proxymodeltable.find_many(
         where={

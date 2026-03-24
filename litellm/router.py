@@ -8236,13 +8236,16 @@ class Router:
         ):
             return True
         elif model_name is not None and model["model_name"] == model_name:
+            # Fallback: check by internal model_name for non-team deployments
+            # or deployments that haven't been migrated to team_public_model_name yet
             model_team_id = (model.get("model_info") or {}).get("team_id")
             if (
-                team_id is None
+                team_id is None  # requester has no team constraint
                 or model_team_id is None  # global deployment - accessible to all teams
-                or model_team_id == team_id
+                or model_team_id == team_id  # deployment belongs to requester's team
             ):
                 return True
+        # No match: deployment is for a different team or doesn't match the requested model
         return False
 
     def _get_all_deployments(

@@ -41,6 +41,8 @@ service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS = 10_000
 _STALE_TEAM_ALIAS_WARNING_KEYS: OrderedDict[str, None] = OrderedDict()
+# Cache the stale alias bypass flag at module load to avoid hot-path secret lookups
+_ENABLE_TEAM_STALE_ALIAS_BYPASS: Optional[bool] = None
 
 
 if TYPE_CHECKING:
@@ -1320,9 +1322,13 @@ def _update_model_if_team_alias_exists(
 
         # Optional bypass for stale aliases from pre-PR deployments:
         # only enabled via feature flag to preserve backwards compatibility.
-        enable_stale_alias_bypass = get_secret_bool(
-            "LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False
-        )
+        # Cached at module level to avoid hot-path secret lookups on every request.
+        global _ENABLE_TEAM_STALE_ALIAS_BYPASS
+        if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
+            _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool(
+                "LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False
+            )
+        enable_stale_alias_bypass = _ENABLE_TEAM_STALE_ALIAS_BYPASS
         # Check if the alias points to a team-scoped UUID name
         # (format: "model_name_{team_id}_{uuid}")
         is_stale_team_alias = aliased_target.startswith(
