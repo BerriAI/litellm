@@ -2,8 +2,10 @@
 Amazon Nova Canvas image edit on Bedrock (InvokeModel).
 
 Maps OpenAI-style image edit (image + prompt, optional mask) to Nova Canvas task types:
-- With mask: INPAINTING (inPaintingParams per AWS docs)
-- Without mask: IMAGE_VARIATION (imageVariationParams)
+- BACKGROUND_REMOVAL: removes image background (no prompt required)
+- IMAGE_VARIATION:    default when no mask is provided (imageVariationParams)
+- INPAINTING:         when mask is present or explicitly requested (inPaintingParams)
+- OUTPAINTING:        requires maskImage or maskPrompt (outPaintingParams)
 
 Refs:
 - https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
