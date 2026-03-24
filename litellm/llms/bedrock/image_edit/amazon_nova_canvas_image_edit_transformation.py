@@ -147,11 +147,7 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
 
 def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
     """
-    True when model_cost marks the model for Nova Canvas image edit.
-
-    Prefer supports_nova_canvas_image_edit (config-driven). If that key is absent on
-    older installs, accept a registered Bedrock image_generation model whose catalog
-    key is the known Nova Canvas id family (amazon.nova-canvas...).
+    True when model_cost has supports_nova_canvas_image_edit for a resolved catalog key.
 
     get_model_info / ModelInfoBase omit arbitrary JSON keys, so we read model_cost
     directly (same idea as supports_* bare_entry fallback).
@@ -205,12 +201,6 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
             continue
         entry = _litellm.model_cost.get(key) or {}
         if entry.get("supports_nova_canvas_image_edit") is True:
-            return True
-        if (
-            entry.get("litellm_provider") == "bedrock"
-            and entry.get("mode") == "image_generation"
-            and "amazon.nova-canvas" in key.lower()
-        ):
             return True
     return False
 
