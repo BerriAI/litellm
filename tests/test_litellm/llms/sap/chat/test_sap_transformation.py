@@ -268,9 +268,12 @@ class TestSAPTransformationIntegration:
             litellm_params={},
             headers={}
         )
-        assert config["config"]["modules"]["grounding"] == grounding_config
         assert config["placeholder_values"] == placeholder_values
-        assert config["config"]["modules"]["prompt_templating"]["model"]["params"] == {}
+        modules = config["config"]["modules"]
+        assert modules["grounding"]["type"] == "document_grounding_service"
+        assert modules["grounding"]["config"]["placeholders"]["output"] == "grounding_response"
+        assert modules["grounding"]["config"]["filters"][0]["data_repository_type"] == "vector"
+        assert modules["prompt_templating"]["model"]["params"] == {}
 
     def test_grounding_search_config_rejects_both_count_fields(self, mock_config):
         with pytest.raises(ValidationError):
@@ -534,27 +537,28 @@ class TestSAPTransformationIntegration:
                       'target_language': 'fr-FR'}
                  }
         }
-
-        config = mock_config.transform_request(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "Hello."}],
-            optional_params={'deployment_url': "shouldn't be in results",
-                             "fallback_sap_modules": [{"model": "sap/gpt-5",
-                                                   "messages": [{"role": "user", "content": "Hello world!"}],
-                                                   "translation": translation_config
-                                                   }]
-                ,
-                             },
-            litellm_params={},
-            headers={}
-        )
-        assert "translation" not in config["config"]["modules"][0]
-        translation = config["config"]["modules"][1]["translation"]
-        assert translation["input"]["config"]["source_language"] == "en-US"
-        assert translation["input"]["config"]["target_language"] == "de-DE"
-        assert translation["output"]["config"]["target_language"] == "fr-FR"
-        assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
-        assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
-        assert config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello world!"
-        assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
+        for model in ["sap/gpt-5", "gpt-5"]:
+            config = mock_config.transform_request(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "Hello."}],
+                optional_params={'deployment_url': "shouldn't be in results",
+                                 "fallback_sap_modules": [{"model": model,
+                                                       "messages": [{"role": "user", "content": "Hello world!"}],
+                                                       "translation": translation_config
+                                                       }]
+                    ,
+                                 },
+                litellm_params={},
+                headers={}
+            )
+            assert "translation" not in config["config"]["modules"][0]
+            translation = config["config"]["modules"][1]["translation"]
+            assert translation["input"]["config"]["source_language"] == "en-US"
+            assert translation["input"]["config"]["target_language"] == "de-DE"
+            assert translation["output"]["config"]["target_language"] == "fr-FR"
+            assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
+            assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+            assert config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello world!"
+            assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
+            assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"
