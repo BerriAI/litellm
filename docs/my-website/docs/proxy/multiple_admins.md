@@ -79,6 +79,8 @@ litellm_settings:
 Audit logs are written as JSON files to:
 
 ```
+s3://<bucket>/audit_logs/<YYYY-MM-DD>/<HH-MM-SS>_<audit-log-id>.json
+# or, when s3_path is set:
 s3://<bucket>/<s3_path>/audit_logs/<YYYY-MM-DD>/<HH-MM-SS>_<audit-log-id>.json
 ```
 
