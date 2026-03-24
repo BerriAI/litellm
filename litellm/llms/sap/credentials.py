@@ -233,7 +233,7 @@ def _parse_service_key_once(
 
 def _resolve_credential_from_service_key(
     service_key: Optional[Union[str, dict]], cv: CredentialsValue
-):
+)-> Optional[str]:
     if service_key is None:
         return None
     val = _str_or_none(
@@ -284,7 +284,7 @@ def fetch_credentials(
         Source(
             "service key",
             lambda cv: _resolve_credential_from_service_key(service_key, cv),
-        ),  # type: ignore[arg-type]
+        ),
         Source(
             "environment variables",
             lambda cv: _str_or_none(os.environ.get(f"AICORE_{cv.name.upper()}")),
@@ -332,7 +332,7 @@ def validate_credentials(
     key_str: Optional[str] = None,
     cert_file_path: Optional[str] = None,
     key_file_path: Optional[str] = None,
-):
+)-> None:
     """
         Validate SAP AI Core credentials for completeness and consistency.
 
