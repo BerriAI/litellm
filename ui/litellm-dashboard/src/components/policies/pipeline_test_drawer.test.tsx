@@ -95,12 +95,14 @@ const defaultProps = {
 };
 
 async function selectAntOption(user: ReturnType<typeof userEvent.setup>, title: string) {
-  const selector = document.querySelector(".ant-select-selector") as HTMLElement;
+  const selector = document.querySelector(".ant-select-selector");
+  if (!selector) throw new Error("Ant Select selector not found");
   await user.click(selector);
   await waitFor(() => {
     expect(document.querySelector(`[title="${title}"].ant-select-item-option`)).toBeInTheDocument();
   });
-  const option = document.querySelector(`[title="${title}"].ant-select-item-option`) as HTMLElement;
+  const option = document.querySelector(`[title="${title}"].ant-select-item-option`);
+  if (!option) throw new Error(`Ant Select option "${title}" not found`);
   await user.click(option);
 }
 

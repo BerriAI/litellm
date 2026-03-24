@@ -7,6 +7,7 @@ import {
   derivePipelineFromPolicy,
   complianceMatchExpected,
   getPromptsForTestSource,
+  getTestSourceOptions,
   TEST_SOURCE_QUICK,
   TEST_SOURCE_ALL,
 } from "./pipeline_utils";
@@ -216,6 +217,28 @@ describe("getPromptsForTestSource", () => {
   it("should return an empty array for an unrecognized source", () => {
     vi.spyOn(complianceData, "getFrameworks").mockReturnValue([]);
     expect(getPromptsForTestSource("nonexistent")).toEqual([]);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("getTestSourceOptions", () => {
+  it("should always include quick chat and all datasets options", () => {
+    vi.spyOn(complianceData, "getFrameworks").mockReturnValue([]);
+    const options = getTestSourceOptions();
+    expect(options[0]).toEqual({ value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" });
+    expect(options[options.length - 1]).toEqual({ value: TEST_SOURCE_ALL, label: "All compliance datasets" });
+    vi.restoreAllMocks();
+  });
+
+  it("should include framework names from getFrameworks", () => {
+    vi.spyOn(complianceData, "getFrameworks").mockReturnValue([
+      { name: "GDPR", icon: "", description: "", categories: [] },
+      { name: "EU AI Act", icon: "", description: "", categories: [] },
+    ]);
+    const options = getTestSourceOptions();
+    expect(options).toHaveLength(4);
+    expect(options[1]).toEqual({ value: "GDPR", label: "GDPR" });
+    expect(options[2]).toEqual({ value: "EU AI Act", label: "EU AI Act" });
     vi.restoreAllMocks();
   });
 });
