@@ -51,7 +51,7 @@ try:
 except Exception:
     version = "0.0.0"
 
-def create_proxy_mount_config() -> Optional[dict]:
+def create_proxy_mount_config() -> dict:
     """
     Creates the configuration for using httpx with http/https proxy. 
     Returns the dict with proxy options if HTTP_PROXY or/and HTTPS_PROXY environment variable is set. Using http_proxy/https_proxy as fallback. 
