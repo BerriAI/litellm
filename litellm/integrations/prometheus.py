@@ -65,6 +65,17 @@ def _get_cached_end_user_id_for_cost_tracking():
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
+
+    @staticmethod
+    def get_instance() -> Optional["PrometheusLogger"]:
+        """Find the PrometheusLogger instance from litellm.callbacks, if registered."""
+        import litellm
+
+        for cb in litellm.callbacks:
+            if isinstance(cb, PrometheusLogger):
+                return cb
+        return None
+
     def __init__(  # noqa: PLR0915
         self,
         **kwargs,
@@ -437,6 +448,76 @@ class PrometheusLogger(CustomLogger):
             self.litellm_teams_count_metric = self._gauge_factory(
                 "litellm_teams_count",
                 "Total number of teams in LiteLLM",
+                labelnames=[],
+            )
+
+            ########################################
+            # Managed Batch Metrics
+            ########################################
+            self.litellm_managed_batch_created_total = self._counter_factory(
+                name="litellm_managed_batch_created_total",
+                documentation="Total number of managed batches created",
+                labelnames=[
+                    "model",
+                    "api_provider",
+                    "user",
+                    "user_email",
+                    "api_key_alias",
+                ],
+            )
+
+            self.litellm_managed_file_size_bytes = self._gauge_factory(
+                "litellm_managed_file_size_bytes",
+                "Size of the most recent managed batch file in bytes (last-seen value per label combination)",
+                labelnames=["purpose", "file_type", "model", "api_provider", "user"],
+            )
+
+            self.litellm_managed_batch_duration_seconds = self._histogram_factory(
+                "litellm_managed_batch_duration_seconds",
+                "Duration of completed managed batches in seconds (completed_at - created_at)",
+                labelnames=["model", "api_provider"],
+                buckets=BATCH_DURATION_BUCKETS,
+            )
+
+            self.litellm_managed_file_created_total = self._counter_factory(
+                name="litellm_managed_file_created_total",
+                documentation="Total number of managed files created",
+                labelnames=[
+                    "model",
+                    "api_provider",
+                    "user",
+                    "user_email",
+                    "api_key_alias",
+                ],
+            )
+
+            self.litellm_managed_file_deleted_total = self._counter_factory(
+                name="litellm_managed_file_deleted_total",
+                documentation="Total number of managed file deletions (success or blocked)",
+                labelnames=["result"],
+            )
+
+            self.litellm_check_batch_cost_jobs_polled = self._gauge_factory(
+                "litellm_check_batch_cost_jobs_polled",
+                "Number of unprocessed batches found by the last CheckBatchCost poll",
+                labelnames=[],
+            )
+
+            self.litellm_check_batch_cost_jobs_processed_total = self._counter_factory(
+                name="litellm_check_batch_cost_jobs_processed_total",
+                documentation="Total number of batches successfully cost-tracked by CheckBatchCost",
+                labelnames=["model", "api_provider"],
+            )
+
+            self.litellm_check_batch_cost_errors_total = self._counter_factory(
+                name="litellm_check_batch_cost_errors_total",
+                documentation="Total number of errors in CheckBatchCost by error type",
+                labelnames=["error_type"],
+            )
+
+            self.litellm_check_batch_cost_last_run_timestamp = self._gauge_factory(
+                "litellm_check_batch_cost_last_run_timestamp",
+                "Unix timestamp of the last CheckBatchCost job run",
                 labelnames=[],
             )
 
@@ -2157,6 +2238,127 @@ class PrometheusLogger(CustomLogger):
                 ).inc()
         except Exception as e:
             verbose_logger.debug(f"Error recording guardrail metrics: {str(e)}")
+
+    ########################################
+    # Managed Batch Metric Recording Methods
+    ########################################
+
+    def record_managed_batch_created(
+        self,
+        model: Optional[str],
+        api_provider: Optional[str],
+        user: Optional[str],
+        user_email: Optional[str],
+        api_key_alias: Optional[str],
+    ):
+        try:
+            self.litellm_managed_batch_created_total.labels(
+                model=model,
+                api_provider=api_provider,
+                user=user,
+                user_email=user_email,
+                api_key_alias=api_key_alias,
+            ).inc()
+        except Exception as e:
+            verbose_logger.warning(f"Error recording batch created metric: {e}")
+
+    def record_managed_file_size(
+        self,
+        size_bytes: int,
+        purpose: str,
+        file_type: str,
+        model: Optional[str] = None,
+        api_provider: Optional[str] = None,
+        user: Optional[str] = None,
+    ):
+        """Record the size of a managed file. Uses a gauge (last-seen value per label combination)."""
+        try:
+            self.litellm_managed_file_size_bytes.labels(
+                purpose=purpose,
+                file_type=file_type,
+                model=model or "",
+                api_provider=api_provider or "",
+                user=user or "",
+            ).set(size_bytes)
+        except Exception as e:
+            verbose_logger.warning(f"Error recording file size metric: {e}")
+
+    def record_managed_batch_duration(
+        self,
+        duration_seconds: float,
+        model: Optional[str] = None,
+        api_provider: Optional[str] = None,
+    ):
+        try:
+            self.litellm_managed_batch_duration_seconds.labels(
+                model=model or "",
+                api_provider=api_provider or "",
+            ).observe(duration_seconds)
+        except Exception as e:
+            verbose_logger.warning(f"Error recording batch duration metric: {e}")
+
+    def record_managed_file_created(
+        self,
+        model: Optional[str],
+        api_provider: Optional[str],
+        user: Optional[str],
+        user_email: Optional[str],
+        api_key_alias: Optional[str],
+    ):
+        try:
+            self.litellm_managed_file_created_total.labels(
+                model=model,
+                api_provider=api_provider,
+                user=user,
+                user_email=user_email,
+                api_key_alias=api_key_alias,
+            ).inc()
+        except Exception as e:
+            verbose_logger.warning(f"Error recording file created metric: {e}")
+
+    def record_managed_file_deleted(self, result: str):
+        """Record a managed file deletion attempt. result is 'success' or 'blocked'."""
+        try:
+            self.litellm_managed_file_deleted_total.labels(result=result).inc()
+        except Exception as e:
+            verbose_logger.warning(f"Error recording file deleted metric: {e}")
+
+    def record_check_batch_cost_run(
+        self,
+        jobs_polled: int,
+        processed_models: Optional[List[Tuple[Optional[str], Optional[str]]]] = None,
+    ):
+        """
+        Record CheckBatchCost polling metrics.
+
+        Args:
+            jobs_polled: Number of unprocessed batches found
+            processed_models: List of (model, api_provider) tuples for processed jobs
+        """
+        import time
+
+        try:
+            self.litellm_check_batch_cost_last_run_timestamp.set(time.time())
+            self.litellm_check_batch_cost_jobs_polled.set(jobs_polled)
+
+            if processed_models:
+                for model, api_provider in processed_models:
+                    self.litellm_check_batch_cost_jobs_processed_total.labels(
+                        model=model or "",
+                        api_provider=api_provider or "",
+                    ).inc()
+        except Exception as e:
+            verbose_logger.warning(f"Error recording check batch cost metrics: {e}")
+
+    def record_check_batch_cost_error(self, error_type: str):
+        try:
+            self.litellm_check_batch_cost_errors_total.labels(
+                error_type=error_type,
+            ).inc()
+        except Exception as e:
+            verbose_logger.warning(
+                f"Error recording check batch cost error metric: {e}"
+            )
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:

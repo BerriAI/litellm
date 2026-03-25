@@ -159,6 +159,23 @@ LATENCY_BUCKETS = (
     float("inf"),
 )
 
+# Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
+BATCH_DURATION_BUCKETS = (
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    900.0,
+    1800.0,
+    3600.0,
+    7200.0,
+    14400.0,
+    28800.0,
+    43200.0,
+    86400.0,
+    float("inf"),
+)
+
 
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
@@ -238,6 +255,16 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    # Managed batch metrics
+    "litellm_managed_batch_created_total",
+    "litellm_managed_file_size_bytes",
+    "litellm_managed_batch_duration_seconds",
+    "litellm_managed_file_created_total",
+    "litellm_managed_file_deleted_total",
+    "litellm_check_batch_cost_jobs_polled",
+    "litellm_check_batch_cost_jobs_processed_total",
+    "litellm_check_batch_cost_errors_total",
+    "litellm_check_batch_cost_last_run_timestamp",
 ]
 
 
@@ -617,6 +644,43 @@ class PrometheusMetricLabels:
     litellm_cache_hits_metric = _cache_metric_labels
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
+
+    # Managed batch metrics
+    _batch_user_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_managed_batch_created_total = _batch_user_labels
+
+    litellm_managed_file_size_bytes: List[
+        str
+    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
+
+    litellm_managed_batch_duration_seconds = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_managed_file_created_total = _batch_user_labels
+
+    litellm_managed_file_deleted_total: List[
+        str
+    ] = []  # only "result" label, added at metric creation
+
+    litellm_check_batch_cost_jobs_polled: List[str] = []
+
+    litellm_check_batch_cost_jobs_processed_total = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_check_batch_cost_errors_total: List[str] = []  # label: error_type (custom)
+
+    litellm_check_batch_cost_last_run_timestamp: List[str] = []
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
