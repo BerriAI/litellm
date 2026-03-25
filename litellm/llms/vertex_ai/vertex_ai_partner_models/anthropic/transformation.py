@@ -107,8 +107,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         # VertexAI doesn't support output_format parameter, remove it if present
         data.pop("output_format", None)
-        
-        # Pass output_config through for Vertex AI Claude - supports format (json_schema) for structured output
+
+        # Conditionally handle output_config:
+        # - Drop it when it only contains non-structured-output settings (e.g. effort)
+        #   since Vertex AI does not support the effort parameter and would return
+        #   "Extra inputs are not permitted".
+        # - Pass it through when it contains structured output configuration
+        #   (e.g. format with json_schema) so structured output works on Vertex AI Claude.
+        output_config = data.get("output_config")
+        if isinstance(output_config, dict) and "format" not in output_config:
+            data.pop("output_config", None)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)

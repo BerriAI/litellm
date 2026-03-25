@@ -593,8 +593,74 @@ def test_vertex_ai_anthropic_output_format_and_output_config_both_dropped():
         assert result["max_tokens"] == 2048, "max_tokens should be preserved"
         assert "messages" in result, "messages should be present"
         assert "model" not in result, "model should also be dropped for Vertex AI"
-        
+
     finally:
         # Restore original method
+        config.__class__.__bases__[0].transform_request = original_transform
+
+
+def test_vertex_ai_anthropic_output_config_with_format_passed_through():
+    """
+    Test that output_config containing a 'format' key (structured output configuration)
+    is passed through to Vertex AI Anthropic requests.
+
+    Vertex AI Claude supports output_config with format for structured output
+    (e.g. json_schema). Only effort-only output_config should be dropped.
+    """
+    config = VertexAIAnthropicConfig()
+
+    messages = [{"role": "user", "content": "Extract structured data about AI."}]
+    headers = {}
+
+    # output_config with 'format' key for structured output - should be kept
+    optional_params = {
+        "max_tokens": 1024,
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "data",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                    },
+                },
+            }
+        },
+    }
+
+    # Mock the parent transform_request to include output_config in the result
+    original_transform = config.__class__.__bases__[0].transform_request
+
+    def mock_transform_request(
+        self, model, messages, optional_params, litellm_params, headers
+    ):
+        return {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": messages,
+            "max_tokens": 1024,
+            "output_config": optional_params.get("output_config"),
+        }
+
+    config.__class__.__bases__[0].transform_request = mock_transform_request
+
+    try:
+        result = config.transform_request(
+            model="claude-3-5-sonnet-20241022",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers=headers,
+        )
+
+        # output_config with format should be preserved for structured output
+        assert "output_config" in result, \
+            "output_config with 'format' key should be passed through for structured output"
+        assert result["output_config"]["format"]["type"] == "json_schema"
+
+        # model should still be removed for Vertex AI
+        assert "model" not in result, "model should be removed for Vertex AI"
+
+    finally:
         config.__class__.__bases__[0].transform_request = original_transform
 
