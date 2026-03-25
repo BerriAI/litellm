@@ -6,6 +6,7 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -1036,9 +1037,9 @@ class JWTAuthManager:
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
     ) -> Set[str]:
-        """Resolve a list of team aliases to team IDs via DB lookup."""
-        resolved_ids: Set[str] = set()
-        for alias in aliases:
+        """Resolve a list of team aliases to team IDs via concurrent DB lookups."""
+
+        async def _resolve_one(alias: str) -> Optional[str]:
             try:
                 team_object = await get_team_object_by_alias(
                     team_alias=alias,
@@ -1047,14 +1048,18 @@ class JWTAuthManager:
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-                if team_object:
-                    resolved_ids.add(team_object.team_id)
+                # get_team_object_by_alias raises on not-found; this is a defensive check
+                if team_object and team_object.team_id:
+                    return team_object.team_id
+                return None
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "Failed to resolve team alias '%s' to team_id: %s", alias, e
                 )
-                continue
-        return resolved_ids
+                return None
+
+        results = await asyncio.gather(*[_resolve_one(alias) for alias in aliases])
+        return {team_id for team_id in results if team_id is not None}
 
     @staticmethod
     async def find_team_with_model_access(

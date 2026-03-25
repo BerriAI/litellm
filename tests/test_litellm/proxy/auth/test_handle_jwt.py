@@ -1789,12 +1789,24 @@ async def test_get_team_aliases_from_jwt():
 
 @pytest.mark.asyncio
 async def test_resolve_team_aliases_to_ids():
-    """Test that resolve_team_aliases_to_ids() correctly resolves aliases to team IDs."""
+    """Test that resolve_team_aliases_to_ids() correctly resolves aliases to team IDs.
+
+    get_team_object_by_alias raises HTTPException(404) when not found — it never
+    returns None — so the mock mirrors that contract.
+    """
+    from fastapi import HTTPException
+
     team_a = LiteLLM_TeamTable(team_id="id-engineering", team_alias="engineering")
     team_b = LiteLLM_TeamTable(team_id="id-platform", team_alias="platform")
+    _lookup = {"engineering": team_a, "platform": team_b}
 
     async def mock_get_by_alias(team_alias, **kwargs):
-        return {"engineering": team_a, "platform": team_b}.get(team_alias)
+        if team_alias not in _lookup:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team '{team_alias}' not found"},
+            )
+        return _lookup[team_alias]
 
     with patch(
         "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
@@ -1813,13 +1825,24 @@ async def test_resolve_team_aliases_to_ids():
 
 @pytest.mark.asyncio
 async def test_resolve_team_aliases_skips_not_found():
-    """Test that aliases that cannot be resolved are silently skipped."""
+    """Test that aliases that cannot be resolved are silently skipped.
+
+    The real get_team_object_by_alias raises HTTPException(404) when the alias
+    does not exist in the database — it never returns None.  The exception
+    handler in resolve_team_aliases_to_ids is the only path that handles the
+    not-found case; this test exercises that path directly.
+    """
+    from fastapi import HTTPException
+
     team_a = LiteLLM_TeamTable(team_id="id-engineering", team_alias="engineering")
 
     async def mock_get_by_alias(team_alias, **kwargs):
         if team_alias == "engineering":
             return team_a
-        raise Exception("Team not found")
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team with alias '{team_alias}' doesn't exist in db"},
+        )
 
     with patch(
         "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
