@@ -327,7 +327,9 @@ async def vllm_proxy_route(
     )
     is_streaming_request = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
-        model = request_body.get("model") or request.query_params.get("model")
+        model = request_body.get("model")
+        if model is None:
+            model = request.query_params.get("model")
         result = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
