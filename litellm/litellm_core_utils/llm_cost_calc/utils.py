@@ -674,9 +674,19 @@ def generic_cost_per_token(  # noqa: PLR0915
     )
     has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
 
+    # Check for under-counting: sum of details < prompt_tokens means
+    # unaccounted tokens (e.g. Gemini PDF attachments report only text_tokens
+    # in prompt_tokens_details but total prompt_tokens includes file tokens).
+    # Attribute the gap to text_tokens so they are billed at the default rate.
+    has_under_counting = (
+        usage.prompt_tokens > 0
+        and total_details < usage.prompt_tokens
+        and total_details > 0
+    )
+
     if (
         text_tokens == 0 and prompt_tokens_details["image_count"] == 0
-    ) or has_double_counting:
+    ) or has_double_counting or has_under_counting:
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
