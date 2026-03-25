@@ -2721,6 +2721,64 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
 
 
 @pytest.mark.asyncio
+async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_again(
+    client_no_auth,
+):
+    """
+    Test that /get/config/callbacks returns already-decrypted email/slack values as-is.
+    """
+    mock_config_data = {
+        "litellm_settings": {},
+        "environment_variables": {
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/test/webhook",
+            "SMTP_HOST": "10.16.68.20",
+            "SMTP_PORT": "587",
+            "SMTP_USERNAME": "smtp-user",
+            "SMTP_PASSWORD": "smtp-password",
+            "SMTP_SENDER_EMAIL": "alerts@example.com",
+            "TEST_EMAIL_ADDRESS": "ops@example.com",
+            "EMAIL_LOGO_URL": "https://example.com/logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@example.com",
+        },
+        "general_settings": {"alerting": ["slack"]},
+    }
+
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+
+    with patch.object(
+        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+    ), patch(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        side_effect=AssertionError("decrypt_value_helper should not be called"),
+    ) as decrypt_mock:
+        response = client_no_auth.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    result = response.json()
+    alerts = result["alerts"]
+
+    slack_alert = next((alert for alert in alerts if alert["name"] == "slack"), None)
+    assert slack_alert is not None
+    assert slack_alert["variables"] == {
+        "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/test/webhook"
+    }
+
+    email_alert = next((alert for alert in alerts if alert["name"] == "email"), None)
+    assert email_alert is not None
+    assert email_alert["variables"] == {
+        "SMTP_HOST": "10.16.68.20",
+        "SMTP_PORT": "587",
+        "SMTP_USERNAME": "smtp-user",
+        "SMTP_PASSWORD": "smtp-password",
+        "SMTP_SENDER_EMAIL": "alerts@example.com",
+        "TEST_EMAIL_ADDRESS": "ops@example.com",
+        "EMAIL_LOGO_URL": "https://example.com/logo.png",
+        "EMAIL_SUPPORT_CONTACT": "support@example.com",
+    }
+    decrypt_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_config_success_callback_normalization():
     """
     Ensure success_callback values are normalized to lowercase when updating config.

@@ -12624,11 +12624,7 @@ async def get_config():  # noqa: PLR0915
                     _value = os.getenv("SLACK_WEBHOOK_URL", None)
                     _slack_env_vars[_var] = _value
                 else:
-                    # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(
-                        value=env_variable, key=_var
-                    )
-                    _slack_env_vars[_var] = _decrypted_value
+                    _slack_env_vars[_var] = env_variable
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = (
@@ -12662,9 +12658,7 @@ async def get_config():  # noqa: PLR0915
             if env_variable is None:
                 _email_env_vars[_var] = None
             else:
-                # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
-                _email_env_vars[_var] = _decrypted_value
+                _email_env_vars[_var] = env_variable
 
         alerting_data.append(
             {
