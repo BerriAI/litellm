@@ -245,9 +245,9 @@ async def test_url_with_format_param_openai(model, sync_mode):
     from litellm import acompletion, completion
 
     if sync_mode:
-        client = OpenAI()
+        client = OpenAI(timeout=60.0, max_retries=3)
     else:
-        client = AsyncOpenAI()
+        client = AsyncOpenAI(timeout=60.0, max_retries=3)
 
     args = {
         "model": model,

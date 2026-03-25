@@ -102,7 +102,7 @@ class TestPerplexityReasoning:
             new_response.parse.return_value = pydantic_obj
             return new_response
 
-        openai_client = OpenAI(api_key="fake-api-key")
+        openai_client = OpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
         with patch.object(
             openai_client.chat.completions.with_raw_response, "create", side_effect=_return_pydantic_obj

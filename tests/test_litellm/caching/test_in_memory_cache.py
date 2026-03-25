@@ -21,7 +21,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
-    openai_obj = OpenAI(api_key="my-fake-key")
+    openai_obj = OpenAI(api_key="my-fake-key", timeout=60.0, max_retries=3)
 
     in_memory_cache = InMemoryCache()
 

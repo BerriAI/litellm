@@ -34,7 +34,7 @@ async def test_o1_handle_system_role(model):
 
     litellm.set_verbose = True
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         client.chat.completions.with_raw_response, "create"
@@ -106,7 +106,7 @@ async def test_o1_max_completion_tokens(model: str):
 
     litellm.set_verbose = True
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         client.chat.completions.with_raw_response, "create"

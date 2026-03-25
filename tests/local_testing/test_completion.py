@@ -116,7 +116,7 @@ def test_null_role_response():
     """
     import openai
 
-    openai_client = openai.OpenAI()
+    openai_client = openai.OpenAI(timeout=60.0, max_retries=3)
     with patch.object(
         openai_client.chat.completions, "create", side_effect=_openai_mock_response
     ) as mock_response:
@@ -1282,7 +1282,7 @@ def test_completion_perplexity_api():
             new_response.parse.return_value = pydantic_obj
             return new_response
 
-        openai_client = OpenAI()
+        openai_client = OpenAI(timeout=60.0, max_retries=3)
 
         with patch.object(
             openai_client.chat.completions.with_raw_response,
@@ -3969,7 +3969,7 @@ def test_openai_hallucinated_tool_call():
     """
     import openai
 
-    openai_client = openai.OpenAI()
+    openai_client = openai.OpenAI(timeout=60.0, max_retries=3)
     with patch.object(
         openai_client.chat.completions,
         "create",
@@ -4214,7 +4214,7 @@ def test_qwen_text_completion():
 def test_completion_openai_metadata(monkeypatch, enable_preview_features):
     from openai import OpenAI
 
-    client = OpenAI()
+    client = OpenAI(timeout=60.0, max_retries=3)
 
     litellm.set_verbose = True
 
@@ -4265,7 +4265,7 @@ def test_completion_gpt_4o_empty_str():
     from openai import OpenAI
     from unittest.mock import MagicMock
 
-    client = OpenAI()
+    client = OpenAI(timeout=60.0, max_retries=3)
 
     # Create response object matching OpenAI's format
     mock_response_data = {
