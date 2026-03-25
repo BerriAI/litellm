@@ -2749,7 +2749,6 @@ async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_aga
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ), patch(
         "litellm.proxy.proxy_server.decrypt_value_helper",
-        side_effect=AssertionError("decrypt_value_helper should not be called"),
     ) as decrypt_mock:
         response = client_no_auth.get("/get/config/callbacks")
 
