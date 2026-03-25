@@ -16,7 +16,7 @@ import TabItem from '@theme/TabItem';
 > **Status:** Active investigation
 > **Last updated:** March 24, 2026, 2:00 PM ET
 
-LiteLLM is investigating a suspected supply chain attack involving unauthorized PyPI package publishes. Current evidence suggests a maintainer's PyPI account may have been compromised and used to distribute malicious code.
+LiteLLM AI Gateway is investigating a suspected supply chain attack involving unauthorized PyPI package publishes. Current evidence suggests a maintainer's PyPI account may have been compromised and used to distribute malicious code.
 
 At this time, we believe this incident may be linked to the broader [Trivy security compromise](https://www.aquasec.com/blog/trivy-supply-chain-attack-what-you-need-to-know/), in which stolen credentials were reportedly used to gain unauthorized access to the LiteLLM publishing pipeline.
 
@@ -26,8 +26,8 @@ This investigation is ongoing. Details below may change as we confirm additional
 
 The following LiteLLM versions published to PyPI were impacted:
 
-- **v1.82.7**: contained a malicious payload in `proxy_server.py`
-- **v1.82.8**: contained `litellm_init.pth` and a malicious payload in `proxy_server.py`
+- **v1.82.7**: contained a malicious payload in the LiteLLM AI Gateway `proxy_server.py`
+- **v1.82.8**: contained `litellm_init.pth` and a malicious payload in the LiteLLM AI Gateway `proxy_server.py`
 
 If you installed or ran either of these versions, review the recommendations below immediately.
 
@@ -59,8 +59,10 @@ You may be affected if **any** of the following are true:
 
 You are **not** affected if any of the following are true:
 
+**LiteLLM AI Gateway/Proxy users:** Customers running the official LiteLLM Proxy Docker image were not impacted. That deployment path pins dependencies in requirements.txt and does not rely on the compromised PyPI packages.
+
 - You are using **LiteLLM Cloud**
-- You are using the official Docker image: `ghcr.io/berriai/litellm`
+- You are using the official LiteLLM AI Gateway Docker image: `ghcr.io/berriai/litellm`
 - You are on **v1.82.6 or earlier** and did not upgrade during the affected window
 - You installed LiteLLM from source via the GitHub repository, which was **not** compromised
 
@@ -125,10 +127,10 @@ If present:
 
 Review your:
 
-- local environments
+- Local environments
 - CI/CD pipelines
 - Docker builds
-- deployment logs
+- Deployment logs
 
 Confirm whether **v1.82.7** or **v1.82.8** was installed anywhere.
 
@@ -137,7 +139,7 @@ Pin LiteLLM to a known safe version such as **v1.82.6 or earlier**, or to a late
 
 ## Response and remediation
 
-The LiteLLM team has already taken the following steps:
+The LiteLLM AI Gateway team has already taken the following steps:
 
 - Removed compromised packages from PyPI
 - Rotated maintainer credentials and established new authorized maintainers
