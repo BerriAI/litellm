@@ -849,6 +849,7 @@ const sidebars = {
           label: "Google AI Studio",
           items: [
             "providers/gemini",
+            "providers/palm",
             "providers/gemini/videos",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
@@ -935,6 +936,7 @@ const sidebars = {
         "providers/llamafile",
         "providers/llamagate",
         "providers/lm_studio",
+        "providers/maritalk",
         "providers/manus",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
