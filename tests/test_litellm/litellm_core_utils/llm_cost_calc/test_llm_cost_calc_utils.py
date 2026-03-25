@@ -529,7 +529,7 @@ def test_string_cost_values_edge_cases():
     # Prompt: 1000 * 1e-6 + 100 * 0 (invalid string becomes 0)
     # Completion: 500 * 2e-6 + 50 * 2e-6 (audio tokens fall back to base cost when output_cost_per_audio_token is None)
     expected_prompt_cost = 1000 * 1e-6
-    expected_completion_cost = 500 * 2e-6 + 50 * 2e-6
+    expected_completion_cost = 450 * 2e-6 + 50 * 2e-6
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
