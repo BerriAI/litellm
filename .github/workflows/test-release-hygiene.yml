@@ -36,25 +36,4 @@ jobs:
             exit 0
           fi
 
-          mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-
-          if [[ ${#changed_files[@]} -eq 0 ]]; then
-            echo "No changed files detected."
-            exit 0
-          fi
-
-          violating_files=()
-          for file in "${changed_files[@]}"; do
-            if [[ "$file" =~ (^|/)(dist|build)(/|$) ]] || [[ "$file" =~ \.(whl|tar\.gz)$ ]]; then
-              violating_files+=("$file")
-            fi
-          done
-
-          if [[ ${#violating_files[@]} -gt 0 ]]; then
-            echo "Build artifacts should not be committed to git."
-            echo "Publish archives from the release process instead."
-            printf ' - %s\n' "${violating_files[@]}"
-            exit 1
-          fi
-
-          echo "No committed build artifacts detected."
+          python ci_cd/check_committed_build_artifacts.py --base "$BASE_SHA" --head "$HEAD_SHA"
