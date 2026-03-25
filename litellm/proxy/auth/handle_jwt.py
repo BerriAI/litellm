@@ -176,6 +176,17 @@ class JWTHandler:
 
         return []
 
+    def get_team_aliases_from_jwt(self, token: dict) -> List[str]:
+        if self.litellm_jwtauth.team_aliases_jwt_field is not None:
+            team_aliases: Optional[List[str]] = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_aliases_jwt_field,
+                default=[],
+            )
+            return team_aliases or []
+
+        return []
+
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
@@ -1014,6 +1025,31 @@ class JWTAuthManager:
         return all_team_ids
 
     @staticmethod
+    async def resolve_team_aliases_to_ids(
+        aliases: List[str],
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        parent_otel_span: Optional[Span],
+        proxy_logging_obj: ProxyLogging,
+    ) -> Set[str]:
+        """Resolve a list of team aliases to team IDs via DB lookup."""
+        resolved_ids: Set[str] = set()
+        for alias in aliases:
+            try:
+                team_object = await get_team_object_by_alias(
+                    team_alias=alias,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if team_object:
+                    resolved_ids.add(team_object.team_id)
+            except Exception:
+                continue
+        return resolved_ids
+
+    @staticmethod
     async def find_team_with_model_access(
         team_ids: Set[str],
         requested_model: Optional[str],
@@ -1462,6 +1498,18 @@ class JWTAuthManager:
         )
         if specific_team_id:
             all_team_ids.add(specific_team_id)
+
+        # Resolve team_aliases_jwt_field (list of team names → team IDs)
+        team_aliases = jwt_handler.get_team_aliases_from_jwt(jwt_valid_token)
+        if team_aliases:
+            resolved_ids = await JWTAuthManager.resolve_team_aliases_to_ids(
+                aliases=team_aliases,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            all_team_ids.update(resolved_ids)
 
         header_team_id = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,

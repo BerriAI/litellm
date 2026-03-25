@@ -4142,6 +4142,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=None,
         description="The field in the JWT token that stores the team name/alias. Will be resolved to team_id via database lookup.",
     )
+    team_aliases_jwt_field: Optional[str] = Field(
+        default=None,
+        description="The field in the JWT token that stores a list of team names/aliases. Each will be resolved to team_id via database lookup.",
+    )
 
     org_id_jwt_field: Optional[str] = None
     org_alias_jwt_field: Optional[str] = Field(
