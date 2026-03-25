@@ -364,3 +364,64 @@ def test_vertex_transformation_field_casing():
     transformed = _transform_part_to_httpx_format(part)
     assert "labels" in transformed
     assert "response" in transformed["labels"]
+
+    # 6. Test default preservation in schema
+    part = {"properties": {"my_field": {"type": "object", "default": {"snake_case_key": 1}}}}
+    transformed = _transform_part_to_httpx_format(part, parent_key="properties")
+    assert "properties" in transformed
+    assert "my_field" in transformed["properties"]
+    assert "default" in transformed["properties"]["my_field"]
+    assert "snake_case_key" in transformed["properties"]["my_field"]["default"]
+
+    # 7. Test labels at non-top-level are camelCased
+    part = {"some_inner_object": {"labels": {"user_key": "value"}}}
+    transformed = _transform_part_to_httpx_format(part, parent_key="something")
+    assert "someInnerObject" in transformed
+    assert "labels" in transformed["someInnerObject"]
+    assert "userKey" in transformed["someInnerObject"]["labels"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_request_body_tools_transformation():
+    from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+    from litellm.types.utils import LlmProviders
+
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [
+        {
+            "function_declarations": [
+                {
+                    "name": "my_func",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"my_param": {"type": "string", "format": "email"}},
+                    },
+                }
+            ]
+        }
+    ]
+
+    # Test for Vertex AI - should transform tools
+    transformed = _transform_request_body(
+        messages=messages,
+        model="gemini-1.5-flash",
+        optional_params={"tools": tools},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert "tools" in transformed
+    assert "functionDeclarations" in transformed["tools"][0]
+
+    # Test for Gemini (AI Studio) - should NOT transform tools
+    original = _transform_request_body(
+        messages=messages,
+        model="gemini-1.5-flash",
+        optional_params={"tools": tools},
+        custom_llm_provider=LlmProviders.GEMINI.value,
+        litellm_params={},
+        cached_content=None,
+    )
+    assert "tools" in original
+    assert "function_declarations" in original["tools"][0]

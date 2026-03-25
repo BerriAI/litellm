@@ -267,8 +267,11 @@ def _transform_part_to_httpx_format(part: dict, parent_key: Optional[str] = None
             elif k == "properties":
                 # 'properties' keys in a JSON Schema are user-defined
                 should_preserve_keys = True
-            elif k == "labels":
+            elif k == "labels" and parent_key is None:
                 # 'labels' is a top-level map for Vertex AI billing/tracking, keys are user-defined
+                should_preserve_keys = True
+            elif k == "default" and parent_key in ["properties", None]:
+                # 'default' values in a JSON Schema property are user-defined and should NOT be transformed
                 should_preserve_keys = True
 
         if should_preserve_keys:
@@ -836,6 +839,10 @@ def _transform_request_body(  # noqa: PLR0915
                 {"system_instruction": data["system_instruction"]}, parent_key=None
             )["systemInstruction"]
             del data["system_instruction"]
+        if "tools" in data:
+            data["tools"] = _transform_part_to_httpx_format(
+                {"tools": data["tools"]}, parent_key=None
+            )["tools"]
 
     return data
 

@@ -208,5 +208,11 @@ def transform_openai_messages_to_gemini_context_caching(
                 {"system_instruction": data["system_instruction"]}, parent_key=None
             )["systemInstruction"]
             del data["system_instruction"]
+        if "tools" in data:
+            data["tools"] = _transform_part_to_httpx_format(
+                {"tools": data["tools"]}, parent_key=None
+            )["tools"]
 
-    return data
+    from typing import cast
+
+    return cast(CachedContentRequestBody, data)
