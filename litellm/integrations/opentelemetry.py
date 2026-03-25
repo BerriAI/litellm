@@ -655,9 +655,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -834,7 +834,7 @@ class OpenTelemetry(CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
+        provider = params.get("custom_llm_provider") or "Unknown"
 
         common_attrs = {
             "gen_ai.operation.name": "chat",
@@ -878,6 +878,7 @@ class OpenTelemetry(CustomLogger):
             )
             if (
                 response_obj
+                and isinstance(response_obj, dict)
                 and (usage := response_obj.get("usage"))
                 and self._token_usage_histogram
             ):
@@ -966,7 +967,11 @@ class OpenTelemetry(CustomLogger):
 
         # Get completion tokens from response_obj
         completion_tokens = None
-        if response_obj and (usage := response_obj.get("usage")):
+        if (
+            response_obj
+            and isinstance(response_obj, dict)
+            and (usage := response_obj.get("usage"))
+        ):
             completion_tokens = usage.get("completion_tokens")
 
         if completion_tokens is None or completion_tokens <= 0:
@@ -1088,8 +1093,8 @@ class OpenTelemetry(CustomLogger):
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
-            "custom_llm_provider", "Unknown"
-        )
+            "custom_llm_provider"
+        ) or "Unknown"
 
         # per-message events
         for msg in kwargs.get("messages", []):
@@ -1116,7 +1121,10 @@ class OpenTelemetry(CustomLogger):
             otel_logger.emit(log_record)
 
         # per-choice events
-        for idx, choice in enumerate(response_obj.get("choices", [])):
+        choices = (
+            response_obj.get("choices", []) if isinstance(response_obj, dict) else []
+        )
+        for idx, choice in enumerate(choices):
             attrs = {
                 "event_name": "gen_ai.content.completion",
                 "gen_ai.system": provider,
@@ -1560,7 +1568,7 @@ class OpenTelemetry(CustomLogger):
             self.safe_set_attribute(
                 span=span,
                 key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider", "Unknown"),
+                value=litellm_params.get("custom_llm_provider") or "Unknown",
             )
 
             # The maximum number of tokens the LLM generates for a request.
@@ -1606,7 +1614,9 @@ class OpenTelemetry(CustomLogger):
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
             response_id = (
-                response_obj.get("id") if response_obj else None
+                response_obj.get("id")
+                if response_obj and isinstance(response_obj, dict)
+                else None
             ) or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
@@ -1616,14 +1626,22 @@ class OpenTelemetry(CustomLogger):
                 )
 
             # The model used to generate the response.
-            if response_obj and response_obj.get("model"):
+            if (
+                response_obj
+                and isinstance(response_obj, dict)
+                and response_obj.get("model")
+            ):
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL.value,
                     value=response_obj.get("model"),
                 )
 
-            usage = response_obj and response_obj.get("usage")
+            usage = (
+                response_obj
+                and isinstance(response_obj, dict)
+                and response_obj.get("usage")
+            )
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -1701,7 +1719,7 @@ class OpenTelemetry(CustomLogger):
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
-            if response_obj is not None:
+            if response_obj is not None and isinstance(response_obj, dict):
                 if response_obj.get("choices"):
                     transformed_choices = (
                         self._transform_choices_to_otel_semantic_conventions(

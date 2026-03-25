@@ -2751,3 +2751,118 @@ class TestResponseIdFallback(unittest.TestCase):
         mock_span.set_attribute.assert_any_call(
             "gen_ai.response.id", "litellm-img-call-101"
         )
+
+
+class TestOpenTelemetryNonDictResponseObj(unittest.TestCase):
+    """Issue #24516: OpenTelemetry callback crashes when response_obj is a
+    non-dict type (e.g. a list) as can happen with Usage AI chat."""
+
+    def _make_kwargs(self, provider="openai"):
+        return {
+            "model": "gpt-4",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": provider},
+            "standard_logging_object": {
+                "id": "litellm-call-id-abc",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+    def test_set_attributes_with_list_response_obj(self):
+        """set_attributes should not crash when response_obj is a list."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._make_kwargs()
+        response_obj = [{"some": "data"}]  # non-dict response
+
+        # Should not raise
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        # Should still set the fallback response id from standard_logging_payload
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.response.id", "litellm-call-id-abc"
+        )
+
+    def test_set_attributes_with_none_response_obj(self):
+        """set_attributes should handle None response_obj gracefully."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._make_kwargs()
+
+        # Should not raise
+        otel.set_attributes(mock_span, kwargs, None)
+
+        # Should still set the fallback response id
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.response.id", "litellm-call-id-abc"
+        )
+
+    def test_set_attributes_with_none_provider(self):
+        """set_attributes should default gen_ai.system to 'Unknown' when
+        custom_llm_provider is None."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = self._make_kwargs(provider=None)
+        response_obj = {"id": "resp-1", "choices": [], "usage": None}
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        # gen_ai.system should be "Unknown", not None
+        from litellm.proxy._types import SpanAttributes
+
+        mock_span.set_attribute.assert_any_call(
+            SpanAttributes.LLM_SYSTEM.value, "Unknown"
+        )
+
+    def test_record_metrics_with_list_response_obj(self):
+        """_record_metrics should not crash when response_obj is a list."""
+        otel = OpenTelemetry()
+        otel._operation_duration_histogram = MagicMock()
+        otel._token_usage_histogram = MagicMock()
+        otel._cost_histogram = None
+
+        start = datetime.now()
+        end = start + timedelta(seconds=1)
+
+        kwargs = {
+            "model": "gpt-4",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {"metadata": {}},
+        }
+        response_obj = ["item1", "item2"]
+
+        # Should not raise
+        otel._record_metrics(kwargs, response_obj, start, end)
+
+        # Duration histogram should still be recorded
+        otel._operation_duration_histogram.record.assert_called_once()
+        # Token histogram should NOT be recorded (response_obj is not dict)
+        otel._token_usage_histogram.record.assert_not_called()
+
+    def test_record_metrics_with_none_provider(self):
+        """_record_metrics should use 'Unknown' when provider is None."""
+        otel = OpenTelemetry()
+        otel._operation_duration_histogram = MagicMock()
+        otel._token_usage_histogram = None
+        otel._cost_histogram = None
+
+        start = datetime.now()
+        end = start + timedelta(seconds=1)
+
+        kwargs = {
+            "model": "gpt-4",
+            "litellm_params": {"custom_llm_provider": None},
+            "standard_logging_object": {"metadata": {}},
+        }
+        response_obj = {
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+        }
+
+        otel._record_metrics(kwargs, response_obj, start, end)
+
+        call_attrs = otel._operation_duration_histogram.record.call_args
+        assert call_attrs[1]["attributes"]["gen_ai.system"] == "Unknown"
