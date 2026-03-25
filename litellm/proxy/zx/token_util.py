@@ -177,22 +177,25 @@ async def create_or_get_user_key(
     users = await internal_user_endpoints.get_users(
         user_email=org_email,
         role=None,
-        user_ids=user_id,
+        user_ids=None,
         sso_user_ids=None,
         team=None,
         page=1,
-        page_size=25,
+        page_size=100,
         sort_by=None,
         sort_order="asc",
     )
-    user_total_count = users.get("total", 0) or 0
+    # get_users 使用模糊匹配，需要过滤出精确匹配的用户
+    exact_users = [
+        u for u in (users.get("users") or [])
+        if u.user_email == org_email
+    ]
+    user_total_count = len(exact_users)
     if user_total_count > 1:
         raise ClientError(f"user [{org_email}]在系统中重复: {user_total_count}")
     uid = None
     if user_total_count == 1:
-        user: LiteLLM_UserTableWithKeyCount = users.get("users", [None])[0]
-        if user is None:
-            raise ClientError(f"user [{org_email}]不存在")
+        user: LiteLLM_UserTableWithKeyCount = exact_users[0]
         uid = user.user_id
     else:
         metadata = {"provider": provider}
