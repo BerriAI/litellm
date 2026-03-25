@@ -141,6 +141,48 @@ else:
 unified_guardrail = UnifiedLLMGuardrails()
 
 
+def _should_run_output_parse_pii_last() -> bool:
+    """
+    Opt-in ordering change for output_parse_pii post-call guardrails.
+
+    By default we preserve callback registration order for backwards
+    compatibility. Deployments that want output_parse_pii unmasking to run
+    after all other post-call guardrails can set
+    LITELLM_RUN_OUTPUT_PARSE_PII_LAST=true.
+    """
+    return os.getenv("LITELLM_RUN_OUTPUT_PARSE_PII_LAST", "false").lower() == "true"
+
+
+def _should_auto_run_output_parse_pii_last(
+    guardrail_callbacks: List[CustomGuardrail],
+) -> bool:
+    """
+    Auto-enable output_parse_pii-last ordering for the explicit Presidio
+    residual-output-masking flow.
+
+    When the same guardrail registers both:
+    - an output_parse_pii post-call callback (unmask original request tokens), and
+    - an apply_to_output post-call callback (mask residual model-generated PII),
+    the residual-masking callback must run before the unmask callback. Otherwise
+    the unmask step is immediately overwritten and output_parse_pii produces
+    incorrect results.
+    """
+    output_parse_guardrail_names = {
+        getattr(callback, "guardrail_name", None)
+        for callback in guardrail_callbacks
+        if getattr(callback, "output_parse_pii", False)
+        and getattr(callback, "guardrail_name", None) is not None
+    }
+    if not output_parse_guardrail_names:
+        return False
+
+    return any(
+        getattr(callback, "apply_to_output", False)
+        and getattr(callback, "guardrail_name", None) in output_parse_guardrail_names
+        for callback in guardrail_callbacks
+    )
+
+
 def print_verbose(print_statement):
     """
     Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
@@ -1968,8 +2010,27 @@ class ProxyLogging:
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=data, llm_router=llm_router
             )
-
-            for callback in guardrail_callbacks:
+            ordered_guardrail_callbacks = guardrail_callbacks
+            if (
+                _should_run_output_parse_pii_last()
+                or _should_auto_run_output_parse_pii_last(guardrail_callbacks)
+            ):
+                # Opt-in ordering guarantee: all non-output_parse_pii guardrails
+                # run first, then output_parse_pii guardrails run last. This
+                # prevents request-token unmasking from being overwritten by
+                # later post-call guardrails (for example apply_to_output
+                # masking the response again).
+                output_parse_callbacks = []
+                other_guardrail_callbacks = []
+                for callback in guardrail_callbacks:
+                    if getattr(callback, "output_parse_pii", False):
+                        output_parse_callbacks.append(callback)
+                    else:
+                        other_guardrail_callbacks.append(callback)
+                ordered_guardrail_callbacks = (
+                    other_guardrail_callbacks + output_parse_callbacks
+                )
+            for callback in ordered_guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
                 if (

@@ -79,6 +79,9 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     filter_scope = getattr(litellm_params, "presidio_filter_scope", None) or "both"
     run_input = filter_scope in ("input", "both")
     run_output = filter_scope in ("output", "both")
+    mask_residual_output_pii = bool(
+        getattr(litellm_params, "presidio_mask_residual_output_pii", False)
+    )
 
     def _make_presidio_callback(**overrides):
         params = dict(
@@ -104,22 +107,29 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     primary_callback = None
 
     if run_input:
+        # output_parse_pii-specific hook expansion is handled inside
+        # _OPTIONAL_PresidioPIIMasking.__init__.
         primary_callback = _make_presidio_callback()
 
-        if litellm_params.output_parse_pii:
-            _make_presidio_callback(
-                output_parse_pii=True,
-                event_hook=GuardrailEventHooks.post_call.value,
-            )
-
-    if run_output:
-        output_callback = _make_presidio_callback(
-            apply_to_output=True,
-            event_hook=GuardrailEventHooks.post_call.value,
-            output_parse_pii=False,
-        )
+    # By default, output_parse_pii uses post_call for token unmasking only. A
+    # separate output-masking callback is created only when output masking is
+    # requested without input token unmasking, or when users explicitly opt in to
+    # masking residual model-generated PII after output_parse_pii flows.
+    if run_output and (
+        not (litellm_params.output_parse_pii and run_input) or mask_residual_output_pii
+    ):
         if primary_callback is None:
-            primary_callback = output_callback
+            primary_callback = _make_presidio_callback(
+                apply_to_output=True,
+                event_hook=GuardrailEventHooks.post_call.value,
+                output_parse_pii=False,
+            )
+        else:
+            _make_presidio_callback(
+                apply_to_output=True,
+                event_hook=GuardrailEventHooks.post_call.value,
+                output_parse_pii=False,
+            )
 
     return primary_callback
 
