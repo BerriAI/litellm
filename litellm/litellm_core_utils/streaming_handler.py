@@ -2174,12 +2174,16 @@ class CustomStreamWrapper:
                     None,
                 )
                 if _deferred_cb is not None:
-                    # Proxy has post-call guardrails — let the closure
-                    # run guardrails on the assembled response, then
-                    # fire logging with guardrail_information populated.
-                    self.logging_obj._on_deferred_stream_complete = None  # type: ignore[attr-defined]
-                    asyncio.create_task(
-                        _deferred_cb(complete_streaming_response, cache_hit)
+                    # Proxy has post-call guardrails. Store the assembled
+                    # response so the outer streaming consumer
+                    # (ProxyLogging.async_post_call_streaming_iterator_hook)
+                    # can fire the deferred callback AFTER all guardrail
+                    # end-of-stream blocks complete.  Scheduling here via
+                    # create_task would race with unified_guardrail's
+                    # end-of-stream block for short-stream providers.
+                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                        complete_streaming_response,
+                        cache_hit,
                     )
                 else:
                     asyncio.create_task(
