@@ -53,7 +53,7 @@ spec:
         - name: {{ include "litellm.name" . }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          image: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
