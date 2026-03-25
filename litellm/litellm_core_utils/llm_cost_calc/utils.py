@@ -686,6 +686,20 @@ def generic_cost_per_token(  # noqa: PLR0915
         )
         prompt_tokens_details["text_tokens"] = text_tokens
 
+    ## EDGE CASE - partial token breakdown (e.g. Gemini PDF attachments)
+    ## When prompt_tokens_details subcategories don't sum to prompt_tokens,
+    ## the unaccounted tokens (e.g. PDF document tokens) are billed at the
+    ## base text rate to avoid silent under-billing.
+    ## Ref: https://github.com/BerriAI/litellm/issues/24375
+    else:
+        total_accounted = (
+            text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+        )
+        unaccounted_tokens = usage.prompt_tokens - total_accounted
+        if unaccounted_tokens > 0:
+            text_tokens += unaccounted_tokens
+            prompt_tokens_details["text_tokens"] = text_tokens
+
     (
         prompt_base_cost,
         completion_base_cost,
