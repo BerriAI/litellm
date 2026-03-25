@@ -1,0 +1,60 @@
+name: Release Hygiene
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  block-built-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Block committed build artifacts
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "No valid base SHA available, skipping artifact diff."
+            exit 0
+          fi
+
+          mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          if [[ ${#changed_files[@]} -eq 0 ]]; then
+            echo "No changed files detected."
+            exit 0
+          fi
+
+          violating_files=()
+          for file in "${changed_files[@]}"; do
+            if [[ "$file" =~ (^|/)(dist|build)(/|$) ]] || [[ "$file" =~ \.(whl|tar\.gz)$ ]]; then
+              violating_files+=("$file")
+            fi
+          done
+
+          if [[ ${#violating_files[@]} -gt 0 ]]; then
+            echo "Build artifacts should not be committed to git."
+            echo "Publish archives from the release process instead."
+            printf ' - %s\n' "${violating_files[@]}"
+            exit 1
+          fi
+
+          echo "No committed build artifacts detected."

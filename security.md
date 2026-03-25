@@ -5,6 +5,8 @@
 ### LiteLLM Github
 
 - All commits run through Github's CodeQL checking
+- Generated release artifacts should be published from the release process and not committed to git
+- Prefer short-lived credentials or trusted publishing for package releases whenever possible
 
 ### Self-hosted Instances LiteLLM
 
@@ -45,5 +47,6 @@ We value the security community's role in protecting our systems and users. To r
 - Email support@berri.ai with details
 - Include steps to reproduce the issue
 - Provide any relevant additional information
+- Do not disclose unpatched vulnerabilities or leaked credentials in public issues or PRs
 
 We'll review all reports promptly. Note that we don't currently offer a bug bounty program.

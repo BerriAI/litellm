@@ -8,6 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Do not commit build artifacts** - Avoid committing `dist/`, `build/`, `*.whl`, and `*.tar.gz` files. Publish generated archives from the release process, not from git.
 
 #### Proxy (Backend) PRs
 
@@ -222,6 +223,7 @@ If `make test-unit` fails:
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
 - **Update documentation**: If you change APIs, update docs
+- **Keep source reviewable**: Avoid checking in generated package archives or other release artifacts
 
 ## Building and Running Locally
 
@@ -319,4 +321,4 @@ Looking for ideas? Check out:
 - 🧪 Test coverage improvements
 - 🔌 New LLM provider integrations
 
-Thank you for contributing to LiteLLM! 🚀 
+Thank you for contributing to LiteLLM! 🚀
