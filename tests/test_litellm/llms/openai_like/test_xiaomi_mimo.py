@@ -148,3 +148,49 @@ if __name__ == "__main__":
     print("\n" + "="*50)
     print("✓ All configuration tests passed!")
     print("="*50)
+
+
+class TestXiaomiMiMoOutputConfigFiltering:
+    """Tests for output_config filtering in non-Anthropic providers.
+    Related to issue #24549.
+    """
+
+    def test_output_config_not_forwarded_to_xiaomi_mimo(self):
+        """output_config is an Anthropic-specific param and must not be passed
+        through to xiaomi_mimo (or any other non-Anthropic provider).
+        See: https://github.com/BerriAI/litellm/issues/24549
+        """
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="mimo-v2-pro",
+            custom_llm_provider="xiaomi_mimo",
+            # Anthropic-specific: should be silently dropped for MiMo
+            output_config={"effort": "medium"},
+            temperature=0.7,
+        )
+
+        assert "output_config" not in optional_params, (
+            "output_config must not be forwarded to xiaomi_mimo — "
+            "it is an Anthropic-only parameter and causes "
+            "AsyncCompletions.create() to raise an unexpected-keyword-argument error."
+        )
+        # Standard params should still pass through
+        assert optional_params.get("temperature") == 0.7
+
+    def test_output_config_forwarded_to_anthropic(self):
+        """output_config must still be forwarded when the provider IS Anthropic."""
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            output_config={"effort": "medium"},
+            temperature=1.0,
+        )
+
+        # output_config should reach the Anthropic request transformer
+        has_output_config = "output_config" in optional_params or any(
+            "effort" in str(v) for v in optional_params.values()
+        )
+        assert has_output_config, "output_config must reach the Anthropic request transformer"

@@ -4656,6 +4656,16 @@ def get_optional_params(  # noqa: PLR0915
     return optional_params
 
 
+_ANTHROPIC_ONLY_EXTRA_PARAMS: List[str] = [
+    "output_config",  # Anthropic output_config (effort control) — not a standard OpenAI param
+]
+"""
+Params that are Anthropic-specific and must NOT be forwarded to other providers.
+Used in add_provider_specific_params_to_optional_params to prevent silent breakage
+when a user mixes Anthropic-specific kwargs with non-Anthropic model calls.
+"""
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -4706,11 +4716,21 @@ def add_provider_specific_params_to_optional_params(
                 extra_body=processed_extra_body
             )
     else:
+        _is_anthropic_provider = custom_llm_provider in (
+            "anthropic",
+            "anthropic_text",
+            "bedrock",
+            "vertex_ai",
+            "vertex_ai_beta",
+        )
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
                 if _should_drop_param(
                     k=k, additional_drop_params=additional_drop_params
                 ):
+                    continue
+                # Skip Anthropic-only params for providers that don't support them
+                if not _is_anthropic_provider and k in _ANTHROPIC_ONLY_EXTRA_PARAMS:
                     continue
                 optional_params[k] = passed_params[k]
     return optional_params
