@@ -1945,6 +1945,11 @@ def add_provider_specific_headers_to_request(
         if header.lower() == "authorization" and is_anthropic_oauth_key(value):
             anthropic_headers[header] = value
             added_header = True
+            # Remove x-api-key from headers since it's incompatible with OAuth tokens.
+            # When both Authorization and x-api-key are sent with the same token value,
+            # the Anthropic API uses x-api-key (which fails for OAuth format).
+            # We must keep only Authorization for OAuth tokens.
+            anthropic_headers.pop("x-api-key", None)
             break
     if added_header is True:
         # Anthropic headers work across multiple providers
