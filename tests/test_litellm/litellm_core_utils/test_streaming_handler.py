@@ -1977,16 +1977,20 @@ async def test_azure_streaming_role_with_include_usage(sync_mode: bool):
         async for chunk in response:
             chunks.append(chunk)
 
-    # At least one chunk must have role='assistant' in its delta
-    has_role = any(
-        hasattr(c, "choices")
-        and len(c.choices) > 0
-        and hasattr(c.choices[0], "delta")
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
-        for c in chunks
-    )
+    # Verify role appears in exactly the first emitted chunk
+    assert len(chunks) > 0, "No chunks were yielded"
+    first_chunk = chunks[0]
     assert (
-        has_role
-    ), "No chunk contained role='assistant' in delta. " "Chunk deltas: " + str(
-        [c.choices[0].delta if c.choices else "no choices" for c in chunks]
+        len(first_chunk.choices) > 0
+        and getattr(first_chunk.choices[0].delta, "role", None) == "assistant"
+    ), (
+        f"Expected role='assistant' in the first chunk, got: "
+        f"{first_chunk.choices[0].delta if first_chunk.choices else 'no choices'}"
     )
+
+    # Verify subsequent chunks do NOT repeat the role
+    for chunk in chunks[1:]:
+        if chunk.choices:
+            assert (
+                getattr(chunk.choices[0].delta, "role", None) != "assistant"
+            ), f"Unexpected role='assistant' in non-first chunk: {chunk.choices[0].delta}"
