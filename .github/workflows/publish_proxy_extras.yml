@@ -19,6 +19,8 @@ jobs:
     if: github.repository == 'BerriAI/litellm'
     permissions:
       contents: write
+      id-token: write
+    environment: pypi-proxy-extras
     defaults:
       run:
         working-directory: litellm-proxy-extras
@@ -66,9 +68,7 @@ jobs:
           git push
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_PASSWORD }}
-        run: |
-          pip install twine
-          twine upload dist/litellm_proxy_extras-${{ steps.bump.outputs.new }}*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: litellm-proxy-extras/dist/
+        # No token needed — uses OIDC Trusted Publisher

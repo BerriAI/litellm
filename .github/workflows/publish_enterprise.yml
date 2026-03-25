@@ -20,6 +20,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      id-token: write
+    environment: pypi-enterprise
     defaults:
       run:
         working-directory: enterprise
@@ -86,9 +88,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_ENTERPRISE }}
-        run: |
-          pip install twine
-          twine upload dist/litellm_enterprise-${{ steps.bump.outputs.new }}*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: enterprise/dist/
+        # No token needed — uses OIDC Trusted Publisher
