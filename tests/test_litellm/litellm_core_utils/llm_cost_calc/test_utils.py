@@ -1,18 +1,14 @@
-from unittest.mock import patch
 import os
 import sys
-from litellm.types.utils import (
-    CompletionTokensDetailsWrapper,
-    PromptTokensDetailsWrapper
-)
-
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-
-from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    generic_cost_per_token
+from unittest.mock import patch
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
 
 def test_completion_breakdown_ignores_inflated_text_tokens():
