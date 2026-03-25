@@ -178,12 +178,14 @@ class JWTHandler:
 
     def get_team_aliases_from_jwt(self, token: dict) -> List[str]:
         if self.litellm_jwtauth.team_aliases_jwt_field is not None:
-            team_aliases: Optional[List[str]] = get_nested_value(
+            team_aliases = get_nested_value(
                 data=token,
                 key_path=self.litellm_jwtauth.team_aliases_jwt_field,
                 default=[],
             )
-            return team_aliases or []
+            if not isinstance(team_aliases, list):
+                return []
+            return team_aliases
 
         return []
 
@@ -207,12 +209,14 @@ class JWTHandler:
     def is_required_team_id(self) -> bool:
         """
         Returns:
-        - True: if 'team_id_jwt_field' or 'team_alias_jwt_field' is set
-        - False: if neither is set
+        - True: if 'team_id_jwt_field', 'team_alias_jwt_field', 'team_ids_jwt_field', or 'team_aliases_jwt_field' is set
+        - False: if none is set
         """
         if (
             self.litellm_jwtauth.team_id_jwt_field is None
             and self.litellm_jwtauth.team_alias_jwt_field is None
+            and self.litellm_jwtauth.team_ids_jwt_field is None
+            and self.litellm_jwtauth.team_aliases_jwt_field is None
         ):
             return False
         return True
@@ -1045,7 +1049,10 @@ class JWTAuthManager:
                 )
                 if team_object:
                     resolved_ids.add(team_object.team_id)
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to resolve team alias '%s' to team_id: %s", alias, e
+                )
                 continue
         return resolved_ids
 
