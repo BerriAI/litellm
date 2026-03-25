@@ -6,9 +6,14 @@ import sys
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import ProxyErrorTypes
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -190,3 +195,164 @@ def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
     projected_spend, projected_exceeded_date = result
     assert projected_spend == 290.0
     assert projected_exceeded_date == real_datetime.date(2026, 4, 21)
+
+
+class _TrackingPostCallGuardrail(CustomGuardrail):
+    def __init__(
+        self,
+        guardrail_name: str,
+        label: str,
+        seen: list[str],
+        output_parse_pii: bool,
+        apply_to_output: bool = False,
+    ):
+        super().__init__(guardrail_name=guardrail_name, event_hook="post_call")
+        self.label = label
+        self.seen = seen
+        self.output_parse_pii = output_parse_pii
+        self.apply_to_output = apply_to_output
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return event_type == GuardrailEventHooks.post_call
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.seen.append(self.label)
+        return response
+
+
+@pytest.mark.asyncio
+async def test_post_call_guardrails_preserve_registration_order_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_RUN_OUTPUT_PARSE_PII_LAST", raising=False)
+    seen: list[str] = []
+    callbacks = [
+        _TrackingPostCallGuardrail(
+            guardrail_name="output-parse",
+            label="output-parse",
+            seen=seen,
+            output_parse_pii=True,
+        ),
+        _TrackingPostCallGuardrail(
+            guardrail_name="audit",
+            label="audit",
+            seen=seen,
+            output_parse_pii=False,
+        ),
+    ]
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    response = ModelResponse(
+        id="resp",
+        choices=[
+            Choices(
+                message=Message(content="ok", role="assistant"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        model="test-model",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "test-model"},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+    )
+
+    assert seen == ["output-parse", "audit"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_guardrails_can_opt_in_to_run_output_parse_last(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUN_OUTPUT_PARSE_PII_LAST", "true")
+    seen: list[str] = []
+    callbacks = [
+        _TrackingPostCallGuardrail(
+            guardrail_name="output-parse",
+            label="output-parse",
+            seen=seen,
+            output_parse_pii=True,
+        ),
+        _TrackingPostCallGuardrail(
+            guardrail_name="audit",
+            label="audit",
+            seen=seen,
+            output_parse_pii=False,
+        ),
+    ]
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    response = ModelResponse(
+        id="resp",
+        choices=[
+            Choices(
+                message=Message(content="ok", role="assistant"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        model="test-model",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "test-model"},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+    )
+
+    assert seen == ["audit", "output-parse"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_guardrails_auto_reorder_presidio_residual_masking(
+    monkeypatch,
+):
+    monkeypatch.delenv("LITELLM_RUN_OUTPUT_PARSE_PII_LAST", raising=False)
+    seen: list[str] = []
+    callbacks = [
+        _TrackingPostCallGuardrail(
+            guardrail_name="presidio",
+            label="unmask",
+            seen=seen,
+            output_parse_pii=True,
+        ),
+        _TrackingPostCallGuardrail(
+            guardrail_name="presidio",
+            label="residual-mask",
+            seen=seen,
+            output_parse_pii=False,
+            apply_to_output=True,
+        ),
+    ]
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    response = ModelResponse(
+        id="resp",
+        choices=[
+            Choices(
+                message=Message(content="ok", role="assistant"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+        model="test-model",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "test-model"},
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+    )
+
+    assert seen == ["residual-mask", "unmask"]

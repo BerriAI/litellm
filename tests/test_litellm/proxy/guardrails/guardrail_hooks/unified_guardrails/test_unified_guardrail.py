@@ -18,7 +18,15 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 class RecordingGuardrail(CustomGuardrail):
@@ -36,6 +44,29 @@ class RecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
         self.apply_calls.append({"inputs": inputs, "input_type": input_type})
         return {"texts": inputs.get("texts", [])}
+
+
+class OutputParseReturnsNoneGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="output-parse-none")
+        self.output_parse_pii = True
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def async_post_call_success_hook(  # type: ignore[override]
+        self, data, user_api_key_dict, response
+    ):
+        return None
+
+
+class OutputParseNoPostHookGuardrail:
+    def __init__(self):
+        self.guardrail_name = "output-parse-no-hook"
+        self.output_parse_pii = True
+
+    def should_run_guardrail(self, data, event_type):
+        return True
 
 
 class _NoopTranslation(BaseTranslation):
@@ -404,3 +435,96 @@ class TestUnifiedLLMGuardrails:
 
             # Response returned with pages intact
             assert result.pages[0].markdown == "Some text"
+
+        @pytest.mark.asyncio
+        async def test_output_parse_none_hook_preserves_original_response(self):
+            handler = UnifiedLLMGuardrails()
+            guardrail = OutputParseReturnsNoneGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gpt-test",
+                "metadata": {},
+            }
+
+            class _ExplodingTranslation(_NoopTranslation):
+                async def process_output_response(  # type: ignore[override]
+                    self,
+                    response,
+                    guardrail_to_apply,
+                    litellm_logging_obj=None,
+                    user_api_key_dict=None,
+                ):
+                    raise AssertionError(
+                        "process_output_response should not run for output_parse_pii"
+                    )
+
+            response = ModelResponse(
+                id="1",
+                object="chat.completion",
+                created=0,
+                model="gpt-test",
+                choices=[
+                    Choices(
+                        message=Message(role="assistant", content="Hello"),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+            )
+
+            original_endpoint_mappings = (
+                unified_module.endpoint_guardrail_translation_mappings
+            )
+            unified_module.endpoint_guardrail_translation_mappings = {
+                CallTypes.anthropic_messages: _ExplodingTranslation
+            }
+            original_infer_call_type = unified_module._infer_call_type
+            unified_module._infer_call_type = (
+                lambda call_type=None, completion_response=None: CallTypes.anthropic_messages
+            )  # type: ignore[assignment]
+
+            try:
+                result = await handler.async_post_call_success_hook(
+                    data=data,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=response,
+                )
+            finally:
+                unified_module._infer_call_type = original_infer_call_type
+                unified_module.endpoint_guardrail_translation_mappings = (
+                    original_endpoint_mappings
+                )
+
+            assert result is response
+            assert result.choices[0].message.content == "Hello"
+            assert data["metadata"]["applied_guardrails"] == [guardrail.guardrail_name]
+
+        @pytest.mark.asyncio
+        async def test_output_parse_missing_post_hook_preserves_original_response(
+            self, caplog
+        ):
+            handler = UnifiedLLMGuardrails()
+            guardrail = OutputParseNoPostHookGuardrail()
+            response = ModelResponse(
+                id="1",
+                object="chat.completion",
+                created=0,
+                model="gpt-test",
+                choices=[
+                    Choices(
+                        message=Message(role="assistant", content="Hello"),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+            )
+
+            with caplog.at_level("WARNING"):
+                result = await handler.async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-test"},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=response,
+                )
+
+            assert result is response
+            assert "no async_post_call_success_hook" in caplog.text
