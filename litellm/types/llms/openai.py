@@ -536,6 +536,20 @@ class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
+    type: Required[Literal["summary_text"]]
+    text: str
+
+
+class ChatCompletionReasoningItem(TypedDict, total=False):
+    """Represents an OpenAI Responses API reasoning item for round-tripping in conversation history."""
+
+    type: Required[Literal["reasoning"]]
+    id: str
+    encrypted_content: Optional[str]
+    summary: List["ChatCompletionReasoningSummaryTextBlock"]
+
+
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
     city: str
     """Free text input for the city of the user, e.g. `San Francisco`."""
