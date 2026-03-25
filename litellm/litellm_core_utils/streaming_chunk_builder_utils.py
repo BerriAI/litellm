@@ -717,6 +717,26 @@ class ChunkProcessor:
                     web_search_requests
                 )
 
+        # Ensure completion_tokens >= reasoning_tokens (OpenAI spec compliance).
+        # Some backends (e.g., vLLM) report reasoning_tokens and
+        # completion_tokens separately instead of including reasoning tokens
+        # in the completion_tokens total.  When reasoning_tokens exceeds
+        # completion_tokens it is clear that the backend excluded them from
+        # the total, so we add them to produce a spec-compliant value.
+        if (
+            returned_usage.completion_tokens_details is not None
+            and returned_usage.completion_tokens_details.reasoning_tokens is not None
+            and returned_usage.completion_tokens_details.reasoning_tokens
+            > returned_usage.completion_tokens
+        ):
+            returned_usage.completion_tokens = (
+                returned_usage.completion_tokens
+                + returned_usage.completion_tokens_details.reasoning_tokens
+            )
+            returned_usage.total_tokens = (
+                returned_usage.prompt_tokens + returned_usage.completion_tokens
+            )
+
         # Return a new usage object with the new values
 
         returned_usage = Usage(**returned_usage.model_dump())

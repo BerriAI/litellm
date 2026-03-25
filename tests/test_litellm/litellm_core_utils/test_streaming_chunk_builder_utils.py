@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProces
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
+    CompletionTokensDetailsWrapper,
     Delta,
     Function,
     ModelResponseStream,
@@ -603,3 +604,121 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
     assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+
+
+def test_streaming_reasoning_tokens_exceeds_completion_tokens():
+    """
+    Validate that when a backend (e.g. vLLM) reports reasoning_tokens
+    separately from completion_tokens such that reasoning_tokens >
+    completion_tokens, calculate_usage adjusts completion_tokens to include
+    reasoning_tokens so that the OpenAI invariant
+    completion_tokens >= reasoning_tokens is maintained.
+
+    Reproduces: https://github.com/BerriAI/litellm/issues/24526
+    """
+    # Simulate vLLM streaming usage: completion_tokens=64 (text only),
+    # reasoning_tokens=79 (thinking tokens reported separately).
+    chunk = ModelResponseStream(
+        id="chatcmpl-vllm-reasoning",
+        created=1745513206,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=64,
+            prompt_tokens=100,
+            total_tokens=164,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=79
+            ),
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunks = [chunk]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        completion_output="",
+    )
+
+    # completion_tokens must be >= reasoning_tokens per OpenAI spec.
+    # Since vLLM reported them separately (64 text + 79 reasoning),
+    # the fix should set completion_tokens = 64 + 79 = 143.
+    assert usage.completion_tokens >= usage.completion_tokens_details.reasoning_tokens
+    assert usage.completion_tokens == 64 + 79  # 143
+    assert usage.completion_tokens_details.reasoning_tokens == 79
+    assert usage.total_tokens == 100 + 143  # prompt + adjusted completion
+
+
+def test_streaming_reasoning_tokens_within_completion_tokens_unchanged():
+    """
+    When reasoning_tokens <= completion_tokens (the backend already follows
+    the OpenAI convention), calculate_usage must NOT inflate completion_tokens.
+    """
+    chunk = ModelResponseStream(
+        id="chatcmpl-openai-normal",
+        created=1745513206,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=150,
+            prompt_tokens=50,
+            total_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=80
+            ),
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunks = [chunk]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="gpt-4o",
+        completion_output="",
+    )
+
+    # Already compliant — should stay unchanged.
+    assert usage.completion_tokens == 150
+    assert usage.completion_tokens_details.reasoning_tokens == 80
+    assert usage.total_tokens == 200
