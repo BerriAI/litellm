@@ -127,6 +127,11 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 "Fallback events in sticky routing",
                 ["model_group", "reason", "strategy"],
             )
+            self._routing_redis_count = Gauge(
+                "litellm_sticky_routing_redis_count",
+                "Redis in-flight count per deployment as seen by routing at decision time",
+                ["model_group", "deployment_id"],
+            )
         except ValueError:
             # Already registered by another handler instance — reuse from registry
             from prometheus_client import REGISTRY
@@ -140,20 +145,25 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
             self._routing_fallback = REGISTRY._names_to_collectors.get(
                 "litellm_sticky_routing_fallback_total"
             )
+            self._routing_redis_count = REGISTRY._names_to_collectors.get(
+                "litellm_sticky_routing_redis_count"
+            )
             # Guard against partial registration — if any lookup returned None,
             # fall back to NoOpMetric to avoid AttributeError on .labels().inc()
-            if not all([self._routing_decisions, self._routing_in_flight, self._routing_fallback]):
+            if not all([self._routing_decisions, self._routing_in_flight, self._routing_fallback, self._routing_redis_count]):
                 from litellm.types.integrations.prometheus import NoOpMetric
 
                 self._routing_decisions = self._routing_decisions or NoOpMetric()
                 self._routing_in_flight = self._routing_in_flight or NoOpMetric()
                 self._routing_fallback = self._routing_fallback or NoOpMetric()
+                self._routing_redis_count = self._routing_redis_count or NoOpMetric()
         except Exception:
             from litellm.types.integrations.prometheus import NoOpMetric
 
             self._routing_decisions = NoOpMetric()
             self._routing_in_flight = NoOpMetric()
             self._routing_fallback = NoOpMetric()
+            self._routing_redis_count = NoOpMetric()
 
         verbose_router_logger.info(
             f"[StickyLeastBusyRedis INIT] Initialized with "
@@ -790,6 +800,12 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
             dep_ids.append(dep_id)
             dep_id_to_deployment[dep_id] = d
 
+        # Expose Redis counts to Prometheus so Grafana can show what routing sees
+        for did in dep_ids:
+            self._routing_redis_count.labels(model_group, did).set(
+                request_counts.get(did, 0)
+            )
+
         total_load = sum(request_counts.get(did, 0) for did in dep_ids)
         avg_load = total_load / len(dep_ids) if dep_ids else 0
         min_load = min(
@@ -960,6 +976,12 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 dep_id = str(dep_id)
             dep_ids.append(dep_id)
             dep_id_to_deployment[dep_id] = d
+
+        # Expose Redis counts to Prometheus so Grafana can show what routing sees
+        for did in dep_ids:
+            self._routing_redis_count.labels(model_group, did).set(
+                request_counts.get(did, 0)
+            )
 
         total_load = sum(request_counts.get(did, 0) for did in dep_ids)
         avg_load = total_load / len(dep_ids) if dep_ids else 0
