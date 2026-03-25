@@ -2304,7 +2304,7 @@ def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
 def test_pre_call_log_raw_request_via_metadata():
     """metadata={'log_raw_request': True} should trigger raw request logging."""
     import time
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     logging_obj = LiteLLMLoggingObj(
@@ -2339,7 +2339,8 @@ def test_pre_call_log_raw_request_via_metadata():
 def test_pre_call_no_raw_request_without_flag():
     """Without log_raw_request in metadata, raw request should not be logged."""
     import time
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
+    import litellm.litellm_core_utils.litellm_logging as logging_module
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     logging_obj = LiteLLMLoggingObj(
@@ -2355,13 +2356,10 @@ def test_pre_call_no_raw_request_without_flag():
         "litellm_params": {"metadata": {}},
     }
 
-    with patch.object(
-        logging_obj, "_get_request_curl_command", return_value="curl -X POST ..."
-    ) as mock_curl, patch.object(
-        logging_obj, "_print_llm_call_debugging_log"
-    ), patch.object(
-        logging_obj, "_pre_call"
-    ):
+    with patch.object(logging_module, "log_raw_request_response", False), \
+         patch.object(logging_obj, "_get_request_curl_command", return_value="curl -X POST ...") as mock_curl, \
+         patch.object(logging_obj, "_print_llm_call_debugging_log"), \
+         patch.object(logging_obj, "_pre_call"):
         logging_obj.pre_call(input="hi", api_key="sk-test", additional_args={})
 
     mock_curl.assert_not_called()
