@@ -404,14 +404,14 @@ async def google_login(
             state=cli_state,
         )
         if return_to is not None and sso_redirect is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-            sso_redirect.set_cookie(
-                key="litellm_cp_return_to",
-                value=return_to,
-                max_age=600,
-                httponly=True,
-                samesite="lax",
-            )
+            if SSOAuthenticationHandler._validate_return_to(return_to):
+                sso_redirect.set_cookie(
+                    key="litellm_cp_return_to",
+                    value=return_to,
+                    max_age=600,
+                    httponly=True,
+                    samesite="lax",
+                )
         return sso_redirect
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -1778,22 +1778,19 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
-    def _validate_return_to(return_to: str) -> None:
+    def _validate_return_to(return_to: str) -> bool:
         """
         Validate that return_to matches the configured control_plane_url origin.
 
-        Raises HTTPException(400) if:
-        - control_plane_url is not configured in general_settings
-        - return_to origin does not match control_plane_url origin
+        Returns True if return_to is valid and should be used.
+        Returns False if control_plane_url is not configured (return_to is ignored).
+        Raises HTTPException(400) if return_to origin does not match control_plane_url origin.
         """
         from litellm.proxy.proxy_server import general_settings
 
         control_plane_url = general_settings.get("control_plane_url")
         if control_plane_url is None:
-            raise HTTPException(
-                status_code=400,
-                detail="return_to is not allowed: control_plane_url is not configured",
-            )
+            return False
 
         def _origin(url: str) -> tuple:
             parsed = urlparse(url)
@@ -1808,6 +1805,8 @@ class SSOAuthenticationHandler:
                 status_code=400,
                 detail="return_to does not match the configured control_plane_url",
             )
+
+        return True
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -2589,9 +2588,9 @@ class SSOAuthenticationHandler:
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.
         # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-
+        if return_to is not None and SSOAuthenticationHandler._validate_return_to(
+            return_to
+        ):
             code = secrets.token_urlsafe(32)
             cache_key = f"login_code:{code}"
             cache_value = {"token": jwt_token, "redirect_url": return_to}
