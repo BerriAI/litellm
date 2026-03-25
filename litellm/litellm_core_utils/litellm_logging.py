@@ -3093,6 +3093,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
+                    # Track callback logging failures in Prometheus
+                    try:
+                        self._handle_callback_failure(callback=callback)
+                    except Exception:
+                        pass
         except Exception as e:
             verbose_logger.exception(
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {}".format(

@@ -2,6 +2,7 @@
 Mock prometheus unit tests, these don't rely on LLM API calls
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -13,7 +14,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest_asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -1056,6 +1057,94 @@ async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
             mock_increment.assert_called_with(callback_name="langfuse_otel")
     
     print("✓ Langfuse OTEL callback failure metric test passed")
+
+
+@pytest.mark.asyncio
+async def test_custom_batch_logger_auto_failure_reporting():
+    """
+    Ensure batch logger failures are reported automatically via shared flush path.
+    """
+    from litellm.integrations.custom_batch_logger import CustomBatchLogger
+
+    class _TestBatchLogger(CustomBatchLogger):
+        def _get_callback_failure_name(self) -> str:
+            return "AutoTestLogger"
+
+        async def async_send_batch(self, *args, **kwargs):
+            raise RuntimeError("batch send failed")
+
+    logger = _TestBatchLogger(flush_lock=asyncio.Lock(), batch_size=1)
+    logger.log_queue.append({"dummy": "event"})
+
+    with patch.object(logger, "_report_callback_failure") as mock_report:
+        await logger.flush_queue()
+        mock_report.assert_called_once_with(callback_name="AutoTestLogger")
+
+
+@pytest.mark.asyncio
+async def test_custom_batch_logger_dedupes_repeated_failed_batch_metric():
+    """
+    Ensure periodic retries for the same failed batch do not over-increment metrics.
+    """
+    from litellm.integrations.custom_batch_logger import CustomBatchLogger
+
+    class _TestBatchLogger(CustomBatchLogger):
+        def _get_callback_failure_name(self) -> str:
+            return "AutoTestLogger"
+
+        async def async_send_batch(self, *args, **kwargs):
+            raise RuntimeError("batch send failed")
+
+    logger = _TestBatchLogger(flush_lock=asyncio.Lock(), batch_size=1)
+    logger.log_queue.append({"dummy": "event"})
+
+    with patch.object(logger, "_report_callback_failure") as mock_report:
+        await logger.flush_queue()
+        logger.log_queue.append({"dummy": "event-2"})
+        await logger.flush_queue()
+        await logger.flush_queue()
+        mock_report.assert_called_once_with(callback_name="AutoTestLogger")
+
+
+def test_otel_exporter_failure_reports_callback_metric_once_per_outage():
+    """
+    Ensure OTEL exporter failures increment callback failure metric and dedupe
+    repeated failures until export recovers.
+    """
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    class _DummyExporter:
+        def __init__(self):
+            self._results = [
+                SpanExportResult.FAILURE,
+                SpanExportResult.FAILURE,
+                SpanExportResult.SUCCESS,
+                SpanExportResult.FAILURE,
+            ]
+            self._idx = 0
+
+        def export(self, spans):
+            result = self._results[self._idx]
+            self._idx += 1
+            return result
+
+    otel_logger = OpenTelemetry.__new__(OpenTelemetry)
+    otel_logger.callback_name = "ArizeLogger"
+    otel_logger._span_export_in_failure_state = False
+
+    with patch.object(otel_logger, "_report_callback_failure") as mock_report:
+        wrapped_exporter = otel_logger._wrap_exporter_with_failure_tracking(
+            _DummyExporter()
+        )
+        wrapped_exporter.export([])
+        wrapped_exporter.export([])
+        wrapped_exporter.export([])
+        wrapped_exporter.export([])
+
+        assert mock_report.call_count == 2
+        mock_report.assert_any_call(callback_name="ArizeLogger")
 
 
 # ==============================================================================

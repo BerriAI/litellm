@@ -795,9 +795,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is useful for logging payloads that contain sensitive information.
         """
-        import litellm
         from copy import copy
 
+        import litellm
         from litellm import Choices, Message, ModelResponse
 
         turn_off_message_logging: bool = getattr(
@@ -888,11 +888,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    def handle_callback_failure(self, callback_name: str):
+    def _report_callback_failure(self, callback_name: str) -> None:
         """
-        Handle callback logging failures by incrementing Prometheus metrics.
+        Report callback failures to Prometheus callback failure metric.
 
-        Call this method in exception handlers within your callback when logging fails.
+        Keep this as a single helper so callback integrations have one
+        standard failure-reporting path.
         """
         try:
             import litellm
@@ -917,8 +918,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             from litellm._logging import verbose_logger
 
             verbose_logger.debug(
-                f"Error in handle_callback_failure for {callback_name}: {str(e)}"
+                f"Error in _report_callback_failure for {callback_name}: {str(e)}"
             )
+
+    def handle_callback_failure(self, callback_name: str):
+        """
+        Handle callback logging failures by incrementing Prometheus metrics.
+
+        Call this method in exception handlers within your callback when logging fails.
+        """
+        self._report_callback_failure(callback_name=callback_name)
 
     async def _strip_base64_from_messages(
         self,

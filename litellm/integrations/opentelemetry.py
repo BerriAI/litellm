@@ -160,6 +160,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
+        self._span_export_in_failure_state = False
         self._tracer_provider_cache: Dict[str, Any] = {}
         self._init_tracing(tracer_provider)
 
@@ -294,7 +295,7 @@ class OpenTelemetry(CustomLogger):
         return provider
 
     def _init_tracing(self, tracer_provider):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
@@ -333,7 +334,7 @@ class OpenTelemetry(CustomLogger):
             self._response_duration_histogram = None
             return
 
-        from opentelemetry import metrics
+        import opentelemetry.metrics as metrics
         from opentelemetry.sdk.metrics import MeterProvider
 
         def create_meter_provider():
@@ -433,7 +434,7 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -493,7 +494,7 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -555,7 +556,7 @@ class OpenTelemetry(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         parent_otel_span = user_api_key_dict.parent_otel_span
@@ -746,7 +747,7 @@ class OpenTelemetry(CustomLogger):
             span = None
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if parent_span is not None and hasattr(parent_span, "set_status"):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -808,7 +809,7 @@ class OpenTelemetry(CustomLogger):
     def _maybe_log_raw_request(
         self, kwargs, response_obj, start_time, end_time, parent_span
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         # only log raw LLM request/response if message_logging is on and not globally turned off
@@ -1076,8 +1077,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry._logs import SeverityNumber, get_logger
 
         try:
-            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
-                LogRecord as SdkLogRecord,
+            from opentelemetry.sdk._logs import (
+                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
             )
         except ImportError:
             from opentelemetry.sdk._logs._internal import (
@@ -1159,7 +1160,7 @@ class OpenTelemetry(CustomLogger):
           2. The parent proxy-request span
           3. The original fallback context (may be None — last resort)
         """
-        from opentelemetry import trace as _trace
+        import opentelemetry.trace as _trace
 
         if span is not None:
             return _trace.set_span_in_context(span)
@@ -1288,7 +1289,7 @@ class OpenTelemetry(CustomLogger):
             # record error on parent span (keeps hierarchy shallow)
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_otel_span is guaranteed to be not None here
-            if parent_otel_span.is_recording():
+            if parent_otel_span is not None and parent_otel_span.is_recording():
                 parent_otel_span.set_status(Status(StatusCode.ERROR))
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
@@ -1923,7 +1924,8 @@ class OpenTelemetry(CustomLogger):
         return _parent_context
 
     def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
-        from opentelemetry import context, trace
+        import opentelemetry.context as context
+        import opentelemetry.trace as trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
@@ -2016,7 +2018,10 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
-            return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
+            wrapped_exporter = self._wrap_exporter_with_failure_tracking(
+                cast(SpanExporter, self.OTEL_EXPORTER)
+            )
+            return SimpleSpanProcessor(cast(SpanExporter, wrapped_exporter))
 
         if self.OTEL_EXPORTER == "console":
             verbose_logger.debug(
@@ -2046,11 +2051,12 @@ class OpenTelemetry(CustomLogger):
             normalized_endpoint = self._normalize_otel_endpoint(
                 self.OTEL_ENDPOINT, "traces"
             )
-            return BatchSpanProcessor(
+            wrapped_exporter = self._wrap_exporter_with_failure_tracking(
                 OTLPSpanExporterHTTP(
                     endpoint=normalized_endpoint, headers=_split_otel_headers
-                ),
+                )
             )
+            return BatchSpanProcessor(cast(SpanExporter, wrapped_exporter))
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -2069,17 +2075,78 @@ class OpenTelemetry(CustomLogger):
             normalized_endpoint = self._normalize_otel_endpoint(
                 self.OTEL_ENDPOINT, "traces"
             )
-            return BatchSpanProcessor(
+            wrapped_exporter = self._wrap_exporter_with_failure_tracking(
                 OTLPSpanExporterGRPC(
                     endpoint=normalized_endpoint, headers=_split_otel_headers
-                ),
+                )
             )
+            return BatchSpanProcessor(cast(SpanExporter, wrapped_exporter))
         else:
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
+
+    def _wrap_exporter_with_failure_tracking(self, exporter: SpanExporter) -> Any:
+        parent = self
+
+        class _FailureTrackingExporter:
+            def __init__(self, wrapped_exporter: SpanExporter):
+                self._wrapped_exporter = wrapped_exporter
+
+            def export(self, spans):
+                try:
+                    result = self._wrapped_exporter.export(spans)
+                except Exception:
+                    parent._report_span_export_failure()
+                    raise
+
+                if parent._is_failed_span_export_result(result):
+                    parent._report_span_export_failure()
+                else:
+                    parent._mark_span_export_success()
+                return result
+
+            def shutdown(self):
+                if hasattr(self._wrapped_exporter, "shutdown"):
+                    return self._wrapped_exporter.shutdown()
+                return None
+
+            def force_flush(self, timeout_millis: int = 30000):
+                if hasattr(self._wrapped_exporter, "force_flush"):
+                    return self._wrapped_exporter.force_flush(timeout_millis)
+                return True
+
+        return _FailureTrackingExporter(exporter)
+
+    @staticmethod
+    def _is_failed_span_export_result(result: Any) -> bool:
+        try:
+            from opentelemetry.sdk.trace.export import SpanExportResult
+
+            return result == SpanExportResult.FAILURE
+        except Exception:
+            normalized_result = str(result).strip().lower()
+            return normalized_result == "failure" or normalized_result.endswith(
+                ".failure"
+            )
+
+    def _get_callback_failure_metric_name(self) -> str:
+        if self.callback_name:
+            return self.callback_name
+        return self.__class__.__name__
+
+    def _report_span_export_failure(self) -> None:
+        if self._span_export_in_failure_state:
+            return
+        self._report_callback_failure(
+            callback_name=self._get_callback_failure_metric_name()
+        )
+        self._span_export_in_failure_state = True
+
+    def _mark_span_export_success(self) -> None:
+        self._span_export_in_failure_state = False
 
     def _get_log_exporter(self):
         """
@@ -2327,7 +2394,7 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -2380,7 +2447,7 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
+        import opentelemetry.trace as trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
