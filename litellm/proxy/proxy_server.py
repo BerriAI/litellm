@@ -3092,6 +3092,17 @@ class ProxyConfig:
                 verbose_proxy_logger.critical(
                     "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
                 )
+
+            if master_key is not None and isinstance(master_key, str):
+                if master_key is "sk-1234":
+                    raise ValueError(
+                            f"LITELLM_MASTER_KEY is set to the default master-key granting proxy admin access, please change it to something stronger"
+                           )
+                if len(master_key) < 16:
+                    verbose_proxy_logger.warning(
+                        "A key of at least 32 characters is reccomended for production"
+                        )
+
             ### USER API KEY CACHE IN-MEMORY TTL ###
             user_api_key_cache_ttl = general_settings.get(
                 "user_api_key_cache_ttl", None
