@@ -126,6 +126,8 @@ async def create_or_get_user_key(
         sort_order="desc",
         expand=None,
         status=None,
+        project_id=None,
+        access_group_id=None,
     )
 
     key_total_count = keys.get("total_count", 0) or 0
@@ -184,6 +186,8 @@ async def create_or_get_user_key(
         page_size=100,
         sort_by=None,
         sort_order="asc",
+        organization_ids=None,
+        user_api_key_dict=user_api_key_dict,
     )
     # get_users 使用模糊匹配，需要过滤出精确匹配的用户
     exact_users = [
