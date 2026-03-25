@@ -147,12 +147,12 @@ async def list_vector_stores(
         vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
             prisma_client=prisma_client
         )
-        
+
         # Also clean up in-memory registry to remove any deleted vector stores
         if litellm.vector_store_registry is not None:
             db_vector_store_ids = {
-                vs.get("vector_store_id") 
-                for vs in vector_stores_from_db 
+                vs.get("vector_store_id")
+                for vs in vector_stores_from_db
                 if vs.get("vector_store_id")
             }
             # Remove any in-memory vector stores that no longer exist in database
