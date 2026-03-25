@@ -3094,7 +3094,7 @@ class ProxyConfig:
                 )
 
             if master_key is not None and isinstance(master_key, str):
-                if master_key is "sk-1234":
+                if master_key == "sk-1234":
                     raise ValueError(
                             f"LITELLM_MASTER_KEY is set to the default master-key granting proxy admin access, please change it to something stronger"
                            )
