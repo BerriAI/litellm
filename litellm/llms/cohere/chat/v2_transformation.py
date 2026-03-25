@@ -179,8 +179,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         # Cohere v2 rejects fields that are valid in OpenAI but not in Cohere:
         # 1. 'index' in assistant tool_calls
         # 2. 'name' in tool result messages
+        if "messages" not in data:
+            return data
         sanitized: List[AllMessageValues] = []
-        for message in data.get("messages", []):
+        for message in data["messages"]:
             if hasattr(message, "model_dump"):
                 message = message.model_dump(exclude_unset=True)
             if isinstance(message, dict):
@@ -190,6 +192,8 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                         {k: v for k, v in tc.items() if k != "index"}
                         if isinstance(tc, dict)
                         else {k: v for k, v in tc.model_dump(exclude_unset=True).items() if k != "index"}
+                        if hasattr(tc, "model_dump")
+                        else tc
                         for tc in message["tool_calls"]
                     ]
                     message = {**message, "tool_calls": cleaned_tool_calls}

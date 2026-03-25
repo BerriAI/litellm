@@ -133,6 +133,8 @@ class TestCohereV2Transform:
         assistant_msg = result["messages"][1]
         assert "index" not in assistant_msg["tool_calls"][0]
         assert assistant_msg["tool_calls"][0]["id"] == "call_abc"
+        assert assistant_msg["tool_calls"][0]["type"] == "function"
+        assert assistant_msg["tool_calls"][0]["function"]["name"] == "get_time"
 
     def test_preserves_messages_without_offending_fields(self):
         """Messages that don't have index or name are passed through unchanged."""
