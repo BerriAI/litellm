@@ -166,7 +166,7 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     """ """
     from anthropic import Anthropic
 
-    anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", timeout=60.0, max_retries=3))
     litellm._turn_on_debug()
 
     custom_logger = TestCustomLogger()

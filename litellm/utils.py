@@ -6598,7 +6598,7 @@ def prompt_token_calculator(model, messages):
             Exception("Anthropic import failed please run `pip install anthropic`")
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
-        anthropic_obj = Anthropic()
+        anthropic_obj = Anthropic(timeout=60.0)
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
         num_tokens = len(_get_default_encoding().encode(text))

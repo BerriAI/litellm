@@ -6235,9 +6235,9 @@ def moderation(
     openai_client = kwargs.get("client", None)
     if openai_client is None:
         if api_base is not None:
-            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base)
+            openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, timeout=60.0)
         else:
-            openai_client = openai.OpenAI(api_key=api_key)
+            openai_client = openai.OpenAI(api_key=api_key, timeout=60.0)
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)

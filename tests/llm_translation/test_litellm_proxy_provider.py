@@ -29,7 +29,7 @@ async def test_litellm_gateway_from_sdk():
     ]
     from openai import OpenAI
 
-    openai_client = OpenAI(api_key="fake-key")
+    openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
@@ -63,7 +63,7 @@ async def test_litellm_gateway_from_sdk_structured_output():
     litellm.set_verbose = True
     from openai import OpenAI
 
-    openai_client = OpenAI(api_key="fake-key")
+    openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         openai_client.chat.completions, "create", new=MagicMock()
@@ -99,13 +99,13 @@ async def test_litellm_gateway_from_sdk_embedding(is_async):
     if is_async:
         from openai import AsyncOpenAI
 
-        openai_client = AsyncOpenAI(api_key="fake-key")
+        openai_client = AsyncOpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = AsyncMock()
         patch_target = openai_client.embeddings.create
     else:
         from openai import OpenAI
 
-        openai_client = OpenAI(api_key="fake-key")
+        openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = MagicMock()
         patch_target = openai_client.embeddings.create
 
@@ -144,13 +144,13 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
     if is_async:
         from openai import AsyncOpenAI
 
-        openai_client = AsyncOpenAI(api_key="fake-key")
+        openai_client = AsyncOpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = AsyncMock()
         patch_target = openai_client.images.generate
     else:
         from openai import OpenAI
 
-        openai_client = OpenAI(api_key="fake-key")
+        openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = MagicMock()
         patch_target = openai_client.images.generate
 
@@ -315,13 +315,13 @@ async def test_litellm_gateway_from_sdk_transcription(is_async):
     if is_async:
         from openai import AsyncOpenAI
 
-        openai_client = AsyncOpenAI(api_key="fake-key")
+        openai_client = AsyncOpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = AsyncMock()
         patch_target = openai_client.audio.transcriptions.create
     else:
         from openai import OpenAI
 
-        openai_client = OpenAI(api_key="fake-key")
+        openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = MagicMock()
         patch_target = openai_client.audio.transcriptions.create
 
@@ -359,13 +359,13 @@ async def test_litellm_gateway_from_sdk_speech(is_async):
     if is_async:
         from openai import AsyncOpenAI
 
-        openai_client = AsyncOpenAI(api_key="fake-key")
+        openai_client = AsyncOpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = AsyncMock()
         patch_target = openai_client.audio.speech.create
     else:
         from openai import OpenAI
 
-        openai_client = OpenAI(api_key="fake-key")
+        openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
         mock_method = MagicMock()
         patch_target = openai_client.audio.speech.create
 
@@ -504,7 +504,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
     from openai import OpenAI
 
-    openai_client = OpenAI(api_key="fake-key")
+    openai_client = OpenAI(api_key="fake-key", timeout=60.0, max_retries=3)
 
     # Create mock response object
     mock_response = MagicMock()

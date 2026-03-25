@@ -52,7 +52,7 @@ def image_url():
 # def test_openai_image_variation_openai_sdk(image_url):
 #     from openai import OpenAI
 #
-#     client = OpenAI()
+#     client = OpenAI(timeout=60.0, max_retries=3)
 #     response = client.images.create_variation(image=image_url, n=2, size="1024x1024")
 #     print(response)
 #

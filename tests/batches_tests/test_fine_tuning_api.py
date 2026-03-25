@@ -492,7 +492,7 @@ async def test_mock_openai_create_fine_tune_job():
     from openai import AsyncOpenAI
     from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(client.fine_tuning.jobs, "create") as mock_create:
         mock_create.return_value = FineTuningJob(
@@ -541,7 +541,7 @@ async def test_mock_openai_list_fine_tune_jobs():
     from openai import AsyncOpenAI
     from unittest.mock import AsyncMock
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         client.fine_tuning.jobs, "list", new_callable=AsyncMock
@@ -564,7 +564,7 @@ async def test_mock_openai_cancel_fine_tune_job():
     """Test that cancel_fine_tuning_job sends correct parameters to OpenAI"""
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(client.fine_tuning.jobs, "cancel") as mock_cancel:
         try:
@@ -583,7 +583,7 @@ async def test_mock_openai_retrieve_fine_tune_job():
     """Test that retrieve_fine_tuning_job sends correct parameters to OpenAI"""
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key="fake-api-key")
+    client = AsyncOpenAI(api_key="fake-api-key", timeout=60.0, max_retries=3)
 
     with patch.object(client.fine_tuning.jobs, "retrieve") as mock_retrieve:
         try:

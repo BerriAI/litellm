@@ -119,7 +119,7 @@ class TestVolcEngineConfig:
         from litellm import completion
         from litellm.types.utils import ModelResponse
 
-        client = OpenAI(api_key="test_api_key")
+        client = OpenAI(api_key="test_api_key", timeout=60.0, max_retries=3)
 
         mock_raw_response = MagicMock()
         mock_raw_response.headers = {

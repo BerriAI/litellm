@@ -4146,7 +4146,7 @@ def test_completion_vllm(provider):
     """
     from openai import OpenAI
 
-    client = OpenAI(api_key="my-fake-key")
+    client = OpenAI(api_key="my-fake-key", timeout=60.0, max_retries=3)
 
     with patch.object(
         client.completions.with_raw_response, "create", side_effect=mock_post

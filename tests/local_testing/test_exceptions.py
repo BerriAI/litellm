@@ -1140,7 +1140,7 @@ def test_openai_gateway_timeout_error():
     """
     Test that the OpenAI gateway timeout error is raised
     """
-    openai_client = OpenAI()
+    openai_client = OpenAI(timeout=60.0, max_retries=3)
     mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
     def _return_exception(*args, **kwargs):
         import datetime
