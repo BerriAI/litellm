@@ -593,13 +593,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
-                validated = await _run_post_custom_auth_checks(
-                    valid_token=validated,
-                    request=request,
-                    request_data=request_data,
-                    route=route,
-                    parent_otel_span=parent_otel_span,
-                )
+                if getattr(litellm, "enable_post_custom_auth_checks", False):
+                    validated = await _run_post_custom_auth_checks(
+                        valid_token=validated,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                        parent_otel_span=parent_otel_span,
+                    )
                 return validated
             elif response is not None and isinstance(response, str):
                 api_key = response
@@ -607,13 +608,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
-            validated = await _run_post_custom_auth_checks(
-                valid_token=validated,
-                request=request,
-                request_data=request_data,
-                route=route,
-                parent_otel_span=parent_otel_span,
-            )
+            if getattr(litellm, "enable_post_custom_auth_checks", False):
+                validated = await _run_post_custom_auth_checks(
+                    valid_token=validated,
+                    request=request,
+                    request_data=request_data,
+                    route=route,
+                    parent_otel_span=parent_otel_span,
+                )
             return validated
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
