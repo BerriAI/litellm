@@ -389,7 +389,10 @@ class AsyncHTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
+        proxy_mounts = self._create_proxy_mount_config()
+
         return httpx.AsyncClient(
+            mounts=proxy_mounts or None,
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
@@ -939,8 +942,11 @@ class HTTPHandler:
         if client is None:
             transport = self._create_sync_transport()
 
+            proxy_mounts = self._create_proxy_mount_config()
+
             # Create a client with a connection pool
             self.client = httpx.Client(
+                mounts=proxy_mounts or None,
                 transport=transport,
                 timeout=timeout,
                 verify=ssl_config,
@@ -1188,6 +1194,24 @@ class HTTPHandler:
         except Exception:
             pass
 
+    def _create_proxy_mount_config(self) -> Optional[dict]:
+        """
+        Creates the configuration for using httpx with http/https proxy. 
+        Returns the dict with proxy options if HTTP_PROXY or/and HTTPS_PROXY environment variable is set. Using http_proxy/https_proxy as fallback. 
+        Returns empty dict if unset
+        """
+        proxy_mounts = {}
+
+        http_proxy = os.getenv("HTTP_PROXY", os.getenv("http_proxy", ""))
+        if http_proxy:
+            proxy_mounts["http://"] = httpx.HTTPTransport(proxy=http_proxy)
+
+        https_proxy = os.getenv("HTTPS_PROXY", os.getenv("https_proxy", ""))
+        if https_proxy:
+            proxy_mounts["https://"] = httpx.HTTPTransport(proxy=https_proxy)
+
+        return proxy_mounts
+    
     def _create_sync_transport(self) -> Optional[HTTPTransport]:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
