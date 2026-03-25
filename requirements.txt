@@ -22,7 +22,7 @@ uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.42.80 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 redisvl==0.4.1 ## redis semantic caching
-prisma==0.11.0 # for db
+prisma==0.15.0 # for db
 nodejs-wheel-binaries==24.13.1 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys

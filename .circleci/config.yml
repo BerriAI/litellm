@@ -153,7 +153,7 @@ jobs:
               "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.133.0" pyarrow \
               "boto3==1.42.80" langchain lunary==0.2.5 \
               "azure-identity==1.25.3" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
-              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
+              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.15.0 \
               "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
               "gunicorn==23.0.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.11.2" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
@@ -248,7 +248,7 @@ jobs:
               "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.133.0" pyarrow \
               "boto3==1.42.80" langchain lunary==0.2.5 \
               "azure-identity==1.25.3" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
-              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
+              traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.15.0 \
               "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
               "gunicorn==23.0.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
               "apscheduler==3.11.2" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
@@ -360,7 +360,7 @@ jobs:
             pip install opentelemetry-sdk==1.28.0
             pip install opentelemetry-exporter-otlp==1.28.0
             pip install openai==1.100.1
-            pip install prisma==0.11.0
+            pip install prisma==0.15.0
             pip install "detect_secrets==1.5.0"
             pip install "httpx==0.28.1"
             pip install "respx==0.22.0"

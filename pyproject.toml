@@ -49,7 +49,7 @@ fastapi-sso = { version = "0.16.0", optional = true }
 PyJWT = { version = "2.12.1", optional = true, python = ">=3.9" }
 python-multipart = { version = "0.0.20", optional = true}
 cryptography = {version = "43.0.3", optional = true} # Docker uses 46.0.5; pyproject uses 43.0.3 for Poetry Python 3.9.0/3.9.1 compat
-prisma = {version = "0.11.0", optional = true}
+prisma = {version = "0.15.0", optional = true}
 azure-identity = {version = "1.25.3", optional = true, python = ">=3.9"}
 azure-keyvault-secrets = {version = "4.10.0", optional = true}
 azure-storage-blob = {version = "12.28.0", optional = true}
@@ -167,7 +167,7 @@ pytest-cov = "5.0.0"
 parameterized = "0.9.0"
 
 [tool.poetry.group.proxy-dev.dependencies]
-prisma = "0.11.0"
+prisma = "0.15.0"
 hypercorn = "0.17.3"
 prometheus-client = "0.20.0"
 opentelemetry-api = "1.28.0"
