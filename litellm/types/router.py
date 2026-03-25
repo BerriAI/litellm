@@ -163,6 +163,8 @@ class CredentialLiteLLMParams(BaseModel):
     s3_region_name: Optional[str] = None
     s3_encryption_key_id: Optional[str] = None
     aws_batch_role_arn: Optional[str] = None
+    ## VERTEX AI BATCH / GCS ##
+    gcs_bucket_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -224,10 +226,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     complexity_router_config: Optional[Dict] = None
     complexity_router_default_model: Optional[str] = None
 
-    # Batch/File API Params
-    s3_bucket_name: Optional[str] = None
-    s3_encryption_key_id: Optional[str] = None
-    gcs_bucket_name: Optional[str] = None
+    # Note: Batch/File API params (s3_bucket_name, s3_encryption_key_id,
+    # gcs_bucket_name, etc.) are inherited from CredentialLiteLLMParams.
 
     # Vector Store Params
     vector_store_id: Optional[str] = None
