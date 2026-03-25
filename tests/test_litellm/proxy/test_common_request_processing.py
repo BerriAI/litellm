@@ -1791,6 +1791,8 @@ async def test_completion_model_fallback_logic(monkeypatch):
     assert (
         returned_data_cli["model"] == user_model_cli
     ), f"Expected {user_model_cli}, but got {returned_data_cli['model']}. CLI user_model should have highest precedence."
+
+
 class TestHasAttributeErrorInChain:
     """Tests for _has_attribute_error_in_chain helper."""
 
