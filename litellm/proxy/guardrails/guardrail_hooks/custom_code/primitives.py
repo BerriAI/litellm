@@ -5,6 +5,7 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+import ipaddress
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
@@ -392,6 +393,42 @@ def _http_success_response(response: httpx.Response) -> Dict[str, Any]:
     }
 
 
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud IMDS
+    ipaddress.ip_network("100.64.0.0/10"),   # shared address space
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+_BLOCKED_HOSTNAMES = frozenset(
+    ["localhost", "metadata.google.internal", "metadata.azure.com"]
+)
+
+
+def _is_ssrf_blocked_url(url: str) -> bool:
+    """Return True if the URL targets a private/internal network address."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        if host is None:
+            return True
+        if host.lower() in _BLOCKED_HOSTNAMES or host.lower().endswith(".local"):
+            return True
+        try:
+            addr = ipaddress.ip_address(host)
+            return any(addr in net for net in _PRIVATE_NETWORKS)
+        except ValueError:
+            # Not a bare IP literal — could still resolve to private IP,
+            # but we can only block known literals and hostnames at parse time.
+            return False
+    except Exception:
+        return True
+
+
 def _prepare_http_body(
     body: Optional[Any],
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -455,6 +492,11 @@ async def http_request(
     # Validate URL
     if not is_valid_url(url):
         return _http_error_response(f"Invalid URL: {url}")
+
+    if _is_ssrf_blocked_url(url):
+        return _http_error_response(
+            "Requests to private/internal network addresses are not allowed."
+        )
 
     # Validate and normalize method
     method = method.upper()
