@@ -30,7 +30,12 @@ else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
-from .models import ResponseFormatJSONSchema, ResponseFormat, OrchestrationRequest, ChatCompletionTool
+from .models import (
+    ResponseFormatJSONSchema,
+    ResponseFormat,
+    OrchestrationRequest,
+    ChatCompletionTool,
+)
 from .handler import (
     GenAIHubOrchestrationError,
     AsyncSAPStreamIterator,
@@ -200,6 +205,65 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         api_base_ = f"{self.deployment_url}/v2/completion"
         return api_base_
 
+    def _build_prompt_module(
+        self,
+        model_name: str,
+        template_messages: List[Dict[str, str]],
+        params: dict,
+    ) -> dict:
+        # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
+        # LangChain agents pass strict=true at top level, which fails for GPT models
+        # Anthropic models accept strict, so preserve it for them
+        if model_name.startswith("gpt") and "strict" in params:
+            params.pop("strict")
+
+        model_version = params.pop("model_version", "latest")
+
+        tools_ = params.pop("tools", [])
+        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+        tools = {"tools": tools_} if tools_ else {}
+
+        response_format = params.pop("response_format", {})
+        resp_type = response_format.get("type", None)
+        if resp_type:
+            if resp_type == "json_schema":
+                response_format = validate_dict(
+                    response_format, ResponseFormatJSONSchema
+                )
+            else:
+                response_format = validate_dict(response_format, ResponseFormat)
+            response_format = {"response_format": response_format}
+        else:
+            response_format = {}
+
+        placeholder_defaults = params.pop("placeholder_defaults", {})
+        placeholder_defaults = (
+            {"defaults": placeholder_defaults} if placeholder_defaults else {}
+        )
+
+        optional_modules = {}
+        optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
+        for module in optional_modules_lst:
+            if params.get(module, None) is not None:
+                optional_modules[module] = params.pop(module)
+
+        return {
+            "prompt_templating": {
+                "prompt": {
+                    "template": template_messages,
+                    **placeholder_defaults,
+                    **tools,
+                    **response_format,
+                },
+                "model": {
+                    "name": model_name,
+                    "params": params,
+                    "version": model_version,
+                },
+            },
+            **optional_modules,
+        }
+
     def transform_request(
         self,
         model: str,
@@ -210,65 +274,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
-
-        def _build_prompt_module(
-            *,
-            model_name: str,
-            template_messages: List[Dict[str, str]],
-            params: dict,
-        ) -> dict:
-            # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
-            # LangChain agents pass strict=true at top level, which fails for GPT models
-            # Anthropic models accept strict, so preserve it for them
-            if model_name.startswith("gpt") and "strict" in params:
-                params.pop("strict")
-
-            model_version = params.pop("model_version", "latest")
-
-            tools_ = params.pop("tools", [])
-            tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-            tools = {"tools": tools_} if tools_ else {}
-
-            response_format = params.pop("response_format", {})
-            resp_type = response_format.get("type", None)
-            if resp_type:
-                if resp_type == "json_schema":
-                    response_format = validate_dict(
-                        response_format, ResponseFormatJSONSchema
-                    )
-                else:
-                    response_format = validate_dict(response_format, ResponseFormat)
-                response_format = {"response_format": response_format}
-            else:
-                response_format = {}
-
-            placeholder_defaults = params.pop("placeholder_defaults", {})
-            placeholder_defaults = (
-                {"defaults": placeholder_defaults} if placeholder_defaults else {}
-            )
-
-            optional_modules = {}
-            optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
-            for module in optional_modules_lst:
-                if params.get(module, None) is not None:
-                    optional_modules[module] = params.pop(module)
-
-            return {
-                "prompt_templating": {
-                    "prompt": {
-                        "template": template_messages,
-                        **placeholder_defaults,
-                        **tools,
-                        **response_format,
-                    },
-                    "model": {
-                        "name": model_name,
-                        "params": params,
-                        "version": model_version,
-                    },
-                },
-                **optional_modules,
-            }
 
         template = messages
 
@@ -283,13 +288,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         placeholder_values = optional_params.pop("placeholder_values", None)
         placeholder_values = (
-            {"placeholder_values": placeholder_values} if placeholder_values is not None else {}
+            {"placeholder_values": placeholder_values}
+            if placeholder_values is not None
+            else {}
         )
 
         fallback_modules = optional_params.pop("fallback_sap_modules", [])
 
         modules = [
-            _build_prompt_module(
+            self._build_prompt_module(
                 model_name=model,
                 template_messages=template,
                 params=dict(optional_params),
@@ -308,7 +315,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             fallback_template = modules_dict.pop("messages", [])
 
             modules.append(
-                _build_prompt_module(
+                self._build_prompt_module(
                     model_name=fallback_model,
                     template_messages=fallback_template,
                     params=modules_dict,
@@ -316,9 +323,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             )
 
         if fallback_modules:
-            modules_payload = modules  # list
+            modules_payload = modules
         else:
-            modules_payload = modules[0]  # single dict
+            modules_payload = modules[0]  # type: ignore
 
         request_body = {
             "config": {
