@@ -1601,9 +1601,10 @@ async def test_load_environment_variables_blocks_dangerous_keys():
 
 
 @pytest.mark.asyncio
-async def test_load_environment_variables_blocks_proxy_keys():
+async def test_load_environment_variables_allows_proxy_keys():
     """
-    Test that _load_environment_variables rejects proxy-related env var keys.
+    Test that HTTP_PROXY/HTTPS_PROXY are allowed since they are commonly used
+    in corporate environments to route outbound API calls.
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -1611,20 +1612,40 @@ async def test_load_environment_variables_blocks_proxy_keys():
 
     test_config = {
         "environment_variables": {
-            "HTTP_PROXY": "http://evil-proxy:8080",
-            "HTTPS_PROXY": "http://evil-proxy:8080",
-            "http_proxy": "http://evil-proxy:8080",
-            "https_proxy": "http://evil-proxy:8080",
+            "HTTP_PROXY": "http://corp-proxy:8080",
+            "HTTPS_PROXY": "http://corp-proxy:8080",
         }
     }
 
     with patch.dict(os.environ, {}, clear=False):
         proxy_config._load_environment_variables(test_config)
 
-        assert os.environ.get("HTTP_PROXY") != "http://evil-proxy:8080"
-        assert os.environ.get("HTTPS_PROXY") != "http://evil-proxy:8080"
-        assert os.environ.get("http_proxy") != "http://evil-proxy:8080"
-        assert os.environ.get("https_proxy") != "http://evil-proxy:8080"
+        assert os.environ["HTTP_PROXY"] == "http://corp-proxy:8080"
+        assert os.environ["HTTPS_PROXY"] == "http://corp-proxy:8080"
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_blocks_no_proxy():
+    """
+    Test that NO_PROXY/no_proxy are blocked to prevent bypassing proxy-based
+    network monitoring.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    test_config = {
+        "environment_variables": {
+            "NO_PROXY": "internal-service",
+            "no_proxy": "internal-service",
+        }
+    }
+
+    with patch.dict(os.environ, {}, clear=False):
+        proxy_config._load_environment_variables(test_config)
+
+        assert os.environ.get("NO_PROXY") != "internal-service"
+        assert os.environ.get("no_proxy") != "internal-service"
 
 
 @pytest.mark.asyncio

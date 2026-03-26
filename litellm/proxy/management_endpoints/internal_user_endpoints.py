@@ -562,9 +562,9 @@ def _is_valid_user_id(user_id: str) -> bool:
     MAX_USER_ID_LENGTH = 512
     if len(user_id) > MAX_USER_ID_LENGTH:
         return False
-    # Reject null bytes and control characters (< 0x20) except space
+    # Reject ASCII control characters (U+0000–U+001F)
     for ch in user_id:
-        if ch == "\x00" or (ord(ch) < 0x20 and ch != " "):
+        if ord(ch) < 0x20:
             return False
     return True
 
