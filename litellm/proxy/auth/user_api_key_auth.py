@@ -1264,7 +1264,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # enforcement happens at user/team level in common_checks.
             if valid_token.token == CLI_JWT_TOKEN_NAME:
                 skip_budget_checks = True
-            if model is not None and llm_router is not None:
+            if model is not None and llm_router is not None and not skip_budget_checks:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(
