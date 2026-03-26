@@ -79,7 +79,7 @@ class AzureADCredential:
             credential: An azure-identity credential object. If None,
                        DefaultAzureCredential will be used on first token request.
         """
-        self._credential = credential
+        self._credential: Any = credential
         self._initialized = credential is not None
 
     def get_token(self, scope: str) -> AccessToken:

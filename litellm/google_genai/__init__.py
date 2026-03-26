@@ -13,7 +13,7 @@ from .main import (
 
 __all__ = [
     "generate_content",
-    "agenerate_content", 
+    "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
-] 
+]

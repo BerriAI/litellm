@@ -8,6 +8,8 @@ Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
+Provider-specific cost tracking (e.g., [Vertex AI PayGo / priority pricing](../providers/vertex.md#paygo--priority-cost-tracking), [Bedrock service tiers](../providers/bedrock.md#usage---service-tier), [Azure base model mapping](./custom_pricing.md#set-base_model-for-cost-tracking-eg-azure-deployments)) is applied automatically when the response includes tier metadata.
+
 :::tip Keep Pricing Data Updated
 [Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
 :::
@@ -161,7 +163,7 @@ Use this when you want non-proxy admins to access `/spend` endpoints
 
 :::info
 
-Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Schedule a [meeting with us to get your Enterprise License](https://enterprise.litellm.ai/demo)
 
 :::
 
@@ -325,6 +327,10 @@ curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&
 See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
 
 ## Custom Tags
+
+:::tip See Full Request Tags Documentation
+For comprehensive documentation on all tag options including `x-litellm-tags` header, request body `tags`, and config-based tags, see the dedicated [Request Tags](./request_tags.md) page.
+:::
 
 Requirements:
 

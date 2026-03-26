@@ -27,6 +27,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
+    StandardAuditLogPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -175,6 +176,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
+        """Called when an audit log is created. Override in subclasses to handle."""
         pass
 
     #### PROMPT MANAGEMENT HOOKS ####
@@ -377,6 +382,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_headers: Optional[Dict[str, str]] = None,
+        litellm_call_info: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, str]]:
         """
         Called after an LLM API call (success or failure) to allow injecting custom HTTP response headers.
@@ -386,6 +392,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
             - response: Any - The response object (None for failure cases).
             - request_headers: Optional[Dict[str, str]] - The original request headers.
+            - litellm_call_info: Optional[Dict[str, Any]] - Normalized routing metadata:
+                - custom_llm_provider: str - The LLM provider (e.g. "openai", "azure")
+                - model_info: dict - The model_info from router config
+                - api_base: str - The API base URL used
+                - model_id: str - The deployment model ID
 
         Returns:
             - Optional[Dict[str, str]]: A dictionary of headers to inject into the HTTP response.
@@ -665,6 +676,37 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Tuple[bool, Dict]:
+        """
+        Hook to determine if chat completion agentic loop should be executed.
+        """
+        return False, {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        optional_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: Dict,
+    ) -> Any:
+        """
+        Hook to execute chat completion agentic loop based on context from should_run hook.
+        """
+        pass
+
     # Useful helpers for custom logger classes
 
     def truncate_standard_logging_payload_content(
@@ -743,15 +785,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self, model_call_details: Dict
     ) -> Dict:
         """
-        Only redacts messages and responses when self.turn_off_message_logging is True
+        Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
+        This method handles two features:
+        1. turn_off_message_logging: When True, redacts messages and responses
+        2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
-        By default, self.turn_off_message_logging is False and this does nothing.
-
-        Return a redacted deepcopy of the provided logging payload.
+        Return a modified copy of the provided logging payload.
 
         This is useful for logging payloads that contain sensitive information.
         """
+        import litellm
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
@@ -759,14 +803,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         turn_off_message_logging: bool = getattr(
             self, "turn_off_message_logging", False
         )
+        excluded_fields: Optional[List[str]] = getattr(
+            litellm, "standard_logging_payload_excluded_fields", None
+        )
 
-        if turn_off_message_logging is False:
+        # Early return if no processing needed
+        if turn_off_message_logging is False and not excluded_fields:
             return model_call_details
 
         # Only make a shallow copy of the top-level dict to avoid deepcopy issues
         # with complex objects like AuthenticationError that may be present
         model_call_details_copy = copy(model_call_details)
-        redacted_str = "redacted-by-litellm"
         standard_logging_object = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
             return model_call_details_copy
@@ -774,43 +821,62 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         # Make a copy of just the standard_logging_object to avoid modifying the original
         standard_logging_object_copy = copy(standard_logging_object)
 
-        if standard_logging_object_copy.get("messages") is not None:
-            standard_logging_object_copy["messages"] = [
-                Message(content=redacted_str).model_dump()
-            ]
+        # Handle excluded fields - remove them entirely from the payload
+        if excluded_fields:
+            for field in excluded_fields:
+                if field in standard_logging_object_copy:
+                    del standard_logging_object_copy[field]
 
-        if standard_logging_object_copy.get("response") is not None:
-            response = standard_logging_object_copy["response"]
-            # Check if this is a ResponsesAPIResponse (has "output" field)
-            if isinstance(response, dict) and "output" in response:
-                # Make a copy to avoid modifying the original
-                from copy import deepcopy
+        # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
+        if turn_off_message_logging:
+            redacted_str = "redacted-by-litellm"
 
-                response_copy = deepcopy(response)
-                # Redact content in output array
-                if isinstance(response_copy.get("output"), list):
-                    for output_item in response_copy["output"]:
-                        if isinstance(output_item, dict) and "content" in output_item:
-                            if isinstance(output_item["content"], list):
-                                # Redact text in content items
-                                for content_item in output_item["content"]:
-                                    if (
-                                        isinstance(content_item, dict)
-                                        and "text" in content_item
-                                    ):
-                                        content_item["text"] = redacted_str
-                standard_logging_object_copy["response"] = response_copy
-            else:
-                # Standard ModelResponse format
-                model_response = ModelResponse(
-                    choices=[Choices(message=Message(content=redacted_str))]
-                )
-                model_response_dict = model_response.model_dump()
-                standard_logging_object_copy["response"] = model_response_dict
+            if (
+                "messages" not in (excluded_fields or [])
+                and standard_logging_object_copy.get("messages") is not None
+            ):
+                standard_logging_object_copy["messages"] = [
+                    Message(content=redacted_str).model_dump()
+                ]
 
-        model_call_details_copy["standard_logging_object"] = (
-            standard_logging_object_copy
-        )
+            if (
+                "response" not in (excluded_fields or [])
+                and standard_logging_object_copy.get("response") is not None
+            ):
+                response = standard_logging_object_copy["response"]
+                # Check if this is a ResponsesAPIResponse (has "output" field)
+                if isinstance(response, dict) and "output" in response:
+                    # Make a copy to avoid modifying the original
+                    from copy import deepcopy
+
+                    response_copy = deepcopy(response)
+                    # Redact content in output array
+                    if isinstance(response_copy.get("output"), list):
+                        for output_item in response_copy["output"]:
+                            if (
+                                isinstance(output_item, dict)
+                                and "content" in output_item
+                            ):
+                                if isinstance(output_item["content"], list):
+                                    # Redact text in content items
+                                    for content_item in output_item["content"]:
+                                        if (
+                                            isinstance(content_item, dict)
+                                            and "text" in content_item
+                                        ):
+                                            content_item["text"] = redacted_str
+                    standard_logging_object_copy["response"] = response_copy
+                else:
+                    # Standard ModelResponse format
+                    model_response = ModelResponse(
+                        choices=[Choices(message=Message(content=redacted_str))]
+                    )
+                    model_response_dict = model_response.model_dump()
+                    standard_logging_object_copy["response"] = model_response_dict
+
+        model_call_details_copy[
+            "standard_logging_object"
+        ] = standard_logging_object_copy
         return model_call_details_copy
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(

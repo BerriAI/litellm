@@ -4,6 +4,6 @@ Code in this folder is licensed under a commercial license. Please review the [L
 
 **These features are covered under the LiteLLM Enterprise contract**
 
-👉 **Using in an Enterprise / Need specific features ?** Meet with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat?month=2024-02)
+👉 **Using in an Enterprise / Need specific features ?** Meet with us [here](https://enterprise.litellm.ai/demo?month=2024-02)
 
 See all Enterprise Features here 👉 [Docs](https://docs.litellm.ai/docs/proxy/enterprise)

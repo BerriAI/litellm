@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -256,6 +257,15 @@ def detect_first_expected_role(
     return None
 
 
+def _counts_for_alternation(message: AllMessageValues) -> bool:
+    role = message.get("role")
+    if role == "user":
+        return True
+    if role == "assistant":
+        return not bool(message.get("tool_calls"))
+    return False
+
+
 def _insert_user_continue_message(
     messages: List[AllMessageValues],
     user_continue_message: Optional[ChatCompletionUserMessage],
@@ -268,8 +278,8 @@ def _insert_user_continue_message(
     2. Final assistant message
     3. Consecutive assistant messages
 
-    Only inserts messages between consecutive assistant messages,
-    ignoring all other role types.
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not messages:
         return messages
@@ -277,25 +287,42 @@ def _insert_user_continue_message(
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
-    # Handle first message if it's an assistant message
+    # Handle first message if it's an assistant message — always prepend
+    # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
         result_messages.insert(0, continue_message)
 
-    # Handle consecutive assistant messages and final message
-    i = 1  # Start from second message since we handled first message
+    # Handle consecutive assistant messages in the counted sequence
+    i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
-        prev_message = result_messages[i - 1]
-
-        # Only check for consecutive assistant messages
-        # Ignore all other role types
-        if curr_message["role"] == "assistant" and prev_message["role"] == "assistant":
-            result_messages.insert(i, continue_message)
-            i += 2  # Skip over the message we just inserted
-        else:
+        inserted_continue_message = False
+        if (
+            _counts_for_alternation(curr_message)
+            and curr_message["role"] == "assistant"
+        ):
+            # Preserve old behavior for malformed adjacent assistant sequences like
+            # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
+            if i > 0 and result_messages[i - 1].get("role") == "assistant":
+                result_messages.insert(i, continue_message)
+                i += 2
+                inserted_continue_message = True
+            else:
+                j = i - 1
+                while j >= 0:
+                    previous_message = result_messages[j]
+                    if _counts_for_alternation(previous_message):
+                        if previous_message["role"] == "assistant":
+                            result_messages.insert(i, continue_message)
+                            i += 2
+                            inserted_continue_message = True
+                        break
+                    j -= 1
+        if not inserted_continue_message:
             i += 1
 
-    # Handle final message
+    # Handle final message — append user_continue after any trailing assistant,
+    # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
         result_messages.append(continue_message)
 
@@ -310,34 +337,24 @@ def _insert_assistant_continue_message(
     """
     Add assistant continuation messages between consecutive user messages.
 
-    Args:
-        messages: List of message dictionaries
-        assistant_continue_message: Optional custom assistant message
-        ensure_alternating_roles: Whether to enforce alternating roles
-
-    Returns:
-        Modified list of messages with inserted assistant messages
+    Only checks directly adjacent messages to preserve backward compatibility.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    # Create a new list to store modified messages
+    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+
     modified_messages: List[AllMessageValues] = []
-
     for i, message in enumerate(messages):
-        modified_messages.append(message)
-
-        # Check if we need to insert an assistant message
         if (
-            i < len(messages) - 1  # Not the last message
-            and message.get("role") == "user"  # Current is user
+            i < len(messages) - 1
+            and message.get("role") == "user"
             and messages[i + 1].get("role") == "user"
-        ):  # Next is user
-            # Insert assistant message
-            continue_message = (
-                assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-            )
+        ):
+            modified_messages.append(message)
             modified_messages.append(continue_message)
+        else:
+            modified_messages.append(message)
 
     return modified_messages
 
@@ -452,7 +469,7 @@ def update_responses_input_with_model_file_ids(
 
     For managed files (unified file IDs), uses model_file_id_mapping if provided,
     otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
-    
+
     Args:
         input: The responses API input parameter
         model_id: The model ID to use for looking up provider-specific file IDs
@@ -488,9 +505,13 @@ def update_responses_input_with_model_file_ids(
                     file_id = content_item.get("file_id")
                     if file_id:
                         provider_file_id = file_id  # Default to original
-                        
+
                         # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                        if (
+                            model_file_id_mapping
+                            and model_id
+                            and file_id in model_file_id_mapping
+                        ):
                             # Use the model-specific file ID from mapping
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
@@ -501,15 +522,19 @@ def update_responses_input_with_model_file_ids(
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(
+                                file_id
+                            )
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
-                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
+                                unified_file_id = convert_b64_uid_to_unified_uid(
+                                    file_id
+                                )
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split(
                                         "llm_output_file_id,"
                                     )[1].split(";")[0]
-                                
+
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = provider_file_id
                                 updated_content.append(updated_content_item)
@@ -527,6 +552,61 @@ def update_responses_input_with_model_file_ids(
     return updated_input
 
 
+def _decode_vector_store_ids_in_tools(
+    tools: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
+    provider-native IDs.  Non-unified IDs are passed through unchanged.
+
+    This runs unconditionally — no file-ID mapping is required.
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+
+    from litellm.llms.base_llm.managed_resources.utils import (
+        is_base64_encoded_unified_id,
+        parse_unified_id,
+    )
+
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "file_search":
+            updated_tools.append(tool)
+            continue
+
+        vector_store_ids = tool.get("vector_store_ids")
+        if not isinstance(vector_store_ids, list):
+            updated_tools.append(tool)
+            continue
+
+        decoded_ids = []
+        for vs_id in vector_store_ids:
+            if not isinstance(vs_id, str) or not is_base64_encoded_unified_id(vs_id):
+                decoded_ids.append(vs_id)
+                continue
+
+            parsed = parse_unified_id(vs_id)
+            provider_resource_id = (
+                parsed.get("provider_resource_id") if parsed else None
+            )
+
+            if not provider_resource_id:
+                verbose_logger.warning(
+                    "file_search tool contains unified vector_store_id '%s' that could "
+                    "not be decoded to a provider resource ID — passing original ID. "
+                    "Ensure the vector store was created via LiteLLM.",
+                    vs_id,
+                )
+                decoded_ids.append(vs_id)
+            else:
+                decoded_ids.append(provider_resource_id)
+
+        updated_tools.append({**tool, "vector_store_ids": decoded_ids})
+
+    return updated_tools
+
+
 def update_responses_tools_with_model_file_ids(
     tools: Optional[List[Dict[str, Any]]],
     model_id: Optional[str] = None,
@@ -534,9 +614,10 @@ def update_responses_tools_with_model_file_ids(
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Updates responses API tools with provider-specific file IDs.
-    
-    Handles code_interpreter tools with container.file_ids.
-    
+
+    Pass 1 (always): decode unified vector_store_ids in file_search tools.
+    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
+
     Args:
         tools: The responses API tools parameter
         model_id: The model ID to use for looking up provider-specific file IDs
@@ -545,18 +626,22 @@ def update_responses_tools_with_model_file_ids(
     """
     if not tools or not isinstance(tools, list):
         return tools
-    
+
+    # Pass 1: decode unified vector_store_ids (no mapping needed)
+    tools = _decode_vector_store_ids_in_tools(tools) or tools
+
+    # Pass 2: map code_interpreter file IDs (requires mapping)
     if not model_file_id_mapping or not model_id:
         return tools
-    
+
     updated_tools = []
     for tool in tools:
         if not isinstance(tool, dict):
             updated_tools.append(tool)
             continue
-        
+
         updated_tool = tool.copy()
-        
+
         # Handle code_interpreter with container file_ids
         if tool.get("type") == "code_interpreter":
             container = tool.get("container")
@@ -578,14 +663,14 @@ def update_responses_tools_with_model_file_ids(
                                 updated_file_ids.append(file_id)
                         else:
                             updated_file_ids.append(file_id)
-                    
+
                     # Update the tool with new file IDs
                     updated_container = container.copy()
                     updated_container["file_ids"] = updated_file_ids
                     updated_tool["container"] = updated_container
-        
+
         updated_tools.append(updated_tool)
-    
+
     return updated_tools
 
 
@@ -635,6 +720,10 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
+        # Try to get filename from file handle if not already set
+        if not filename and hasattr(file_content, "name"):
+            filename = Path(file_content.name).name
+
         content = file_content.read()
 
         if isinstance(content, str):
@@ -1104,6 +1193,46 @@ def set_last_user_message(
     return messages
 
 
+def add_system_prompt_to_messages(
+    messages: List[AllMessageValues],
+    system_prompt: str,
+    merge_with_first_system: bool = False,
+) -> List[AllMessageValues]:
+    """
+    Add a system prompt to the messages list.
+
+    Args:
+        messages: List of chat completion messages
+        system_prompt: The system prompt content to add. If empty or None, returns messages unchanged.
+        merge_with_first_system: If True and the first message is already a system message,
+            prepends the new prompt to that message's content. If False, adds a new system
+            message at the beginning.
+
+    Returns:
+        New list of messages with the system prompt added
+    """
+    if not system_prompt:
+        return list(messages)
+
+    if merge_with_first_system and messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        existing_content = first.get("content", "")
+        merged_content: Union[str, List[Dict[str, str]]]
+        if isinstance(existing_content, str):
+            merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
+        elif isinstance(existing_content, list):
+            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(
+                existing_content
+            )
+        else:
+            merged_content = [{"type": "text", "text": system_prompt.strip()}]
+        first["content"] = merged_content
+        return [cast(AllMessageValues, first)] + list(messages[1:])
+
+    system_message: AllMessageValues = {"role": "system", "content": system_prompt}
+    return [system_message, *messages]
+
+
 def convert_prefix_message_to_non_prefix_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -1230,16 +1359,76 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
     return images
 
 
+def _attempt_json_repair(s: str) -> Optional[Any]:
+    """
+    Attempt to repair truncated JSON produced by LLM tool calls.
+
+    Handles the most common truncation patterns where the model generates
+    valid JSON that is cut short (missing closing brackets/braces).
+
+    Returns the parsed value on success, or None if repair fails.
+    """
+    import json
+
+    stripped = s.rstrip()
+    if not stripped:
+        return None
+
+    # Track the stack of unmatched openers to respect nesting order
+    opener_stack: list = []
+    in_string = False
+    escape_next = False
+
+    for ch in stripped:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            opener_stack.append("}")
+        elif ch == "[":
+            opener_stack.append("]")
+        elif ch in ("}", "]"):
+            if opener_stack and opener_stack[-1] == ch:
+                opener_stack.pop()
+
+    if not opener_stack:
+        return None
+
+    # Remove trailing comma before we close brackets
+    candidate = stripped.rstrip(",")
+
+    # Close in reverse order of opening (respects nesting)
+    candidate += "".join(reversed(opener_stack))
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
 def parse_tool_call_arguments(
     arguments: Optional[str],
     tool_name: Optional[str] = None,
     context: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> Any:
     """
     Parse tool call arguments from a JSON string.
 
-    This function handles malformed JSON gracefully by raising a ValueError
-    with context about what failed and what the problematic input was.
+    When the JSON is malformed (e.g. truncated by the model), this function
+    attempts a lightweight repair (closing unmatched brackets/braces) before
+    raising an error.  A warning is logged whenever repair succeeds so that
+    callers are aware the arguments were not perfectly formed.
 
     Args:
         arguments: The JSON string containing tool arguments, or None.
@@ -1247,19 +1436,34 @@ def parse_tool_call_arguments(
         context: Optional context string (e.g., "Anthropic Messages API").
 
     Returns:
-        Parsed arguments as a dictionary. Returns empty dict if arguments is None or empty.
+        Parsed arguments (usually a dict, but may be any JSON-deserializable
+        type such as list, str, int, float, or None).  Returns empty dict if
+        arguments is None or empty.
 
     Raises:
-        ValueError: If the arguments string is not valid JSON.
+        ValueError: If the arguments string is not valid JSON and cannot be repaired.
     """
     import json
 
-    if not arguments:
+    if not arguments or not arguments.strip():
         return {}
 
     try:
         return json.loads(arguments)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError as original_error:
+        repaired = _attempt_json_repair(arguments)
+        if repaired is not None:
+            verbose_logger.warning(
+                "Repaired truncated tool call arguments for tool '%s' (%s). "
+                "Original (%d chars): %.200s%s",
+                tool_name or "<unknown>",
+                context or "unknown context",
+                len(arguments),
+                arguments,
+                "..." if len(arguments) > 200 else "",
+            )
+            return repaired
+
         error_parts = ["Failed to parse tool call arguments"]
 
         if tool_name:
@@ -1268,7 +1472,64 @@ def parse_tool_call_arguments(
             error_parts.append(f"({context})")
 
         error_message = (
-            " ".join(error_parts) + f". Error: {str(e)}. Arguments: {arguments}"
+            " ".join(error_parts)
+            + f". Error: {str(original_error)}. Arguments: {arguments}"
         )
 
-        raise ValueError(error_message) from e
+        raise ValueError(error_message) from original_error
+
+
+def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+    """
+    Split a string that contains one or more concatenated JSON objects into
+    a list of parsed dicts.
+
+    LLM providers (notably Bedrock Claude Sonnet 4.5) sometimes return
+    multiple tool-call argument objects concatenated in a single
+    ``arguments`` string, e.g.::
+
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+
+    ``json.loads()`` fails on this with ``JSONDecodeError: Extra data``.
+    This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
+    and extract each JSON object individually.
+
+    Returns
+    -------
+    list[dict]
+        A list of parsed dicts – one per JSON object found.  If *raw* is
+        empty or whitespace-only, an empty list is returned.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If the string contains text that cannot be parsed as JSON at all.
+    """
+    import json
+
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    decoder = json.JSONDecoder()
+    results: List[Dict[str, Any]] = []
+    idx = 0
+    length = len(raw)
+
+    while idx < length:
+        # Skip whitespace between objects
+        while idx < length and raw[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+
+        obj, end_idx = decoder.raw_decode(raw, idx)
+        if isinstance(obj, dict):
+            results.append(obj)
+        else:
+            # Non-dict JSON value – wrap in empty dict (Bedrock requires
+            # toolUse.input to be an object).
+            results.append({})
+        idx = end_idx
+
+    return results

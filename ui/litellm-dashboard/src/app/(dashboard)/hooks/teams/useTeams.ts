@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
@@ -35,7 +35,7 @@ export interface TeamListCallOptions {
   status?: string | null;
 }
 
-const teamListCall = async (
+export const teamListCall = async (
   accessToken: string,
   page: number,
   pageSize: number,
@@ -121,6 +121,43 @@ export const useTeam = (teamId?: string) => {
 
       return teams?.find((team) => team.team_id === teamId);
     },
+  });
+};
+
+const infiniteTeamKeys = createQueryKeys("infiniteTeams");
+
+export const useInfiniteTeams = (
+  pageSize: number = 50,
+  search?: string,
+  organizationId?: string | null,
+) => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
+
+  return useInfiniteQuery<TeamsResponse>({
+    queryKey: infiniteTeamKeys.list({
+      filters: {
+        pageSize,
+        ...(search && { search }),
+        ...(organizationId && { organizationId }),
+        ...(userId && { userId }),
+      },
+    }),
+    queryFn: async ({ pageParam }) => {
+      return await teamListCall(accessToken!, pageParam as number, pageSize, {
+        team_alias: search || undefined,
+        organizationID: organizationId,
+        userID: !isAdmin ? userId : undefined,
+      });
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      if (lastPage.page < lastPage.total_pages) {
+        return lastPage.page + 1;
+      }
+      return undefined;
+    },
+    enabled: Boolean(accessToken),
   });
 };
 

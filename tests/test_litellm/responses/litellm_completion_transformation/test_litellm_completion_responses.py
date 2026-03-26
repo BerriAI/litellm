@@ -7,6 +7,7 @@ sys.path.insert(
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    TOOL_CALLS_CACHE,
 )
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
@@ -17,6 +18,8 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Message,
     ModelResponse,
+    Function,
+    ChatCompletionMessageToolCall,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -755,6 +758,98 @@ class TestFunctionCallTransformation:
         tool_call = tool_calls[0]
         assert tool_call.get("id") == "fallback_id"
 
+    def test_ensure_tool_results_preserves_cached_openai_object_tool_call(self):
+        """
+        Test cached ChatCompletionMessageToolCall objects are normalized correctly.
+        """
+        tool_call_id = "call_cached_openai_object"
+        TOOL_CALLS_CACHE.set_cache(
+            key=tool_call_id,
+            value=ChatCompletionMessageToolCall(
+                id=tool_call_id,
+                type="function",
+                function=Function(
+                    name="search_web",
+                    arguments='{"query": "python bugs"}',
+                ),
+            ),
+        )
+
+        messages_missing_tool_calls = [
+            {"role": "user", "content": "Search for python bugs"},
+            {"role": "assistant", "content": None, "tool_calls": []},
+            {"role": "tool", "content": "Found 5 results", "tool_call_id": tool_call_id},
+        ]
+
+        try:
+            fixed_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+                messages=messages_missing_tool_calls,
+                tools=None,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        assistant_msg = fixed_messages[1]
+        tool_calls = assistant_msg.get("tool_calls", [])
+        assert len(tool_calls) == 1
+
+        tool_call = tool_calls[0]
+        function = tool_call.get("function", {})
+        assert function.get("name") == "search_web"
+        assert function.get("arguments") == '{"query": "python bugs"}'
+
+    def test_ensure_tool_results_preserves_cached_attr_object_tool_call(self):
+        """
+        Test cached attribute-only tool call objects are normalized correctly.
+        """
+
+        class AttrOnlyFunction:
+            def __init__(self, name: str, arguments: str):
+                self.name = name
+                self.arguments = arguments
+
+        class AttrOnlyToolCall:
+            def __init__(self, id: str, type: str, function: AttrOnlyFunction):
+                self.id = id
+                self.type = type
+                self.function = function
+
+        tool_call_id = "call_cached_attr_object"
+        TOOL_CALLS_CACHE.set_cache(
+            key=tool_call_id,
+            value=AttrOnlyToolCall(
+                id=tool_call_id,
+                type="function",
+                function=AttrOnlyFunction(
+                    name="search_web",
+                    arguments='{"query": "attribute objects"}',
+                ),
+            ),
+        )
+
+        messages_missing_tool_calls = [
+            {"role": "user", "content": "Search using attr object"},
+            {"role": "assistant", "content": None, "tool_calls": []},
+            {"role": "tool", "content": "Found 3 results", "tool_call_id": tool_call_id},
+        ]
+
+        try:
+            fixed_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+                messages=messages_missing_tool_calls,
+                tools=None,
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        assistant_msg = fixed_messages[1]
+        tool_calls = assistant_msg.get("tool_calls", [])
+        assert len(tool_calls) == 1
+
+        tool_call = tool_calls[0]
+        function = tool_call.get("function", {})
+        assert function.get("name") == "search_web"
+        assert function.get("arguments") == '{"query": "attribute objects"}'
+
 
 class TestToolChoiceTransformation:
     """Test the tool_choice transformation fix for Cursor IDE bug"""
@@ -1424,6 +1519,47 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is None
         assert response_usage.output_tokens_details is None
 
+    def test_transform_usage_with_image_tokens(self):
+        """Test that image_tokens from Vertex AI/Gemini are properly transformed to output_tokens_details"""
+        # Setup: Simulate Vertex AI/Gemini usage with image_tokens in completion_tokens_details
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=150,
+            total_tokens=160,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=0,
+                text_tokens=50,
+                image_tokens=100,  # From Vertex AI candidatesTokensDetails with modality="IMAGE"
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Here is the generated image.", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.output_tokens == 150
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
+        assert response_usage.output_tokens_details.image_tokens == 100
+
 
 class TestStreamingIDConsistency:
     """Test cases for consistent IDs across streaming events (issue #14962)"""
@@ -1638,3 +1774,128 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+    def test_parallel_tool_calls_merged_into_single_assistant_message(self):
+        """
+        Regression test: multi-turn parallel tool calls via the Responses API must
+        produce a single assistant message with all tool_calls, not one assistant
+        message per function_call item.
+
+        When the model responds with two parallel tool calls (e.g. get_weather for
+        SF and NYC), the next Responses API request includes two consecutive
+        function_call items followed by two function_call_output items.
+
+        Without the fix each function_call becomes its own assistant message,
+        producing back-to-back assistant messages that Anthropic/Vertex AI rejects:
+        "tool_use ids were found without tool_result blocks immediately after".
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF and NYC?"},
+            # Two parallel tool calls from the previous assistant response
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "toolu_02",
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+            # Tool results
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+            {"type": "function_call_output", "call_id": "toolu_02", "output": "55°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        # Must not have two consecutive assistant messages
+        for i in range(len(roles) - 1):
+            assert not (
+                roles[i] == "assistant" and roles[i + 1] == "assistant"
+            ), f"Consecutive assistant messages at indices {i} and {i+1}: {roles}"
+
+        # The single assistant message must contain BOTH tool_calls
+        assistant_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "assistant"
+        ]
+        assert len(assistant_messages) == 1, (
+            f"Expected 1 assistant message, got {len(assistant_messages)}"
+        )
+
+        assistant_msg = assistant_messages[0]
+        tool_calls = (
+            assistant_msg.get("tool_calls")
+            if isinstance(assistant_msg, dict)
+            else getattr(assistant_msg, "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 2, (
+            f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
+        )
+
+        call_ids = [
+            (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None))
+            for tc in tool_calls
+        ]
+        assert "toolu_01" in call_ids, f"toolu_01 missing from tool_calls: {call_ids}"
+        assert "toolu_02" in call_ids, f"toolu_02 missing from tool_calls: {call_ids}"
+
+        # Both tool messages must be present
+        tool_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "tool"
+        ]
+        assert len(tool_messages) == 2, (
+            f"Expected 2 tool messages, got {len(tool_messages)}"
+        )
+
+    def test_single_tool_call_still_works_after_merge_fix(self):
+        """
+        Ensure the parallel-tool-call merging fix does not break the existing
+        single-tool-call path.
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF?"},
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        assert "user" in roles
+        assert "assistant" in roles
+        assert "tool" in roles
+
+        assistant_messages = [m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"]
+        assert len(assistant_messages) == 1
+
+        tool_calls = (
+            assistant_messages[0].get("tool_calls")
+            if isinstance(assistant_messages[0], dict)
+            else getattr(assistant_messages[0], "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 1

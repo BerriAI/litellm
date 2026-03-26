@@ -38,10 +38,10 @@ beforeAll(() => {
       matches: false,
       media: query,
       onchange: null,
-      addListener: () => { },
-      removeListener: () => { },
-      addEventListener: () => { },
-      removeEventListener: () => { },
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
       dispatchEvent: () => false,
     }),
   });
@@ -169,6 +169,20 @@ describe("PublicModelHub", () => {
         return text === "Unknown";
       });
       expect(unknownStatus).toBeInTheDocument();
+    });
+  });
+  it("handles non-array response gracefully (regression test for e.filter crash)", async () => {
+    const networkingModule = await import("./networking");
+    // Mock the API to return an object (like an error response) instead of an array
+    vi.mocked(networkingModule.modelHubPublicModelsCall).mockResolvedValue({
+      detail: "No models configured",
+    } as any);
+
+    render(<PublicModelHub />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("navbar")).toBeInTheDocument();
+      expect(screen.getByText("Model Hub")).toBeInTheDocument();
     });
   });
 });

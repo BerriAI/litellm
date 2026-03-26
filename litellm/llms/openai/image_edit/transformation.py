@@ -40,6 +40,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             "image",
             "prompt",
             "background",
+            "input_fidelity",
             "mask",
             "model",
             "n",
@@ -100,7 +101,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             request_params["image"] = image
         if prompt is not None:
             request_params["prompt"] = prompt
-            
+
         request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
 

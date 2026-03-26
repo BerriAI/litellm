@@ -54,6 +54,14 @@ class BaseResponsesAPIConfig(ABC):
             and v is not None
         }
 
+    def supports_native_file_search(self) -> bool:
+        """Return True if this provider handles the file_search tool natively.
+
+        Override in provider subclasses that support file_search without
+        LiteLLM emulation (e.g. OpenAI, Azure OpenAI).
+        """
+        return False
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
@@ -216,6 +224,18 @@ class BaseResponsesAPIConfig(ABC):
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
+        return False
+
+    def supports_native_websocket(self) -> bool:
+        """
+        Returns True if the provider has a native WebSocket endpoint for Responses API.
+
+        Providers with native websocket support can connect directly to wss:// endpoints.
+        Providers without native support will use the ManagedResponsesWebSocketHandler
+        which makes HTTP streaming calls and forwards events over the websocket.
+
+        Default: False (use managed websocket handler)
+        """
         return False
 
     #########################################################

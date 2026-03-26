@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from functools import lru_cache
 from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
@@ -311,20 +312,21 @@ def get_request_route(request: Request) -> str:
         return request.url.path
 
 
+@lru_cache(maxsize=256)
 def normalize_request_route(route: str) -> str:
     """
     Normalize request routes by replacing dynamic path parameters with placeholders.
-    
+
     This prevents high cardinality in Prometheus metrics by collapsing routes like:
     - /v1/responses/1234567890 -> /v1/responses/{response_id}
     - /v1/threads/thread_123 -> /v1/threads/{thread_id}
-    
+
     Args:
         route: The request route path
-        
+
     Returns:
         Normalized route with dynamic parameters replaced by placeholders
-        
+
     Examples:
         >>> normalize_request_route("/v1/responses/abc123")
         '/v1/responses/{response_id}'
@@ -337,58 +339,90 @@ def normalize_request_route(route: str) -> str:
     # Format: (regex_pattern, replacement_template)
     patterns = [
         # Responses API - must come before generic patterns
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)$', r'\1/{response_id}'),
-        (r'^(/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
-        (r'^(/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
-        (r'^(/responses)/([^/]+)$', r'\1/{response_id}'),
-        
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)$", r"\1/{response_id}"),
+        (r"^(/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
+        (r"^(/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
+        (r"^(/responses)/([^/]+)$", r"\1/{response_id}"),
         # Threads API
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$', r'\1/{thread_id}\3/{run_id}\5/{step_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/cancel)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/submit_tool_outputs)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)$', r'\1/{thread_id}\3/{run_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)$', r'\1/{thread_id}\3'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)/([^/]+)$', r'\1/{thread_id}\3/{message_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)$', r'\1/{thread_id}\3'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)$', r'\1/{thread_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$",
+            r"\1/{thread_id}\3/{run_id}\5/{step_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/cancel)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/submit_tool_outputs)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)$",
+            r"\1/{thread_id}\3/{run_id}",
+        ),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)$", r"\1/{thread_id}\3"),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/messages)/([^/]+)$",
+            r"\1/{thread_id}\3/{message_id}",
+        ),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)(/messages)$", r"\1/{thread_id}\3"),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)$", r"\1/{thread_id}"),
         # Vector Stores API
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)/([^/]+)$', r'\1/{vector_store_id}\3/{file_id}'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)$', r'\1/{vector_store_id}\3'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)/([^/]+)$', r'\1/{vector_store_id}\3/{batch_id}'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)$', r'\1/{vector_store_id}\3'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)$', r'\1/{vector_store_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)/([^/]+)$",
+            r"\1/{vector_store_id}\3/{file_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)$",
+            r"\1/{vector_store_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)/([^/]+)$",
+            r"\1/{vector_store_id}\3/{batch_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)$",
+            r"\1/{vector_store_id}\3",
+        ),
+        (r"^(/(?:openai/)?v1/vector_stores)/([^/]+)$", r"\1/{vector_store_id}"),
         # Assistants API
-        (r'^(/(?:openai/)?v1/assistants)/([^/]+)$', r'\1/{assistant_id}'),
-        
+        (r"^(/(?:openai/)?v1/assistants)/([^/]+)$", r"\1/{assistant_id}"),
         # Files API
-        (r'^(/(?:openai/)?v1/files)/([^/]+)(/content)$', r'\1/{file_id}\3'),
-        (r'^(/(?:openai/)?v1/files)/([^/]+)$', r'\1/{file_id}'),
-        
+        (r"^(/(?:openai/)?v1/files)/([^/]+)(/content)$", r"\1/{file_id}\3"),
+        (r"^(/(?:openai/)?v1/files)/([^/]+)$", r"\1/{file_id}"),
         # Batches API
-        (r'^(/(?:openai/)?v1/batches)/([^/]+)(/cancel)$', r'\1/{batch_id}\3'),
-        (r'^(/(?:openai/)?v1/batches)/([^/]+)$', r'\1/{batch_id}'),
-        
+        (r"^(/(?:openai/)?v1/batches)/([^/]+)(/cancel)$", r"\1/{batch_id}\3"),
+        (r"^(/(?:openai/)?v1/batches)/([^/]+)$", r"\1/{batch_id}"),
         # Fine-tuning API
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/events)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/cancel)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/checkpoints)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)$', r'\1/{fine_tuning_job_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/events)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/cancel)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/checkpoints)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)$", r"\1/{fine_tuning_job_id}"),
         # Models API
-        (r'^(/(?:openai/)?v1/models)/([^/]+)$', r'\1/{model}'),
+        (r"^(/(?:openai/)?v1/models)/([^/]+)$", r"\1/{model}"),
     ]
-    
+
     # Apply patterns in order
     for pattern, replacement in patterns:
         normalized = re.sub(pattern, replacement, route)
         if normalized != route:
             return normalized
-    
+
     # Return original route if no pattern matched
     return route
 
@@ -505,8 +539,45 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
+def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
+    """
+    Return the minimum value of `field` across all deployments for model_name,
+    or None if no deployment has the field set.
+
+    When multiple deployments share the same model name, taking the minimum is
+    the safest choice for load-balanced setups: it ensures no deployment is
+    over-consumed regardless of which one actually serves a given request.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    deployments = llm_router.get_model_list(model_name=model_name)
+    if not deployments:
+        return None
+    limits = []
+    for deployment in deployments:
+        raw = deployment.get("litellm_params", {}).get(field)
+        if raw is not None:
+            try:
+                if isinstance(raw, (int, float, str, bytes, bytearray)):
+                    limits.append(int(raw))
+            except (ValueError, TypeError):
+                pass
+    return min(limits) if limits else None
+
+
+def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
+
+
+def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model rpm limit for a given api key.
@@ -515,6 +586,7 @@ def get_key_model_rpm_limit(
     1. Key metadata (model_rpm_limit)
     2. Key model_max_budget (rpm_limit per model)
     3. Team metadata (model_rpm_limit)
+    4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -533,13 +605,22 @@ def get_key_model_rpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_rpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_rpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_rpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model tpm limit for a given api key.
@@ -548,6 +629,7 @@ def get_key_model_tpm_limit(
     1. Key metadata (model_tpm_limit)
     2. Key model_max_budget (tpm_limit per model)
     3. Team metadata (model_tpm_limit)
+    4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -566,7 +648,15 @@ def get_key_model_tpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_tpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_tpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_tpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
@@ -628,11 +718,12 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
     items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    customer_headers_mappings = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -641,8 +732,13 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
         if role is None or not header_name:
             continue
         if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
-            return header_name
+            customer_headers_mappings.append(header_name.lower())
+
+    if customer_headers_mappings:
+        return customer_headers_mappings
+
     return None
+
 
 def _get_customer_id_from_standard_headers(
     request_headers: Optional[dict],
@@ -679,7 +775,9 @@ def get_end_user_id_from_request_body(
     from litellm.proxy.proxy_server import general_settings
 
     # Check 1: Standard customer ID headers (always checked, no configuration required)
-    customer_id = _get_customer_id_from_standard_headers(request_headers=request_headers)
+    customer_id = _get_customer_id_from_standard_headers(
+        request_headers=request_headers
+    )
     if customer_id is not None:
         return customer_id
 
@@ -687,7 +785,7 @@ def get_end_user_id_from_request_body(
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        custom_header_name_to_check: Optional[str] = None
+        custom_header_name_to_check: Optional[Union[list, str]] = None
 
         # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
@@ -704,15 +802,19 @@ def get_end_user_id_from_request_body(
                 custom_header_name_to_check = value
 
         # If we have a header name to check, try to read it from request headers
-        if isinstance(custom_header_name_to_check, str):
+        if isinstance(custom_header_name_to_check, list):
+            headers_lower = {k.lower(): v for k, v in request_headers.items()}
+            for expected_header in custom_header_name_to_check:
+                header_value = headers_lower.get(expected_header)
+                if header_value is not None:
+                    user_id_str = str(header_value)
+                    if user_id_str.strip():
+                        return user_id_str
+
+        elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_from_header = header_value
-                    user_id_str = (
-                        str(user_id_from_header)
-                        if user_id_from_header is not None
-                        else ""
-                    )
+                    user_id_str = str(header_value) if header_value is not None else ""
                     if user_id_str.strip():
                         return user_id_str
 
@@ -734,6 +836,15 @@ def get_end_user_id_from_request_body(
         user_id_from_metadata_field = metadata_dict.get("user_id")
         if user_id_from_metadata_field is not None:
             return str(user_id_from_metadata_field)
+
+    # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
+    # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
+    # Only use this for end-user identification in trusted environments where you control
+    # the calling application. For untrusted callers, prefer using headers or server-side
+    # middleware to set the end_user_id to prevent impersonation.
+    if request_body.get("safety_identifier") is not None:
+        user_from_body_user_field = request_body["safety_identifier"]
+        return str(user_from_body_user_field)
 
     return None
 

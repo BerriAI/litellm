@@ -254,7 +254,7 @@ class GigaChatConfig(BaseConfig):
                 func_name = tool_choice.get("function", {}).get("name")
                 if func_name:
                     return {"name": func_name}
-        
+
         # Default to None (don't set function_call)
         return None
 
@@ -386,33 +386,7 @@ class GigaChatConfig(BaseConfig):
 
             transformed.append(message)
 
-        # Collapse consecutive user messages
-        return self._collapse_user_messages(transformed)
-
-    def _collapse_user_messages(self, messages: List[dict]) -> List[dict]:
-        """Collapse consecutive user messages into one."""
-        collapsed: List[dict] = []
-        prev_user_msg: Optional[dict] = None
-        content_parts: List[str] = []
-
-        for msg in messages:
-            if msg.get("role") == "user" and prev_user_msg is not None:
-                content_parts.append(msg.get("content", ""))
-            else:
-                if content_parts and prev_user_msg:
-                    prev_user_msg["content"] = "\n".join(
-                        [prev_user_msg.get("content", "")] + content_parts
-                    )
-                    content_parts = []
-                collapsed.append(msg)
-                prev_user_msg = msg if msg.get("role") == "user" else None
-
-        if content_parts and prev_user_msg:
-            prev_user_msg["content"] = "\n".join(
-                [prev_user_msg.get("content", "")] + content_parts
-            )
-
-        return collapsed
+        return transformed
 
     def transform_response(
         self,

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from typing import (
@@ -11,6 +12,10 @@ from typing import (
     Tuple,
     Union,
     cast,
+)
+
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -61,12 +66,14 @@ def create_tool_name_mapping(
             mapping[truncated_name] = original_name
     return mapping
 
+
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
@@ -172,10 +179,11 @@ class AnthropicAdapter:
             model=model, messages=messages, **kwargs
         )
 
-        translated_body, tool_name_mapping = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                anthropic_message_request=request_body
-            )
+        (
+            translated_body,
+            tool_name_mapping,
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            anthropic_message_request=request_body
         )
 
         return translated_body, tool_name_mapping
@@ -283,7 +291,11 @@ class LiteLLMAnthropicMessagesAdapter:
             model: Model name to check if cache_control should be preserved
         """
         # TypedDict objects are dicts at runtime, so .get() works
-        cache_control = source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
+        cache_control = (
+            source.get("cache_control")
+            if isinstance(source, dict)
+            else getattr(source, "cache_control", None)
+        )
         if cache_control and model and self.is_anthropic_claude_model(model):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
@@ -297,7 +309,35 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         Which anthropic params, we need to translate to the openai format.
         """
-        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking", "output_format"]
+        return [
+            "messages",
+            "metadata",
+            "system",
+            "tool_choice",
+            "tools",
+            "thinking",
+            "output_format",
+        ]
+
+    def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
+        """
+        Check if a tool is an Anthropic web search tool.
+
+        Anthropic web search tools have:
+        - type starting with "web_search" (e.g., "web_search_20260209")
+        - name = "web_search"
+
+        Args:
+            tool: Tool definition dict
+
+        Returns:
+            True if this is a web search tool
+        """
+        tool_type = tool.get("type", "")
+        tool_name = tool.get("name", "")
+        return (
+            isinstance(tool_type, str) and tool_type.startswith("web_search")
+        ) or tool_name == "web_search"
 
     def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
@@ -330,13 +370,17 @@ class LiteLLMAnthropicMessagesAdapter:
                             text_obj = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
-                            self._add_cache_control_if_applicable(content, text_obj, model)
+                            self._add_cache_control_if_applicable(
+                                content, text_obj, model
+                            )
                             new_user_content_list.append(text_obj)  # type: ignore
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
                             openai_image_url = (
-                                self._translate_anthropic_image_to_openai(cast(dict, source))
+                                self._translate_anthropic_image_to_openai(
+                                    cast(dict, source)
+                                )
                             )
 
                             if openai_image_url:
@@ -346,13 +390,17 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                self._add_cache_control_if_applicable(content, image_obj, model)
+                                self._add_cache_control_if_applicable(
+                                    content, image_obj, model
+                                )
                                 new_user_content_list.append(image_obj)  # type: ignore
                         elif content.get("type") == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
                             source = content.get("source", {})
                             openai_image_url = (
-                                self._translate_anthropic_image_to_openai(cast(dict, source))
+                                self._translate_anthropic_image_to_openai(
+                                    cast(dict, source)
+                                )
                             )
 
                             if openai_image_url:
@@ -362,7 +410,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 doc_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                self._add_cache_control_if_applicable(content, doc_obj, model)
+                                self._add_cache_control_if_applicable(
+                                    content, doc_obj, model
+                                )
                                 new_user_content_list.append(doc_obj)  # type: ignore
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
@@ -371,7 +421,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content="",
                                 )
-                                self._add_cache_control_if_applicable(content, tool_result, model)
+                                self._add_cache_control_if_applicable(
+                                    content, tool_result, model
+                                )
                                 tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), str):
                                 tool_result = ChatCompletionToolMessage(
@@ -379,7 +431,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content=str(content.get("content", "")),
                                 )
-                                self._add_cache_control_if_applicable(content, tool_result, model)
+                                self._add_cache_control_if_applicable(
+                                    content, tool_result, model
+                                )
                                 tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), list):
                                 # Combine all content items into a single tool message
@@ -396,7 +450,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=c,
                                         )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
+                                        self._add_cache_control_if_applicable(
+                                            content, tool_result, model
+                                        )
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                     elif isinstance(c, dict):
                                         if c.get("type") == "text":
@@ -407,7 +463,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=c.get("text", ""),
                                             )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            self._add_cache_control_if_applicable(
+                                                content, tool_result, model
+                                            )
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                         elif c.get("type") == "image":
                                             source = c.get("source", {})
@@ -424,7 +482,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=openai_image_url,
                                             )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            self._add_cache_control_if_applicable(
+                                                content, tool_result, model
+                                            )
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                 else:
                                     # For multiple content items, combine into a single tool message
@@ -474,7 +534,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=combined_content_parts,  # type: ignore
                                         )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
+                                        self._add_cache_control_if_applicable(
+                                            content, tool_result, model
+                                        )
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]
 
             if len(tool_message_list) > 0:
@@ -488,7 +550,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[Dict[str, Any]] = []  # For content blocks with cache_control
+            assistant_content_list: List[
+                Dict[str, Any]
+            ] = []  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -507,7 +571,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
-                                self._add_cache_control_if_applicable(content, text_block, model)
+                                self._add_cache_control_if_applicable(
+                                    content, text_block, model
+                                )
                                 if "cache_control" in text_block:
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
@@ -529,19 +595,21 @@ class LiteLLMAnthropicMessagesAdapter:
                                         function_chunk.get("provider_specific_fields")
                                         or {}
                                     )
-                                    provider_specific_fields["thought_signature"] = (
-                                        signature
-                                    )
-                                    function_chunk["provider_specific_fields"] = (
-                                        provider_specific_fields
-                                    )
+                                    provider_specific_fields[
+                                        "thought_signature"
+                                    ] = signature
+                                    function_chunk[
+                                        "provider_specific_fields"
+                                    ] = provider_specific_fields
 
                                 tool_call = ChatCompletionAssistantToolCall(
                                     id=content.get("id", ""),
                                     type="function",
                                     function=function_chunk,
                                 )
-                                self._add_cache_control_if_applicable(content, tool_call, model)
+                                self._add_cache_control_if_applicable(
+                                    content, tool_call, model
+                                )
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
                                 thinking_block = ChatCompletionThinkingBlock(
@@ -640,10 +708,7 @@ class LiteLLMAnthropicMessagesAdapter:
         - vertex_ai/*claude* models
         """
         model_lower = model.lower()
-        return (
-            "anthropic" in model_lower
-            or "claude" in model_lower
-        )
+        return "anthropic" in model_lower or "claude" in model_lower
 
     @staticmethod
     def translate_thinking_for_model(
@@ -673,6 +738,24 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking
             )
             if reasoning_effort:
+                summary = (
+                    thinking.get("summary") if isinstance(thinking, dict) else None
+                )
+                auto_summary = is_reasoning_auto_summary_enabled()
+                if summary:
+                    return {
+                        "reasoning_effort": {
+                            "effort": reasoning_effort,
+                            "summary": summary,
+                        }
+                    }
+                elif auto_summary:
+                    return {
+                        "reasoning_effort": {
+                            "effort": reasoning_effort,
+                            "summary": "detailed",
+                        }
+                    }
                 return {"reasoning_effort": reasoning_effort}
             return {}
 
@@ -712,7 +795,15 @@ class LiteLLMAnthropicMessagesAdapter:
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+
         for tool in tools:
+            # Check if this is an Anthropic-native tool that should be kept as-is
+            tool_type = tool.get("type", "")
+            if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
+                # Keep Anthropic-native tools in their original format
+                new_tools.append(tool)  # type: ignore[arg-type]
+                continue
+
             original_name = tool["name"]
             truncated_name = truncate_tool_name(original_name)
 
@@ -731,7 +822,9 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
+            tool_param = ChatCompletionToolParam(
+                type="function", function=function_chunk
+            )
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)  # type: ignore[arg-type]
 
@@ -763,6 +856,11 @@ class LiteLLMAnthropicMessagesAdapter:
         if not schema:
             return None
 
+        # Deep copy to avoid mutating the original schema
+        schema = copy.deepcopy(schema)
+        # OpenAI strict mode requires additionalProperties: false on every object
+        self._add_additional_properties_false(schema)
+
         # Convert to OpenAI response_format structure
         return {
             "type": "json_schema",
@@ -772,6 +870,46 @@ class LiteLLMAnthropicMessagesAdapter:
                 "strict": True,
             },
         }
+
+    @staticmethod
+    def _add_additional_properties_false(schema: dict) -> None:
+        """
+        Recursively ensure object schemas comply with OpenAI strict mode.
+
+        OpenAI's strict mode requires:
+        1. 'additionalProperties': false at every object nesting level
+        2. All property keys listed in 'required'
+        """
+        if not isinstance(schema, dict):
+            return
+
+        if schema.get("type") == "object" and "properties" in schema:
+            schema["additionalProperties"] = False
+            schema["required"] = list(schema["properties"].keys())
+            for prop in schema["properties"].values():
+                LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(prop)
+
+        # Handle array items
+        if "items" in schema:
+            LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                schema["items"]
+            )
+
+        # Handle anyOf/oneOf/allOf
+        for key in ("anyOf", "oneOf", "allOf"):
+            if key in schema:
+                for sub_schema in schema[key]:
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        sub_schema
+                    )
+
+        # Handle $defs / definitions
+        for key in ("$defs", "definitions"):
+            if key in schema:
+                for def_schema in schema[key].values():
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(
+                        def_schema
+                    )
 
     def _add_system_message_to_messages(
         self,
@@ -807,6 +945,144 @@ class LiteLLMAnthropicMessagesAdapter:
                     0,
                     ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
                 )
+
+    def _translate_metadata_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate metadata fields from Anthropic request to OpenAI request."""
+        if "metadata" in anthropic_message_request:
+            metadata = anthropic_message_request["metadata"]
+            if metadata and "user_id" in metadata:
+                new_kwargs["user"] = metadata["user_id"]
+
+        if "litellm_metadata" in anthropic_message_request:
+            # metadata will be passed to litellm.acompletion(), it's a litellm_param
+            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
+
+    def _translate_tool_choice_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic tool_choice to OpenAI format."""
+        if "tool_choice" not in anthropic_message_request:
+            return
+        tool_choice = anthropic_message_request["tool_choice"]
+        if not tool_choice:
+            return
+        new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
+            tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
+        )
+
+    def _translate_tools_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> Dict[str, str]:
+        """Translate tools and extract web_search_options when needed."""
+        if "tools" not in anthropic_message_request:
+            return {}
+
+        tools = anthropic_message_request["tools"]
+        if not tools:
+            return {}
+
+        web_search_tools: List[AllAnthropicToolsValues] = []
+        regular_tools: List[AllAnthropicToolsValues] = []
+        for tool in tools:
+            cast_tool = cast(Dict[str, Any], tool)
+            if self._is_web_search_tool(cast_tool):
+                web_search_tools.append(cast(AllAnthropicToolsValues, tool))
+            else:
+                regular_tools.append(cast(AllAnthropicToolsValues, tool))
+
+        if web_search_tools:
+            new_kwargs["web_search_options"] = {}  # type: ignore
+
+        if not regular_tools:
+            return {}
+
+        translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
+            tools=regular_tools,
+            model=new_kwargs.get("model"),
+        )
+        new_kwargs["tools"] = translated_tools
+        return tool_name_mapping
+
+    def _translate_thinking_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate Anthropic thinking to either thinking or reasoning_effort."""
+        if "thinking" not in anthropic_message_request:
+            return
+
+        thinking = anthropic_message_request["thinking"]
+        if not thinking:
+            return
+
+        model = new_kwargs.get("model", "")
+        if self.is_anthropic_claude_model(model):
+            new_kwargs["thinking"] = thinking  # type: ignore
+            return
+
+        reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(
+            cast(Dict[str, Any], thinking)
+        )
+        if not reasoning_effort:
+            return
+
+        summary = thinking.get("summary") if isinstance(thinking, dict) else None
+        auto_summary = is_reasoning_auto_summary_enabled()
+        if summary:
+            new_kwargs["reasoning_effort"] = cast(
+                Any,
+                {
+                    "effort": reasoning_effort,
+                    "summary": summary,
+                },
+            )
+        elif auto_summary:
+            new_kwargs["reasoning_effort"] = cast(
+                Any,
+                {
+                    "effort": reasoning_effort,
+                    "summary": "detailed",
+                },
+            )
+        else:
+            new_kwargs["reasoning_effort"] = reasoning_effort
+
+    def _translate_output_format_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate output_format to response_format when applicable."""
+        if "output_format" not in anthropic_message_request:
+            return
+        output_format = anthropic_message_request["output_format"]
+        if not output_format:
+            return
+        response_format = self.translate_anthropic_output_format_to_openai(
+            output_format=output_format
+        )
+        if response_format:
+            new_kwargs["response_format"] = response_format
+
+    def _copy_untranslated_anthropic_params(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Copy through anthropic params that do not require translation."""
+        translatable_params = self.translatable_anthropic_params()
+        for k, v in anthropic_message_request.items():
+            if k not in translatable_params:  # pass remaining params as is
+                new_kwargs[k] = v  # type: ignore
 
     def translate_anthropic_to_openai(
         self, anthropic_message_request: AnthropicMessagesRequest
@@ -848,63 +1124,35 @@ class LiteLLMAnthropicMessagesAdapter:
             "model": anthropic_message_request["model"],
             "messages": new_messages,
         }
-        ## CONVERT METADATA (user_id)
-        if "metadata" in anthropic_message_request:
-            metadata = anthropic_message_request["metadata"]
-            if metadata and "user_id" in metadata:
-                new_kwargs["user"] = metadata["user_id"]
-
-        # Pass litellm proxy specific metadata
-        if "litellm_metadata" in anthropic_message_request:
-            # metadata will be passed to litellm.acompletion(), it's a litellm_param
-            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
-
+        ## CONVERT METADATA (user_id + litellm metadata)
+        self._translate_metadata_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT TOOL CHOICE
-        if "tool_choice" in anthropic_message_request:
-            tool_choice = anthropic_message_request["tool_choice"]
-            if tool_choice:
-                new_kwargs["tool_choice"] = (
-                    self.translate_anthropic_tool_choice_to_openai(
-                        tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                    )
-                )
+        self._translate_tool_choice_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT TOOLS
-        if "tools" in anthropic_message_request:
-            tools = anthropic_message_request["tools"]
-            if tools:
-                new_kwargs["tools"], tool_name_mapping = self.translate_anthropic_tools_to_openai(
-                    tools=cast(List[AllAnthropicToolsValues], tools),
-                    model=new_kwargs.get("model"),
-                )
-
+        tool_name_mapping = self._translate_tools_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT THINKING
-        if "thinking" in anthropic_message_request:
-            thinking = anthropic_message_request["thinking"]
-            if thinking:
-                model = new_kwargs.get("model", "")
-                if self.is_anthropic_claude_model(model):
-                    new_kwargs["thinking"] = thinking  # type: ignore
-                else:
-                    reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(
-                        cast(Dict[str, Any], thinking)
-                    )
-                    if reasoning_effort:
-                        new_kwargs["reasoning_effort"] = reasoning_effort
-
+        self._translate_thinking_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
         ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
-        if "output_format" in anthropic_message_request:
-            output_format = anthropic_message_request["output_format"]
-            if output_format:
-                response_format = self.translate_anthropic_output_format_to_openai(
-                    output_format=output_format
-                )
-                if response_format:
-                    new_kwargs["response_format"] = response_format
-
-        translatable_params = self.translatable_anthropic_params()
-        for k, v in anthropic_message_request.items():
-            if k not in translatable_params:  # pass remaining params as is
-                new_kwargs[k] = v  # type: ignore
+        self._translate_output_format_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        self._copy_untranslated_anthropic_params(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
 
         return new_kwargs, tool_name_mapping
 
@@ -939,22 +1187,8 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: List[Choices],
         tool_name_mapping: Optional[Dict[str, str]] = None,
-    ) -> List[
-        Union[
-            AnthropicResponseContentBlockText,
-            AnthropicResponseContentBlockToolUse,
-            AnthropicResponseContentBlockThinking,
-            AnthropicResponseContentBlockRedactedThinking,
-        ]
-    ]:
-        new_content: List[
-            Union[
-                AnthropicResponseContentBlockText,
-                AnthropicResponseContentBlockToolUse,
-                AnthropicResponseContentBlockThinking,
-                AnthropicResponseContentBlockRedactedThinking,
-            ]
-        ] = []
+    ) -> List[Dict[str, Any]]:
+        new_content: List[Dict[str, Any]] = []
         for choice in choices:
             # Handle thinking blocks first
             if (
@@ -978,7 +1212,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                     if signature_value is not None
                                     else None
                                 ),
-                            )
+                            ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
                         data_value = thinking_block.get("data", "")
@@ -986,7 +1220,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
                                 data=str(data_value) if data_value is not None else "",
-                            )
+                            ).model_dump()
                         )
             # Handle reasoning_content when thinking_blocks is not present
             elif (
@@ -998,7 +1232,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="thinking",
                         thinking=str(choice.message.reasoning_content),
                         signature=None,
-                    )
+                    ).model_dump()
                 )
 
             # Handle text content
@@ -1006,7 +1240,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(
                         type="text", text=choice.message.content
-                    )
+                    ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
             if (
@@ -1044,7 +1278,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_use_block.provider_specific_fields = (
                             provider_specific_fields
                         )
-                    new_content.append(tool_use_block)
+                    new_content.append(tool_use_block.model_dump())
 
         return new_content
 
@@ -1084,15 +1318,27 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
+        uncached_input_tokens = usage.prompt_tokens or 0
+        cached_tokens = 0
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            cached_tokens = (
+                getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            )
+            uncached_input_tokens -= cached_tokens
+
         anthropic_usage = AnthropicUsage(
-            input_tokens=usage.prompt_tokens or 0,
+            input_tokens=uncached_input_tokens,
             output_tokens=usage.completion_tokens or 0,
         )
-        # Add cache tokens if available (for prompt caching support)
-        if hasattr(usage, "_cache_creation_input_tokens") and usage._cache_creation_input_tokens > 0:
-            anthropic_usage["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
-        if hasattr(usage, "_cache_read_input_tokens") and usage._cache_read_input_tokens > 0:
-            anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
+        if (
+            hasattr(usage, "_cache_creation_input_tokens")
+            and usage._cache_creation_input_tokens > 0
+        ):
+            anthropic_usage[
+                "cache_creation_input_tokens"
+            ] = usage._cache_creation_input_tokens
+        if cached_tokens > 0:
+            anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
@@ -1165,7 +1411,6 @@ class LiteLLMAnthropicMessagesAdapter:
             ContentThinkingSignatureBlockDelta,
         ],
     ]:
-
         text: str = ""
         reasoning_content: str = ""
         reasoning_signature: str = ""
@@ -1244,15 +1489,35 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
+                uncached_input_tokens = litellm_usage_chunk.prompt_tokens or 0
+                cached_tokens = 0
+                if (
+                    hasattr(litellm_usage_chunk, "prompt_tokens_details")
+                    and litellm_usage_chunk.prompt_tokens_details
+                ):
+                    cached_tokens = (
+                        getattr(
+                            litellm_usage_chunk.prompt_tokens_details,
+                            "cached_tokens",
+                            0,
+                        )
+                        or 0
+                    )
+                    uncached_input_tokens -= cached_tokens
+
                 usage_delta = UsageDelta(
-                    input_tokens=litellm_usage_chunk.prompt_tokens or 0,
+                    input_tokens=uncached_input_tokens,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
-                # Add cache tokens if available (for prompt caching support)
-                if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens") and litellm_usage_chunk._cache_creation_input_tokens > 0:
-                    usage_delta["cache_creation_input_tokens"] = litellm_usage_chunk._cache_creation_input_tokens
-                if hasattr(litellm_usage_chunk, "_cache_read_input_tokens") and litellm_usage_chunk._cache_read_input_tokens > 0:
-                    usage_delta["cache_read_input_tokens"] = litellm_usage_chunk._cache_read_input_tokens
+                if (
+                    hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
+                    and litellm_usage_chunk._cache_creation_input_tokens > 0
+                ):
+                    usage_delta[
+                        "cache_creation_input_tokens"
+                    ] = litellm_usage_chunk._cache_creation_input_tokens
+                if cached_tokens > 0:
+                    usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             return MessageBlockDelta(

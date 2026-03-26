@@ -200,6 +200,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         },
       ]}
       mode="multiple"
+      placeholder="Select Models"
       allowClear
       maxTagCount="responsive"
       maxTagPlaceholder={(omittedValues) => (

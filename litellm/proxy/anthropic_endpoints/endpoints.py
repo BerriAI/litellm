@@ -30,7 +30,7 @@ async def anthropic_response(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/anthropic_completion).
+    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion).
 
     This was a BETA endpoint that calls 100+ LLMs in the anthropic format.
     """
@@ -80,6 +80,7 @@ async def anthropic_response(  # noqa: PLR0915
 
         # Create Anthropic-formatted response with violation message
         import uuid
+
         from litellm.types.utils import AnthropicMessagesResponse
 
         _anthropic_response = AnthropicMessagesResponse(
@@ -203,7 +204,12 @@ async def count_tokens(
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
 
-        token_request = TokenCountRequest(model=model_name, messages=messages)
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages,
+            tools=data.get("tools"),
+            system=data.get("system"),
+        )
 
         # Call the internal token counter function with direct request flag set to False
         token_response = await internal_token_counter(
@@ -240,3 +246,19 @@ async def count_tokens(
         raise HTTPException(
             status_code=500, detail={"error": f"Internal server error: {str(e)}"}
         )
+
+
+@router.post(
+    "/api/event_logging/batch",
+    tags=["[beta] Anthropic Event Logging"],
+)
+async def event_logging_batch(
+    request: Request,
+):
+    """
+    Stubbed endpoint for Anthropic event logging batch requests.
+
+    This endpoint accepts event logging requests but does nothing with them.
+    It exists to prevent 404 errors from Claude Code clients that send telemetry.
+    """
+    return {"status": "ok"}

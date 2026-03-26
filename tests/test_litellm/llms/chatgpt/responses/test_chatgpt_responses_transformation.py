@@ -9,6 +9,7 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
@@ -19,9 +20,20 @@ from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPICon
 
 
 class TestChatGPTResponsesAPITransformation:
-    def test_chatgpt_provider_config_registration(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.4",
+            "chatgpt/gpt-5.4-pro",
+            "chatgpt/gpt-5.3-chat-latest",
+            "chatgpt/gpt-5.3-instant",
+            "chatgpt/gpt-5.3-codex",
+            "chatgpt/gpt-5.3-codex-spark",
+        ],
+    )
+    def test_chatgpt_provider_config_registration(self, model_name):
         config = ProviderConfigManager.get_provider_responses_api_config(
-            model="chatgpt/gpt-5.2",
+            model=model_name,
             provider=LlmProviders.CHATGPT,
         )
 
@@ -72,10 +84,17 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
 
-    def test_chatgpt_forces_streaming_and_reasoning_include(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.2-codex",
+            "chatgpt/gpt-5.3-codex",
+        ],
+    )
+    def test_chatgpt_forces_streaming_and_reasoning_include(self, model_name):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(
-            model="chatgpt/gpt-5.2-codex",
+            model=model_name,
             input="hi",
             response_api_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
@@ -88,14 +107,69 @@ class TestChatGPTResponsesAPITransformation:
             "You are Codex, based on GPT-5."
         )
 
-    def test_chatgpt_non_stream_sse_response_parsing(self):
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.2-codex",
+            "chatgpt/gpt-5.3-codex-spark",
+        ],
+    )
+    def test_chatgpt_drops_unsupported_responses_params(self, model_name):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model=model_name,
+            input="hi",
+            response_api_optional_request_params={
+                # unsupported by ChatGPT Codex
+                "user": "user_123",
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+                "metadata": {"foo": "bar"},
+                "max_output_tokens": 123,
+                "stream_options": {"include_usage": True},
+                # supported and should be preserved
+                "truncation": "auto",
+                "previous_response_id": "resp_123",
+                "reasoning": {"effort": "medium"},
+                "tools": [{"type": "function", "function": {"name": "hello"}}],
+                "tool_choice": {"type": "function", "function": {"name": "hello"}},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "user" not in request
+        assert "temperature" not in request
+        assert "top_p" not in request
+        assert "context_management" not in request
+        assert "metadata" not in request
+        assert "max_output_tokens" not in request
+        assert "stream_options" not in request
+
+        assert request["truncation"] == "auto"
+        assert request["previous_response_id"] == "resp_123"
+        assert request["reasoning"] == {"effort": "medium"}
+        assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
+        assert request["tool_choice"] == {"type": "function", "function": {"name": "hello"}}
+
+    @pytest.mark.parametrize(
+        ("model_name", "response_model"),
+        [
+            ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
+            ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
+        ],
+    )
+    def test_chatgpt_non_stream_sse_response_parsing(
+        self, model_name: str, response_model: str
+    ):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
             "object": "response",
             "created_at": 1700000000,
             "status": "completed",
-            "model": "gpt-5.2-codex",
+            "model": response_model,
             "output": [
                 {
                     "type": "message",
@@ -117,7 +191,7 @@ class TestChatGPTResponsesAPITransformation:
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
-            model="chatgpt/gpt-5.2-codex",
+            model=model_name,
             raw_response=raw_response,
             logging_obj=logging_obj,
         )

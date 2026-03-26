@@ -185,11 +185,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         ):  # allow user to toggle this feature.
             return content
         if isinstance(content["image_url"], str):
-            content["image_url"] = f"{content['image_url']}#transform=inline"
+            # Skip base64 data URLs — appending #transform=inline corrupts the
+            # base64 payload and causes an "Incorrect padding" decode error on
+            # the Fireworks side.  Data URLs are already inlined by definition.
+            # Lower-case before checking: URI schemes are case-insensitive (RFC 3986).
+            if not content["image_url"].lower().startswith("data:"):
+                content["image_url"] = f"{content['image_url']}#transform=inline"
         elif isinstance(content["image_url"], dict):
-            content["image_url"][
-                "url"
-            ] = f"{content['image_url']['url']}#transform=inline"
+            url = content["image_url"]["url"]
+            if not url.lower().startswith("data:"):
+                content["image_url"]["url"] = f"{url}#transform=inline"
         return content
 
     def _transform_tools(
@@ -239,7 +244,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             # Remove fields not permitted by FireworksAI that may cause:
             # "Not permitted, field: 'messages[n].provider_specific_fields'"
             if isinstance(message, dict) and "provider_specific_fields" in message:
-                message.pop("provider_specific_fields", None)
+                cast(dict, message).pop("provider_specific_fields", None)
 
         return messages
 
@@ -257,30 +262,33 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "gpt-oss-120b",
             "gpt-oss-20b",
         ]
-        
+
         # Normalize model name - remove prefix if present
         normalized_model = model
         if model.startswith("fireworks_ai/"):
             normalized_model = model.replace("fireworks_ai/", "")
         if normalized_model.startswith("accounts/fireworks/models/"):
-            normalized_model = normalized_model.replace("accounts/fireworks/models/", "")
-        
+            normalized_model = normalized_model.replace(
+                "accounts/fireworks/models/", ""
+            )
+
         # Check if model supports reasoning
         supports_reasoning_value = any(
-            reasoning_model in normalized_model for reasoning_model in reasoning_supported_models
+            reasoning_model in normalized_model
+            for reasoning_model in reasoning_supported_models
         )
-        
+
         provider_specific_model_info: ProviderSpecificModelInfo = {
             "supports_function_calling": True,
             "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
             "supports_pdf_input": True,  # via document inlining
             "supports_vision": True,  # via document inlining
         }
-        
+
         # Only include supports_reasoning if True
         if supports_reasoning_value:
             provider_specific_model_info["supports_reasoning"] = True
-        
+
         return provider_specific_model_info
 
     def transform_request(
@@ -426,8 +434,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
             )
 
+        base = api_base.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
         response = litellm.module_level_client.get(
-            url=f"{api_base}/v1/accounts/{account_id}/models",
+            url=f"{base}/v1/accounts/{account_id}/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

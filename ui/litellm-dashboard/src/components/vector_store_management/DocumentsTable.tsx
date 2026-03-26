@@ -1,5 +1,6 @@
 import React from "react";
-import { Table, Badge, Tooltip, message } from "antd";
+import { Table, Badge, Tooltip } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { EyeOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
 import { DocumentUpload } from "./types";
 
@@ -11,7 +12,7 @@ interface DocumentsTableProps {
 const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) => {
   const handleCopyId = (uid: string) => {
     navigator.clipboard.writeText(uid);
-    message.success("Document ID copied to clipboard");
+    MessageManager.success("Document ID copied to clipboard");
   };
 
   const getStatusBadge = (status: DocumentUpload["status"]) => {

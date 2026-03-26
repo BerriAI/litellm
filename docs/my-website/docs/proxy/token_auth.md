@@ -11,7 +11,7 @@ Use JWT's to auth admins / users / projects into the proxy.
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 
@@ -1053,6 +1053,95 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 curl -X GET 'http://0.0.0.0:4000/user/info?user_id=user-123' \
 -H 'Authorization: Bearer <PROXY_MASTER_KEY>'
 ```
+
+## [BETA] JWT-to-Virtual-Key Mapping
+
+Map JWT identities to LiteLLM virtual keys so that JWT-authenticated users get per-user budgets, rate limits, model access controls, and spend tracking.
+
+When a JWT comes in, LiteLLM looks up a configured claim (e.g. `email`, `sub`) in a mapping table. If a mapping exists, the request is treated as if it arrived with the corresponding virtual key — all virtual key features apply.
+
+### Setup
+
+Add `virtual_key_claim_field` to your JWT auth config:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    virtual_key_claim_field: "email"         # JWT claim to look up (supports dot notation)
+    virtual_key_mapping_cache_ttl: 300       # Cache TTL in seconds (default: 300)
+```
+
+### Managing Mappings
+
+All endpoints require admin auth (`Authorization: Bearer <master_key>`).
+
+**Create a mapping** — link a JWT claim value to an existing virtual key:
+
+```bash
+curl -X POST http://localhost:4000/jwt/key/mapping/new \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jwt_claim_name": "email",
+    "jwt_claim_value": "user@example.com",
+    "key": "sk-virtual-key-from-key-generate"
+  }'
+```
+
+**List mappings** (paginated):
+
+```bash
+curl http://localhost:4000/jwt/key/mapping/list?page=1&size=50 \
+  -H "Authorization: Bearer sk-1234"
+```
+
+**Get a specific mapping:**
+
+```bash
+curl "http://localhost:4000/jwt/key/mapping/info?id=<mapping-id>" \
+  -H "Authorization: Bearer sk-1234"
+```
+
+**Update a mapping:**
+
+```bash
+curl -X POST http://localhost:4000/jwt/key/mapping/update \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "<mapping-id>",
+    "description": "Updated description",
+    "is_active": true
+  }'
+```
+
+**Delete a mapping:**
+
+```bash
+curl -X POST http://localhost:4000/jwt/key/mapping/delete \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"id": "<mapping-id>"}'
+```
+
+### How It Works
+
+1. A request arrives with a JWT bearer token
+2. LiteLLM validates the JWT signature
+3. Extracts the configured claim (e.g. `email` → `user@example.com`)
+4. Looks up the claim value in the `LiteLLM_JWTKeyMapping` table
+5. If a mapping exists, the request proceeds as if the mapped virtual key was used — budgets, rate limits, model access, and spend tracking all apply
+6. If no mapping exists, falls back to standard JWT auth (team-level controls)
+
+### Error Codes
+
+| Code | Meaning |
+|------|---------|
+| 409 | Duplicate mapping — a mapping for that claim name + value already exists |
+| 400 | The provided key does not match an existing virtual key |
+| 404 | Mapping not found (for update/delete/info) |
+| 403 | Non-admin user attempted a mapping operation |
 
 ## All JWT Params
 

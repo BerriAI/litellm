@@ -1,7 +1,15 @@
-from litellm._redis import get_redis_url_from_environment, _get_redis_cluster_kwargs, get_redis_async_client
+from litellm._redis import (
+    get_redis_url_from_environment,
+    _get_redis_cluster_kwargs,
+    get_redis_async_client,
+    get_redis_client,
+    get_redis_connection_pool,
+)
+import json
 import os
 import pytest
 from unittest.mock import MagicMock, patch
+import redis
 import redis.asyncio as async_redis
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -167,3 +175,115 @@ def test_get_redis_async_client_without_connection_pool():
         # Verify Redis was called without connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
         assert "connection_pool" not in call_kwargs, "connection_pool should not be in kwargs when not provided"
+
+@patch("litellm._redis.init_redis_cluster")
+def test_sync_client_prefers_cluster_over_url(mock_init_cluster, monkeypatch):
+    """
+    Test get_redis_client returns RedisCluster when startup_nodes is present even if
+    REDIS_URL is also set.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+    mock_init_cluster.return_value = MagicMock(spec=redis.RedisCluster)
+
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6379}]
+    get_redis_client(startup_nodes=startup_nodes)
+
+    mock_init_cluster.assert_called_once()
+    call_kwargs = mock_init_cluster.call_args[0][0]
+    assert (
+        "startup_nodes" in call_kwargs
+    ), "startup_nodes must be forwarded to init_redis_cluster"
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_client_prefers_cluster_over_url(mock_cluster_cls, monkeypatch):
+    """
+    Test (1) get_redis_async_client returns async RedisCluster when startup_nodes is present
+    even if REDIS_URL is also set and (2) startup_nodes is forwarded to RedisCluster.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6379}]
+    get_redis_async_client(startup_nodes=startup_nodes)
+
+    mock_cluster_cls.assert_called_once()
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
+    assert len(call_kwargs["startup_nodes"]) == 1, "should forward exactly 1 cluster node"
+
+
+@patch("litellm._redis.async_redis.RedisCluster")
+def test_async_client_prefers_cluster_over_url_via_env_var(mock_cluster_cls, monkeypatch):
+    """
+    Test get_redis_async_client returns async RedisCluster when REDIS_CLUSTER_NODES is set
+    even if REDIS_URL is also set.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+    monkeypatch.setenv(
+        "REDIS_CLUSTER_NODES",
+        json.dumps([{"host": "cluster-node.example.com", "port": 6379}]),
+    )
+
+    get_redis_async_client()
+
+    mock_cluster_cls.assert_called_once()
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
+
+@patch("litellm._redis.init_redis_cluster")
+def test_sync_client_prefers_cluster_over_url_via_env_var(mock_init_cluster, monkeypatch):
+    """
+    Test get_redis_client returns RedisCluster when REDIS_CLUSTER_NODES is set even if
+    REDIS_URL is also set.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+    monkeypatch.setenv(
+        "REDIS_CLUSTER_NODES",
+        json.dumps([{"host": "cluster-node.example.com", "port": 6379}]),
+    )
+    mock_init_cluster.return_value = MagicMock(spec=redis.RedisCluster)
+
+    get_redis_client()
+
+    mock_init_cluster.assert_called_once()
+    call_kwargs = mock_init_cluster.call_args[0][0]
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to init_redis_cluster"
+    assert len(call_kwargs["startup_nodes"]) == 1
+
+@patch("litellm._redis.init_redis_cluster")
+def test_sync_client_preserves_password_for_cluster_when_url_also_set(mock_init_cluster, monkeypatch):
+    """
+    Test _get_redis_client_logic does not strip password from redis_kwargs when
+    startup_nodes is present even if REDIS_URL is also set.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+    monkeypatch.setenv("REDIS_PASSWORD", "secret")
+    mock_init_cluster.return_value = MagicMock(spec=redis.RedisCluster)
+
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6379}]
+    get_redis_client(startup_nodes=startup_nodes)
+
+    mock_init_cluster.assert_called_once()
+    call_kwargs = mock_init_cluster.call_args[0][0]
+    assert "password" in call_kwargs, "password must not be stripped when routing to cluster"
+    assert call_kwargs["password"] == "secret"
+
+
+def test_connection_pool_returns_none_for_cluster(monkeypatch):
+    """Test get_redis_connection_pool returns None when startup_nodes is present."""
+    monkeypatch.setenv("REDIS_URL", "redis://fallback-host:6379")
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6379}]
+    result = get_redis_connection_pool(startup_nodes=startup_nodes)
+    assert result is None, "connection pool must be None for cluster mode"
+
+
+@patch("litellm._redis.redis.Redis.from_url")
+def test_sync_client_url_used_when_no_cluster(mock_from_url, monkeypatch):
+    """
+    Test get_redis_client default to using URL path when no startup_nodes are provided.
+    """
+    monkeypatch.setenv("REDIS_URL", "redis://plain-host:6379")
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+
+    get_redis_client()
+
+    mock_from_url.assert_called_once()
