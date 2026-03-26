@@ -1,12 +1,15 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
+import hashlib
 from datetime import datetime
 from typing import Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.utils import StandardLoggingPayload
+
+MAX_S3_FILENAME_COMPONENT_LENGTH = 250
 
 
 class S3Logger:
@@ -185,6 +188,11 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
+    if len(s3_file_name) > MAX_S3_FILENAME_COMPONENT_LENGTH:
+        digest = hashlib.sha256(s3_file_name.encode("utf-8")).hexdigest()[:16]
+        prefix_length = MAX_S3_FILENAME_COMPONENT_LENGTH - len(digest) - 1
+        s3_file_name = f"{s3_file_name[:prefix_length]}_{digest}"
+
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
         + prefix
