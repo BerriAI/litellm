@@ -13,7 +13,7 @@ Covers:
 - litellm/proxy/prompts/prompt_endpoints.py (uses dotprompt PromptManager.jinja_env)
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from jinja2.sandbox import SandboxedEnvironment, SecurityError
@@ -47,34 +47,34 @@ class TestDotpromptSandboxedEnvironment:
 
     def test_ssti_dunder_class_blocked(self):
         """Accessing __class__ on objects should be blocked."""
+        template = self.manager.jinja_env.from_string(
+            "{{ config.__class__.__init__.__globals__['os'].popen('id').read() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ config.__class__.__init__.__globals__['os'].popen('id').read() }}"
-            )
             template.render(config={})
 
     def test_ssti_dunder_mro_blocked(self):
         """Accessing __mro__ should be blocked."""
+        template = self.manager.jinja_env.from_string(
+            "{{ ''.__class__.__mro__[1].__subclasses__() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-            )
             template.render()
 
     def test_ssti_dunder_globals_blocked(self):
         """Accessing __globals__ should be blocked."""
+        template = self.manager.jinja_env.from_string(
+            "{{ request.__class__.__init__.__globals__ }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ request.__class__.__init__.__globals__ }}"
-            )
             template.render(request="test")
 
     def test_ssti_getattr_bypass_blocked(self):
         """Attempting getattr-based bypass should be blocked."""
+        template = self.manager.jinja_env.from_string(
+            "{{ lipsum.__globals__['os'].popen('id').read() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ lipsum.__globals__['os'].popen('id').read() }}"
-            )
             template.render()
 
 
@@ -102,10 +102,10 @@ class TestArizePhoenixSandboxedEnvironment:
         assert result == "Hello World."
 
     def test_ssti_blocked(self):
+        template = self.manager.jinja_env.from_string(
+            "{{ ''.__class__.__mro__[1].__subclasses__() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-            )
             template.render()
 
 
@@ -137,10 +137,10 @@ class TestBitBucketSandboxedEnvironment:
         assert result == "Hello World."
 
     def test_ssti_blocked(self):
+        template = self.manager.jinja_env.from_string(
+            "{{ ''.__class__.__mro__[1].__subclasses__() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-            )
             template.render()
 
 
@@ -171,8 +171,8 @@ class TestGitLabSandboxedEnvironment:
         assert result == "Hello World."
 
     def test_ssti_blocked(self):
+        template = self.manager.jinja_env.from_string(
+            "{{ ''.__class__.__mro__[1].__subclasses__() }}"
+        )
         with pytest.raises(SecurityError):
-            template = self.manager.jinja_env.from_string(
-                "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-            )
             template.render()
