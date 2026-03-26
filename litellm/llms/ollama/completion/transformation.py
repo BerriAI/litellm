@@ -238,6 +238,11 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_BASE")
             or "http://localhost:11434"
         )
+        # Strip trailing "/api/chat" so we don't produce
+        # "http://host/api/chat/api/show" when api_base was already set
+        # by get_complete_url.  Mirrors the guard in get_complete_url.
+        if api_base.endswith("/api/chat"):
+            api_base = api_base[: -len("/api/chat")]
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 

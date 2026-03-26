@@ -159,7 +159,11 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["role"] == "user"
 
     def test_transform_request_empty_content_list(self):
-        """Test handling of empty content list in transform_request"""
+        """Test handling of empty content list in transform_request.
+
+        With the image-url fix, an empty string is no longer set on the
+        Ollama message (falsy check).  Only the role should be present.
+        """
         config = OllamaChatConfig()
 
         # Test message with empty content list
@@ -173,10 +177,12 @@ class TestOllamaChatConfigResponseFormat:
             headers={},
         )
 
-        # Verify empty content becomes empty string
         assert len(result["messages"]) == 1
-        assert result["messages"][0]["content"] == ""
         assert result["messages"][0]["role"] == "user"
+        # Empty string content should NOT be forwarded to Ollama
+        assert result["messages"][0].get("content", None) in (None, "")
+        # No images either
+        assert "images" not in result["messages"][0] or result["messages"][0]["images"] == []
 
     def test_transform_request_image_extraction(self):
         """Test that images are properly extracted from messages in transform_request"""
@@ -301,7 +307,15 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["images"][0] == "https://example.com/image.jpg"
 
     def test_transform_request_no_images_no_images_key(self):
-        """Test that messages without images don't have images key"""
+        """Test that messages without images do NOT have an 'images' key.
+
+        Previously the code used ``if images is not None`` which always
+        evaluated to True because extract_images_from_message returns []
+        rather than None.  The fix uses ``if images`` so the key is omitted
+        entirely for text-only messages.  Sending ``"images": []`` to Ollama
+        is harmless but wastes bandwidth and may confuse some versions of the
+        Ollama server.
+        """
         config = OllamaChatConfig()
 
         # Test message with no images
@@ -318,12 +332,10 @@ class TestOllamaChatConfigResponseFormat:
             headers={},
         )
 
-        # Verify no images key when no images present
+        # Text content should be present
         assert result["messages"][0]["content"] == "Just text here"
-        # Since extract_images_from_message returns empty list [] when no images found,
-        # and the code checks "if images is not None", an empty list will still be set
-        assert "images" in result["messages"][0]
-        assert result["messages"][0]["images"] == []
+        # The 'images' key must NOT be present for text-only messages
+        assert "images" not in result["messages"][0]
 
 
 class TestOllamaToolCalling:
@@ -601,3 +613,274 @@ class TestOllamaReasoningContentStreaming:
         assert result.choices[0].finish_reason == "stop"
 
 
+
+
+class TestOllamaImageUrlFix:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/24598
+
+    ollama_chat was silently dropping image_url content blocks in multimodal
+    requests.  Three bugs were present:
+
+    1. convert_content_list_to_str (the "flatten" step) only preserves
+       ``type: text`` blocks; image_url blocks are discarded in the text
+       output.  This is expected – images travel in the separate ``images``
+       field of the Ollama API payload.
+
+    2. Previously the code called convert_content_list_to_str BEFORE
+       extract_images_from_message.  If anything in that chain had mutated
+       ``m["content"]`` to a plain string, the isinstance(content, list)
+       guard in extract_images_from_message would silently return [].  The
+       fix moves image extraction to BEFORE the flatten call to make the
+       ordering robust against future changes.
+
+    3. Both guards used ``is not None`` instead of truthiness checks:
+       - ``if content_str is not None`` → always True (returns ""); fix: ``if content_str``
+       - ``if images is not None``       → always True (returns []); fix: ``if images``
+       This caused Ollama to receive ``"images": []`` for every text-only
+       message and an empty ``"content": ""`` for image-only messages.
+    """
+
+    def test_image_url_data_uri_reaches_ollama_images_field(self):
+        """Core regression: a data-URI image_url must appear in Ollama 'images'."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llava",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        msg = result["messages"][0]
+        assert msg["content"] == "What is in this image?", (
+            "Text content should be preserved in the 'content' field"
+        )
+        assert "images" in msg, (
+            "image_url block must produce an 'images' key in the Ollama payload"
+        )
+        assert len(msg["images"]) == 1, "Exactly one image expected"
+        # Ollama wants pure base64 – the data-URI prefix must be stripped
+        assert msg["images"][0] == "iVBORw0KGgoAAAANS", (
+            "Base64 data should be extracted without the 'data:image/...;base64,' prefix"
+        )
+
+    def test_http_image_url_reaches_ollama_images_field(self):
+        """HTTP image URLs (non-data-URI) must also be forwarded unchanged."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/photo.jpg"},
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llava",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        msg = result["messages"][0]
+        assert "images" in msg
+        assert msg["images"][0] == "https://example.com/photo.jpg"
+
+    def test_image_only_message_no_empty_content(self):
+        """Image-only messages must NOT forward an empty 'content' string to Ollama."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/jpeg;base64,/9j/abc123"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llava",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        msg = result["messages"][0]
+        # Image must be present
+        assert "images" in msg
+        assert msg["images"][0] == "/9j/abc123"
+        # Empty string content must NOT be forwarded
+        assert msg.get("content", "") == "", (
+            "Image-only messages should not have a non-empty 'content' key"
+        )
+
+    def test_text_only_message_no_empty_images_list(self):
+        """Text-only messages must NOT include an empty 'images' list in the payload."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [{"role": "user", "content": "Plain text message"}],
+        )
+
+        result = config.transform_request(
+            model="llama3",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        msg = result["messages"][0]
+        assert msg["content"] == "Plain text message"
+        assert "images" not in msg, (
+            "Text-only messages must not have an 'images' key – previously the "
+            "'if images is not None' guard always evaluated to True"
+        )
+
+    def test_multiple_images_all_extracted(self):
+        """All image_url blocks in a single message must be extracted."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Compare:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AAAA"},
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,BBBB"},
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llava",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        msg = result["messages"][0]
+        assert msg["content"] == "Compare:"
+        assert "images" in msg
+        assert len(msg["images"]) == 2
+        assert msg["images"][0] == "AAAA"
+        assert msg["images"][1] == "BBBB"
+
+
+class TestOllamaGetModelInfoUrlFix:
+    """
+    Regression tests for the /api/show URL construction bug (issue #24598, Bug 3).
+
+    When ``api_base`` already ends with ``/api/chat`` (set internally by
+    get_complete_url), get_model_info was constructing::
+
+        http://localhost:11434/api/chat/api/show   ← 404
+
+    instead of::
+
+        http://localhost:11434/api/show             ← correct
+
+    The fix strips the trailing ``/api/chat`` segment before appending
+    ``/api/show``, mirroring the guard already present in get_complete_url.
+    """
+
+    def test_get_model_info_strips_api_chat_suffix(self):
+        """get_model_info must not double-append /api/chat when constructing /api/show."""
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        config = OllamaConfig()
+
+        # Simulate api_base already ending with /api/chat
+        api_base_with_chat = "http://localhost:11434/api/chat"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "details": {},
+            "model_info": {},
+        }
+
+        with patch(
+            "litellm.module_level_client.post", return_value=mock_response
+        ) as mock_post:
+            config.get_model_info(model="llava", api_base=api_base_with_chat)
+
+        # The URL used must be the correct /api/show, not /api/chat/api/show
+        call_kwargs = mock_post.call_args
+        called_url = call_kwargs[1].get("url") or call_kwargs[0][0]
+        assert called_url == "http://localhost:11434/api/show", (
+            f"Expected 'http://localhost:11434/api/show', got '{called_url}'. "
+            "api_base ending in /api/chat must be sanitised before appending /api/show."
+        )
+
+    def test_get_model_info_normal_api_base_unchanged(self):
+        """api_base without /api/chat suffix must be forwarded as-is."""
+        from unittest.mock import MagicMock, patch
+
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        config = OllamaConfig()
+
+        api_base_plain = "http://localhost:11434"
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"details": {}, "model_info": {}}
+
+        with patch(
+            "litellm.module_level_client.post", return_value=mock_response
+        ) as mock_post:
+            config.get_model_info(model="llava", api_base=api_base_plain)
+
+        call_kwargs = mock_post.call_args
+        called_url = call_kwargs[1].get("url") or call_kwargs[0][0]
+        assert called_url == "http://localhost:11434/api/show"
