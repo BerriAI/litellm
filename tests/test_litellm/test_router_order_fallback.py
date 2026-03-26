@@ -282,3 +282,50 @@ async def test_router_order_fallback_then_external_fallback():
         messages=[{"role": "user", "content": "hi"}],
     )
     assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_with_non_standard_fallbacks():
+    """Non-standard fallback formats (e.g. fallbacks=["model-name"]) passed
+    per-request should still be tried after all order levels are exhausted."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 2"),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "success from non-standard fallback",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    response = await router.acompletion(
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        fallbacks=["fallback-model"],  # non-standard format, passed per-request
+    )
+    assert response._hidden_params["model_id"] == "fallback"
