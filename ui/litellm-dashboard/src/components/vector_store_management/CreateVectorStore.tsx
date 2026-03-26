@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
-import { Upload, Button, Select, Form, message, Alert, Tooltip, Input } from "antd";
+import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { ragIngestCall } from "../networking";
@@ -47,13 +48,13 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       ].includes(file.type);
 
       if (!isValidType) {
-        message.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
+        MessageManager.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
         return Upload.LIST_IGNORE;
       }
 
       const isLt50M = file.size / 1024 / 1024 < 50;
       if (!isLt50M) {
-        message.error(`${file.name} must be smaller than 50MB!`);
+        MessageManager.error(`${file.name} must be smaller than 50MB!`);
         return Upload.LIST_IGNORE;
       }
 
@@ -87,12 +88,12 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
   const handleCreateVectorStore = async () => {
     if (documents.length === 0) {
-      message.warning("Please upload at least one document");
+      MessageManager.warning("Please upload at least one document");
       return;
     }
 
     if (!selectedProvider) {
-      message.warning("Please select a provider");
+      MessageManager.warning("Please select a provider");
       return;
     }
 
@@ -100,7 +101,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
-        message.warning(`Please provide ${field.label}`);
+        MessageManager.warning(`Please provide ${field.label}`);
         return;
       }
     }
@@ -108,17 +109,17 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     // S3 Vectors specific validation
     if (selectedProvider === "s3_vectors") {
       if (providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3) {
-        message.warning("Vector bucket name must be at least 3 characters");
+        MessageManager.warning("Vector bucket name must be at least 3 characters");
         return;
       }
       if (providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3) {
-        message.warning("Index name must be at least 3 characters if provided");
+        MessageManager.warning("Index name must be at least 3 characters if provided");
         return;
       }
     }
 
     if (!accessToken) {
-      message.error("No access token available");
+      MessageManager.error("No access token available");
       return;
     }
 

@@ -117,3 +117,30 @@ def test_team_info_route_access():
         valid_token=valid_token,
         request_data={},
     )
+
+
+def test_v2_user_info_route_in_info_routes():
+    """Test that /v2/user/info is in the info_routes list"""
+    assert "/v2/user/info" in LiteLLMRoutes.info_routes.value
+
+
+def test_v2_user_info_route_access():
+    """Test access control for /v2/user/info route - handled by endpoint itself"""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user")
+    request = MagicMock(spec=Request)
+    request.query_params = {"user_id": "other_user"}
+
+    # Should not raise exception as /v2/user/info handles its own RBAC logic in the handler
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER,
+        route="/v2/user/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )

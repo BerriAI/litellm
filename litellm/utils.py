@@ -1798,6 +1798,7 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
+        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
 
         try:
             if logging_obj is None:
@@ -1944,15 +1945,36 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+            # Internal sub-calls (e.g. emulated file-search steps) share the
+            # parent's logging obj; skip async logging here so only the outer call bills once.
+            # NOTE: streaming requests return early (before this point) via
+            # CustomStreamWrapper, so this block is non-streaming only.
+            if not _is_litellm_internal_call:
+                if getattr(logging_obj, "_defer_async_logging", False):
+
+                    def _enqueue_deferred_logging() -> None:
+                        asyncio.create_task(
+                            _client_async_logging_helper(
+                                logging_obj=logging_obj,
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                            )
+                        )
+
+                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                else:
+                    asyncio.create_task(
+                        _client_async_logging_helper(
+                            logging_obj=logging_obj,
+                            result=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        )
+                    )
+
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
@@ -1985,7 +2007,7 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
-            if logging_obj:
+            if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
@@ -2573,6 +2595,47 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         if supported_by_provider is not None:
             return supported_by_provider
 
+        return False
+
+
+def _is_explicitly_disabled_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> bool:
+    """Return True only when the model map explicitly sets *key* to ``False``.
+
+    This is the opt-out mirror of :func:`_supports_factory`.  Where
+    ``_supports_factory`` requires an explicit ``True`` to return ``True``,
+    this function requires an explicit ``False``.  A missing key (``None``)
+    is treated as *not* disabled so that unknown or newly-added models are
+    allowed through without any model-map entry.
+
+    Uses the same ``get_llm_provider`` → ``_get_model_info_helper`` chain as
+    ``_supports_factory`` so caching, fallback, and normalisation improvements
+    apply here automatically.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        val = model_info.get(key)
+        if val is False:
+            return True
+        if val is None:
+            bare_model_key = _get_model_cost_key(model)
+            if bare_model_key is not None:
+                bare_entry = litellm.model_cost.get(bare_model_key) or {}
+                if bare_entry.get(key) is False:
+                    return True
+        return False
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking {key} disabled state. "
+            f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
+            f"Error: {str(e)}"
+        )
         return False
 
 
@@ -6160,7 +6223,10 @@ def validate_environment(  # noqa: PLR0915
                     ["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"]
                 )
         elif custom_llm_provider == "anthropic":
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -6399,7 +6465,10 @@ def validate_environment(  # noqa: PLR0915
                 missing_keys.append("OPENAI_API_KEY")
         ## anthropic
         elif model in litellm.anthropic_models:
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -7945,6 +8014,7 @@ class ProviderConfigManager:
             LlmProviders.VERTEX_AI_BETA: (lambda: litellm.VertexGeminiConfig(), False),
             LlmProviders.CLOUDFLARE: (lambda: litellm.CloudflareChatConfig(), False),
             LlmProviders.SAGEMAKER_CHAT: (lambda: litellm.SagemakerChatConfig(), False),
+            LlmProviders.SAGEMAKER_NOVA: (lambda: litellm.SagemakerNovaConfig(), False),
             LlmProviders.SAGEMAKER: (lambda: litellm.SagemakerConfig(), False),
             LlmProviders.FIREWORKS_AI: (lambda: litellm.FireworksAIConfig(), False),
             LlmProviders.FRIENDLIAI: (lambda: litellm.FriendliaiChatConfig(), False),
@@ -8140,6 +8210,8 @@ class ProviderConfigManager:
             if provider_config is None:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
+
+        return None
 
     @staticmethod
     def get_provider_embedding_config(
@@ -8590,9 +8662,7 @@ class ProviderConfigManager:
 
             return ManusFilesConfig()
         elif LlmProviders.ANTHROPIC == provider:
-            from litellm.llms.anthropic.files.transformation import (
-                AnthropicFilesConfig,
-            )
+            from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
         return None

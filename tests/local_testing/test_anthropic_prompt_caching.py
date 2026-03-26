@@ -151,6 +151,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
                         },
                         "required": ["location"],
                     },
+                    "type": "custom",
                 }
             ],
             "max_tokens": 64000,

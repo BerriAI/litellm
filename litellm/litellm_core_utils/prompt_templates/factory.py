@@ -1498,17 +1498,49 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     from litellm.types.llms.vertex_ai import BlobType
 
     content_str: str = ""
-    inline_data: Optional[BlobType] = None
+    inline_data_list: List[BlobType] = []
 
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
+            # Detect data-URL images (e.g. from Anthropic tool_result with a single image block
+            # that was serialised as a plain string by translate_anthropic_messages_to_openai)
+            # and promote them to inline_data so Gemini receives actual image bytes.
+            if content_str[:5].lower() == "data:" and ";base64," in content_str:
+                try:
+                    mime_rest = content_str[5:].split(";base64,", 1)
+                    if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
+                        # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
+                        clean_mime = mime_rest[0].split(";")[0].strip()
+                        inline_data_list.append(
+                            BlobType(data=mime_rest[1], mime_type=clean_mime)
+                        )
+                        content_str = ""
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Failed to parse data URL in tool response: {e}"
+                    )
         elif isinstance(message["content"], List):
             content_list = message["content"]
             for content in content_list:
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
+                elif content_type == "image":
+                    # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
+                    source = content.get("source", {})
+                    if isinstance(source, dict) and source.get("type") == "base64":
+                        try:
+                            inline_data_list.append(
+                                BlobType(
+                                    data=source.get("data", ""),
+                                    mime_type=source.get("media_type", "image/jpeg"),
+                                )
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process Anthropic image block in tool response: {e}"
+                            )
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
@@ -1524,9 +1556,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             image_obj = convert_to_anthropic_image_obj(
                                 image_url, format=None
                             )
-                            inline_data = BlobType(
-                                data=image_obj["data"],
-                                mime_type=image_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=image_obj["data"],
+                                    mime_type=image_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1551,9 +1585,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             file_obj = convert_to_anthropic_image_obj(
                                 file_data, format=None
                             )
-                            inline_data = BlobType(
-                                data=file_obj["data"],
-                                mime_type=file_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=file_obj["data"],
+                                    mime_type=file_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1607,13 +1643,12 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
 
-    # For Computer Use, if we have an image, we need separate parts:
+    # For Computer Use, if we have images/files, we need separate parts:
     # - One part with function_response
-    # - One part with inline_data
+    # - One part per inline_data item
     # Gemini's PartType is a oneof, so we can't have both in the same part
-    if inline_data:
-        image_part: VertexPartType = {"inline_data": inline_data}
-        return [_part, image_part]
+    if inline_data_list:
+        return [_part] + [{"inline_data": d} for d in inline_data_list]
 
     return _part
 
@@ -2283,7 +2318,7 @@ def sanitize_messages_for_tool_calling(
     for idx, msg in enumerate(sanitized_messages):
         role = msg.get("role")
         tcid = msg.get("tool_call_id") if role in ["tool", "function"] else None
-        if tcid:
+        if tcid and isinstance(tcid, str):
             if tcid in seen_in_block:
                 # Mark the earlier occurrence for removal (keep latest)
                 duplicates_to_remove.add(seen_in_block[tcid])
@@ -2439,11 +2474,33 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                             user_content.append(_content_element)
                         elif m.get("type", "") == "document":
-                            user_content.append(cast(AnthropicMessagesDocumentParam, m))
+                            _document_content_element = cast(
+                                AnthropicMessagesDocumentParam,
+                                add_cache_control_to_content(
+                                    anthropic_content_element=cast(
+                                        AnthropicMessagesDocumentParam, m
+                                    ),
+                                    original_content_element=dict(m),
+                                ),
+                            )
+                            user_content.append(_document_content_element)
                         elif m.get("type", "") == "file":
-                            user_content.append(
+                            _file_content_element = (
                                 anthropic_process_openai_file_message(
                                     cast(ChatCompletionFileObject, m)
+                                )
+                            )
+                            _file_content_element = add_cache_control_to_content(
+                                anthropic_content_element=cast(
+                                    AnthropicMessagesDocumentParam,
+                                    _file_content_element,
+                                ),
+                                original_content_element=dict(m),
+                            )
+                            user_content.append(
+                                cast(
+                                    AnthropicMessagesDocumentParam,
+                                    _file_content_element,
                                 )
                             )
                 elif isinstance(user_message_types_block["content"], str):
@@ -2581,13 +2638,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                 # Build the text block if content is a non-empty string
                 text_element = None
-                if (
-                    isinstance(assistant_content_block.get("content"), str)
-                    and assistant_content_block["content"]
-                ):
+                _acb_content = assistant_content_block.get("content")
+                if isinstance(_acb_content, str) and _acb_content:
                     _anthropic_text_content_element = AnthropicMessagesTextParam(
                         type="text",
-                        text=assistant_content_block["content"],
+                        text=_acb_content,
                     )
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_text_content_element,
@@ -2682,9 +2737,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
+                _content_list = (
+                    assistant_content_block.get("content") if _content_is_list else None
+                )
                 _list_has_thinking = False
-                if _content_is_list:
-                    for _item in assistant_content_block["content"]:
+                if _content_is_list and _content_list is not None:
+                    for _item in _content_list:
                         if isinstance(_item, dict) and _item.get("type") in (
                             "thinking",
                             "redacted_thinking",
@@ -2696,8 +2754,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     thinking_blocks is not None and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
-                if _content_is_list:
-                    for m in assistant_content_block["content"]:
+                if _content_is_list and _content_list is not None:
+                    for m in _content_list:
+                        if not isinstance(m, dict):
+                            continue
                         # handle thinking blocks
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))

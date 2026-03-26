@@ -97,6 +97,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
+audit_log_callbacks: List[CALLBACK_TYPES] = []
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -144,6 +145,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "focus",
+    "vantage",
     "posthog",
     "levo",
 ]
@@ -357,7 +359,7 @@ model_cost_map_url: str = os.getenv(
 )
 blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
+    "https://docs.litellm.ai/blog/rss.xml",
 )
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
@@ -1470,6 +1472,9 @@ if TYPE_CHECKING:
     from .llms.sagemaker.chat.transformation import (
         SagemakerChatConfig as SagemakerChatConfig,
     )
+    from .llms.sagemaker.nova.transformation import (
+        SagemakerNovaConfig as SagemakerNovaConfig,
+    )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from .llms.anthropic.experimental_pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
@@ -1897,7 +1902,7 @@ if TYPE_CHECKING:
     supports_reasoning: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., _ModelInfoType]
+    get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]

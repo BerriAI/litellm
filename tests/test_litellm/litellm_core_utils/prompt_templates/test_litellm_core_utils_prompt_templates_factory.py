@@ -1,3 +1,4 @@
+import base64
 import json
 from unittest.mock import MagicMock, patch
 
@@ -8,10 +9,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
+    anthropic_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
+from litellm.types.llms.openai import ChatCompletionToolMessage
 
 
 def test_ollama_pt_simple_messages():
@@ -548,6 +552,175 @@ def test_convert_gemini_tool_call_result_with_image_url():
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
     assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+
+
+def test_convert_gemini_tool_call_result_with_anthropic_image_block():
+    """
+    Test that Anthropic-native image blocks in tool_result list content are
+    converted to Gemini inline_data instead of being silently dropped.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=[
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": tiny_png_b64,
+                },
+            }
+        ],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 1, "expected exactly one inline_data part"
+    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+
+
+def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
+    """
+    Test that multiple Anthropic-native image blocks in a single tool_result
+    are all preserved as separate inline_data parts instead of only the last
+    one being kept.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+    jpeg_b64 = base64.b64encode(b"JPEG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_multi",
+        content=[
+            {"type": "text", "text": "here are two images"},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": png_b64},
+            },
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": jpeg_b64},
+            },
+        ],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_multi",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "screenshot", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 2, f"expected 2 inline_data parts, got {len(inline_parts)}"
+    mime_types = {p["inline_data"]["mime_type"] for p in inline_parts}
+    assert mime_types == {"image/png", "image/jpeg"}
+
+
+def test_convert_gemini_tool_call_result_with_data_url_string():
+    """
+    Test that a data-URL string in tool_result content is converted to
+    Gemini inline_data instead of being passed as plain text.
+    Fixes: https://github.com/BerriAI/litellm/issues/23712
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_456",
+        content=f"data:image/png;base64,{tiny_png_b64}",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_456",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 1, "data-URL image string was not converted to inline_data"
+    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+
+
+def test_convert_gemini_tool_call_result_with_data_url_extra_params():
+    """
+    Test that a data-URL with extra MIME parameters (e.g. charset) produces
+    a clean mime_type without the extra parameters.
+    """
+    tiny_png_b64 = base64.b64encode(b"PNG_PLACEHOLDER").decode()
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_extra",
+        content=f"data:image/png;charset=UTF-8;base64,{tiny_png_b64}",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_extra",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result, list), "expected a list of parts"
+    inline_parts = [p for p in result if "inline_data" in p]
+    assert len(inline_parts) == 1
+    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png", (
+        f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
+    )
 
 
 def test_bedrock_tools_unpack_defs():
@@ -1594,6 +1767,92 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     assert "$defs" not in tool_schema, "$defs should be removed after expansion"
 
 
+def test_anthropic_messages_pt_file_block_preserves_cache_control():
+    """
+    Test that cache_control on file-type content blocks is preserved
+    when translating to Anthropic message format.
+    Regression test for https://github.com/BerriAI/litellm/issues/23873
+    """
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 fake pdf content").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "document.pdf",
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize this document.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 1
+    content_blocks = result[0]["content"]
+    assert len(content_blocks) == 2
+
+    file_block = content_blocks[0]
+    assert file_block["type"] == "document"
+    assert "cache_control" in file_block, (
+        "cache_control should be preserved on file/document content blocks"
+    )
+    assert file_block["cache_control"]["type"] == "ephemeral"
+
+    text_block = content_blocks[1]
+    assert text_block["type"] == "text"
+    assert "cache_control" in text_block
+    assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_anthropic_messages_pt_file_block_without_cache_control():
+    """
+    Test that file blocks without cache_control still work correctly.
+    """
+    import base64
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 fake").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "doc.pdf",
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 1
+    file_block = result[0]["content"][0]
+    assert file_block["type"] == "document"
+    assert "cache_control" not in file_block
+
+
 # ── _convert_to_bedrock_tool_call_invoke tests ──
 
 
@@ -2027,3 +2286,56 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         )
     finally:
         litellm.modify_params = original
+
+
+def test_anthropic_messages_pt_file_block_preserves_cache_control():
+    """
+    Test that cache_control is preserved on file-type content blocks
+    when translated to Anthropic document params.
+    Regression test for https://github.com/BerriAI/litellm/issues/23873
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "doc.pdf",
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": "Summarize this document.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-20250514", llm_provider="anthropic"
+    )
+
+    content_blocks = result[0]["content"]
+    assert len(content_blocks) == 2
+
+    # Document block (from file) should preserve cache_control
+    doc_block = content_blocks[0]
+    assert doc_block["type"] == "document"
+    assert "cache_control" in doc_block, (
+        "cache_control was dropped from file/document block"
+    )
+    assert doc_block["cache_control"]["type"] == "ephemeral"
+
+    # Text block should also preserve cache_control
+    text_block = content_blocks[1]
+    assert text_block["type"] == "text"
+    assert "cache_control" in text_block
+    assert text_block["cache_control"]["type"] == "ephemeral"
