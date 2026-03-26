@@ -869,12 +869,8 @@ model_list = [
     },
 ]
 
-router = Router(model_list=model_list, enable_pre_call_checks=True)  # 👈 Required for 'order' to work
+router = Router(model_list=model_list)
 ```
-
-:::important
-The `order` parameter requires `enable_pre_call_checks=True` to be set on the Router.
-:::
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
@@ -892,9 +888,6 @@ model_list:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
       order: 2  # 👈 Tried when order=1 fails
-
-router_settings:
-  enable_pre_call_checks: true  # 👈 Required for 'order' to work
 ```
 
 </TabItem>
