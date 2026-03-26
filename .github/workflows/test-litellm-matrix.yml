@@ -144,7 +144,7 @@ jobs:
           poetry install --with dev,proxy-dev --extras "proxy semantic-router"
           # pytest-rerunfailures and pytest-xdist are in pyproject.toml dev dependencies
           poetry run pip install google-genai==1.22.0 \
-            google-cloud-aiplatform==1.143.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
+            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
 
       - name: Setup litellm-enterprise
         run: |
