@@ -1666,7 +1666,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+        effective_prompt_tokens = usage_metadata.get(
+            "promptTokenCount", 0
+        ) + usage_metadata.get("toolUsePromptTokenCount", 0)
+        if effective_prompt_tokens + usage_metadata.get(
             "candidatesTokenCount", 0
         ) == usage_metadata.get("totalTokenCount", 0):
             return True
@@ -1848,8 +1851,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
+        prompt_tokens = usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+            "toolUsePromptTokenCount", 0
+        )
         usage = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0),
+            prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,

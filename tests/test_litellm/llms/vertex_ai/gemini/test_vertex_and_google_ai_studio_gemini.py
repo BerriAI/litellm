@@ -1338,6 +1338,48 @@ def test_vertex_ai_usage_metadata_missing_token_count():
     )  # Default value for missing tokenCount
 
 
+def test_calculate_usage_with_tool_use_prompt_token_count():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/23731.
+
+    When Gemini uses built-in tools (e.g. code execution), `usageMetadata` contains
+    `toolUsePromptTokenCount` for the tool system-prompt tokens.  These tokens must be:
+      1. Added to `prompt_tokens` in the returned Usage object.
+      2. Included in `is_candidate_token_count_inclusive` so that the inclusive/exclusive
+         check isn't thrown off by the extra token bucket, which previously caused
+         `thoughtsTokenCount` to be double-counted into `completion_tokens`.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import UsageMetadata
+
+    v = VertexGeminiConfig()
+
+    # Gemini 2.5 Flash with code-execution tool enabled.
+    # candidatesTokenCount=28 is exclusive of thoughtsTokenCount=255, so total is:
+    # 123 (prompt) + 248 (tool prompt) + 255 (thoughts) + 28 (actual output) = 654
+    usage_metadata = UsageMetadata(
+        promptTokenCount=123,
+        toolUsePromptTokenCount=248,
+        candidatesTokenCount=28,
+        thoughtsTokenCount=255,
+        totalTokenCount=654,
+    )
+
+    # is_candidate_token_count_inclusive must return False (thoughts are separate)
+    assert VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata) is False
+
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    # prompt_tokens must include toolUsePromptTokenCount
+    assert result.prompt_tokens == 123 + 248
+    # completion_tokens = candidatesTokenCount + thoughtsTokenCount (exclusive case)
+    assert result.completion_tokens == 28 + 255
+    assert result.total_tokens == 654
+    assert result.completion_tokens_details.reasoning_tokens == 255
+
+
 def test_vertex_ai_process_candidates_with_grounding_metadata():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
