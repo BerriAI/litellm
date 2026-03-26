@@ -325,14 +325,7 @@ model_list:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
       order: 2  # 👈 Used when order=1 fails
-
-router_settings:
-  enable_pre_call_checks: true  # 👈 Required for 'order' to work
 ```
-
-:::important
-The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
-:::
 
 ### How order-based fallback works
 
@@ -360,7 +353,6 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 router_settings:
-  enable_pre_call_checks: true
   fallbacks:
     - gpt-4:
         - gpt-4-fallback  # tried after all order levels fail
