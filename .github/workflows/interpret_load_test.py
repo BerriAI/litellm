@@ -123,7 +123,7 @@ if __name__ == "__main__":
         + docker_run_command
         + "\n\n"
         + "### Don't want to maintain your internal proxy? get in touch 🎉"
-        + "\nHosted Proxy Alpha: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions"
+        + "\nHosted Proxy Alpha: https://enterprise.litellm.ai/demo"
         + "\n\n"
         + "## Load Test LiteLLM Proxy Results"
         + "\n\n"
