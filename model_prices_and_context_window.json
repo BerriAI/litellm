@@ -25394,6 +25394,23 @@
         "supports_prompt_caching": true,
         "supports_computer_use": false
     },
+    "openrouter/minimax/minimax-m2.7": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "cache_read_input_token_cost": 6e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://openrouter.ai/minimax/minimax-m2.7",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_computer_use": false
+    },
     "openrouter/openrouter/auto": {
         "input_cost_per_token": 0,
         "output_cost_per_token": 0,
