@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
       - name: Install Dependencies
         run: |
-          pip install aiohttp
+          pip install 'aiohttp==3.13.3'
       - name: Update JSON Data
         run: |
           python ".github/workflows/auto_update_price_and_context_window_file.py"
