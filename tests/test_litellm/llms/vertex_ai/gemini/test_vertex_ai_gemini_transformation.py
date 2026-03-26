@@ -1812,3 +1812,49 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_image_fetch_error_propagates_from_file_element():
+    """
+    Test that ImageFetchError raised by _process_gemini_media is NOT wrapped
+    in a generic Exception but propagated as-is.
+
+    Regression test for:
+    https://github.com/BerriAI/litellm/pull/24194
+    """
+    import pytest
+    from unittest.mock import patch
+    import litellm
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/image.jpg",
+                        "format": None,
+                    },
+                }
+            ],
+        }
+    ]
+
+    original_error = litellm.ImageFetchError(
+        model="gemini-1.5-pro",
+        llm_provider="vertex_ai",
+        message="403 Forbidden: unable to fetch image",
+    )
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._process_gemini_media",
+        side_effect=original_error,
+    ):
+        with pytest.raises(litellm.ImageFetchError) as exc_info:
+            _gemini_convert_messages_with_history(messages=messages)
+
+    # Must be the original error, not wrapped in a plain Exception
+    assert exc_info.value is original_error, (
+        "ImageFetchError was re-wrapped instead of being propagated directly"
+    )
