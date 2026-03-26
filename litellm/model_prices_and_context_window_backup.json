@@ -15942,12 +15942,10 @@
         "output_cost_per_token": 0,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
-            "text",
-            "image"
+            "text"
         ],
         "supported_output_modalities": [
-            "audio",
-            "text"
+            "audio"
         ],
         "supports_audio_input": false,
         "supports_audio_output": true,
@@ -15955,7 +15953,7 @@
         "supports_prompt_caching": false,
         "supports_response_schema": false,
         "supports_system_messages": false,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_web_search": false
     },
     "gemini/lyria-3-pro-preview": {
@@ -15969,12 +15967,10 @@
         "output_cost_per_token": 0,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
-            "text",
-            "image"
+            "text"
         ],
         "supported_output_modalities": [
-            "audio",
-            "text"
+            "audio"
         ],
         "supports_audio_input": false,
         "supports_audio_output": true,
@@ -15982,7 +15978,7 @@
         "supports_prompt_caching": false,
         "supports_response_schema": false,
         "supports_system_messages": false,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_web_search": false
     },
     "gemini/veo-2.0-generate-001": {
