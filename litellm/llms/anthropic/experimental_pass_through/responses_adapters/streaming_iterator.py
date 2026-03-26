@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Iterator
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -300,6 +300,39 @@ class AnthropicResponsesStreamWrapper:
             self._sent_message_stop = True
             return
 
+    def __iter__(self) -> "AnthropicResponsesStreamWrapper":
+        return self
+
+    def __next__(self) -> Dict[str, Any]:
+        # Return any queued chunks first
+        if self._chunk_queue:
+            return self._chunk_queue.popleft()
+
+        # Emit message_start if not yet done (fallback if response.created wasn't fired)
+        if not self._sent_message_start:
+            self._sent_message_start = True
+            self._chunk_queue.append(self._make_message_start())
+            return self._chunk_queue.popleft()
+
+        # Consume the upstream stream
+        try:
+            for event in self.responses_stream:
+                self._process_event(event)
+                if self._chunk_queue:
+                    return self._chunk_queue.popleft()
+        except StopIteration:
+            pass
+        except Exception as e:
+            verbose_logger.error(
+                f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}"
+            )
+
+        # Drain any remaining queued chunks
+        if self._chunk_queue:
+            return self._chunk_queue.popleft()
+
+        raise StopIteration
+
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
@@ -332,6 +365,16 @@ class AnthropicResponsesStreamWrapper:
             return self._chunk_queue.popleft()
 
         raise StopAsyncIteration
+
+    def anthropic_sse_wrapper(self) -> Iterator[bytes]:
+        """Yield SSE-encoded bytes for each Anthropic event chunk (sync)."""
+        for chunk in self:
+            if isinstance(chunk, dict):
+                event_type: str = str(chunk.get("type", "message"))
+                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                yield payload.encode()
+            else:
+                yield chunk
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """Yield SSE-encoded bytes for each Anthropic event chunk."""
