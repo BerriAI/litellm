@@ -5315,15 +5315,20 @@ class Router:
                 for o in order_values
                 if o > skip_up_to
             ]
-            # Get external fallbacks
+            # Get external fallbacks — handle both standard and non-standard formats
             external_fallback_group: Optional[List] = None
             if fallbacks is not None and model_group is not None:
-                external_fallback_group, generic_idx = get_fallback_model_group(
-                    fallbacks=fallbacks,
-                    model_group=cast(str, model_group),
-                )
-                if external_fallback_group is None and generic_idx is not None:
-                    external_fallback_group = fallbacks[generic_idx]["*"]
+                if _check_non_standard_fallback_format(fallbacks=fallbacks):
+                    # Non-standard formats (e.g. ["claude-3-haiku"] or
+                    # [{"model": "...", "messages": [...]}]) are passed through directly
+                    external_fallback_group = fallbacks
+                else:
+                    external_fallback_group, generic_idx = get_fallback_model_group(
+                        fallbacks=fallbacks,
+                        model_group=cast(str, model_group),
+                    )
+                    if external_fallback_group is None and generic_idx is not None:
+                        external_fallback_group = fallbacks[generic_idx]["*"]
 
             # Combined list: order fallbacks first, then external
             combined_fallbacks = order_fallback_entries + (
