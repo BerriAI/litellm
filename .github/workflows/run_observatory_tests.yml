@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - name: Validate tag input
         env:
@@ -77,8 +77,9 @@ jobs:
 
       - name: Start cloudflared tunnel
         run: |
-          # Install cloudflared
+          # Install cloudflared (pinned version + checksum)
           curl -sL https://github.com/cloudflare/cloudflared/releases/download/2025.2.1/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          echo "afdfadd1ef552e66bffc35246fe30a9bd578356d2d386de95585ccfc432472b8  /usr/local/bin/cloudflared" | sha256sum -c -
           chmod +x /usr/local/bin/cloudflared
 
           # Start a quick tunnel (no account needed) and capture the URL
