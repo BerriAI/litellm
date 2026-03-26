@@ -1,4 +1,3 @@
-import asyncio
 import json
 import re
 from copy import deepcopy
@@ -9,14 +8,14 @@ import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse, completion
+from litellm import ModelResponse
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.types.utils import Usage
 from litellm.utils import CustomStreamWrapper
 
 
@@ -52,13 +51,13 @@ def test_get_model_for_vertex_ai_url():
 
 def test_is_model_gemini_spec_model():
     # Test case 1: None input
-    assert VertexGeminiConfig._is_model_gemini_spec_model(None) == False
+    assert not VertexGeminiConfig._is_model_gemini_spec_model(None)
 
     # Test case 2: Regular model name
-    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini-pro") == False
+    assert not VertexGeminiConfig._is_model_gemini_spec_model("gemini-pro")
 
     # Test case 3: Gemini spec model
-    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini/custom-model") == True
+    assert VertexGeminiConfig._is_model_gemini_spec_model("gemini/custom-model")
 
 
 def test_get_model_name_from_gemini_spec_model():
@@ -332,9 +331,7 @@ def test_vertex_ai_response_json_schema_for_gemini_2():
     assert "propertyOrdering" not in transformed_request["response_json_schema"]
 
     # additionalProperties should be preserved (supported by responseJsonSchema)
-    assert (
-        transformed_request["response_json_schema"].get("additionalProperties") == False
-    )
+    assert not transformed_request["response_json_schema"].get("additionalProperties")
 
 
 def test_vertex_ai_response_schema_for_old_models():
@@ -723,7 +720,6 @@ def test_finish_reason_unspecified_and_malformed_function_call():
 
 def test_vertex_ai_usage_metadata_response_token_count():
     """For Gemini Live API"""
-    from litellm.types.utils import PromptTokensDetailsWrapper
 
     v = VertexGeminiConfig()
     usage_metadata = {
@@ -738,7 +734,6 @@ def test_vertex_ai_usage_metadata_response_token_count():
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
-    print("result", result)
     assert result.prompt_tokens == 66
     assert result.completion_tokens == 74
     assert result.total_tokens == 131
@@ -769,7 +764,6 @@ def test_vertex_ai_usage_metadata_with_image_tokens():
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
-    print("result", result)
 
     # Verify basic token counts
     assert result.prompt_tokens == 14
@@ -811,7 +805,6 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
-    print("result", result)
 
     # Verify basic token counts
     assert result.prompt_tokens == 14
@@ -855,7 +848,6 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
-    print("result", result)
 
     # Verify basic token counts
     assert result.prompt_tokens == 533
@@ -941,16 +933,13 @@ def test_vertex_ai_map_tools():
     )
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
-    print(tools)
 
     new_optional_params = {}
     new_tools = v._map_function(
         value=[{"codeExecution": {}}], optional_params=new_optional_params
     )
     assert len(new_tools) == 1
-    print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
-    print(new_tools)
 
     assert tools == new_tools
 
@@ -1030,7 +1019,6 @@ def test_vertex_ai_streaming_usage_calculation():
     """
     Ensure streaming usage calculation uses same function as non-streaming usage calculation
     """
-    from unittest.mock import patch
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
@@ -1092,14 +1080,13 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     """
     Ensure streaming usage calculation uses same function as non-streaming usage calculation
     """
-    from unittest.mock import patch
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
         VertexGeminiConfig,
     )
 
-    v = VertexGeminiConfig()
+    VertexGeminiConfig()
     usage_metadata = {
         "promptTokenCount": 57,
         "candidatesTokenCount": 10,
@@ -1136,7 +1123,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
     assert usage.prompt_tokens_details.web_search_requests == 2
 
 
-def test_vertex_ai_transform_parts():
+def test_vertex_ai_transform_parts():  # noqa: PLR0915
     """
     Test the _transform_parts method for converting Vertex AI function calls
     to OpenAI-compatible tool calls and function calls.
@@ -1340,7 +1327,6 @@ def test_vertex_ai_transform_parts():
 
 def test_vertex_ai_usage_metadata_missing_token_count():
     """Test that missing tokenCount in responseTokensDetails defaults to 0"""
-    from litellm.types.utils import PromptTokensDetailsWrapper
 
     v = VertexGeminiConfig()
     usage_metadata = {
@@ -1498,7 +1484,6 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
         standard_optional_params={},
     )
 
-    print(result)
     assert isinstance(result[0], list)
     assert len(result[0]) == 1
 
@@ -1793,8 +1778,8 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
 
     for model in gemini_3_models:
         # Test _supports_penalty_parameters method
-        assert (
-            v._supports_penalty_parameters(model) == False
+        assert not v._supports_penalty_parameters(
+            model
         ), f"Gemini 3 model {model} should not support penalty parameters"
 
         # Test get_supported_openai_params method
@@ -1842,8 +1827,8 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
 
     # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
     non_gemini_3_model = "gemini-2.5-pro"
-    assert (
-        v._supports_penalty_parameters(non_gemini_3_model) == True
+    assert v._supports_penalty_parameters(
+        non_gemini_3_model
     ), f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
 
     supported_params = v.get_supported_openai_params(non_gemini_3_model)
@@ -1867,7 +1852,6 @@ def test_vertex_ai_annotation_streaming_events():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
-    from litellm.types.llms.openai import ChatCompletionAnnotation
 
     litellm_logging = MagicMock()
 
@@ -2119,26 +2103,21 @@ def test_is_gemini_3_or_newer():
     )
 
     # Gemini 3 models
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview") == True
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash") == True
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro") == True
-    assert (
-        VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview")
-        == True
-    )
-    assert (
-        VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview") == True
-    )
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview")
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash")
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro")
+    assert VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview")
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini/gemini-3-pro-preview")
 
     # Gemini 2.5 and older models
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-pro") == False
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-flash") == False
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.0-flash") == False
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-1.5-pro") == False
-    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro") == False
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-pro")
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.5-flash")
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.0-flash")
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("gemini-1.5-pro")
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro")
 
     # Edge cases
-    assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
+    assert not VertexGeminiConfig._is_gemini_3_or_newer("")
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
@@ -3708,7 +3687,6 @@ def test_vertex_ai_web_search_options_parameter():
     v = VertexGeminiConfig()
 
     # Simulate the map_openai_params flow
-    optional_params = {}
 
     # When web_search_options is present, it should be mapped to a tool
     web_search_options = {}
