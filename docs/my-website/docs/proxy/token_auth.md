@@ -11,7 +11,7 @@ Use JWT's to auth admins / users / projects into the proxy.
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+[Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 

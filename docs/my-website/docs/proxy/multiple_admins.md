@@ -20,7 +20,7 @@ LiteLLM tracks changes to the following entities and actions:
 
 :::tip
 
-Requires Enterprise License, Get in touch with us [here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+Requires Enterprise License, Get in touch with us [here](https://enterprise.litellm.ai/demo)
 
 :::
 
