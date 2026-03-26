@@ -207,7 +207,7 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
 
 
 def _parse_service_key_once(
-        service_key: Optional[Union[str, dict]]
+    service_key: Optional[Union[str, dict]]
 ) -> Optional[Dict[str, Any]]:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
@@ -231,9 +231,10 @@ def _parse_service_key_once(
     )
     return None
 
+
 def _resolve_credential_from_service_key(
     service_key: Optional[Union[str, dict]], cv: CredentialsValue
-)-> Optional[str]:
+) -> Optional[str]:
     if service_key is None:
         return None
     val = _str_or_none(
@@ -315,8 +316,8 @@ def fetch_credentials(
     credentials = resolve_credentials(sources)
 
     resource_group = resolve_resource_group(sources)
-
-    credentials["resource_group"] = resource_group
+    if resource_group is not None:
+        credentials["resource_group"] = resource_group
 
     if "cert_url" in credentials:
         credentials["auth_url"] = credentials.pop("cert_url")
@@ -332,30 +333,30 @@ def validate_credentials(
     key_str: Optional[str] = None,
     cert_file_path: Optional[str] = None,
     key_file_path: Optional[str] = None,
-)-> None:
+) -> None:
     """
-        Validate SAP AI Core credentials for completeness and consistency.
+    Validate SAP AI Core credentials for completeness and consistency.
 
-        Args:
-            auth_url: OAuth2 token endpoint URL (required)
-            base_url: SAP AI Core API base URL (required)
-            client_id: OAuth2 client ID (required)
-            client_secret: OAuth2 client secret (for secret-based auth)
-            cert_str: PEM-encoded certificate string (for cert-based auth)
-            key_str: PEM-encoded private key string (for cert-based auth)
-            cert_file_path: Path to certificate file (for file-based cert auth)
-            key_file_path: Path to private key file (for file-based cert auth)
+    Args:
+        auth_url: OAuth2 token endpoint URL (required)
+        base_url: SAP AI Core API base URL (required)
+        client_id: OAuth2 client ID (required)
+        client_secret: OAuth2 client secret (for secret-based auth)
+        cert_str: PEM-encoded certificate string (for cert-based auth)
+        key_str: PEM-encoded private key string (for cert-based auth)
+        cert_file_path: Path to certificate file (for file-based cert auth)
+        key_file_path: Path to private key file (for file-based cert auth)
 
-        Raises:
-            ValueError: If required fields are missing or authentication mode is ambiguous.
+    Raises:
+        ValueError: If required fields are missing or authentication mode is ambiguous.
 
-        Note:
-            - This function does NOT validate resource_group (resolved separately).
-            - Exactly one authentication method must be provided:
-              * client_secret, OR
-              * (cert_str AND key_str), OR
-              * (cert_file_path AND key_file_path)
-        """
+    Note:
+        - This function does NOT validate resource_group (resolved separately).
+        - Exactly one authentication method must be provided:
+          * client_secret, OR
+          * (cert_str AND key_str), OR
+          * (cert_file_path AND key_file_path)
+    """
     if not auth_url or not client_id or not base_url:
         raise ValueError(
             "SAP AI Core credentials not found. "
@@ -464,8 +465,8 @@ def get_token_creator(
         # Case 1: secret-based auth
         if client_secret:
             return _request_token(
-                auth_url=auth_url,
-                client_id=client_id,
+                auth_url=auth_url, # type: ignore[arg-type]
+                client_id=client_id, # type: ignore[arg-type]
                 timeout=timeout,
                 client_secret=client_secret,
             )
@@ -481,16 +482,16 @@ def get_token_creator(
                 with open(key_path, "w") as f:
                     f.write(key_str_fixed)
                 return _request_token(
-                    auth_url=auth_url,
-                    client_id=client_id,
+                    auth_url=auth_url, # type: ignore[arg-type]
+                    client_id=client_id, # type: ignore[arg-type]
                     timeout=timeout,
                     cert_pair=(cert_path, key_path),
                 )
         # Case 3: file-based cert/key
-        if cert_file_path and key_file_path:
+        if cert_file_path is not None and key_file_path is not None:
             return _request_token(
-                auth_url=auth_url,
-                client_id=client_id,
+                auth_url=auth_url, # type: ignore[arg-type]
+                client_id=client_id, # type: ignore[arg-type]
                 timeout=timeout,
                 cert_pair=(cert_file_path, key_file_path),
             )
