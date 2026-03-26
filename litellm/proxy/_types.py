@@ -1155,6 +1155,17 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
+                # Validate command against allowlist to prevent arbitrary execution
+                import os as _os
+
+                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+
+                base_command = _os.path.basename(values["command"])
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise ValueError(
+                        f"Command '{values['command']}' is not in the allowed commands list "
+                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+                    )
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError(
@@ -1215,6 +1226,17 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
+                # Validate command against allowlist to prevent arbitrary execution
+                import os as _os
+
+                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+
+                base_command = _os.path.basename(values["command"])
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise ValueError(
+                        f"Command '{values['command']}' is not in the allowed commands list "
+                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+                    )
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError(
