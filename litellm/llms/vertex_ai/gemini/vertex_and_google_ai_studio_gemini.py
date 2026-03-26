@@ -1603,14 +1603,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
+        _usage_metadata = completion_response["usageMetadata"]
         usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get(
-                "promptTokenCount", 0
-            ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens=_usage_metadata.get("promptTokenCount", 0)
+            + _usage_metadata.get("toolUsePromptTokenCount", 0),
+            completion_tokens=_usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=_usage_metadata.get("totalTokenCount", 0),
         )
 
         setattr(model_response, "usage", usage)
@@ -1641,14 +1639,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
+        _usage_metadata = completion_response["usageMetadata"]
         usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get(
-                "promptTokenCount", 0
-            ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens=_usage_metadata.get("promptTokenCount", 0)
+            + _usage_metadata.get("toolUsePromptTokenCount", 0),
+            completion_tokens=_usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=_usage_metadata.get("totalTokenCount", 0),
         )
 
         setattr(model_response, "usage", usage)
