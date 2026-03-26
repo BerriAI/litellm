@@ -1,5 +1,6 @@
 import enum
 import json
+import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
@@ -1156,11 +1157,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
-                import os as _os
-
                 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 
-                base_command = _os.path.basename(values["command"])
+                base_command = os.path.basename(values["command"])
                 if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "
@@ -1227,11 +1226,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
-                import os as _os
-
                 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 
-                base_command = _os.path.basename(values["command"])
+                base_command = os.path.basename(values["command"])
                 if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "

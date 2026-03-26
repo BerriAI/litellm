@@ -9,7 +9,7 @@ from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
-from litellm.proxy._types import NewMCPServerRequest, UserAPIKeyAuth
+from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 
@@ -1267,6 +1267,16 @@ class TestStdioCommandAllowlist:
             args=["server.js"],
         )
         assert req.command == "node"
+
+    def test_update_request_disallowed_command_raises(self):
+        """UpdateMCPServerRequest should also block non-allowlisted commands."""
+        with pytest.raises(ValueError, match="not in the allowed commands list"):
+            UpdateMCPServerRequest(
+                server_id="some-id",
+                transport="stdio",
+                command="bash",
+                args=["-c", "echo pwned"],
+            )
 
 
 class TestEndpointRoleChecks:
