@@ -37,7 +37,9 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     View all keys created, ordered by spend
 
@@ -47,6 +49,14 @@ async def spend_key_fn():
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    if user_api_key_dict.user_role not in [
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Access denied. Only proxy admins can view all keys."},
+        )
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -77,6 +87,7 @@ async def spend_user_fn(
         default=None,
         description="Get User Table row for user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View all users created, ordered by spend
@@ -93,6 +104,15 @@ async def spend_user_fn(
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    if user_api_key_dict.user_role not in [
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Access denied. Only proxy admins can view all users."},
+        )
+
     from litellm.proxy.proxy_server import prisma_client
 
     try:
