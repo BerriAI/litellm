@@ -5291,6 +5291,11 @@ class Router:
             input_kwargs["fallback_depth"] = 0
 
         # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
+        # Skip for error types that have their own dedicated fallback handlers
+        _skip_order_fallback = isinstance(
+            e,
+            (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
+        )
         all_deployments = self._get_all_deployments(model_name=original_model_group)
         _order_set: set = {
             d.get("litellm_params", {}).get("order")
@@ -5298,11 +5303,17 @@ class Router:
             if d.get("litellm_params", {}).get("order") is not None
         }
         order_values: list = sorted(_order_set)
-        if len(order_values) > 1:
-            # Build order-based fallback entries (skip min order, already tried)
+        if len(order_values) > 1 and not _skip_order_fallback:
+            # Determine which order levels have already been tried
+            current_target = kwargs.get("_target_order")
+            skip_up_to = (
+                current_target if current_target is not None else order_values[0]
+            )
+            # Build order-based fallback entries (skip already-tried levels)
             order_fallback_entries: List = [
                 {"model": original_model_group, "_target_order": o}
-                for o in order_values[1:]
+                for o in order_values
+                if o > skip_up_to
             ]
             # Get external fallbacks
             external_fallback_group: Optional[List] = None
