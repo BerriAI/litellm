@@ -5164,15 +5164,13 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
 class TestValidateReturnTo:
     """Tests for SSOAuthenticationHandler._validate_return_to"""
 
-    def test_rejects_when_no_control_plane_url_configured(self, monkeypatch):
-        """return_to should be rejected if control_plane_url is not in general_settings."""
+    def test_returns_false_when_no_control_plane_url_configured(self, monkeypatch):
+        """return_to should be silently ignored if control_plane_url is not in general_settings."""
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.general_settings", {}
         )
-        with pytest.raises(HTTPException) as exc_info:
-            SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
-        assert exc_info.value.status_code == 400
-        assert "not configured" in exc_info.value.detail
+        result = SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+        assert result is False
 
     def test_allows_matching_origin(self, monkeypatch):
         """return_to matching the configured control_plane_url origin should pass."""
