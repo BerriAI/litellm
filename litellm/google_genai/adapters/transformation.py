@@ -321,7 +321,7 @@ class GoogleGenAIAdapter:
         )
         # Return the SSE-wrapped version for proper event formatting
         return google_genai_wrapper.async_google_genai_sse_wrapper()
-    
+
     def sync_translate_completion_output_params_streaming(
         self,
         completion_stream: Any,
@@ -330,7 +330,7 @@ class GoogleGenAIAdapter:
         google_genai_wrapper = GoogleGenAIStreamWrapper(
             completion_stream=completion_stream
         )
-        return google_genai_wrapper.google_genai_sse_wrapper()    
+        return google_genai_wrapper.google_genai_sse_wrapper()
 
     def _transform_google_genai_tools_to_openai(
         self,

@@ -229,7 +229,7 @@ class AnthropicAdapter:
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
-    
+
     def sync_translate_completion_output_params_streaming(
         self,
         completion_stream: Any,
@@ -568,9 +568,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -681,7 +681,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.

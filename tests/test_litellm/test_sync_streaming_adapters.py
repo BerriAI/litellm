@@ -230,7 +230,7 @@ def test_google_genai_sync_translate_sse_contains_candidates():
     for chunk in result:
         chunk_str = chunk.decode("utf-8")
         if chunk_str.startswith("data: "):
-            json_str = chunk_str[len("data: "):].strip()
+            json_str = chunk_str[len("data: ") :].strip()
             if json_str:
                 data = json.loads(json_str)
                 if "candidates" in data:
