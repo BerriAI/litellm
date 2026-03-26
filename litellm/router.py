@@ -5851,9 +5851,19 @@ class Router:
 
         if isinstance(error, openai.AuthenticationError):
             """
-            - if other deployments available -> retry
+            - if other deployments available -> try once on a different deployment
+            - if missing API key (not a transient error) -> raise immediately
             - else -> raise error
             """
+            _auth_err_str = str(error).lower()
+            # "Missing ... API Key" is a configuration error, not transient.
+            # Retrying the same or another deployment won't help — raise immediately
+            # so the user sees the error right away instead of waiting through N retries.
+            # Ref: https://github.com/BerriAI/litellm/issues/18395
+            if "missing" in _auth_err_str and (
+                "api key" in _auth_err_str or "api_key" in _auth_err_str
+            ):
+                raise error
             if (
                 _num_all_deployments <= 1
             ):  # if there is only 1 deployment for this model group then don't retry

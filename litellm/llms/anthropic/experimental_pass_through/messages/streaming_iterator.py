@@ -99,10 +99,34 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         collected_chunks = []
 
-        async for chunk in completion_stream:
-            encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-            collected_chunks.append(encoded_chunk)
-            yield encoded_chunk
+        try:
+            async for chunk in completion_stream:
+                encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                collected_chunks.append(encoded_chunk)
+                yield encoded_chunk
+        except Exception as e:
+            # Map raw provider errors (e.g. Bedrock internalServerException mid-
+            # stream) to typed LiteLLM exceptions so the proxy returns a proper
+            # error response instead of leaking the raw provider error string.
+            # Ref: https://github.com/BerriAI/litellm/issues/24609
+            import litellm  # lazy import — avoids circular at module level
+            from litellm.litellm_core_utils.exception_mapping_utils import (
+                exception_type as _map_exception,
+            )
+
+            _model     = getattr(self, 'model', None) or ''
+            _provider  = getattr(self, 'custom_llm_provider', None) or 'bedrock'
+            _mapped: Exception = e
+            try:
+                _mapped = _map_exception(
+                    model=_model,
+                    original_exception=e,
+                    custom_llm_provider=_provider,
+                )
+            except Exception:
+                # _map_exception raises the mapped exception — catch and re-raise
+                raise
+            raise _mapped
 
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)

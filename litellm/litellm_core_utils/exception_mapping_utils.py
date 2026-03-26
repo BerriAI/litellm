@@ -1100,6 +1100,22 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="bedrock",
                     )
+                elif (
+                    "internalServerException" in error_str
+                    or "InternalServerException" in error_str
+                    or "internalServerError" in error_str
+                ):
+                    # botocore eventstream wraps all mid-stream errors as HTTP 400,
+                    # so we cannot rely on status_code for Bedrock server errors.
+                    # Detect by error type string instead.
+                    # Ref: https://github.com/BerriAI/litellm/issues/24608
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"BedrockException InternalServerError - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=getattr(original_exception, "response", None),
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True

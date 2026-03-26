@@ -125,6 +125,11 @@ class XAIChatConfig(OpenAIGPTConfig):
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
+            elif drop_params:
+                # Silently drop unsupported parameters when drop_params=True.
+                # This handles cases like reasoning_effort on non-reasoning grok models.
+                # Ref: https://github.com/BerriAI/litellm/issues/16204
+                pass
         return optional_params
 
     def get_model_response_iterator(
