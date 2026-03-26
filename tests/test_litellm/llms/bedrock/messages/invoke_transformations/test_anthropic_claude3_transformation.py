@@ -34,7 +34,9 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
         _dummy_stream(),
         litellm_logging_obj=LiteLLMLoggingObj(
             model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+            messages=[
+                {"role": "user", "content": "Hello, can you tell me a short joke?"}
+            ],
             stream=True,
             call_type="chat",
             start_time=datetime.now(),
@@ -96,12 +98,9 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "1h"
-                        }
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
-                ]
+                ],
             }
         ]
     }
@@ -122,20 +121,14 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "1h"
-                        }
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     },
                     {
                         "type": "text",
                         "text": "World",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "2h"
-                        }
-                    }
-                ]
+                        "cache_control": {"type": "ephemeral", "ttl": "2h"},
+                    },
+                ],
             }
         ]
     }
@@ -156,11 +149,9 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral"
-                        }
+                        "cache_control": {"type": "ephemeral"},
                     }
-                ]
+                ],
             }
         ]
     }
@@ -231,6 +222,7 @@ def test_remove_custom_field_from_tools():
     request4 = {"tools": None}
     remove_custom_field_from_tools(request4)
     assert request4["tools"] is None
+
 
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
@@ -303,9 +295,9 @@ def test_bedrock_messages_strips_output_config():
         headers={},
     )
 
-    assert "output_config" not in result, (
-        "output_config should be stripped — Bedrock Invoke rejects it"
-    )
+    assert (
+        "output_config" not in result
+    ), "output_config should be stripped — Bedrock Invoke rejects it"
     # Other params should be preserved
     assert result.get("max_tokens") == 4096
 
@@ -373,9 +365,9 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
             headers={},
         )
 
-        assert "output_config" in result, (
-            f"output_config should be preserved for Claude 4.6 model {model_id}"
-        )
+        assert (
+            "output_config" in result
+        ), f"output_config should be preserved for Claude 4.6 model {model_id}"
         assert result["output_config"]["effort"] == "max"
         assert result["thinking"]["type"] == "adaptive"
 
@@ -392,9 +384,9 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
-    assert "output_config" in result, (
-        "output_config should be preserved for Claude Sonnet 4.6"
-    )
+    assert (
+        "output_config" in result
+    ), "output_config should be preserved for Claude Sonnet 4.6"
     assert result["output_config"]["effort"] == "high"
 
 
@@ -426,6 +418,6 @@ def test_bedrock_messages_strips_output_config_for_pre_4_6():
             headers={},
         )
 
-        assert "output_config" not in result, (
-            f"output_config should be stripped for pre-4.6 model {model_id}"
-        )
+        assert (
+            "output_config" not in result
+        ), f"output_config should be stripped for pre-4.6 model {model_id}"
