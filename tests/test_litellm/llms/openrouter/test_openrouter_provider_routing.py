@@ -80,7 +80,10 @@ class TestOpenRouterNativeModelRouting:
         "input_model,expected_model",
         [
             ("openrouter/anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
-            ("openrouter/meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            (
+                "openrouter/meta-llama/llama-3-70b-instruct",
+                "meta-llama/llama-3-70b-instruct",
+            ),
         ],
     )
     def test_regular_models_still_strip_normally(self, input_model, expected_model):
@@ -88,3 +91,12 @@ class TestOpenRouterNativeModelRouting:
         result_model, provider, _, _ = litellm.get_llm_provider(model=input_model)
         assert provider == "openrouter"
         assert result_model == expected_model
+
+    def test_wildcard_deployment_strips_routing_prefix(self):
+        """openrouter/* proxy deployments pass custom_llm_provider; strip LiteLLM prefix."""
+        result_model, provider, _, _ = litellm.get_llm_provider(
+            model="openrouter/anthropic/claude-3.5-sonnet",
+            custom_llm_provider="openrouter",
+        )
+        assert provider == "openrouter"
+        assert result_model == "anthropic/claude-3.5-sonnet"
