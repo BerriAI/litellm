@@ -350,6 +350,12 @@ AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
 )
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5)
+)
+REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -505,6 +511,7 @@ LITELLM_CHAT_PROVIDERS = [
     "azure_ai",
     "sagemaker",
     "sagemaker_chat",
+    "sagemaker_nova",
     "bedrock",
     "vllm",
     "nlp_cloud",
@@ -1351,6 +1358,15 @@ PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
 PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
+MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
+MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
+    1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+)
+# Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
+# CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
+# installations with large numbers of stale managed objects).
+_batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
+PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
@@ -1408,6 +1424,7 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "default_team_params",
     "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
@@ -1433,6 +1450,7 @@ SENTRY_DENYLIST = [
     "credential",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "AZURE_API_KEY",
     "COHERE_API_KEY",
     "REPLICATE_API_KEY",

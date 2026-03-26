@@ -130,6 +130,15 @@ async def get_marketplace():
         )
 
 
+# Allowlist for git-subdir paths: one or more segments separated by '/'.
+# Each segment must start with an alphanumeric character and contain only
+# alphanumeric characters, dots, hyphens, and underscores.
+# This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$"
+)
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
@@ -148,7 +157,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github or url format)
+        - source: Git source reference (github, url, or git-subdir format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
@@ -204,10 +213,34 @@ async def register_plugin(
                         "error": "URL source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
                     },
                 )
+        elif source_type == "git-subdir":
+            if not source.get("url"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "git-subdir source must include 'url' field (e.g., 'https://github.com/org/repo.git')"
+                    },
+                )
+            if not source.get("path"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "git-subdir source must include 'path' field (e.g., 'plugins/plugin-name')"
+                    },
+                )
+            if not _VALID_GIT_SUBDIR_PATH_RE.match(source["path"]):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
+                    },
+                )
         else:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "source.source must be 'github' or 'url'"},
+                detail={
+                    "error": "source.source must be 'github', 'url', or 'git-subdir'"
+                },
             )
 
         # Build manifest for storage

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from litellm._uuid import uuid
 
@@ -3418,9 +3418,10 @@ class TestPKCEFunctionality:
         mock_userinfo_response.json.return_value = userinfo_resp
 
         async def fake_post(*args, **kwargs):
-            # Verify Basic Auth is set
-            assert "auth" in kwargs
-            assert isinstance(kwargs["auth"], httpx.BasicAuth)
+            # Verify Basic Auth is set via Authorization header
+            headers = kwargs.get("headers", {})
+            assert "Authorization" in headers
+            assert headers["Authorization"].startswith("Basic ")
             # Verify code_verifier is in the POST body (essential PKCE field)
             post_data = kwargs.get("data", {})
             assert post_data.get("code_verifier") == "verifier_abc"
@@ -3431,20 +3432,17 @@ class TestPKCEFunctionality:
             assert "client_id" not in post_data, "client_id must not appear in POST body when using Basic Auth (include_client_id=False)"
             return mock_response
 
-        # Use separate mock clients for token exchange and userinfo —
-        # each httpx.AsyncClient() call gets its own independent mock.
-        mock_token_client = AsyncMock()
-        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
-        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        # get_async_httpx_client returns a client directly (no context manager).
+        mock_token_client = MagicMock()
         mock_token_client.post = AsyncMock(side_effect=fake_post)
 
-        mock_userinfo_client = AsyncMock()
-        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
-        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo_response)
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_code_123",
@@ -3481,7 +3479,9 @@ class TestPKCEFunctionality:
         userinfo_resp = {"sub": "user2", "email": "user2@example.com"}
 
         async def fake_post(*args, **kwargs):
-            assert "auth" not in kwargs, "Should NOT use Basic Auth when include_client_id=True"
+            headers = kwargs.get("headers", {})
+            auth_header = headers.get("Authorization", "")
+            assert not auth_header.startswith("Basic "), "Should NOT use Basic Auth when include_client_id=True"
             data = kwargs.get("data", {})
             assert "client_id" in data
             assert "client_secret" in data
@@ -3496,18 +3496,16 @@ class TestPKCEFunctionality:
         mock_userinfo.status_code = 200
         mock_userinfo.json.return_value = userinfo_resp
 
-        mock_token_client = AsyncMock()
-        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
-        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        mock_token_client = MagicMock()
         mock_token_client.post = AsyncMock(side_effect=fake_post)
 
-        mock_userinfo_client = AsyncMock()
-        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
-        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_code_456",
@@ -3536,15 +3534,15 @@ class TestPKCEFunctionality:
 
         error_body = {"error": "invalid_grant", "error_description": "Code already used"}
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = error_body
             mock_client.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._pkce_token_exchange(
@@ -3576,14 +3574,14 @@ class TestPKCEFunctionality:
         ).rstrip(b"=").decode()
         fake_id_token = f"eyJhbGciOiJSUzI1NiJ9.{encoded_payload}.fakesig"
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_fail = MagicMock()
             mock_fail.status_code = 503
             mock_client.get = AsyncMock(return_value=mock_fail)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             result = await SSOAuthenticationHandler._get_pkce_userinfo(
                 access_token="some_token",
@@ -3628,14 +3626,14 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_fail = MagicMock()
             mock_fail.status_code = 503
             mock_client.get = AsyncMock(return_value=mock_fail)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._get_pkce_userinfo(
@@ -3659,12 +3657,12 @@ class TestPKCEFunctionality:
         mock_resp.status_code = 200
         mock_resp.json.return_value = None  # HTTP 200 with null JSON body
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._get_pkce_userinfo(
@@ -3725,7 +3723,9 @@ class TestPKCEFunctionality:
         userinfo_resp = {"sub": "pubuser", "email": "pub@example.com"}
 
         async def fake_post(*args, **kwargs):
-            assert "auth" not in kwargs, "Public client must not use Basic Auth"
+            headers = kwargs.get("headers", {})
+            auth_header = headers.get("Authorization", "")
+            assert not auth_header.startswith("Basic "), "Public client must not use Basic Auth"
             data = kwargs.get("data", {})
             assert data.get("client_id") == "public_client_id"
             assert "client_secret" not in data, "No secret should be sent for public client"
@@ -3739,18 +3739,16 @@ class TestPKCEFunctionality:
         mock_userinfo.status_code = 200
         mock_userinfo.json.return_value = userinfo_resp
 
-        mock_token_client = AsyncMock()
-        mock_token_client.__aenter__ = AsyncMock(return_value=mock_token_client)
-        mock_token_client.__aexit__ = AsyncMock(return_value=False)
+        mock_token_client = MagicMock()
         mock_token_client.post = AsyncMock(side_effect=fake_post)
 
-        mock_userinfo_client = AsyncMock()
-        mock_userinfo_client.__aenter__ = AsyncMock(return_value=mock_userinfo_client)
-        mock_userinfo_client.__aexit__ = AsyncMock(return_value=False)
+        mock_userinfo_client = MagicMock()
         mock_userinfo_client.get = AsyncMock(return_value=mock_userinfo)
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client_cls.side_effect = [mock_token_client, mock_userinfo_client]
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_get_client.side_effect = [mock_token_client, mock_userinfo_client]
 
             result = await SSOAuthenticationHandler._pkce_token_exchange(
                 authorization_code="auth_pub",
@@ -3884,12 +3882,12 @@ class TestPKCEFunctionality:
         mock_response.status_code = 401
         mock_response.text = "Unauthorized"
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_client.post = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._pkce_token_exchange(
@@ -3993,16 +3991,16 @@ class TestPKCEFunctionality:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = None  # JSON null response body
             mock_resp.text = "null"
             mock_client.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._pkce_token_exchange(
@@ -4029,15 +4027,15 @@ class TestPKCEFunctionality:
 
         body_without_token = {"token_type": "Bearer", "scope": "openid"}
 
-        with patch("litellm.proxy.management_endpoints.ui_sso.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = MagicMock()
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = body_without_token
             mock_client.post = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             with pytest.raises(ProxyException) as exc_info:
                 await SSOAuthenticationHandler._pkce_token_exchange(
@@ -5161,4 +5159,98 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     assert result.extra_fields is not None
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
+
+
+class TestValidateReturnTo:
+    """Tests for SSOAuthenticationHandler._validate_return_to"""
+
+    def test_returns_false_when_no_control_plane_url_configured(self, monkeypatch):
+        """return_to should be silently ignored if control_plane_url is not in general_settings."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", {}
+        )
+        result = SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+        assert result is False
+
+    def test_allows_matching_origin(self, monkeypatch):
+        """return_to matching the configured control_plane_url origin should pass."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        # Should not raise
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui?page=models")
+
+    def test_allows_matching_origin_with_trailing_slash(self, monkeypatch):
+        """Trailing slash on control_plane_url should not affect origin comparison."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com/"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+
+    def test_rejects_prefix_attack(self, monkeypatch):
+        """return_to like cp.example.com.evil.com must be rejected (not just prefix match)."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com.evil.com/steal")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_different_origin(self, monkeypatch):
+        """return_to pointing to a completely different domain should be rejected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://evil.com/phish")
+        assert exc_info.value.status_code == 400
+
+    def test_case_insensitive_hostname(self, monkeypatch):
+        """Hostname comparison should be case-insensitive per RFC 3986."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://CP.Example.COM"},
+        )
+        # Should not raise
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+
+    def test_rejects_scheme_mismatch(self, monkeypatch):
+        """http:// must be rejected when control_plane_url uses https://."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("http://cp.example.com/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_port_mismatch(self, monkeypatch):
+        """Non-default port must be rejected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com:8443/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_allows_explicit_default_port(self, monkeypatch):
+        """https://host:443 should match https://host (default port normalisation)."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:443/ui")
+
+    def test_allows_matching_custom_port(self, monkeypatch):
+        """Both sides on the same custom port should match."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com:3000"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:3000/ui")
 

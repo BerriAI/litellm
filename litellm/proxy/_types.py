@@ -484,6 +484,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/list",
         "/team/available",
         "/user/info",
+        "/v2/user/info",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -1006,6 +1007,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    organization_id: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -1121,6 +1123,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     is_byok: bool = False
@@ -1669,6 +1672,7 @@ class NewTeamRequest(TeamBase):
         int
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2412,6 +2416,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_metadata: Optional[dict] = None
 
     # Project Params
+    project_alias: Optional[str] = None
     project_metadata: Optional[dict] = None
 
     # Time stamps
@@ -2468,6 +2473,9 @@ class UserAPIKeyAuth(
         Any
     ] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
+    # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
+    jwt_claims: Optional[Dict] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2559,6 +2567,30 @@ class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_info: Optional[Union[dict, BaseModel]]
     keys: List
     teams: List
+
+
+class UserInfoV2Response(LiteLLMPydanticObjectBase):
+    """
+    Response model for GET /v2/user/info
+
+    Returns ONLY the user object - no keys, no teams objects.
+    This is a lightweight alternative to UserInfoResponse.
+    """
+
+    user_id: str
+    user_email: Optional[str] = None
+    user_alias: Optional[str] = None
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    max_budget: Optional[float] = None
+    models: List[str] = []
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    sso_user_id: Optional[str] = None
+    teams: List[str] = []  # Just team IDs, not full team objects
 
 
 class LiteLLM_Config(LiteLLMPydanticObjectBase):
@@ -2925,7 +2957,9 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "rotated"]
+AUDIT_ACTIONS = Literal[
+    "created", "updated", "deleted", "blocked", "unblocked", "rotated"
+]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -3195,6 +3229,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -4236,7 +4271,7 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
         ]
     ] = Field(
-        default=LitellmUserRoles.INTERNAL_USER,
+        default=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         description="Default role assigned to new users created",
     )
     max_budget: Optional[float] = Field(
