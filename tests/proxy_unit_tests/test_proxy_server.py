@@ -2726,6 +2726,10 @@ async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_aga
 ):
     """
     Test that /get/config/callbacks returns already-decrypted email/slack values as-is.
+
+    decrypt_value_helper is called with return_original_value=True, so for already-plaintext
+    values (DB mode: decrypted by _update_config_from_db) it returns the original value
+    unchanged. For encrypted values (YAML mode) it properly decrypts them.
     """
     mock_config_data = {
         "litellm_settings": {},
@@ -2745,10 +2749,15 @@ async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_aga
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
+    # Simulate return_original_value=True behaviour: return the value as-is (already plaintext)
+    def fake_decrypt(value, key, return_original_value=False, **kwargs):
+        return value
+
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ), patch(
         "litellm.proxy.proxy_server.decrypt_value_helper",
+        side_effect=fake_decrypt,
     ) as decrypt_mock:
         response = client_no_auth.get("/get/config/callbacks")
 
@@ -2774,7 +2783,8 @@ async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_aga
         "EMAIL_LOGO_URL": "https://example.com/logo.png",
         "EMAIL_SUPPORT_CONTACT": "support@example.com",
     }
-    decrypt_mock.assert_not_called()
+    # decrypt_value_helper is called once per SMTP var + once for SLACK_WEBHOOK_URL
+    assert decrypt_mock.call_count == len(mock_config_data["environment_variables"])
 
 
 @pytest.mark.asyncio

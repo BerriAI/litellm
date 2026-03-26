@@ -12624,7 +12624,11 @@ async def get_config():  # noqa: PLR0915
                     _value = os.getenv("SLACK_WEBHOOK_URL", None)
                     _slack_env_vars[_var] = _value
                 else:
-                    _slack_env_vars[_var] = env_variable
+                    _slack_env_vars[_var] = decrypt_value_helper(
+                        value=env_variable,
+                        key=_var,
+                        return_original_value=True,
+                    )
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = (
@@ -12658,7 +12662,16 @@ async def get_config():  # noqa: PLR0915
             if env_variable is None:
                 _email_env_vars[_var] = None
             else:
-                _email_env_vars[_var] = env_variable
+                # Use return_original_value=True so this works for both:
+                # - DB mode: values already decrypted by _update_config_from_db → decryption
+                #   fails gracefully and returns the original plaintext value
+                # - YAML mode: values still encrypted in config file → decrypted here
+                _decrypted_value = decrypt_value_helper(
+                    value=env_variable,
+                    key=_var,
+                    return_original_value=True,
+                )
+                _email_env_vars[_var] = _decrypted_value
 
         alerting_data.append(
             {
