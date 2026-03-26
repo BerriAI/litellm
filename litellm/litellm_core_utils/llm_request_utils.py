@@ -50,9 +50,9 @@ def sanitize_request_payload(value: Any) -> Any:
 
     if isinstance(value, dict):
         return {
-            (
-                sanitize_surrogate_code_points(key) if isinstance(key, str) else key
-            ): sanitize_request_payload(nested_value)
+            (sanitize_surrogate_code_points(key) if isinstance(key, str) else key): sanitize_request_payload(
+                nested_value
+            )
             for key, nested_value in value.items()
         }
 
@@ -66,6 +66,17 @@ def find_surrogate_code_point_path(
     value: Any,
     path: str = "payload",
 ) -> Optional[str]:
+    """
+    Recursively searches nested structures for strings or dict keys containing Unicode surrogate code points.
+
+    Args:
+        value: The value to inspect (str, dict, list, or other).
+        path: Base path to use when reporting the surrogate location.
+
+    Returns:
+        Optional[str] path to the first occurrence or None.
+        Examples: "payload.key", "payload[key][0]"
+    """
     if isinstance(value, str):
         if contains_surrogate_code_point(value):
             return path
@@ -115,16 +126,12 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
     for model in known_models:
         try:
-            model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = model_info.get("input_cost_per_token", 0) + model_info.get(
-            "output_cost_per_token", 0
-        )
+        _cost = model_info.get("input_cost_per_token", 0) + model_info.get("output_cost_per_token", 0)
         model_costs.append((model, _cost))
 
     # Sort by cost (ascending)
@@ -143,8 +150,6 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-    )
+    proxy_request_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
     return proxy_request_headers
