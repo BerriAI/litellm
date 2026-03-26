@@ -324,10 +324,46 @@ model_list:
     litellm_params:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      order: 2  # 👈 Used when order=1 is unavailable
+      order: 2  # 👈 Used when order=1 fails
 
 router_settings:
   enable_pre_call_checks: true  # 👈 Required for 'order' to work
+```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
+:::
+
+### How order-based fallback works
+
+When a request to an `order=1` deployment fails (connection error, 404, 429, etc.), the router automatically tries `order=2` deployments, then `order=3`, and so on. Each order level gets its own set of retries before escalating to the next.
+
+If all order levels are exhausted, the router falls through to any configured [model-level fallbacks](#fallbacks).
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-secondary
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2
+
+  - model_name: gpt-4-fallback
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  enable_pre_call_checks: true
+  fallbacks:
+    - gpt-4:
+        - gpt-4-fallback  # tried after all order levels fail
 ```
 
 :::important

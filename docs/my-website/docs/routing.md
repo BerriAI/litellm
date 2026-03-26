@@ -889,7 +889,7 @@ model_list:
     litellm_params:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      order: 2  # 👈 Used when order=1 is unavailable
+      order: 2  # 👈 Tried when order=1 fails
 
 router_settings:
   enable_pre_call_checks: true  # 👈 Required for 'order' to work
