@@ -14,7 +14,9 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 > **Status:** Active investigation
-> **Last updated:** March 25, 2026
+> **Last updated:** March 26, 2026
+
+> **Update (March 26):** Added `checkmarx[.]zone` to [Indicators of compromise](#indicators-of-compromise-iocs).
 
 > **Update (March 25):** Added community-contributed scripts for scanning GitHub Actions and GitLab CI pipelines for the compromised versions. See [How to check if you are affected](#how-to-check-if-you-are-affected). s/o [@Zach Fury](https://www.linkedin.com/in/fryware/) for these scripts.
 
@@ -642,6 +644,8 @@ Review affected systems for the following indicators:
 
 - `litellm_init.pth` present in your `site-packages`
 - Outbound traffic or requests to `models.litellm[.]cloud`
+  This domain is **not** affiliated with LiteLLM
+- Outbound traffic or requests to `checkmarx[.]zone`
   This domain is **not** affiliated with LiteLLM
 
 
