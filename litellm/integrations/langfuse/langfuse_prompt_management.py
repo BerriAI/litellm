@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Uni
 from packaging.version import Version
 from typing_extensions import TypeAlias
 
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from ..custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -19,7 +19,6 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
-from ..prompt_management_base import PromptManagementBase
 from .langfuse import LangFuseLogger
 from .langfuse_handler import LangFuseHandler
 
@@ -108,7 +107,7 @@ def langfuse_client_init(
     return client
 
 
-class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogger):
+class LangfusePromptManagement(CustomPromptManagement, LangFuseLogger):
     def __init__(
         self,
         langfuse_public_key=None,
@@ -175,6 +174,47 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
                 optional_params[k] = v
         return optional_params
 
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+        tools: Optional[List[Dict]] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Overrides the base method to ensure Langfuse-specific prompt management is triggered.
+        """
+
+        if prompt_id is None and not model.startswith("langfuse/"):
+            return model, messages, non_default_params
+
+        prompt_template = self.compile_prompt(
+            prompt_id=prompt_id or model.replace("langfuse/", ""),
+            prompt_variables=prompt_variables,
+            client_messages=messages,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            prompt_spec=prompt_spec,
+        )
+
+        return self.post_compile_prompt_processing(
+            prompt_template=prompt_template,
+            messages=messages,
+            non_default_params=non_default_params,
+            model=model,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
+
     async def async_get_chat_completion_prompt(
         self,
         model: str,
@@ -212,18 +252,15 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         if prompt_id is None:
-            return False
-        langfuse_client = langfuse_client_init(
-            langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
-            langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
-            langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
-            langfuse_host=dynamic_callback_params.get("langfuse_host"),
-        )
-        langfuse_prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=prompt_id,
-            langfuse_client=langfuse_client,
-        )
-        return langfuse_prompt_client is not None
+            return True
+
+        if (
+            prompt_spec is not None
+            and getattr(prompt_spec, "prompt_id", None) is not None
+        ):
+            return True
+
+        return False
 
     def _compile_prompt_helper(
         self,
