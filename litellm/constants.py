@@ -141,6 +141,15 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+# Allowlist of commands permitted for MCP stdio transport.
+# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
+_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
+MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
+    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
+    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
