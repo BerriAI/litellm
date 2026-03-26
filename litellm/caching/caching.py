@@ -411,7 +411,7 @@ class Cache:
         Returns:
             str: The hashed cache key.
         """
-        hash_object = hashlib.sha256(cache_key.encode(), usedforsecurity=False)
+        hash_object = hashlib.sha256(cache_key.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)

@@ -3725,7 +3725,7 @@ class BedrockImageProcessor:
                 sample = normalized[:HASH_SAMPLE_BYTES]
 
             # --- Compute deterministic hash (sample + total length) ---
-            hasher = hashlib.sha256(usedforsecurity=False)
+            hasher = hashlib.sha256()
             hasher.update(sample)
             hasher.update(
                 str(len(normalized)).encode("utf-8")
