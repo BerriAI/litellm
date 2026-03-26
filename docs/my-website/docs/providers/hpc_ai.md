@@ -1,6 +1,6 @@
 # HPC-AI
 
-[HPC-AI](https://api.hpc-ai.com) provides an OpenAI-compatible inference API at `https://api.hpc-ai.com/inference/v1`.
+[HPC-AI](https://www.hpc-ai.com/) provides an OpenAI-compatible inference API at `https://api.hpc-ai.com/inference/v1`.
 
 :::tip
 
@@ -21,8 +21,6 @@ Optional: override the base URL (defaults to `https://api.hpc-ai.com/inference/v
 ```python
 os.environ["HPC_AI_API_BASE"] = "https://api.hpc-ai.com/inference/v1"
 ```
-
-If you use another env name such as `HPC_AI_BASE_URL`, map it to `api_base` in your LiteLLM call or proxy `litellm_params`; LiteLLM reads `HPC_AI_API_BASE` by default.
 
 ## Sample Usage: Chat completion
 
@@ -76,11 +74,18 @@ litellm --config /path/to/config.yaml
 
 3. Send requests to the proxy using your alias (`hpc-ai-minimax` in the example above).
 
-## Supported models (examples)
+## Supported models
 
 | LiteLLM model id | Notes |
 | ---------------- | ----- |
 | `hpc_ai/minimax/minimax-m2.5` | MiniMax M2.5 |
 | `hpc_ai/moonshotai/kimi-k2.5` | Kimi K2.5 |
 
-Pricing in `model_prices_and_context_window.json` may use placeholder token costs; set real rates when your billing API is available.
+## Pricing
+
+Costs in `model_prices_and_context_window.json` use USD per token. Approximate list rates (per 1M tokens):
+
+| Model | Uncached input | Cached input | Output |
+| ----- | -------------- | ------------ | ------ |
+| M2.5 (`minimax/minimax-m2.5`) | $0.30 | $0.03 | $1.20 |
+| K2.5 (`moonshotai/kimi-k2.5`) | $0.45 | $0.07 | $2.25 |
