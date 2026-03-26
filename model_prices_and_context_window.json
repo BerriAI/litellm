@@ -20197,7 +20197,7 @@
         "max_tokens": 204800,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://api.hpc-ai.com/inference/v1",
+        "source": "https://www.hpc-ai.com/models-console/models/minimax/minimax-m2.5",
         "supports_function_calling": true,
         "supports_prompt_caching": true
     },
@@ -20210,7 +20210,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2.25e-06,
-        "source": "https://api.hpc-ai.com/inference/v1",
+        "source": "https://www.hpc-ai.com/models-console/models/moonshotai/kimi-k2.5",
         "supports_function_calling": true,
         "supports_prompt_caching": true
     },
