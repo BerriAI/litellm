@@ -1793,6 +1793,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "HPC_AI",
+    "provider_display_name": "HPC-AI",
+    "litellm_provider": "hpc_ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hpc_ai/minimax/minimax-m2.5"
+  },
+  {
     "provider": "NLP_CLOUD",
     "provider_display_name": "Nlp Cloud",
     "litellm_provider": "nlp_cloud",

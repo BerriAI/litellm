@@ -4638,6 +4638,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "hpc_ai":
+        optional_params = litellm.HpcAiConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
@@ -5131,6 +5142,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+    # hpc_ai
+    elif llm_provider == "hpc_ai":
+        api_key = api_key or litellm.hpc_ai_key or get_secret("HPC_AI_API_KEY")
     # wandb
     elif llm_provider == "wandb":
         api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
@@ -6436,6 +6450,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "hpc_ai":
+            if "HPC_AI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("HPC_AI_API_KEY")
         elif custom_llm_provider == "wandb":
             if "WANDB_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6558,6 +6577,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif model in litellm.hpc_ai_models:
+            if "HPC_AI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("HPC_AI_API_KEY")
         elif model in litellm.wandb_models:
             if "WANDB_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8082,6 +8106,7 @@ class ProviderConfigManager:
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
+            LlmProviders.HPC_AI: (lambda: litellm.HpcAiConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),

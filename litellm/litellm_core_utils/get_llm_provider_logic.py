@@ -324,6 +324,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "api.hpc-ai.com/inference/v1":
+                        custom_llm_provider = "hpc_ai"
+                        dynamic_api_key = get_secret_str("HPC_AI_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -619,6 +622,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.studio.nebius.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
+    elif custom_llm_provider == "hpc_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.HpcAiConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "ollama":
         api_base = (
             api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"

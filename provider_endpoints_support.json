@@ -1503,6 +1503,24 @@
         "interactions": true
       }
     },
+    "hpc_ai": {
+      "display_name": "HPC-AI (`hpc_ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/hpc_ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "nlp_cloud": {
       "display_name": "NLP Cloud (`nlp_cloud`)",
       "url": "https://docs.litellm.ai/docs/providers/nlp_cloud",
