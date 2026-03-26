@@ -40,6 +40,11 @@ def _extract_cache_params() -> Dict[str, Any]:
         return {}
     try:
         cache_params = vars(litellm.cache.cache)
+        if cache_params.get("redis_kwargs"):
+            if not cache_params.get("host"):
+                cache_params["host"] = cache_params["redis_kwargs"].get("host")
+            if not cache_params.get("port"):
+                cache_params["port"] = cache_params["redis_kwargs"].get("port")
         cleaned_params = (
             HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
         )
