@@ -1,2 +1,0 @@
-# Gemini Video Generation Tests
-

@@ -18,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_injection_detection_default_pt,
 )
@@ -35,6 +36,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
         super().__init__(
             guardrail_name="prompt_injection_detection",
             default_on=True,
+            event_hook=[
+                GuardrailEventHooks.pre_call.value,
+                GuardrailEventHooks.during_call.value,
+            ],
         )
         self.prompt_injection_params = prompt_injection_params
         self.llm_router: Optional[Router] = None
@@ -69,6 +74,18 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
             "and begin afresh",
             "and start from scratch",
         ]
+
+    def should_run_guardrail(
+        self,
+        data,
+        event_type: GuardrailEventHooks,
+    ) -> bool:
+        """
+        Prompt-injection detection is a security guardrail that must NOT be
+        bypassable via ``disable_global_guardrail``.  We deliberately ignore
+        that flag and only check whether the event_type matches our hooks.
+        """
+        return self._event_hook_is_event_type(event_type)
 
     def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
