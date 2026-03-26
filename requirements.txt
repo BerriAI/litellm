@@ -81,3 +81,4 @@ pypdf>=6.7.3 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
 litellm-enterprise==0.1.35
+mlflow==3.8.0rc0
