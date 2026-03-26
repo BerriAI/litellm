@@ -236,6 +236,9 @@ class OllamaConfig(BaseConfig):
         api_base = (
             api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         )
+        # Strip /api/chat suffix if present (same logic as get_complete_url in chat/transformation.py)
+        if api_base.endswith("/api/chat"):
+            api_base = api_base[:-10]
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 

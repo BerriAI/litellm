@@ -283,17 +283,17 @@ class OllamaChatConfig(BaseConfig):
             reasoning_content, parsed_content = _extract_reasoning_content(
                 cast(dict, m)
             )
-            content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
+            content_str = convert_content_list_to_str(cast(AllMessageValues, m))
 
             ollama_message = OllamaChatCompletionMessage(
                 role=cast(str, m.get("role")),
             )
             if reasoning_content is not None:
                 ollama_message["thinking"] = reasoning_content
-            if content_str is not None:
+            if content_str:
                 ollama_message["content"] = content_str
-            if images is not None:
+            if images:
                 ollama_message["images"] = images
 
             new_messages.append(ollama_message)
