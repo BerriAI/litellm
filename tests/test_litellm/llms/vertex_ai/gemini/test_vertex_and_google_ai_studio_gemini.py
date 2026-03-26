@@ -3505,18 +3505,20 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_non_streaming():
 
 
 def test_vertex_ai_service_tier_streaming():
-    """Test serviceTier is preserved in model_response for streaming."""
+    """Test service_tier is preserved in model_response from headers for streaming."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
 
     chunk = {
         "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
-        "serviceTier": "FLEX",
     }
 
     iterator = ModelResponseIterator(
-        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        streaming_response=[], 
+        sync_stream=True, 
+        logging_obj=MagicMock(),
+        response_headers={"x-gemini-service-tier": "FLEX"},
     )
     result = iterator.chunk_parser(chunk)
 
@@ -3524,7 +3526,7 @@ def test_vertex_ai_service_tier_streaming():
 
 
 def test_vertex_ai_service_tier_non_streaming():
-    """Test serviceTier is preserved in model_response for non-streaming."""
+    """Test service_tier is preserved in model_response from headers for non-streaming."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
@@ -3541,11 +3543,11 @@ def test_vertex_ai_service_tier_non_streaming():
             "candidatesTokenCount": 100,
             "totalTokenCount": 150,
         },
-        "serviceTier": "FLEX",
     }
 
     raw_response = MagicMock()
     raw_response.json.return_value = completion_response
+    raw_response.headers = {"x-gemini-service-tier": "FLEX"}
 
     result = VertexGeminiConfig().transform_response(
         model="gemini-pro",

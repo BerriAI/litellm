@@ -2430,8 +2430,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
-            if "serviceTier" in completion_response:
-                setattr(model_response, "service_tier", completion_response["serviceTier"])
+            if getattr(raw_response, "headers", None):
+                if service_tier := raw_response.headers.get("x-gemini-service-tier"):
+                    setattr(model_response, "service_tier", service_tier)
 
         except Exception as e:
             raise VertexAIError(
@@ -2531,6 +2532,7 @@ async def make_call(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         logging_obj=logging_obj,
+        response_headers=response.headers,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2573,6 +2575,7 @@ def make_sync_call(
         streaming_response=response.iter_lines(),
         sync_stream=True,
         logging_obj=logging_obj,
+        response_headers=response.headers,
     )
 
     # LOGGING
@@ -3029,7 +3032,11 @@ class VertexLLM(VertexBase):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, logging_obj: LoggingClass
+        self,
+        streaming_response,
+        sync_stream: bool,
+        logging_obj: LoggingClass,
+        response_headers: Optional[Dict[str, str]] = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -3040,6 +3047,7 @@ class ModelResponseIterator:
         self.accumulated_json = ""
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
+        self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
@@ -3157,8 +3165,9 @@ class ModelResponseIterator:
                         "provider_specific_fields", {}
                     )["traffic_type"] = traffic_type
 
-            if "serviceTier" in processed_chunk:
-                setattr(model_response, "service_tier", processed_chunk["serviceTier"])
+            service_tier = self.response_headers.get("x-gemini-service-tier")
+            if service_tier:
+                setattr(model_response, "service_tier", service_tier)
 
             setattr(model_response, "usage", usage)  # type: ignore
 
