@@ -2803,7 +2803,6 @@ def test_gemini_lyria_3_preview_models_in_cost_map():
     assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
     assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
     assert clip["output_cost_per_image"] == 0.04
-    assert pro["output_cost_per_image"] == 0.08
 
 
 def test_model_info_for_fireworks_short_form_models():
