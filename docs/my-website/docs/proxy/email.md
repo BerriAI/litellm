@@ -203,7 +203,7 @@ After regenerating the key, the user will receive an email notification with:
 
 :::info
 
-Customizing Email Branding is an Enterprise Feature [Get in touch with us for a Free Trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+Customizing Email Branding is an Enterprise Feature [Get in touch with us for a Free Trial](https://enterprise.litellm.ai/demo)
 
 :::
 
