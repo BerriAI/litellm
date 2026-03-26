@@ -8874,6 +8874,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.image_generation import (
+                get_volcengine_image_generation_config,
+            )
+
+            return get_volcengine_image_generation_config(model)
         return None
 
     @staticmethod
