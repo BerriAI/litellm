@@ -4,6 +4,7 @@ Unit tests for HPC-AI OpenAI-compatible configuration.
 
 import os
 import sys
+from typing import Any, Optional
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
@@ -15,6 +16,66 @@ from litellm.llms.hpc_ai.chat.transformation import HpcAiConfig
 
 
 class TestHpcAiConfig:
+    def test_get_openai_compatible_provider_info_default_base_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_get_secret_str(
+            secret_name: str, default_value: Optional[Any] = None
+        ) -> Optional[str]:
+            return None
+
+        monkeypatch.setattr(
+            "litellm.llms.hpc_ai.chat.transformation.get_secret_str",
+            fake_get_secret_str,
+        )
+        config = HpcAiConfig()
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.hpc-ai.com/inference/v1"
+        assert api_key is None
+
+    def test_get_openai_compatible_provider_info_api_key_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_get_secret_str(
+            secret_name: str, default_value: Optional[Any] = None
+        ) -> Optional[str]:
+            if secret_name == "HPC_AI_API_KEY":
+                return "env-hpc-ai-key"
+            return None
+
+        monkeypatch.setattr(
+            "litellm.llms.hpc_ai.chat.transformation.get_secret_str",
+            fake_get_secret_str,
+        )
+        config = HpcAiConfig()
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.hpc-ai.com/inference/v1"
+        assert api_key == "env-hpc-ai-key"
+
+    def test_get_openai_compatible_provider_info_explicit_overrides_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_get_secret_str(
+            secret_name: str, default_value: Optional[Any] = None
+        ) -> Optional[str]:
+            if secret_name == "HPC_AI_API_BASE":
+                return "https://from-env.example/v1"
+            if secret_name == "HPC_AI_API_KEY":
+                return "from-env-key"
+            return None
+
+        monkeypatch.setattr(
+            "litellm.llms.hpc_ai.chat.transformation.get_secret_str",
+            fake_get_secret_str,
+        )
+        config = HpcAiConfig()
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://explicit.example/v1",
+            "explicit-key",
+        )
+        assert api_base == "https://explicit.example/v1"
+        assert api_key == "explicit-key"
+
     def test_validate_environment_sets_auth_header(self):
         config = HpcAiConfig()
         headers = {}

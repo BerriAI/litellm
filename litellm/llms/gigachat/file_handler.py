@@ -29,7 +29,7 @@ _file_cache: Dict[str, str] = {}
 
 def _get_url_hash(url: str) -> str:
     """Generate hash for URL to use as cache key."""
-    return hashlib.sha256(url.encode()).hexdigest()
+    return hashlib.sha256(url.encode(), usedforsecurity=False).hexdigest()
 
 
 def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
