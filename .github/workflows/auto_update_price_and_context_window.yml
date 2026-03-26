@@ -2,7 +2,7 @@ name: Updates model_prices_and_context_window.json and Create Pull Request
 
 on:
   schedule:
-    - cron: "0 0 * * 0"  # Run every Sundays at midnight
+    - cron: "0 0 * * 0" # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
 
 jobs:
@@ -10,7 +10,7 @@ jobs:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
       - name: Install Dependencies
         run: |
           pip install aiohttp
