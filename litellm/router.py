@@ -5290,6 +5290,48 @@ class Router:
         if "fallback_depth" not in input_kwargs:
             input_kwargs["fallback_depth"] = 0
 
+        # ORDER-BASED FALLBACKS: prepend higher order levels to the fallback list
+        all_deployments = self._get_all_deployments(model_name=original_model_group)
+        _order_set: set = {
+            d.get("litellm_params", {}).get("order")
+            for d in all_deployments
+            if d.get("litellm_params", {}).get("order") is not None
+        }
+        order_values: list = sorted(_order_set)
+        if len(order_values) > 1:
+            # Build order-based fallback entries (skip min order, already tried)
+            order_fallback_entries: List = [
+                {"model": original_model_group, "_target_order": o}
+                for o in order_values[1:]
+            ]
+            # Get external fallbacks
+            external_fallback_group: Optional[List] = None
+            if fallbacks is not None and model_group is not None:
+                external_fallback_group, generic_idx = get_fallback_model_group(
+                    fallbacks=fallbacks,
+                    model_group=cast(str, model_group),
+                )
+                if external_fallback_group is None and generic_idx is not None:
+                    external_fallback_group = fallbacks[generic_idx]["*"]
+
+            # Combined list: order fallbacks first, then external
+            combined_fallbacks = order_fallback_entries + (
+                external_fallback_group or []
+            )
+
+            if combined_fallbacks:
+                input_kwargs.update(
+                    {
+                        "fallback_model_group": combined_fallbacks,
+                        "original_model_group": original_model_group,
+                    }
+                )
+                response = await run_async_fallback(
+                    *args,
+                    **input_kwargs,
+                )
+                return response
+
         try:
             verbose_router_logger.info("Trying to fallback b/w models")
 
@@ -8886,12 +8928,6 @@ class Router:
                 if i not in invalid_model_indices
             ]
 
-        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        if len(_returned_deployments) > 0:
-            _returned_deployments = litellm.utils._get_order_filtered_deployments(
-                _returned_deployments
-            )
-
         return _returned_deployments
 
     def _get_model_from_alias(self, model: str) -> Optional[str]:
@@ -9138,6 +9174,12 @@ class Router:
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(
                 request_kwargs
             ),
+        )
+
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+        _target_order = (request_kwargs or {}).pop("_target_order", None)
+        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+            cast(List[Dict], healthy_deployments), target_order=_target_order
         )
 
         if len(healthy_deployments) == 0:
@@ -9543,6 +9585,12 @@ class Router:
                 messages=messages,
                 request_kwargs=request_kwargs,
             )
+
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+        _target_order = (request_kwargs or {}).pop("_target_order", None)
+        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+            healthy_deployments, target_order=_target_order
+        )
 
         if len(healthy_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
