@@ -187,11 +187,45 @@ class TestASTValidation:
         with pytest.raises(CustomCodeValidationError, match="global statement"):
             _validate_ast(code)
 
-    def test_ast_blocks_type_call(self):
-        """type() can be used to dynamically create classes for sandbox escape."""
-        code = "def f():\n    type('X', (), {})"
-        with pytest.raises(CustomCodeValidationError, match="type"):
+    def test_ast_allows_type_call(self):
+        """type() is a common Python construct and should not be blocked."""
+        code = "def f():\n    t = type('X', (), {})"
+        # Should not raise — type/super/classmethod/etc. are allowed
+        _validate_ast(code)
+
+    def test_ast_allows_super_call(self):
+        """super() is a common Python construct and should not be blocked."""
+        code = "def f():\n    super().__init__()"
+        # __init__ is blocked as attribute, but super() itself is allowed
+        # This will raise for __init__ but not for super
+        with pytest.raises(CustomCodeValidationError, match="__init__"):
             _validate_ast(code)
+
+    def test_ast_blocks_dunder_init_attr(self):
+        """__init__ attribute access can be used for sandbox escape."""
+        code = "def f():\n    x.__init__"
+        with pytest.raises(CustomCodeValidationError, match="__init__"):
+            _validate_ast(code)
+
+    def test_ast_blocks_dunder_new_attr(self):
+        """__new__ attribute access can be used for sandbox escape."""
+        code = "def f():\n    x.__new__(x)"
+        with pytest.raises(CustomCodeValidationError, match="__new__"):
+            _validate_ast(code)
+
+    def test_ast_reports_all_violations(self):
+        """AST validation should report all violations, not just the first."""
+        code = "import os\nimport sys\ndef f():\n    eval('x')\n    exec('y')"
+        with pytest.raises(CustomCodeValidationError, match="Security violation\\(s\\)"):
+            _validate_ast(code)
+        # Verify the message contains multiple violations
+        try:
+            _validate_ast(code)
+        except CustomCodeValidationError as e:
+            msg = str(e)
+            assert "import" in msg
+            assert "eval" in msg
+            assert "exec" in msg
 
     def test_ast_allows_safe_code(self):
         """Valid guardrail code should pass AST validation."""

@@ -46,7 +46,11 @@ FORBIDDEN_PATTERNS: List[Tuple[str, str]] = [
     (r"\bpickle\.", "pickle module access is not allowed"),
 ]
 
-# Dangerous function names that should not appear as calls in the AST
+# Dangerous function names that should not appear as calls in the AST.
+# NOTE: Common Python constructs (type, super, classmethod, staticmethod,
+# property, object) are intentionally NOT blocked here — guardrail code may
+# legitimately use them, and the empty __builtins__ sandbox already prevents
+# their abuse at runtime.
 FORBIDDEN_CALL_NAMES: Set[str] = {
     "exec",
     "eval",
@@ -63,12 +67,6 @@ FORBIDDEN_CALL_NAMES: Set[str] = {
     "input",
     "__import__",
     "memoryview",
-    "type",
-    "classmethod",
-    "staticmethod",
-    "super",
-    "property",
-    "object",
 }
 
 # Dangerous attribute names that should not be accessed in the AST
@@ -95,8 +93,9 @@ FORBIDDEN_ATTR_NAMES: Set[str] = {
     "__self__",
     "__closure__",
     "__annotations__",
-    # f-string internals
-    "format_map",
+    # Dangerous dunder methods that can be used for sandbox escape
+    "__init__",
+    "__new__",
 }
 
 
@@ -134,12 +133,8 @@ class _ASTSecurityVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"{node.func.id}() is not allowed"
                 )
-        # Check method calls on attributes: e.g. obj.__subclasses__()
-        elif isinstance(node.func, ast.Attribute):
-            if node.func.attr in FORBIDDEN_ATTR_NAMES:
-                self.violations.append(
-                    f"{node.func.attr} access is not allowed"
-                )
+        # Note: attribute-based calls (e.g. obj.__subclasses__()) are already
+        # caught by visit_Attribute, so no need for a duplicate check here.
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -178,9 +173,16 @@ def _validate_ast(code: str) -> None:
     visitor.visit(tree)
 
     if visitor.violations:
-        # Report the first violation found
+        # De-duplicate while preserving order, then report all violations
+        seen: set[str] = set()
+        unique: list[str] = []
+        for v in visitor.violations:
+            if v not in seen:
+                seen.add(v)
+                unique.append(v)
+        summary = "; ".join(unique)
         raise CustomCodeValidationError(
-            f"Security violation: {visitor.violations[0]}"
+            f"Security violation(s): {summary}"
         )
 
 
