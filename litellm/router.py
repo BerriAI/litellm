@@ -5343,7 +5343,6 @@ class Router:
                     )
                     if external_fallback_group is None and generic_idx is not None:
                         external_fallback_group = fallbacks[generic_idx]["*"]
-
             # Combined list: order fallbacks first, then external
             combined_fallbacks = order_fallback_entries + (
                 external_fallback_group or []

@@ -283,7 +283,6 @@ async def test_router_order_fallback_then_external_fallback():
     )
     assert response._hidden_params["model_id"] == "fallback"
 
-
 @pytest.mark.asyncio
 async def test_router_order_fallback_with_non_standard_fallbacks():
     """Non-standard fallback formats (e.g. fallbacks=["model-name"]) passed
