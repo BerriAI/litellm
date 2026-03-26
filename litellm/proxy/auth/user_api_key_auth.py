@@ -1258,13 +1258,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             # Check 2a. Check if model has zero cost - if so, skip all budget checks
             model = get_model_from_request(request_data, route)
             skip_budget_checks = False
-
-            # CLI JWT tokens have no real key-level budget (the $0.25 is a
-            # session default). Token-level checks are meaningless; real
-            # enforcement happens at user/team level in common_checks.
-            if valid_token.token == CLI_JWT_TOKEN_NAME:
-                skip_budget_checks = True
-            if model is not None and llm_router is not None and not skip_budget_checks:
+            if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(
@@ -1430,10 +1424,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # CLI JWT tokens carry frozen spend/budget from the encrypted blob.
             # Replace with real DB values so response headers are accurate.
-            # max_budget is set to the team budget (or user budget as fallback)
-            # because that is the effective constraint for CLI JWT users.
-            # Token-level budget checks are skipped above; real enforcement
-            # uses _team_obj / user_obj directly in common_checks.
+            # Note: token-level budget checks (lines above) see the frozen
+            # values and are a no-op (0.0 >= 0.25 = False). This is fine —
+            # real budget enforcement happens in common_checks() below,
+            # which uses _team_obj and user_obj directly, not valid_token.
             if valid_token.token == CLI_JWT_TOKEN_NAME:
                 if user_obj is not None and user_obj.spend is not None:
                     valid_token.spend = user_obj.spend
