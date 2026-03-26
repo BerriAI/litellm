@@ -143,6 +143,8 @@ MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
+# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
 # Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
 _MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
 MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
