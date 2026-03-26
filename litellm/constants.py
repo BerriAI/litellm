@@ -787,6 +787,15 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "abliteration",  # abliteration - JSON-configured provider
+    "assemblyai",  # assemblyai - JSON-configured provider
+    "charity_engine",  # charity_engine - JSON-configured provider
+    "gmi",  # gmi - JSON-configured provider
+    "llamagate",  # llamagate - JSON-configured provider
+    "sarvam",  # sarvam - JSON-configured provider
+    "scaleway",  # scaleway - JSON-configured provider
+    "veniceai",  # veniceai - JSON-configured provider
+    "xiaomi_mimo",  # xiaomi_mimo - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

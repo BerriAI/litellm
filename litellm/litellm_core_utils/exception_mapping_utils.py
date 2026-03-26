@@ -696,6 +696,26 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         or original_exception.status_code == 413
                     ):
                         exception_mapping_worked = True
+                        # Anthropic returns HTTP 400 for billing/quota exhaustion with the
+                        # message "Your credit balance is too low to access the Anthropic
+                        # API". This is NOT a bad request — the request itself is valid and
+                        # would succeed on any provider with sufficient credits. Raising
+                        # RateLimitError ensures the router triggers fallback routing
+                        # instead of surfacing a non-retryable BadRequestError.
+                        # Ref: https://github.com/BerriAI/litellm/issues/24320
+                        _error_str_lower = error_str.lower()
+                        if (
+                            "credit balance" in _error_str_lower
+                            or "credit_balance" in _error_str_lower
+                            or "balance is too low" in _error_str_lower
+                            or "billing" in _error_str_lower
+                            and "quota" in _error_str_lower
+                        ):
+                            raise RateLimitError(
+                                message=f"AnthropicException - {error_str}",
+                                llm_provider="anthropic",
+                                model=model,
+                            )
                         raise BadRequestError(
                             message=f"AnthropicException - {error_str}",
                             model=model,

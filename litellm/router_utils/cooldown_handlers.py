@@ -60,7 +60,18 @@ def _is_cooldown_required(
         ):  # don't cooldown on litellm api connection errors errors
             for ignored_string in ignored_strings:
                 if ignored_string in exception_str:
-                    return False
+                    # Still cooldown if the exception string signals a rate limit.
+                    # A 429 wrapped as APIConnectionError (e.g. from a providers.json
+                    # provider whose exception mapping falls through to the catch-all)
+                    # must trigger cooldown so the router picks a healthy deployment.
+                    _is_rate_limit = (
+                        "429" in exception_str
+                        or "rate limit" in exception_str.lower()
+                        or "rate_limit" in exception_str.lower()
+                        or "ratelimit" in exception_str.lower()
+                    )
+                    if not _is_rate_limit:
+                        return False
 
         if isinstance(exception_status, str):
             if len(exception_status) == 0:
