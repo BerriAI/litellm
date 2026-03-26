@@ -2710,10 +2710,8 @@ class ProxyConfig:
         "USER",
         "SHELL",
         "LOGNAME",
-        "http_proxy",
-        "https_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
+        "NO_PROXY",
+        "no_proxy",
     }
 
     def _load_environment_variables(self, config: dict):
