@@ -19,8 +19,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -28,8 +27,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -154,7 +152,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Moonshot reasoning models require `reasoning_content` on every assistant
         message that contains tool_calls (multi-turn tool-calling flows).
 
-        For each such message that is missing the field:
+        For each such message that has a missing or falsy `reasoning_content` (e.g., None or empty string):
           1. Check if reasoning_content exists at the top level (for Pydantic models
              that have the attribute but don't support 'in' operator)
           2. Promote provider_specific_fields["reasoning_content"] if present and non-empty

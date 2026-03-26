@@ -1376,12 +1376,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             litellm_params=litellm_params,
         )  # type: ignore
 
-        response = azure_client.audio.speech.create(
-            model=model,
-            voice=voice,  # type: ignore
-            input=input,
+        data = {
+            "model": model,
+            "voice": voice,
+            "input": input,
             **optional_params,
-        )
+        }
+        data = validate_azure_request_payload(data)
+
+        response = azure_client.audio.speech.create(**data)
         return HttpxBinaryResponseContent(response=response.response)
 
     async def async_audio_speech(
@@ -1410,12 +1413,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             litellm_params=litellm_params,
         )  # type: ignore
 
-        azure_response = await azure_client.audio.speech.create(
-            model=model,
-            voice=voice,  # type: ignore
-            input=input,
+        data = {
+            "model": model,
+            "voice": voice,
+            "input": input,
             **optional_params,
-        )
+        }
+        data = validate_azure_request_payload(data)
+
+        azure_response = await azure_client.audio.speech.create(**data)
 
         return HttpxBinaryResponseContent(response=azure_response.response)
 
