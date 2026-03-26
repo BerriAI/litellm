@@ -14,7 +14,7 @@ interface EmailSettingsProps {
 }
 
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
-  const handleSaveEmailSettings = async () => {
+  const handleSaveEmailSettings = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!accessToken) {
       return;
     }
@@ -43,9 +43,15 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     };
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationManager.success("Email settings updated successfully");
+      if (!silent) {
+        NotificationManager.success("Email settings updated successfully");
+      }
     } catch (error) {
-      NotificationManager.fromBackend(error);
+      if (!silent) {
+        NotificationManager.fromBackend(error);
+      }
+      // In silent mode (called from test flow) swallow the error so that
+      // the test can still proceed using env-var / YAML config values.
     }
   };
 
@@ -163,6 +169,12 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
           onClick={async () => {
             if (!accessToken) return;
             try {
+              // Silently attempt to persist the current form values so the
+              // backend can read TEST_EMAIL_ADDRESS from the DB (DB mode).
+              // If saving is not supported (e.g. STORE_MODEL_IN_DB=False /
+              // YAML mode), this is a no-op and the backend will fall back to
+              // the TEST_EMAIL_ADDRESS environment variable instead.
+              await handleSaveEmailSettings({ silent: true });
               await serviceHealthCheck(accessToken, "email");
               NotificationManager.success("Email test triggered. Check your configured email inbox/logs.");
             } catch (error) {
