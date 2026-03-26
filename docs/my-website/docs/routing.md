@@ -842,6 +842,8 @@ Traffic mirroring allows you to "mimic" production traffic to a secondary (silen
 
 Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
 
+When a request to an `order=1` deployment fails (connection error, 404, 429, etc.), the router automatically tries `order=2` deployments, then `order=3`, and so on. Each order level gets its own set of retries before escalating to the next. If all order levels are exhausted, the router falls through to any configured [fallbacks](#fallbacks).
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -862,17 +864,13 @@ model_list = [
         "litellm_params": {
             "model": "azure/gpt-4-fallback",
             "api_key": os.getenv("AZURE_API_KEY_2"),
-            "order": 2,  # 👈 Used when order=1 is unavailable
+            "order": 2,  # 👈 Tried when order=1 fails
         },
     },
 ]
 
-router = Router(model_list=model_list, enable_pre_call_checks=True)  # 👈 Required for 'order' to work
+router = Router(model_list=model_list)
 ```
-
-:::important
-The `order` parameter requires `enable_pre_call_checks=True` to be set on the Router.
-:::
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
@@ -889,10 +887,7 @@ model_list:
     litellm_params:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      order: 2  # 👈 Used when order=1 is unavailable
-
-router_settings:
-  enable_pre_call_checks: true  # 👈 Required for 'order' to work
+      order: 2  # 👈 Tried when order=1 fails
 ```
 
 </TabItem>
