@@ -78,6 +78,7 @@ grpcio = [
     {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14", optional = true},
     {version = ">=1.75.0", python = ">=3.14", optional = true},
 ]
+cachetools = {version = ">=5.0.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -99,6 +100,7 @@ proxy = [
     "boto3",
     "azure-identity",
     "azure-storage-blob",
+    "cachetools",
     "mcp",
     "litellm-proxy-extras",
     "litellm-enterprise",
@@ -116,6 +118,7 @@ extra_proxy = [
     "google-cloud-iam",
     "resend",
     "redisvl",
+    "cachetools",
     "a2a-sdk"
 ]
 

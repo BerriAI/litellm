@@ -1664,3 +1664,263 @@ def test_azure_traditional_api_uses_azure_openai_client():
 
         # Should be AsyncAzureOpenAI client
         assert isinstance(async_client, AsyncAzureOpenAI), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+@pytest.fixture(autouse=False)
+def clear_azure_env(monkeypatch):
+    """Remove all Azure-related env vars so tests are fully isolated."""
+    for var in (
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_SCOPE",
+        "AZURE_AUTHORITY_HOST",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=False)
+def clear_provider_cache():
+    """Clear the module-level credential cache before and after each test."""
+    import litellm.llms.azure.credential_cache as cc
+    with cc._cache_lock:
+        cc._provider_cache.clear()
+    yield
+    with cc._cache_lock:
+        cc._provider_cache.clear()
+
+
+def test_get_azure_ad_token_twice_entra_id_same_provider(clear_azure_env, clear_provider_cache):
+    """
+    Calling get_azure_ad_token twice with the same entra-id credentials should
+    return the same provider callable object — i.e. get_bearer_token_provider
+    inside get_azure_ad_token_from_entra_id should be called only once.
+    """
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    captured_providers: list = []
+
+    def fake_get_bearer_token_provider(credential, scope):
+        provider = MagicMock(return_value="fake-entra-token")
+        captured_providers.append(provider)
+        return provider
+
+    litellm_params = GenericLiteLLMParams(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        azure_username=None,
+        azure_password=None,
+    )
+
+    with (
+        patch("azure.identity.ClientSecretCredential") as mock_csc,
+        patch(
+            "azure.identity.get_bearer_token_provider",
+            side_effect=fake_get_bearer_token_provider,
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.get_secret_str",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.litellm"
+        ) as mock_litellm,
+    ):
+        mock_csc.return_value = MagicMock()
+        mock_litellm.enable_azure_ad_token_refresh = False
+
+        token1 = get_azure_ad_token(litellm_params)
+        token2 = get_azure_ad_token(litellm_params)
+
+    assert token1 == "fake-entra-token"
+    assert token2 == "fake-entra-token"
+    # The provider should have been constructed exactly once (cached) and
+    # invoked once per get_azure_ad_token call.
+    assert len(captured_providers) == 1, (
+        f"Expected get_bearer_token_provider to be called once (provider cached), "
+        f"but it was called {len(captured_providers)} times"
+    )
+    assert captured_providers[0].call_count == 2, (
+        "Expected the single cached provider to be called twice (once per "
+        f"get_azure_ad_token call), but it was called {captured_providers[0].call_count} times"
+    )
+
+
+def test_get_azure_ad_token_twice_username_password_same_provider(clear_azure_env, clear_provider_cache):
+    """
+    Calling get_azure_ad_token twice with the same username/password credentials
+    should return the same provider callable object — i.e. get_bearer_token_provider
+    inside get_azure_ad_token_from_username_password should be called only once.
+    """
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    captured_providers: list = []
+
+    def fake_get_bearer_token_provider(credential, scope):
+        provider = MagicMock(return_value="fake-username-password-token")
+        captured_providers.append(provider)
+        return provider
+
+    litellm_params = GenericLiteLLMParams(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        tenant_id=None,
+        client_secret=None,
+    )
+
+    with (
+        patch("azure.identity.UsernamePasswordCredential") as mock_upc,
+        patch(
+            "azure.identity.get_bearer_token_provider",
+            side_effect=fake_get_bearer_token_provider,
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.get_secret_str",
+            return_value=None,
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.litellm"
+        ) as mock_litellm,
+    ):
+        mock_upc.return_value = MagicMock()
+        mock_litellm.enable_azure_ad_token_refresh = False
+
+        token1 = get_azure_ad_token(litellm_params)
+        token2 = get_azure_ad_token(litellm_params)
+
+    assert token1 == "fake-username-password-token"
+    assert token2 == "fake-username-password-token"
+    # The provider should have been constructed exactly once (cached) and
+    # invoked once per get_azure_ad_token call.
+    assert len(captured_providers) == 1, (
+        f"Expected get_bearer_token_provider to be called once (provider cached), "
+        f"but it was called {len(captured_providers)} times"
+    )
+    assert captured_providers[0].call_count == 2, (
+        "Expected the single cached provider to be called twice (once per "
+        f"get_azure_ad_token call), but it was called {captured_providers[0].call_count} times"
+    )
+
+
+def test_get_azure_ad_token_twice_oidc_cache_hit(clear_azure_env):
+    """
+    Calling get_azure_ad_token twice with the same OIDC credentials should hit
+    the azure_ad_cache on the second call — i.e. the HTTP POST to the Azure
+    token endpoint should be made only once.
+    """
+    import litellm as _litellm
+    from litellm.llms.azure.common_utils import azure_ad_cache, get_azure_ad_token
+
+    # Flush any stale cache entries from other tests.
+    azure_ad_cache.flush_cache()
+
+    litellm_params = GenericLiteLLMParams(
+        azure_ad_token="oidc/test-oidc-token",
+        client_id="test-client-id",
+        tenant_id="test-tenant-id",
+        azure_ad_token_provider=None,
+        client_secret=None,
+        azure_username=None,
+        azure_password=None,
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "access_token": "fake-access-token",
+        "expires_in": 3600,
+    }
+
+    def fake_get_secret_str(key):
+        # Resolve the OIDC token reference; return None for anything else.
+        if key == "oidc/test-oidc-token":
+            return "resolved-oidc-jwt"
+        return None
+
+    with (
+        patch(
+            "litellm.llms.azure.common_utils.get_secret_str",
+            side_effect=fake_get_secret_str,
+        ),
+        patch.object(
+            _litellm.module_level_client,
+            "post",
+            return_value=mock_response,
+        ) as mock_post,
+    ):
+        token1 = get_azure_ad_token(litellm_params)
+        token2 = get_azure_ad_token(litellm_params)
+
+    assert token1 == "fake-access-token"
+    assert token2 == "fake-access-token"
+    assert mock_post.call_count == 1, (
+        f"Expected HTTP POST to Azure token endpoint to be called once (second "
+        f"call should be a cache hit), but it was called {mock_post.call_count} times"
+    )
+
+
+def test_get_azure_ad_token_entra_id_provider_reconstructed_after_ttl_expiry(
+    clear_azure_env, clear_provider_cache
+):
+    """
+    With a TTLCache, sleeping past the TTL causes the cached provider to be
+    evicted, so the second get_azure_ad_token call constructs a new callable.
+    """
+    pytest.importorskip("cachetools")
+    import time
+
+    from cachetools import TTLCache
+
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    litellm_params = GenericLiteLLMParams(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        azure_username=None,
+        azure_password=None,
+    )
+
+    # --- TTLCache: provider is reconstructed after expiry ---
+    captured_ttl: list = []
+
+    def fake_gbtp_ttl(credential, scope):
+        provider = MagicMock(return_value="fake-entra-token")
+        captured_ttl.append(provider)
+        return provider
+
+    tiny_ttl_cache = TTLCache(maxsize=128, ttl=0.001)
+
+    import threading
+    test_lock = threading.Lock()
+
+    with (
+        patch("litellm.llms.azure.common_utils._provider_cache", tiny_ttl_cache),
+        patch("azure.identity.get_bearer_token_provider", side_effect=fake_gbtp_ttl),
+        patch("azure.identity.ClientSecretCredential", return_value=MagicMock()),
+        patch("litellm.llms.azure.common_utils.get_secret_str", return_value=None),
+        patch("litellm.llms.azure.common_utils.litellm"),
+    ):
+        get_azure_ad_token(litellm_params)
+        time.sleep(0.2)  # outlast the 0.001s TTL (200x margin for CI robustness)
+        get_azure_ad_token(litellm_params)
+
+    assert len(captured_ttl) == 2, (
+        f"TTLCache: expected get_bearer_token_provider called twice (entry expired), "
+        f"but was called {len(captured_ttl)} times"
+    )
+    assert captured_ttl[0] is not captured_ttl[1], (
+        "TTLCache: expected two distinct provider callables after expiry"
+    )
+

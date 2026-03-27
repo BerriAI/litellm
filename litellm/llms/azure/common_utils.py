@@ -8,6 +8,11 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.llms.azure.credential_cache import (
+    _cache_lock,
+    _hash_secret,
+    _provider_cache,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -108,11 +113,17 @@ def get_azure_ad_token_from_entra_id(
     )
     if _tenant_id is None or _client_id is None or _client_secret is None:
         raise ValueError("tenant_id, client_id, and client_secret must be provided")
-    credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
 
-    verbose_logger.debug("credential %s", credential)
+    cache_key = ("entra", _tenant_id, _client_id, _hash_secret(_client_secret), scope)
 
-    token_provider = get_bearer_token_provider(credential, scope)
+    with _cache_lock:
+        token_provider = _provider_cache.get(cache_key)
+        if token_provider is None:
+            credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
+            verbose_logger.debug("credential %s", credential)
+
+            token_provider = get_bearer_token_provider(credential, scope)
+            _provider_cache[cache_key] = token_provider
 
     verbose_logger.debug("token_provider %s", token_provider)
 
@@ -145,18 +156,24 @@ def get_azure_ad_token_from_username_password(
         azure_username,
         azure_password,
     )
-    credential = UsernamePasswordCredential(
-        client_id=client_id,
-        username=azure_username,
-        password=azure_password,
-    )
 
-    verbose_logger.debug("credential %s", credential)
+    cache_key = ("upw", client_id, azure_username, _hash_secret(azure_password), scope)
 
-    token_provider = get_bearer_token_provider(credential, scope)
+    with _cache_lock:
+        token_provider = _provider_cache.get(cache_key)
+        if token_provider is None:
+            credential = UsernamePasswordCredential(
+                client_id=client_id,
+                username=azure_username,
+                password=azure_password,
+            )
+
+            verbose_logger.debug("credential %s", credential)
+
+            token_provider = get_bearer_token_provider(credential, scope)
+            _provider_cache[cache_key] = token_provider
 
     verbose_logger.debug("token_provider %s", token_provider)
-
     return token_provider
 
 
