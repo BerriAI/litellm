@@ -26,8 +26,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.pointguardai import (
+    PointGuardAIGuardrailConfigModel,
 )
 
 """
@@ -84,6 +90,7 @@ class SupportedGuardrailIntegrations(Enum):
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    POINTGUARDAI = "pointguard_ai"
 
 
 class Role(Enum):
@@ -515,7 +522,7 @@ class JavelinGuardrailConfigModel(BaseModel):
     )
     config: Optional[Dict] = Field(
         default=None, description="Additional configuration for the guardrail"
-    )
+    ) 
 
 
 class ContentFilterAction(str, Enum):
@@ -743,6 +750,7 @@ class LitellmParams(
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
     JavelinGuardrailConfigModel,
+    PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
