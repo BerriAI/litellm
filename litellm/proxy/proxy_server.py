@@ -37,7 +37,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json
 
-from litellm._uuid import uuid
+from litellm._litellm_uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
@@ -2138,7 +2138,7 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
     except Exception as e:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.debug(
             "Failed to write health state to router cache: %s", str(e)
         )
 
