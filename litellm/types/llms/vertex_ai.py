@@ -58,12 +58,26 @@ class HttpxBlobType(TypedDict, total=False):
     data: str
 
 
+class HttpxServerSideToolCall(TypedDict, total=False):
+    toolType: str
+    id: str
+    args: dict
+
+
+class HttpxServerSideToolResponse(TypedDict, total=False):
+    toolType: str
+    id: str
+    response: Union[str, dict]
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inlineData: HttpxBlobType
     fileData: FileDataType
     functionCall: HttpxFunctionCall
     functionResponse: FunctionResponse
+    toolCall: HttpxServerSideToolCall
+    toolResponse: HttpxServerSideToolResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
@@ -174,7 +188,9 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
+GeminiImageAspectRatio = Literal[
+    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
+]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -214,11 +230,13 @@ class GenerationConfig(TypedDict, total=False):
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    mediaResolution: str
     speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
     """Enum for Vertex AI tool field names."""
+
     GOOGLE_SEARCH = "googleSearch"
     GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
     ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
@@ -240,8 +258,9 @@ class Tools(TypedDict, total=False):
     retrieval: Retrieval
 
 
-class ToolConfig(TypedDict):
+class ToolConfig(TypedDict, total=False):
     functionCallingConfig: FunctionCallingConfig
+    includeServerSideToolInvocations: bool
 
 
 class TTL(TypedDict, total=False):
@@ -264,7 +283,9 @@ class UsageMetadata(TypedDict, total=False):
     cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
+    candidatesTokensDetails: List[
+        PromptTokensDetails
+    ]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -554,6 +575,17 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
+
+
+class GeminiEmbedContentRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class GeminiEmbedContentResponseObject(TypedDict):
+    embedding: ContentEmbeddings
 
 
 # Vertex AI Batch Prediction

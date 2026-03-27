@@ -214,6 +214,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
@@ -289,6 +290,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    _is_azure_model_router_request,
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -351,15 +353,15 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.config_override_endpoints import (
-    router as config_override_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.compliance_endpoints import (
     router as compliance_router,
+)
+from litellm.proxy.management_endpoints.config_override_endpoints import (
+    router as config_override_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -373,7 +375,9 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -442,7 +446,9 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -465,6 +471,7 @@ from litellm.proxy.policy_engine.policy_resolve_endpoints import (
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
+from litellm.proxy.realtime_endpoints.endpoints import router as webrtc_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -473,6 +480,7 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -533,6 +541,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
@@ -541,7 +550,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -1533,6 +1544,10 @@ native_background_mode: List[
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
+# Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
+# Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
+_pkce_no_redis_warning_emitted: bool = False
+_cp_no_redis_warning_emitted: bool = False
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -2282,6 +2297,7 @@ class ProxyConfig:
         self.config: Dict[str, Any] = {}
         self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
         self._last_hashicorp_vault_config: Optional[Dict[str, Any]] = None
+        self.worker_registry: List["WorkerRegistryEntry"] = []
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -2512,6 +2528,8 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+            # Note: PKCE verifier storage uses redis_usage_cache directly (not
+            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
 
     def switch_on_llm_response_caching(self):
         """
@@ -2943,6 +2961,29 @@ class ProxyConfig:
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
+                elif key == "audit_log_callbacks":
+                    litellm.audit_log_callbacks = []
+
+                    for callback in value:
+                        if "." in callback:
+                            litellm.audit_log_callbacks.append(
+                                get_instance_fn(value=callback)
+                            )
+                        else:
+                            litellm.audit_log_callbacks.append(callback)
+
+                    _store_audit_logs = litellm_settings.get(
+                        "store_audit_logs", litellm.store_audit_logs
+                    )
+                    if _store_audit_logs:
+                        print(  # noqa
+                            f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
+                        )  # noqa
+                    else:
+                        verbose_proxy_logger.warning(
+                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
+                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                        )
                 elif key == "cache_params":
                     # this is set in the cache branch
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
@@ -3058,8 +3099,43 @@ class ProxyConfig:
             if user_api_key_cache_ttl is not None:
                 user_api_key_cache.update_cache_ttl(
                     default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache is an in-memory cache
+                    default_redis_ttl=None,  # user_api_key_cache uses in-memory TTL only; Redis not configured for key lookups
                 )
+
+            ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
+            # PKCE verifiers are stored in redis_usage_cache when available so they can
+            # be read back by any instance (not just the one that started the auth flow).
+            # user_api_key_cache is intentionally left in-memory-only to avoid routing
+            # all API-key lookups through Redis.
+            use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+            if use_pkce and redis_usage_cache is None:
+                global _pkce_no_redis_warning_emitted
+                if not _pkce_no_redis_warning_emitted:
+                    _pkce_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                        "PKCE verifiers will not be shared across instances — callbacks may land on a "
+                        "different pod than the login request and fail silently. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or enable sticky sessions for single-instance deployments. "
+                        "Set PKCE_STRICT_CACHE_MISS=true to fail fast with a 401 on cache misses "
+                        "instead of continuing without a code_verifier."
+                    )
+
+            ### CONTROL PLANE CODE-EXCHANGE PREREQUISITE CHECK ###
+            cp_url = general_settings.get("control_plane_url")
+            if cp_url and redis_usage_cache is None:
+                global _cp_no_redis_warning_emitted
+                if not _cp_no_redis_warning_emitted:
+                    _cp_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "control_plane_url is configured but Redis is not configured for LiteLLM caching. "
+                        "Login codes (SSO and /v3/login) will not be shared across instances — "
+                        "the /v3/login/exchange call may land on a different pod and fail with 401. "
+                        "Configure Redis via the 'cache' section in your proxy config, "
+                        "or ensure sticky sessions for single-instance deployments."
+                    )
+
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
@@ -3268,7 +3344,7 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-        )  # type:ignore
+        )  # type: ignore
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
@@ -3350,7 +3426,15 @@ class ProxyConfig:
             litellm.vector_store_registry.load_vector_stores_from_config(
                 vector_store_registry_config
             )
-        pass
+
+        ## WORKER REGISTRY (Control Plane)
+        worker_registry_config = config.get("worker_registry", None)
+        if worker_registry_config:
+            self.worker_registry = [
+                WorkerRegistryEntry(**e) for e in worker_registry_config
+            ]
+        else:
+            self.worker_registry = []
 
     async def _init_policy_engine(
         self,
@@ -4596,9 +4680,7 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_hashicorp_vault_config_override(
-        self, prisma_client: PrismaClient
-    ):
+    async def _init_hashicorp_vault_config_override(self, prisma_client: PrismaClient):
         """
         Load Hashicorp Vault config override from DB.
         Decrypts sensitive fields, sets HCP_VAULT_* env vars, and reinitializes the secret manager.
@@ -4637,18 +4719,14 @@ class ProxyConfig:
 
             # Reinitialize the secret manager
             try:
-                self.initialize_secret_manager(
-                    key_management_system="hashicorp_vault"
-                )
+                self.initialize_secret_manager(key_management_system="hashicorp_vault")
             except Exception:
                 # Restore previous working env vars instead of wiping all
                 _set_env_vars(previous_env)
                 raise
 
             self._last_hashicorp_vault_config = config_data.copy()
-            verbose_proxy_logger.debug(
-                "Hashicorp Vault config override loaded from DB"
-            )
+            verbose_proxy_logger.debug("Hashicorp Vault config override loaded from DB")
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
@@ -4748,7 +4826,14 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
+                        "update": {
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            )
+                        },
                     },
                 )
 
@@ -4849,7 +4934,14 @@ class ProxyConfig:
                                 }
                             ),
                         },
-                        "update": {"param_value": safe_dumps({"interval_hours": interval_hours, "force_reload": False})},
+                        "update": {
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            )
+                        },
                     },
                 )
 
@@ -5314,8 +5406,8 @@ async def initialize(  # noqa: PLR0915
         litellm.add_function_to_prompt = True
         dynamic_config["general"]["add_function_to_prompt"] = True
     if max_budget:  # litellm-specific param
-        litellm.max_budget = max_budget
-        dynamic_config["general"]["max_budget"] = max_budget
+        litellm.max_budget = float(max_budget)
+        dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
     user_telemetry = telemetry
@@ -5418,6 +5510,10 @@ def _restamp_streaming_chunk_model(
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
     if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+        return chunk, model_mismatch_logged
+
+    # For Azure Model Router, preserve the actual model used in each chunk
+    if _is_azure_model_router_request(requested_model_from_client):
         return chunk, model_mismatch_logged
 
     downstream_model = (
@@ -5629,9 +5725,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -5788,6 +5884,8 @@ class ProxyStartupEvent:
                 _RUNTIME_GENERAL_SETTINGS_FLAGS,
             )
 
+            if prisma_client is None:
+                return
             db_record = await prisma_client.db.litellm_uisettings.find_unique(
                 where={"id": "ui_settings"}
             )
@@ -6022,7 +6120,7 @@ class ProxyStartupEvent:
                         "Invalid maximum_spend_logs_retention_interval value"
                     )
         ### CHECK BATCH COST ###
-        if llm_router is not None:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
                 from litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
@@ -6053,7 +6151,7 @@ class ProxyStartupEvent:
                 pass
 
         ### CHECK RESPONSES COST ###
-        if llm_router is not None:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
                 from litellm_enterprise.proxy.common_utils.check_responses_cost import (
                     CheckResponsesCost,
@@ -6126,6 +6224,39 @@ class ProxyStartupEvent:
         # Focus Background Job
         ########################################################
         await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Vantage Background Job
+        ########################################################
+        from litellm.integrations.vantage.vantage_logger import VantageLogger
+        from litellm.proxy.spend_tracking.vantage_endpoints import (
+            _get_vantage_settings,
+            is_vantage_setup,
+            is_vantage_setup_in_config,
+            is_vantage_setup_in_db,
+        )
+
+        if await is_vantage_setup():
+            # If configured via DB but not in config.yaml callbacks,
+            # instantiate and register a VantageLogger so the scheduler
+            # can find it.
+            if not is_vantage_setup_in_config() and await is_vantage_setup_in_db():
+                try:
+                    db_settings = await _get_vantage_settings()
+                    if db_settings:
+                        vantage_logger = VantageLogger(
+                            api_key=db_settings.get("api_key"),
+                            integration_token=db_settings.get("integration_token"),
+                            base_url=db_settings.get("base_url"),
+                        )
+                        litellm.logging_callback_manager.add_litellm_callback(
+                            vantage_logger
+                        )
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "Failed to register VantageLogger from DB settings: %s", e
+                    )
+            await VantageLogger.init_vantage_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
@@ -7508,6 +7639,16 @@ async def audio_transcriptions(
                 **additional_headers,
             )
         )
+
+        # Call response headers hook (matches base_process_llm_request behavior)
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
 
         return response
     except Exception as e:
@@ -11003,6 +11144,165 @@ async def login_v2(request: Request):  # noqa: PLR0915
             )
 
 
+@router.post(
+    "/v3/login", include_in_schema=False
+)  # control-plane login — always returns token in body for cross-origin use
+async def login_v3(request: Request):  # noqa: PLR0915
+    global premium_user, general_settings, master_key
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.utils import get_custom_url
+
+    try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        body = await request.json()
+        username = str(body.get("username"))
+        password = str(body.get("password"))
+
+        login_result = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
+
+        returned_ui_token_object = create_ui_token_object(
+            login_result=login_result,
+            general_settings=general_settings,
+            premium_user=premium_user,
+        )
+
+        import jwt
+
+        jwt_token = jwt.encode(
+            cast(dict, returned_ui_token_object),
+            cast(str, master_key),
+            algorithm="HS256",
+        )
+
+        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
+        litellm_dashboard_ui += "?login=success"
+
+        # Store JWT behind a single-use opaque code (60s TTL)
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": litellm_dashboard_ui}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+        else:
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=cache_value, ttl=60
+            )
+
+        return JSONResponse(
+            content={"code": code, "expires_in": 60},
+            status_code=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v3(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        if isinstance(e, ProxyException):
+            raise e
+        elif isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=error_msg,
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+@router.post(
+    "/v3/login/exchange", include_in_schema=False
+)  # exchange single-use opaque code for JWT
+async def login_v3_exchange(request: Request):
+    try:
+        if not general_settings.get("control_plane_url"):
+            raise ProxyException(
+                message="/v3/login/exchange is only available on workers with control_plane_url configured",
+                type=ProxyErrorTypes.not_found_error,
+                param="control_plane_url",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        body = await request.json()
+        code = body.get("code")
+        if not code:
+            raise ProxyException(
+                message="Missing 'code' parameter",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f"login_code:{code}"
+        if redis_usage_cache is not None:
+            cached_data = await redis_usage_cache.async_get_cache(key=cache_key)
+        else:
+            cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
+
+        if not cached_data or not isinstance(cached_data, dict):
+            raise ProxyException(
+                message="Invalid or expired login code",
+                type=ProxyErrorTypes.auth_error,
+                param="code",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Single-use: delete immediately
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_delete_cache(key=cache_key)
+        else:
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+
+        json_response = JSONResponse(
+            content={
+                "token": cached_data["token"],
+                "redirect_url": cached_data["redirect_url"],
+            },
+            status_code=status.HTTP_200_OK,
+        )
+        json_response.set_cookie(key="token", value=cached_data["token"])
+        return json_response
+    except ProxyException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v3_exchange(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        raise ProxyException(
+            message=str(e),
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
     """
@@ -11983,6 +12283,7 @@ async def get_config_list(
         "mcp_trusted_proxy_ranges": {"type": "List"},
         "always_include_stream_usage": {"type": "Boolean"},
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
+        "mcp_required_fields": {"type": "List"},
     }
 
     return_val = []
@@ -12496,7 +12797,11 @@ async def reload_model_cost_map(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"interval_hours": existing_interval, "force_reload": True})},
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": existing_interval, "force_reload": True}
+                    )
+                },
             },
         )
 
@@ -12831,7 +13136,9 @@ async def reload_anthropic_beta_headers(
         )
         existing_beta_interval = None
         if existing_beta_config and existing_beta_config.param_value:
-            existing_beta_interval = existing_beta_config.param_value.get("interval_hours")
+            existing_beta_interval = existing_beta_config.param_value.get(
+                "interval_hours"
+            )
 
         await prisma_client.db.litellm_config.upsert(
             where={"param_name": "anthropic_beta_headers_reload_config"},
@@ -12842,7 +13149,11 @@ async def reload_anthropic_beta_headers(
                         {"interval_hours": None, "force_reload": True}
                     ),
                 },
-                "update": {"param_value": safe_dumps({"interval_hours": existing_beta_interval, "force_reload": True})},
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": existing_beta_interval, "force_reload": True}
+                    )
+                },
             },
         )
 
@@ -13160,6 +13471,7 @@ app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
+app.include_router(webrtc_router)
 app.include_router(mcp_management_router)
 app.include_router(mcp_byok_oauth_router)
 app.include_router(anthropic_router)
@@ -13180,6 +13492,7 @@ app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
+app.include_router(vantage_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)

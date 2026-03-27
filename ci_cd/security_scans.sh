@@ -10,13 +10,13 @@ echo "Starting security scans for LiteLLM..."
 # Function to install Trivy and required tools
 install_trivy() {
     echo "Installing Trivy and required tools..."
+    TRIVY_VERSION="0.35.0"
     sudo apt-get update
-    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl
-    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-    echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-    sudo apt-get update
-    sudo apt-get install trivy
-    echo "Trivy and required tools installed successfully"
+    sudo apt-get install -y wget jq curl bsdmainutils
+    wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.deb"
+    sudo dpkg -i trivy.deb
+    rm trivy.deb
+    echo "Trivy ${TRIVY_VERSION} installed successfully"
 }
 
 # Function to install Grype
@@ -163,6 +163,9 @@ run_grype_scans() {
         "CVE-2026-25639" # axios - full fix requires 1.x major version bump; pinned to >=0.30.2 to clear other axios CVEs, upgrade to 1.x in follow-up
         "CVE-2026-2297" # Python 3.13 SourcelessFileLoader audit hook bypass - no fix available in base image
         "GHSA-qffp-2rhf-9h96" # tar hardlink path traversal - from nodejs_wheel bundled npm, not used in application runtime code
+        "CVE-2026-2673" # OpenSSL 3.6.1 TLS 1.3 key exchange group negotiation issue - no fix available yet
+        "CVE-2026-3644" # Python 3.13 vulnerability - no fix available in base image
+        "CVE-2026-4224" # Python 3.13 Expat parser stack overflow in ElementDeclHandler - no fix available in base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

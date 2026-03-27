@@ -7,8 +7,18 @@ This is currently in development and not yet ready for production.
 import binascii
 import os
 from datetime import datetime
-from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Literal,
-                    Optional, TypedDict, Union, cast)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
@@ -165,8 +175,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Get or lazy-load the batch rate limiter."""
         if self._batch_rate_limiter is None:
             try:
-                from litellm.proxy.hooks.batch_rate_limiter import \
-                    _PROXY_BatchRateLimiter
+                from litellm.proxy.hooks.batch_rate_limiter import (
+                    _PROXY_BatchRateLimiter,
+                )
 
                 self._batch_rate_limiter = _PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
@@ -668,14 +679,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model: The model being requested
             descriptors: List of rate limit descriptors to append to
         """
-        from litellm.proxy.auth.auth_utils import (get_key_model_rpm_limit,
-                                                   get_key_model_tpm_limit)
+        from litellm.proxy.auth.auth_utils import (
+            get_key_model_rpm_limit,
+            get_key_model_tpm_limit,
+        )
 
         if not requested_model:
             return
 
-        _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
-        _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(
+            user_api_key_dict, model_name=requested_model
+        )
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(
+            user_api_key_dict, model_name=requested_model
+        )
 
         if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
             return
@@ -780,8 +797,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _get_agent_from_registry(self, agent_id: str) -> Optional[Any]:
         """Look up an agent from the in-memory registry by ID."""
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
         return global_agent_registry.get_agent_by_id(agent_id=agent_id)
 
@@ -878,8 +894,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user,
         model-specific, agent, and agent-session limits.
         """
-        from litellm.proxy.auth.auth_utils import (get_team_model_rpm_limit,
-                                                   get_team_model_tpm_limit)
+        from litellm.proxy.auth.auth_utils import (
+            get_team_model_rpm_limit,
+            get_team_model_tpm_limit,
+        )
 
         descriptors = []
 
@@ -1053,8 +1071,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns True if any deployment has failures in the current minute.
         """
         from litellm.proxy.proxy_server import llm_router
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import \
-            get_deployment_failures_for_current_minute
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
 
         if llm_router is None:
             return False
@@ -1468,10 +1487,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
-        from litellm.litellm_core_utils.core_helpers import \
-            _get_parent_otel_span_from_kwargs
-        from litellm.proxy.common_utils.callback_utils import \
-            get_model_group_from_litellm_kwargs
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         rate_limit_type = self.get_rate_limit_type()
@@ -1655,14 +1676,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Decrement max parallel requests counter for the API Key
         """
-        from litellm.litellm_core_utils.core_helpers import \
-            _get_parent_otel_span_from_kwargs
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             # Get metadata from standard_logging_object - this correctly handles both
             # 'metadata' and 'litellm_metadata' fields from litellm_params
             standard_logging_object = kwargs.get("standard_logging_object") or {}

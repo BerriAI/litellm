@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Tooltip, Skeleton, Popover, message } from "antd";
+import { Tooltip, Skeleton, Popover } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   SettingOutlined,
   PlusOutlined,
@@ -11,6 +12,7 @@ import {
   SearchOutlined,
   MessageOutlined,
   AppstoreOutlined,
+  KeyOutlined,
   ArrowLeftOutlined,
   DownOutlined,
   CloseOutlined,
@@ -24,8 +26,11 @@ import ConversationList from "./ConversationList";
 import ChatMessages from "./ChatMessages";
 import MCPConnectPicker from "./MCPConnectPicker";
 import MCPAppsPanel from "./MCPAppsPanel";
+import MCPCredentialsTab from "./MCPCredentialsTab";
 import { fetchAvailableModels } from "../playground/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "../playground/llm_calls/chat_completion";
+import { makeOpenAIResponsesRequest } from "../playground/llm_calls/responses_api";
+import type { MCPEvent } from "./types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -135,11 +140,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [modelSearchText, setModelSearchText] = useState("");
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarView, setSidebarView] = useState<"chats" | "apps">("chats");
+  const _oauthReturn = searchParams?.get("mcpOauthReturn");
+  const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">(
+    _oauthReturn === "apps" ? "apps" : "chats"
+  );
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
   // Comparison mode state (active when selectedModels.length > 1)
@@ -162,10 +171,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     createConversation,
     appendMessage,
     updateLastAssistantMessage,
-    truncateAfterMessage,
+    truncateFromMessage,
     deleteConversation,
     renameConversation,
   } = useChatHistory(activeConversationId);
+
+  // Clean up the OAuth return param after it's been consumed
+  useEffect(() => {
+    if (_oauthReturn && typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("mcpOauthReturn");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load models
   useEffect(() => {
@@ -195,13 +213,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, JSON.stringify([names[0]]));
         }
       })
-      .catch(() => message.error("Could not load models"))
+      .catch(() => MessageManager.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
   useEffect(() => {
     if (staleId) router.replace(getChatUrl(uiRoot));
   }, [staleId, router]);
+
+  // Reset the responses session when switching between conversations so that
+  // previous_response_id from conversation A is never sent for conversation B.
+  useEffect(() => {
+    setResponsesSessionId(null);
+  }, [activeConversationId]);
 
   const toggleModel = useCallback((model: string) => {
     setSelectedModels((prev) => {
@@ -231,6 +255,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       let convId = activeConversationId;
       if (!convId) {
         convId = createConversation(model);
+        setResponsesSessionId(null); // new conversation starts a fresh session
         router.push(getChatUrl(uiRoot, convId));
       }
 
@@ -240,29 +265,56 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
 
-      const history = [
-        ...(historyOverride ?? (activeConversation?.messages ?? [])
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          }))),
-        { role: "user" as const, content: trimmed },
-      ];
+      // When historyOverride is set (edit / retry), the existing server-side
+      // session chain covers messages that were just truncated and is no longer
+      // valid for the rewritten history.  Eagerly clear the session so that a
+      // failed/aborted edit does not leave a stale session ID that contaminates
+      // the next regular send.
+      if (historyOverride) {
+        setResponsesSessionId(null);
+      }
+
+      // On a normal continuation turn with an active session, the Responses API
+      // already holds the prior context server-side, so we only pass the new
+      // user message (sending the full history would double-count it).
+      //
+      // On the very first turn (no session yet), we send the full history.
+      const previousResponseId = historyOverride ? null : responsesSessionId;
+
+      const history: Array<{ role: "user" | "assistant"; content: string }> =
+        historyOverride
+          ? [...historyOverride, { role: "user" as const, content: trimmed }]
+          : previousResponseId
+          ? [{ role: "user" as const, content: trimmed }]
+          : [
+              // Explicitly filter to only user/assistant roles — tool messages
+              // lack a required tool_call_id and would cause API errors.
+              ...(activeConversation?.messages ?? [])
+                .filter((m): m is typeof m & { role: "user" | "assistant" } =>
+                  m.role === "user" || m.role === "assistant"
+                )
+                .map((m) => ({ role: m.role, content: m.content })),
+              { role: "user" as const, content: trimmed },
+            ];
 
       let accumulatedContent = "";
       let accumulatedReasoning = "";
+      // MCP events accumulated locally so we can persist them to the message
+      // without relying on component state (which would cause stale closures).
+      const accumulatedMCPEvents: MCPEvent[] = [];
+      // Track clean completion so partial events are not shown on error/abort.
+      let streamCompletedCleanly = false;
 
       try {
-        await makeOpenAIChatCompletionRequest(
+        await makeOpenAIResponsesRequest(
           history,
-          (chunk: string) => {
+          (_role: string, chunk: string) => {
             accumulatedContent += chunk;
             updateLastAssistantMessage(convId!, { content: accumulatedContent });
           },
           model,
           accessToken,
-          undefined,
+          undefined, // tags
           abortControllerRef.current.signal,
           (rc: string) => {
             accumulatedReasoning += rc;
@@ -270,7 +322,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           },
           undefined, undefined, undefined, undefined, undefined, undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
+          previousResponseId,
+          (id: string) => setResponsesSessionId(id),
+          (event: MCPEvent) => {
+            // Accumulate locally only — persisted once in finally to avoid
+            // one full localStorage write per MCP event during streaming.
+            accumulatedMCPEvents.push(event);
+          },
         );
+        streamCompletedCleanly = true;
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           updateLastAssistantMessage(convId!, {
@@ -282,12 +342,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           });
         }
       } finally {
+        // Only persist MCP events on clean completion — partial events from an
+        // aborted or errored turn would show incomplete tool calls to the user.
+        if (accumulatedMCPEvents.length > 0 && streamCompletedCleanly) {
+          updateLastAssistantMessage(convId!, { mcpEvents: accumulatedMCPEvents });
+        }
         setIsStreaming(false);
         abortControllerRef.current = null;
       }
     },
     [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
-      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming],
+      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming, responsesSessionId],
   );
 
   const handleSendComparison = useCallback(
@@ -355,10 +420,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       const priorMessages = (idx === -1 ? msgs : msgs.slice(0, idx))
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-      truncateAfterMessage(activeConversationId, messageId);
+      truncateFromMessage(activeConversationId, messageId);
       handleSend(newContent, priorMessages);
     },
-    [activeConversationId, isStreaming, activeConversation, truncateAfterMessage, handleSend],
+    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend],
   );
 
   const handleSubmit = useCallback(
@@ -809,6 +874,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         <div style={{ padding: "4px 8px", flexShrink: 0 }}>
           {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
           {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
+          {sidebarNavItem(<KeyOutlined />, "Credentials", () => setSidebarView("credentials"), sidebarView === "credentials")}
           <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
             <a
               href={dashboardUrl}
@@ -919,6 +985,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               />
             </div>
 
+          ) : sidebarView === "credentials" ? (
+            /* ---- Credentials view ---- */
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", maxWidth: 800, margin: "0 auto", width: "100%", padding: "32px 24px" }}>
+              <MCPCredentialsTab accessToken={accessToken} />
+            </div>
+
           ) : showBlankState ? (
             /* ---- Blank state ---- */
             <div style={{
@@ -944,9 +1016,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   : greeting}
               </h1>
 
-              {isComparisonMode && (
+              {isComparisonMode ? (
                 <p style={{ margin: "-16px 0 24px", fontSize: 14, color: "#6b7280", textAlign: "center" }}>
                   Send a message to see responses side-by-side
+                </p>
+              ) : (
+                <p style={{ margin: "-16px 0 28px", fontSize: 14, color: "#6b7280", textAlign: "center", maxWidth: 520, lineHeight: 1.6 }}>
+                  Chat with 100+ LLMs + MCP tools — authenticate once, use them here.{" "}
+                  <button
+                    onClick={() => setSidebarView("apps")}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#1677ff", fontSize: 14, padding: 0, fontWeight: 500 }}
+                  >
+                    Open Apps →
+                  </button>
                 </p>
               )}
 

@@ -77,6 +77,14 @@ vi.mock("@/components/networking", () => {
     // Called when decoding a valid token
     setGlobalLitellmHeaderName: vi.fn(),
     Organization: {},
+    // Daily activity calls used by UsagePage components in the render tree
+    tagDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    teamDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    organizationDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    customerDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    agentDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    userDailyActivityCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
+    userDailyActivityAggregatedCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
   };
 });
 

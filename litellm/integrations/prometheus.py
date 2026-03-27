@@ -931,10 +931,14 @@ class PrometheusLogger(CustomLogger):
         user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
             "metadata"
         ].get("user_api_key_auth_metadata")
+        spend_logs_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
+            "spend_logs_metadata"
+        )
 
         combined_metadata: Dict[str, Any] = {
             **(_requester_metadata if _requester_metadata else {}),
             **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
+            **(spend_logs_metadata if spend_logs_metadata else {}),
         }
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
@@ -1417,7 +1421,9 @@ class PrometheusLogger(CustomLogger):
                 _sanitize_prometheus_label_value(user_api_team),
                 _sanitize_prometheus_label_value(user_api_team_alias),
                 _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(standard_logging_payload.get("model_id", "")),
+                _sanitize_prometheus_label_value(
+                    standard_logging_payload.get("model_id", "")
+                ),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
