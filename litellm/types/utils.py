@@ -58,6 +58,7 @@ from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -1132,6 +1133,7 @@ class Message(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
@@ -1150,6 +1152,7 @@ class Message(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1181,6 +1184,9 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_items is not None:
+            init_values["reasoning_items"] = reasoning_items
 
         if annotations is not None:
             init_values["annotations"] = annotations
@@ -1219,6 +1225,11 @@ class Message(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
 
+        if reasoning_items is None:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
+
         add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
@@ -1246,6 +1257,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -1262,6 +1274,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1294,6 +1307,13 @@ class Delta(SafeAttributeModel, OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        if reasoning_items is not None:
+            self.reasoning_items = reasoning_items
+        else:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
 
         # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
         if annotations is not None:
@@ -2488,6 +2508,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2802,6 +2823,20 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
     """
+
+
+class StandardAuditLogPayload(TypedDict):
+    """Payload for audit log events dispatched to external callbacks."""
+
+    id: str
+    updated_at: str  # ISO-8601
+    changed_by: str
+    changed_by_api_key: str
+    action: str  # "created" | "updated" | "deleted" | "blocked" | "rotated"
+    table_name: str
+    object_id: str
+    before_value: Optional[str]
+    updated_values: Optional[str]
 
 
 class StandardLoggingPayload(TypedDict):

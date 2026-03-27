@@ -1689,7 +1689,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         return logging_result
 
-    def _merge_hidden_params_from_response_into_metadata(self, logging_result: Any) -> None:
+    def _merge_hidden_params_from_response_into_metadata(
+        self, logging_result: Any
+    ) -> None:
         """
         Copy response._hidden_params into litellm_params.metadata['hidden_params'].
 
@@ -1721,6 +1723,9 @@ class Logging(LiteLLMLoggingBaseClass):
             md["hidden_params"] = existing or incoming
             return
         md["hidden_params"] = {**existing, **incoming}
+        self.model_call_details["litellm_params"]["metadata"][
+            "hidden_params"
+        ] = getattr(logging_result, "_hidden_params", {})
 
     def _process_hidden_params_and_response_cost(
         self,
@@ -4765,6 +4770,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_project_id=None,
+            user_api_key_project_alias=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
@@ -5612,6 +5618,7 @@ def get_standard_logging_metadata(
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_project_id=None,
+        user_api_key_project_alias=None,
         user_api_key_user_id=None,
         user_api_key_user_email=None,
         user_api_key_team_alias=None,

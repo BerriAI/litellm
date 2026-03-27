@@ -836,6 +836,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         )
                         if _jwt_project_obj is not None:
                             valid_token.project_metadata = _jwt_project_obj.metadata
+                            valid_token.project_alias = _jwt_project_obj.project_alias
 
                     # run through common checks
                     _ = await common_checks(
@@ -920,9 +921,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         route=route,
                     )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -1431,6 +1432,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
                 if _project_obj is not None:
                     valid_token.project_metadata = _project_obj.metadata
+                    valid_token.project_alias = _project_obj.project_alias
 
             global_proxy_spend = None
             if (
@@ -1499,9 +1501,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict["end_user_object_permission"] = (
-                    _end_user_object.object_permission
-                )
+                valid_token_dict[
+                    "end_user_object_permission"
+                ] = _end_user_object.object_permission
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1888,6 +1890,7 @@ async def _run_post_custom_auth_checks(
         )
         if _project_obj is not None:
             valid_token.project_metadata = _project_obj.metadata
+            valid_token.project_alias = _project_obj.project_alias
 
     if general_settings.get("custom_auth_run_common_checks", False):
         _ = await common_checks(

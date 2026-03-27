@@ -555,7 +555,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 }
                             }
                             if "thought_signature" in invocation:
-                                tc_part["thoughtSignature"] = invocation["thought_signature"]
+                                tc_part["thoughtSignature"] = invocation[
+                                    "thought_signature"
+                                ]
                             assistant_content.append(tc_part)  # type: ignore
 
                             # Re-inject toolResponse part if response is present
@@ -566,11 +568,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 }
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
-                                tr_part: Dict[str, Any] = {
-                                    "toolResponse": tr_dict
-                                }
+                                tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
                                 if "thought_signature" in invocation:
-                                    tr_part["thoughtSignature"] = invocation["thought_signature"]
+                                    tr_part["thoughtSignature"] = invocation[
+                                        "thought_signature"
+                                    ]
                                 assistant_content.append(tr_part)  # type: ignore
 
                 msg_i += 1

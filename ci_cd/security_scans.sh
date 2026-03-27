@@ -10,13 +10,13 @@ echo "Starting security scans for LiteLLM..."
 # Function to install Trivy and required tools
 install_trivy() {
     echo "Installing Trivy and required tools..."
+    TRIVY_VERSION="0.35.0"
     sudo apt-get update
-    sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl bsdmainutils
-    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-    echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-    sudo apt-get update
-    sudo apt-get install trivy
-    echo "Trivy and required tools installed successfully"
+    sudo apt-get install -y wget jq curl bsdmainutils
+    wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.deb"
+    sudo dpkg -i trivy.deb
+    rm trivy.deb
+    echo "Trivy ${TRIVY_VERSION} installed successfully"
 }
 
 # Function to install Grype

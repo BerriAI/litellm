@@ -180,6 +180,21 @@ async def test_azure_create_fine_tune_jobs_async():
     pass
 
 
+def test_azure_trainingtype_defaults_to_one():
+    """
+    Azure requires trainingType in extra_body. When omitted, AzureOpenAIFineTuningAPI defaults it to 1.
+    """
+    from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
+
+    handler = AzureOpenAIFineTuningAPI()
+    create_data = {"model": "gpt-4o-mini", "training_file": "file-test"}
+
+    handler._ensure_training_type(create_data)
+
+    assert "extra_body" in create_data
+    assert create_data["extra_body"]["trainingType"] == 1
+
+
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
     load_vertex_ai_credentials()
@@ -601,11 +616,10 @@ async def test_mock_openai_retrieve_fine_tune_job():
 @pytest.mark.asyncio
 async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
     """Test that Azure-specific parameters are passed through extra_body"""
-    from openai import AsyncAzureOpenAI
-    from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
     from openai.types.fine_tuning.fine_tuning_job import Hyperparameters as OAIHyperparameters
+    from litellm.types.utils import LiteLLMFineTuningJob
 
-    mock_response = FineTuningJob(
+    mock_response = LiteLLMFineTuningJob(
         id="ft-azure-123",
         model="gpt-4.1-mini-2025-04-14",
         created_at=1677610602,
@@ -619,8 +633,11 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
         result_files=[],
     )
 
+    async def mock_async_create(*args, **kwargs):
+        return mock_response
+
     with patch("litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job") as mock_create:
-        mock_create.return_value = mock_response
+        mock_create.return_value = mock_async_create()
 
         response = await litellm.acreate_fine_tuning_job(
             model="gpt-4.1-mini-2025-04-14",

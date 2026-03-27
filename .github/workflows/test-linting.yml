@@ -2,7 +2,10 @@ name: LiteLLM Linting
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -10,72 +13,73 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        clean: true
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          clean: true
+          persist-credentials: false
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+      - name: Install Poetry
+        run: pip install 'poetry==2.3.2'
 
-    - name: Clean Python cache
-      run: |
-        find . -type d -name "__pycache__" -exec rm -rf {} + || true
-        find . -name "*.pyc" -delete || true
+      - name: Clean Python cache
+        run: |
+          find . -type d -name "__pycache__" -exec rm -rf {} + || true
+          find . -name "*.pyc" -delete || true
 
-    - name: Check poetry.lock is up to date
-      run: |
-        poetry check --lock || (echo "❌ poetry.lock is out of sync with pyproject.toml. Run 'poetry lock' locally and commit the result." && exit 1)
+      - name: Check poetry.lock is up to date
+        run: |
+          poetry check --lock || (echo "❌ poetry.lock is out of sync with pyproject.toml. Run 'poetry lock' locally and commit the result." && exit 1)
 
-    - name: Install dependencies
-      run: |
-        poetry install --with dev
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
 
-    - name: Check Black formatting
-      run: |
-        cd litellm
-        poetry run black --check --exclude '/enterprise/' .
-        cd ..
+      - name: Check Black formatting
+        run: |
+          cd litellm
+          poetry run black --check --exclude '/enterprise/' .
+          cd ..
 
-    - name: Debug - Check file state
-      run: |
-        echo "Current branch:"
-        git branch --show-current
-        echo "Last 3 commits:"
-        git log --oneline -3
-        echo "File content around line 43:"
-        head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
-        
-    - name: Run Ruff linting
-      run: |
-        cd litellm
-        poetry run ruff check .
-        cd ..
+      - name: Debug - Check file state
+        run: |
+          echo "Current branch:"
+          git branch --show-current
+          echo "Last 3 commits:"
+          git log --oneline -3
+          echo "File content around line 43:"
+          head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
 
-    - name: Print OpenAI version
-      run: |
-        poetry run python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
+      - name: Run Ruff linting
+        run: |
+          cd litellm
+          poetry run ruff check .
+          cd ..
 
-    - name: Run MyPy type checking
-      run: |
-        cd litellm
-        poetry run mypy . 
-        cd ..
+      - name: Print OpenAI version
+        run: |
+          poetry run python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-    - name: Check for circular imports
-      run: |
-        cd litellm
-        poetry run python ../tests/documentation_tests/test_circular_imports.py
-        cd ..
+      - name: Run MyPy type checking
+        run: |
+          cd litellm
+          poetry run mypy . 
+          cd ..
 
-    - name: Check import safety
-      run: |
-        poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - name: Check for circular imports
+        run: |
+          cd litellm
+          poetry run python ../tests/documentation_tests/test_circular_imports.py
+          cd ..
+
+      - name: Check import safety
+        run: |
+          poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -84,27 +88,28 @@ jobs:
       contents: read
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
 
-    - name: Run secret scan test
-      run: |
-        pip install pytest
-        pytest tests/litellm/test_no_hardcoded_secrets.py -v
+      - name: Run secret scan test
+        run: |
+          pip install 'pytest==9.0.2'
+          pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
-    - name: Run ggshield secret scan
-      env:
-        GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
-      run: |
-        if [ -n "$GITGUARDIAN_API_KEY" ]; then
-          pip install ggshield
-          ggshield secret scan repo .
-        else
-          echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
-        fi
+      - name: Run ggshield secret scan
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        run: |
+          if [ -n "$GITGUARDIAN_API_KEY" ]; then
+            pip install 'ggshield==1.48.0'
+            ggshield secret scan repo .
+          else
+            echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
+          fi

@@ -38,22 +38,28 @@ def test_check_provider_match_azure_ai_allows_openai_and_azure():
     This is needed for Azure Model Router which can route to OpenAI models.
     """
     # azure_ai should match openai models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "openai"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "openai"}, custom_llm_provider="azure_ai"
+        )
+        is True
+    )
 
     # azure_ai should match azure models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "azure"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "azure"}, custom_llm_provider="azure_ai"
+        )
+        is True
+    )
 
     # azure_ai should NOT match other providers
-    assert _check_provider_match(
-        model_info={"litellm_provider": "anthropic"},
-        custom_llm_provider="azure_ai"
-    ) is False
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "anthropic"}, custom_llm_provider="azure_ai"
+        )
+        is False
+    )
 
 
 def test_check_provider_match_github_allows_upstream_provider_metadata():
@@ -61,20 +67,29 @@ def test_check_provider_match_github_allows_upstream_provider_metadata():
     Test that github provider can match upstream provider metadata.
     GitHub Models can provide models from multiple providers.
     """
-    assert _check_provider_match(
-        model_info={"litellm_provider": "openai"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "openai"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
-    assert _check_provider_match(
-        model_info={"litellm_provider": "github"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "github"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
-    assert _check_provider_match(
-        model_info={"litellm_provider": "anthropic"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "anthropic"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
 
 def test_supports_function_calling_github_openai_alias():
@@ -604,7 +619,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
+                    "type": "number"
+                },
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
@@ -623,8 +641,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
-                "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
-                "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_priority": {
+                    "type": "number"
+                },
+                "cache_read_input_token_cost_above_272k_tokens_priority": {
+                    "type": "number"
+                },
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
@@ -743,6 +765,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
@@ -839,7 +862,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         },
     }
 
-    prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
+    prod_json = os.path.join(
+        os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
+    )
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -880,8 +905,10 @@ def test_max_tokens_consistency():
     from pathlib import Path
 
     # Load the model configuration
-    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
-    with open(config_path, 'r') as f:
+    config_path = (
+        Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    )
+    with open(config_path, "r") as f:
         models = json.load(f)
 
     inconsistencies = []
@@ -893,17 +920,19 @@ def test_max_tokens_consistency():
 
         # Check if both max_tokens and max_output_tokens exist
         if isinstance(config, dict):
-            max_tokens = config.get('max_tokens')
-            max_output_tokens = config.get('max_output_tokens')
+            max_tokens = config.get("max_tokens")
+            max_output_tokens = config.get("max_output_tokens")
 
             # Only validate if both exist
             if max_tokens is not None and max_output_tokens is not None:
                 if max_tokens != max_output_tokens:
-                    inconsistencies.append({
-                        'model': model_name,
-                        'max_tokens': max_tokens,
-                        'max_output_tokens': max_output_tokens
-                    })
+                    inconsistencies.append(
+                        {
+                            "model": model_name,
+                            "max_tokens": max_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    )
 
     if inconsistencies:
         error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
@@ -932,6 +961,7 @@ def test_get_model_info_gemini():
             and not "learnlm" in model
             and not "imagen" in model
             and not "veo" in model
+            and not "lyria" in model
             and not "robotics" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
@@ -2381,13 +2411,14 @@ def test_register_model_with_scientific_notation():
 
     # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
-    
+
     # Clear LRU caches that might have stale data
     from litellm.utils import (
         _invalidate_model_cost_lowercase_map,
     )
+
     _invalidate_model_cost_lowercase_map()
-    
+
     model_cost_dict = {
         test_model_name: {
             "max_tokens": 8192,
@@ -2406,7 +2437,7 @@ def test_register_model_with_scientific_notation():
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
-    
+
     # Clean up after test
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
@@ -2734,7 +2765,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
         model_cost = json.load(f)
 
     model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
-    assert model_info is not None, "Model not found in model_prices_and_context_window.json"
+    assert (
+        model_info is not None
+    ), "Model not found in model_prices_and_context_window.json"
     assert model_info["litellm_provider"] == "openrouter"
     assert model_info["mode"] == "chat"
 
@@ -2754,6 +2787,22 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["supports_tool_choice"] is True
 
     print("openrouter kimi-k2.5 model info", model_info)
+
+
+def test_gemini_lyria_3_preview_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    clip = model_cost.get("gemini/lyria-3-clip-preview")
+    pro = model_cost.get("gemini/lyria-3-pro-preview")
+    assert clip is not None and pro is not None
+    assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
+    assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
+    assert clip["output_cost_per_image"] == 0.04
 
 
 def test_model_info_for_fireworks_short_form_models():
@@ -2778,7 +2827,9 @@ def test_model_info_for_fireworks_short_form_models():
         "fireworks_ai/accounts/fireworks/models/glm-4p7",
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} not found in model_prices_and_context_window.json"
         assert info["litellm_provider"] == "fireworks_ai"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == 6e-07
@@ -2792,7 +2843,9 @@ def test_model_info_for_fireworks_short_form_models():
         "fireworks_ai/accounts/fireworks/models/minimax-m2p1",
     ]:
         info = model_cost.get(key)
-        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
+        assert (
+            info is not None
+        ), f"{key} not found in model_prices_and_context_window.json"
         assert info["litellm_provider"] == "fireworks_ai"
         assert info["mode"] == "chat"
         assert info["input_cost_per_token"] == 3e-07
@@ -2801,7 +2854,9 @@ def test_model_info_for_fireworks_short_form_models():
 
     # kimi-k2p5: short-form only (long-form already existed)
     info = model_cost.get("fireworks_ai/kimi-k2p5")
-    assert info is not None, "fireworks_ai/kimi-k2p5 not found in model_prices_and_context_window.json"
+    assert (
+        info is not None
+    ), "fireworks_ai/kimi-k2p5 not found in model_prices_and_context_window.json"
     assert info["litellm_provider"] == "fireworks_ai"
     assert info["mode"] == "chat"
     assert info["input_cost_per_token"] == 6e-07
@@ -3047,7 +3102,9 @@ class TestProxyLoggingBudgetAlerts:
         user_info = MagicMock()
 
         # Should not raise an error
-        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+        await proxy_logging.budget_alerts(
+            type="organization_budget", user_info=user_info
+        )
 
     async def test_budget_alerts_with_both_slack_and_email(self):
         """Test that budget_alerts calls both slack and email instances when both are in alerting."""
@@ -3103,11 +3160,13 @@ class TestProxyLoggingBudgetAlerts:
             type=alert_type, user_info=user_info
         )
 
-    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(self):
+    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts with alert_emails bypass the alerting=None check
         and send emails even when alerting is None.
-        
+
         This tests the new logic that allows team-specific soft budget email alerts
         via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
         """
@@ -3143,7 +3202,9 @@ class TestProxyLoggingBudgetAlerts:
             type="soft_budget", user_info=user_info
         )
 
-    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(self):
+    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts WITHOUT alert_emails still respect alerting=None
         and do not send emails when alerting is None.
@@ -3176,7 +3237,9 @@ class TestProxyLoggingBudgetAlerts:
         proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
         proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
 
-    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(self):
+    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
         """
@@ -3317,7 +3380,10 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
                 {"type": "thinking", "thinking": "Let me analyze the requirements..."}
             ],
             "tool_calls": [
-                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_1",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
         {
@@ -3330,7 +3396,10 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
             # NO thinking_blocks - Claude sometimes doesn't include them
             "content": [{"type": "text", "text": "Let me explore more..."}],
             "tool_calls": [
-                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_2",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
     ]
@@ -3343,10 +3412,9 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
 
     # So we should NOT drop thinking - the combination tells us thinking is in use
     # The fix uses both checks: only drop if last has none AND no message has any
-    should_drop_thinking = (
-        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-        and not any_assistant_message_has_thinking_blocks(messages)
-    )
+    should_drop_thinking = last_assistant_with_tool_calls_has_no_thinking_blocks(
+        messages
+    ) and not any_assistant_message_has_thinking_blocks(messages)
     assert should_drop_thinking is False
 
 
@@ -3558,34 +3626,67 @@ class TestGetOptionalParamsDeepSeek:
 
 class TestIsStreamingRequest:
     def test_stream_true_in_kwargs(self):
-        assert _is_streaming_request(kwargs={"stream": True}, call_type="acompletion") is True
+        assert (
+            _is_streaming_request(kwargs={"stream": True}, call_type="acompletion")
+            is True
+        )
 
     def test_stream_false_in_kwargs(self):
-        assert _is_streaming_request(kwargs={"stream": False}, call_type="acompletion") is False
+        assert (
+            _is_streaming_request(kwargs={"stream": False}, call_type="acompletion")
+            is False
+        )
 
     def test_no_stream_in_kwargs(self):
         assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
 
     def test_generate_content_stream_string(self):
-        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream.value) is True
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.generate_content_stream.value
+            )
+            is True
+        )
 
     def test_agenerate_content_stream_string(self):
-        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream.value) is True
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.agenerate_content_stream.value
+            )
+            is True
+        )
 
     def test_generate_content_stream_enum(self):
-        assert _is_streaming_request(kwargs={}, call_type=CallTypes.generate_content_stream) is True
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.generate_content_stream
+            )
+            is True
+        )
 
     def test_agenerate_content_stream_enum(self):
-        assert _is_streaming_request(kwargs={}, call_type=CallTypes.agenerate_content_stream) is True
+        assert (
+            _is_streaming_request(
+                kwargs={}, call_type=CallTypes.agenerate_content_stream
+            )
+            is True
+        )
 
     def test_non_streaming_call_type_string(self):
         assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
 
     def test_non_streaming_call_type_enum(self):
-        assert _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
+        assert (
+            _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
+        )
 
     def test_stream_true_overrides_non_streaming_call_type(self):
-        assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+        assert (
+            _is_streaming_request(
+                kwargs={"stream": True}, call_type=CallTypes.acompletion
+            )
+            is True
+        )
 
 
 class TestCallbackAsyncSyncSeparation:
@@ -3679,37 +3780,27 @@ class TestMetadataNoneHandling:
     def test_metadata_none_get_previous_models(self):
         """kwargs.get("metadata") or {} should return {} when metadata is None."""
         kwargs = {"metadata": None}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models is None
 
     def test_metadata_none_model_group_check(self):
         """'model_group' in (kwargs.get("metadata") or {}) should not raise TypeError."""
         kwargs = {"metadata": None}
-        _is_litellm_router_call = "model_group" in (
-            kwargs.get("metadata") or {}
-        )
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
         assert _is_litellm_router_call is False
 
     def test_metadata_missing_key(self):
         """Should work when metadata key is completely absent."""
         kwargs = {}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models is None
 
     def test_metadata_present_with_values(self):
         """Should work when metadata has actual values."""
         kwargs = {"metadata": {"previous_models": ["model1"], "model_group": "test"}}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models == ["model1"]
-        _is_litellm_router_call = "model_group" in (
-            kwargs.get("metadata") or {}
-        )
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
         assert _is_litellm_router_call is True
 
     def test_metadata_none_causes_error_with_old_pattern(self):
