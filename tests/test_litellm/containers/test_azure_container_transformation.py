@@ -205,8 +205,32 @@ class TestAzureContainerTransformations:
         assert isinstance(result, ContainerListResponse)
         assert len(result.data) == 1
 
+    def test_transform_container_retrieve_request_with_query_params(self):
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=preview"
+        url, data = self.config.transform_container_retrieve_request(
+            container_id="cntr_123",
+            api_base=api_base,
+            litellm_params={},
+            headers={"api-key": "test"},
+        )
+        assert "/containers/cntr_123" in url
+        assert "?api-version=preview" in url
+        assert url.index("/cntr_123") < url.index("?api-version")
+
+    def test_transform_container_delete_request_with_query_params(self):
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=preview"
+        url, data = self.config.transform_container_delete_request(
+            container_id="cntr_123",
+            api_base=api_base,
+            litellm_params={},
+            headers={"api-key": "test"},
+        )
+        assert "/containers/cntr_123" in url
+        assert "?api-version=preview" in url
+        assert url.index("/cntr_123") < url.index("?api-version")
+
     def test_transform_container_file_list_request(self):
-        api_base = "https://my-resource.openai.azure.com/openai/v1/containers"
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=preview"
         url, params = self.config.transform_container_file_list_request(
             container_id="cntr_123",
             api_base=api_base,
@@ -214,11 +238,13 @@ class TestAzureContainerTransformations:
             headers={"api-key": "test"},
             limit=10,
         )
-        assert "cntr_123/files" in url
+        assert "/containers/cntr_123/files" in url
+        assert "?api-version=preview" in url
+        assert url.index("/cntr_123/files") < url.index("?api-version")
         assert params["limit"] == "10"
 
     def test_transform_container_file_content_request(self):
-        api_base = "https://my-resource.openai.azure.com/openai/v1/containers"
+        api_base = "https://my-resource.openai.azure.com/openai/v1/containers?api-version=preview"
         url, params = self.config.transform_container_file_content_request(
             container_id="cntr_123",
             file_id="file_456",
@@ -226,7 +252,9 @@ class TestAzureContainerTransformations:
             litellm_params={},
             headers={"api-key": "test"},
         )
-        assert "cntr_123/files/file_456/content" in url
+        assert "/containers/cntr_123/files/file_456/content" in url
+        assert "?api-version=preview" in url
+        assert url.index("/file_456/content") < url.index("?api-version")
 
     def test_transform_container_file_content_response(self):
         mock_response = MagicMock(spec=httpx.Response)

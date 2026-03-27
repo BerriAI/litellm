@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -83,3 +84,83 @@ class AzureOpenAIContainerConfig(OpenAIContainerConfig):
         ] = container_cost
 
         return container_obj
+
+    def _construct_url_with_subpath(self, api_base: str, subpath: str) -> str:
+        """Construct a URL by inserting subpath before query parameters.
+
+        Azure URLs contain ?api-version=... query params. Naively appending
+        path segments via string concatenation would place them after the
+        query string, producing malformed URLs. This helper parses the URL
+        and appends the subpath to the path component only.
+        """
+        parsed = urlparse(api_base)
+        new_path = f"{parsed.path.rstrip('/')}/{subpath}"
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                new_path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+    def transform_container_retrieve_request(
+        self,
+        container_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        url = self._construct_url_with_subpath(api_base, container_id)
+        data: Dict[str, Any] = {}
+        return url, data
+
+    def transform_container_delete_request(
+        self,
+        container_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        url = self._construct_url_with_subpath(api_base, container_id)
+        data: Dict[str, Any] = {}
+        return url, data
+
+    def transform_container_file_list_request(
+        self,
+        container_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        url = self._construct_url_with_subpath(api_base, f"{container_id}/files")
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if limit is not None:
+            params["limit"] = str(limit)
+        if order is not None:
+            params["order"] = order
+        if extra_query:
+            params.update(extra_query)
+        return url, params
+
+    def transform_container_file_content_request(
+        self,
+        container_id: str,
+        file_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        url = self._construct_url_with_subpath(
+            api_base, f"{container_id}/files/{file_id}/content"
+        )
+        params: Dict[str, Any] = {}
+        return url, params
