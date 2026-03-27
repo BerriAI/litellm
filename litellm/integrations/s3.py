@@ -185,6 +185,17 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
+    # Local filesystem adapters (e.g. MinIO/rustfs on Linux/Windows) enforce a
+    # 255-character limit on the *last* path component.  Long LiteLLM request IDs
+    # can easily exceed that.  If s3_file_name is too long, keep a short
+    # human-readable prefix and append a SHA-256 hash so the key stays unique.
+    _MAX_FILENAME_CHARS = 200  # leaves headroom for ".json" and future segments
+    if len(s3_file_name) > _MAX_FILENAME_CHARS:
+        import hashlib as _hashlib
+        _ts_prefix = s3_file_name[:40]  # preserve "time-HH-MM-SS-ffffff_resp_" prefix
+        _suffix = _hashlib.sha256(s3_file_name.encode()).hexdigest()[:16]
+        s3_file_name = f"{_ts_prefix}{_suffix}"
+
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
         + prefix
