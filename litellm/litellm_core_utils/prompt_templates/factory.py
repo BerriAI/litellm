@@ -1727,9 +1727,9 @@ def convert_to_anthropic_tool_result(
                     text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "document":
-                tool_result_content_blocks.append(
-                    BedrockToolResultContentBlock(document=content) # Assume it matches Bedrock structure or Anthropic fallback
-                )
+                # Remove 'type' key from content dict to pass to Anthropic / Bedrock block
+                doc_content = {k: v for k, v in content.items() if k != "type"}
+                anthropic_content_list.append(doc_content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -3974,9 +3974,9 @@ def _convert_to_bedrock_tool_call_result(
                     BedrockToolResultContentBlock(text=content["text"])
                 )
             elif content["type"] == "document":
-                tool_result_content_blocks.append(
-                    BedrockToolResultContentBlock(document=content) # Assume it matches Bedrock structure or Anthropic fallback
-                )
+                # Remove 'type' key from content dict to pass to Anthropic / Bedrock block
+                doc_content = {k: v for k, v in content.items() if k != "type"}
+                anthropic_content_list.append(doc_content)
             elif content["type"] == "image_url":
                 format: Optional[str] = None
                 if isinstance(content["image_url"], dict):
@@ -4432,7 +4432,8 @@ class BedrockConverseMessagesProcessor:
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "document":
-                                _part = BedrockContentBlock(document=element) # Pass it through since element already has format, name, source
+                                doc_content = {k: v for k, v in element.items() if k != "type"}
+                                _part = BedrockContentBlock(document=doc_content)
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
@@ -4604,7 +4605,8 @@ class BedrockConverseMessagesProcessor:
                                     )
                                     assistants_parts.append(assistants_part)
                             elif element["type"] == "document":
-                                _part = BedrockContentBlock(document=element) # Pass it through since element already has format, name, source
+                                doc_content = {k: v for k, v in element.items() if k != "type"}
+                                _part = BedrockContentBlock(document=doc_content)
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
