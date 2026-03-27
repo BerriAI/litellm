@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
       - name: Validate tag input
         env:
@@ -49,11 +51,12 @@ jobs:
           TAG: ${{ inputs.tag }}
           AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
           AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           docker run -d \
             --name litellm-rc \
             -p 4000:4000 \
-            -v "${{ github.workspace }}/.github/observatory/litellm_config.yaml:/app/config.yaml" \
+            -v "${WORKSPACE}/.github/observatory/litellm_config.yaml:/app/config.yaml" \
             -e LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}" \
             -e AZURE_API_KEY="${AZURE_API_KEY}" \
             -e AZURE_API_BASE="${AZURE_API_BASE}" \
@@ -104,11 +107,11 @@ jobs:
 
       - name: Verify tunnel connectivity
         run: |
-          echo "Testing tunnel at ${{ env.TUNNEL_URL }}..."
+          echo "Testing tunnel at ${TUNNEL_URL}..."
           # Quick tunnels need time for DNS propagation; retry to avoid
           # transient NXDOMAIN (curl exit code 6) on first attempt.
           for i in $(seq 1 10); do
-            if curl -sf "${{ env.TUNNEL_URL }}/health/liveliness" > /dev/null 2>&1; then
+            if curl -sf "${TUNNEL_URL}/health/liveliness" > /dev/null 2>&1; then
               echo "Tunnel is working (attempt $i)"
               exit 0
             fi
@@ -222,5 +225,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          kill "${{ env.CLOUDFLARED_PID }}" 2>/dev/null || true
+          kill "$CLOUDFLARED_PID" 2>/dev/null || true
           docker rm -f litellm-rc 2>/dev/null || true
