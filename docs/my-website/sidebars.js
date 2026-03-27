@@ -1028,7 +1028,6 @@ const sidebars = {
       ],
     },
 
-
     {
       type: "category",
       label: "Routing & Load Balancing",
@@ -1261,6 +1260,7 @@ const learnSidebar = {
           },
           items: [
             "completion/knowledgebase",
+            "embedding/embedding_chunking",
           ],
         },
         {

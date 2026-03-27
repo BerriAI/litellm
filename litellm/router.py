@@ -303,6 +303,8 @@ class Router:
         deployment_affinity_ttl_seconds: int = 3600,
         model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
         ignore_invalid_deployments: bool = False,
+        enforce_embedding_context_limit: bool = False,
+        embedding_chunk_size: int = 512,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -337,6 +339,8 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
+            enforce_embedding_context_limit (bool): When True, automatically chunks large embedding inputs that exceed embedding_chunk_size. Defaults to False.
+            embedding_chunk_size (int): Maximum tokens per chunk for embedding inputs. Common values: 512 (most models), 2048, 8192. Defaults to 512.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -373,7 +377,8 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
-
+        self.enforce_embedding_context_limit = enforce_embedding_context_limit
+        self.embedding_chunk_size = embedding_chunk_size
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.debug_level = debug_level
@@ -2552,7 +2557,10 @@ class Router:
                     # Request Number X, Model Number Y
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
-                            model=model, idx=idx, messages=message, **kwargs  # type: ignore
+                            model=model,
+                            idx=idx,
+                            messages=message,  # type: ignore[arg-type]
+                            **kwargs,
                         )
                     )
             responses = await asyncio.gather(*_tasks)
@@ -2715,7 +2723,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -3966,6 +3974,393 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    # Helper methods for embedding chunking
+    def _validate_embedding_input(self, input: Union[str, List]) -> List[str]:
+        """
+        Validate and normalize embedding input.
+
+        Args:
+            input: Either a string or a list of strings to embed.
+
+        Returns:
+            List of strings to embed.
+
+        Raises:
+            ValueError: If input is empty, not a string/list, or contains non-strings.
+        """
+        if isinstance(input, str):
+            return [input]
+
+        if not isinstance(input, list):
+            raise ValueError(
+                f"Embedding input must be a string or list of strings, got {type(input).__name__}"
+            )
+
+        if len(input) == 0:
+            raise ValueError("Embedding input list cannot be empty")
+
+        non_strings = [
+            (i, type(item).__name__)
+            for i, item in enumerate(input)
+            if not isinstance(item, str)
+        ]
+        if non_strings:
+            examples = non_strings[:3]  # Show first 3 problematic items
+            raise ValueError(
+                f"All embedding input items must be strings. "
+                f"Found non-string items at indices: {[idx for idx, _ in examples]} "
+                f"with types: {[t for _, t in examples]}"
+            )
+
+        return input
+
+    def _approx_token_count(self, text: str) -> int:
+        """
+        Fast, conservative estimate of token count.
+
+        Uses 1 token ≈ 4 characters ratio with a 1.1 safety factor to account for:
+        - Non-English languages (CJK, Arabic, etc.) where characters may use more tokens
+        - Special characters and punctuation
+        - Tokenizer-specific variations
+
+        The 1.1 multiplier makes the estimate conservative (higher than actual),
+        which helps prevent chunks from exceeding the actual token limit.
+
+        Args:
+            text: The text to estimate token count for.
+
+        Returns:
+            Estimated token count with safety factor applied (conservative/higher estimate).
+        """
+        # Apply 1.1 safety factor to account for tokenizer variations
+        # This makes the estimate conservative (higher), so chunks will be smaller
+        safety_factor = 1.1
+        return int((len(text) / 4) * safety_factor)
+
+    def _chunk_text(self, text: str, chunk_size: int) -> List[str]:
+        """
+        Fast text chunking with basic boundary detection.
+        Prioritizes speed over perfect semantic breaks.
+
+        Args:
+            text: The text to chunk.
+            chunk_size: Target chunk size in tokens.
+
+        Returns:
+            List of text chunks, each approximately within chunk_size tokens.
+        """
+        # Handle empty or whitespace-only input
+        if not text or not text.strip():
+            raise ValueError(
+                "Embedding input cannot be empty or whitespace-only. "
+                "Received text with 0 non-whitespace characters."
+            )
+
+        # Apply 0.9 safety margin to create smaller chunks, accounting for
+        # tokenizer variations (especially with non-English text)
+        safety_margin = 0.9
+        chars_per_chunk = int(chunk_size * 4 * safety_margin)
+        text_len = len(text)
+
+        if text_len <= chars_per_chunk:
+            return [text]
+
+        chunks = []
+        current_pos = 0
+
+        while current_pos < text_len:
+            end_pos = min(current_pos + chars_per_chunk, text_len)
+
+            # Only look for break point if not at end
+            if end_pos < text_len:
+                # Search in last 10% for a space (fast boundary detection)
+                search_start = end_pos - min(chars_per_chunk // 10, 200)
+                space_pos = text.rfind(" ", search_start, end_pos)
+                if space_pos > current_pos:
+                    end_pos = space_pos + 1
+
+            chunk = text[current_pos:end_pos]
+            if chunk.strip():  # Skip empty chunks
+                chunks.append(chunk)
+            current_pos = end_pos
+
+        return chunks
+
+    def _merge_embeddings(self, embeddings: List[List[float]]) -> List[float]:
+        """
+        Average multiple embedding vectors into a single vector.
+
+        Uses element-wise averaging across all input vectors. This is useful
+        for combining chunk embeddings into a single representation.
+
+        Args:
+            embeddings: List of embedding vectors to merge. Each vector should
+                have the same dimensionality.
+
+        Returns:
+            A single averaged embedding vector. Returns empty list if input is empty,
+            or the single vector unchanged if only one is provided.
+
+        Note:
+            If vectors have mismatched dimensions, a warning is logged and the
+            result is truncated to the shortest vector length.
+        """
+        if not embeddings:
+            return []
+
+        if len(embeddings) == 1:
+            return embeddings[0]
+
+        # Check for dimension mismatches
+        dimensions = [len(emb) for emb in embeddings]
+        if len(set(dimensions)) > 1:
+            verbose_router_logger.warning(
+                f"Embedding dimension mismatch detected during merge: {dimensions}. "
+                f"Result will be truncated to shortest dimension ({min(dimensions)}). "
+                "This may indicate API issues or model inconsistencies."
+            )
+
+        num_vecs = len(embeddings)
+
+        # Fast averaging with zip (more cache-friendly)
+        return [sum(vecs) / num_vecs for vecs in zip(*embeddings)]
+
+    def _extract_embedding_usage(self, response: EmbeddingResponse) -> Tuple[int, int]:
+        """
+        Extract usage information from an embedding response.
+
+        Args:
+            response: The embedding response object.
+
+        Returns:
+            Tuple of (prompt_tokens, total_tokens).
+        """
+        prompt_tokens = 0
+        total_tokens = 0
+        if hasattr(response, "usage") and response.usage:
+            prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
+            total_tokens = getattr(response.usage, "total_tokens", 0)
+        return prompt_tokens, total_tokens
+
+    def _extract_embedding_vector(self, response: EmbeddingResponse) -> List[float]:
+        """
+        Safely extract embedding vector from response with validation.
+
+        Args:
+            response: The embedding response object.
+
+        Returns:
+            The embedding vector from the response.
+
+        Raises:
+            ValueError: If response structure is unexpected or missing embedding data.
+        """
+        try:
+            data = (
+                response.get("data")
+                if isinstance(response, dict)
+                else getattr(response, "data", None)
+            )
+            if not data or not isinstance(data, list) or len(data) == 0:
+                raise ValueError("Response missing 'data' field or empty")
+            first_item = data[0]
+            embedding = (
+                first_item.get("embedding")
+                if isinstance(first_item, dict)
+                else getattr(first_item, "embedding", None)
+            )
+            if embedding is None:
+                raise ValueError("Response data missing 'embedding' field")
+            return embedding
+        except (KeyError, IndexError, TypeError) as e:
+            raise ValueError(f"Unexpected embedding response structure: {e}")
+
+    def _process_embedding_responses(
+        self, responses: List[EmbeddingResponse]
+    ) -> Tuple[List[float], int, int]:
+        """
+        Process embedding responses: extract vectors, collect usage, and merge.
+        Optimized with fast path for single response (no merging needed).
+
+        Args:
+            responses: List of embedding responses from chunk calls.
+
+        Returns:
+            Tuple of (merged_embedding_vector, total_prompt_tokens, total_tokens).
+        """
+        if not responses:
+            return [], 0, 0
+
+        # Fast path for single chunk (no merging needed)
+        if len(responses) == 1:
+            r = responses[0]
+            prompt, total = self._extract_embedding_usage(r)
+            return self._extract_embedding_vector(r), prompt, total
+
+        chunk_vectors = []
+        total_prompt_tokens = 0
+        total_tokens = 0
+
+        for response in responses:
+            chunk_vectors.append(self._extract_embedding_vector(response))
+            prompt_toks, total_toks = self._extract_embedding_usage(response)
+            total_prompt_tokens += prompt_toks
+            total_tokens += total_toks
+
+        merged_vector = self._merge_embeddings(chunk_vectors)
+        return merged_vector, total_prompt_tokens, total_tokens
+
+    def _build_embedding_response(
+        self,
+        model: str,
+        embeddings: List[List[float]],
+        total_prompt_tokens: int,
+        total_tokens: int,
+    ) -> EmbeddingResponse:
+        """
+        Build a final EmbeddingResponse from processed embeddings.
+
+        Args:
+            model: The model name.
+            embeddings: List of embedding vectors.
+            total_prompt_tokens: Total prompt tokens used.
+            total_tokens: Total tokens used.
+
+        Returns:
+            A complete EmbeddingResponse object.
+        """
+        return EmbeddingResponse(
+            model=model,
+            data=[
+                {"object": "embedding", "embedding": vec, "index": i}
+                for i, vec in enumerate(embeddings)
+            ],
+            usage=Usage(prompt_tokens=total_prompt_tokens, total_tokens=total_tokens),
+        )
+
+    def _prepare_call_kwargs(
+        self,
+        model: str,
+        input_data: Union[str, List],
+        kwargs: dict,
+        original_function: Callable,
+        is_async: bool = False,
+    ) -> dict:
+        """
+        Prepare kwargs for embedding calls with fallbacks.
+
+        Creates a copy of kwargs to avoid mutation and sets up required parameters
+        for function_with_fallbacks or async_function_with_fallbacks.
+
+        Args:
+            model: The model name/group.
+            input_data: The input text(s) to embed.
+            kwargs: Original kwargs dict (will not be mutated).
+            original_function: The embedding function to use.
+            is_async: Whether this is for async embedding.
+
+        Returns:
+            A new kwargs dict ready for fallback function call.
+        """
+        prepared_kwargs = kwargs.copy()
+        # Deep copy metadata to avoid mutating the original kwargs
+        if "metadata" in prepared_kwargs:
+            prepared_kwargs["metadata"] = copy.deepcopy(prepared_kwargs["metadata"])
+        prepared_kwargs.update(
+            {
+                "model": model,
+                "input": input_data if isinstance(input_data, list) else [input_data],
+                "original_function": original_function,
+            }
+        )
+        self._update_kwargs_before_fallbacks(model=model, kwargs=prepared_kwargs)
+        if not is_async:
+            prepared_kwargs["num_retries"] = prepared_kwargs.get(
+                "num_retries", self.num_retries
+            )
+            prepared_kwargs.setdefault("metadata", {}).update({"model_group": model})
+        return prepared_kwargs
+
+    def _collect_embedding_results(
+        self, results: List[Tuple[List[float], int, int]]
+    ) -> Tuple[List[List[float]], int, int]:
+        """
+        Collect embeddings and usage from processed results.
+
+        Args:
+            results: List of (embedding_vector, prompt_tokens, total_tokens) tuples.
+
+        Returns:
+            Tuple of (list_of_embeddings, total_prompt_tokens, total_tokens).
+        """
+        embeddings = []
+        total_prompt_tokens = 0
+        total_tokens = 0
+        for embedding_vec, prompt_toks, total_toks in results:
+            embeddings.append(embedding_vec)
+            total_prompt_tokens += prompt_toks
+            total_tokens += total_toks
+        return embeddings, total_prompt_tokens, total_tokens
+
+    def _embed_text_sync(
+        self, text: str, model: str, kwargs: dict
+    ) -> Tuple[List[float], int, int]:
+        """
+        Embed a single text input synchronously, with chunking if needed.
+
+        Note: _chunk_text returns [text] for small inputs, so no explicit
+        size check is needed here.
+
+        Args:
+            text: The text to embed.
+            model: The model name/group.
+            kwargs: Additional kwargs for the embedding call.
+
+        Returns:
+            Tuple of (embedding_vector, prompt_tokens, total_tokens).
+        """
+        chunks = self._chunk_text(text, self.embedding_chunk_size)
+        responses = [
+            self.function_with_fallbacks(
+                **self._prepare_call_kwargs(
+                    model, chunk, kwargs, self._embedding, is_async=False
+                )
+            )
+            for chunk in chunks
+        ]
+        return self._process_embedding_responses(responses)
+
+    async def _embed_text_async(
+        self, text: str, model: str, kwargs: dict
+    ) -> Tuple[List[float], int, int]:
+        """
+        Embed a single text input asynchronously, with chunking if needed.
+
+        Note: _chunk_text returns [text] for small inputs, so no explicit
+        size check is needed here.
+
+        Args:
+            text: The text to embed.
+            model: The model name/group.
+            kwargs: Additional kwargs for the embedding call.
+
+        Returns:
+            Tuple of (embedding_vector, prompt_tokens, total_tokens).
+        """
+
+        chunks = self._chunk_text(text, self.embedding_chunk_size)
+        responses = await asyncio.gather(
+            *[
+                self.async_function_with_fallbacks(
+                    **self._prepare_call_kwargs(
+                        model, chunk, kwargs, self._aembedding, is_async=True
+                    )
+                )
+                for chunk in chunks
+            ]
+        )
+        return self._process_embedding_responses(responses)
+
     def embedding(
         self,
         model: str,
@@ -3974,12 +4369,40 @@ class Router:
         **kwargs,
     ) -> EmbeddingResponse:
         try:
-            kwargs["model"] = model
-            kwargs["input"] = input
-            kwargs["original_function"] = self._embedding
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            response = self.function_with_fallbacks(**kwargs)
+            if self.enforce_embedding_context_limit:
+                # Skip chunking for non-string inputs (e.g., token ID arrays)
+                if not isinstance(input, (str, list)) or (
+                    isinstance(input, list) and input and not isinstance(input[0], str)
+                ):
+                    pass  # Fall through to default path
+                else:
+                    inputs = self._validate_embedding_input(input)
+                    if any(
+                        self._approx_token_count(t) > self.embedding_chunk_size
+                        for t in inputs
+                    ):
+                        results = [
+                            self._embed_text_sync(text, model, kwargs)
+                            for text in inputs
+                        ]
+                        (
+                            embeddings,
+                            prompt_tokens,
+                            total_tokens,
+                        ) = self._collect_embedding_results(results)
+                        return self._build_embedding_response(
+                            model, embeddings, prompt_tokens, total_tokens
+                        )
+
+            # Default path
+            prepared_kwargs = self._prepare_call_kwargs(
+                model, input, kwargs, self._embedding, is_async=is_async
+            )
+
+            prepared_kwargs["input"] = input  # Preserve original format
+            response = self.function_with_fallbacks(**prepared_kwargs)
             return response
+
         except Exception as e:
             raise e
 
@@ -4047,12 +4470,39 @@ class Router:
         **kwargs,
     ) -> EmbeddingResponse:
         try:
-            kwargs["model"] = model
-            kwargs["input"] = input
-            kwargs["original_function"] = self._aembedding
-            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            response = await self.async_function_with_fallbacks(**kwargs)
-            return response
+            if self.enforce_embedding_context_limit:
+                # Skip chunking for non-string inputs (e.g., token ID arrays)
+                if not isinstance(input, (str, list)) or (
+                    isinstance(input, list) and input and not isinstance(input[0], str)
+                ):
+                    pass  # Fall through to default path
+                else:
+                    inputs = self._validate_embedding_input(input)
+                    if any(
+                        self._approx_token_count(t) > self.embedding_chunk_size
+                        for t in inputs
+                    ):
+                        results = await asyncio.gather(
+                            *[
+                                self._embed_text_async(text, model, kwargs)
+                                for text in inputs
+                            ]
+                        )
+                        (
+                            embeddings,
+                            prompt_tokens,
+                            total_tokens,
+                        ) = self._collect_embedding_results(results)
+                        return self._build_embedding_response(
+                            model, embeddings, prompt_tokens, total_tokens
+                        )
+
+            # Default path
+            prepared_kwargs = self._prepare_call_kwargs(
+                model, input, kwargs, self._aembedding, is_async=True
+            )
+            prepared_kwargs["input"] = input  # Preserve original format
+            return await self.async_function_with_fallbacks(**prepared_kwargs)
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
@@ -7755,8 +8205,7 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None
-                    and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -7776,8 +8225,7 @@ class Router:
                     model_group_info.supports_url_context = True
 
                 if (
-                    model_info.get("supports_reasoning", None) is not None
-                    and model_info["supports_reasoning"] is True  # type: ignore
+                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
                 ):
                     model_group_info.supports_reasoning = True
                 if (
@@ -7980,9 +8428,7 @@ class Router:
             and isinstance(response._hidden_params, dict)  # type: ignore
         ):
             response._hidden_params.setdefault("additional_headers", {})  # type: ignore
-            response._hidden_params["additional_headers"][  # type: ignore
-                "x-litellm-model-group"
-            ] = model_group
+            response._hidden_params["additional_headers"]["x-litellm-model-group"] = model_group  # type: ignore
 
             additional_headers = response._hidden_params["additional_headers"]  # type: ignore
 
@@ -9456,7 +9902,8 @@ class Router:
 
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments  # type: ignore
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
             )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
