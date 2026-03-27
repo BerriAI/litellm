@@ -2,13 +2,16 @@
 Test Google AI Studio (Gemini) files transformation functionality
 """
 
-import os
 import pytest
 from unittest.mock import Mock, patch
 
 import httpx
 
-from litellm.llms.gemini.files.transformation import GoogleAIStudioFilesHandler
+
+from litellm.llms.gemini.files.transformation import (
+    GoogleAIStudioFilesHandler,
+    _parse_gemini_create_time,
+)
 from litellm.types.llms.openai import OpenAIFileObject
 
 
@@ -23,7 +26,7 @@ class TestGoogleAIStudioFilesTransformation:
         """
         Test that transform_retrieve_file_request returns empty params dict
         to avoid 'Content-Type' query parameter error
-        
+
         Regression test for: https://github.com/BerriAI/litellm/issues/XXX
         When retrieving a file, the API was incorrectly trying to pass Content-Type
         as a query parameter, which Gemini API rejected.
@@ -68,8 +71,8 @@ class TestGoogleAIStudioFilesTransformation:
         assert params == {}, f"Expected empty params dict, got: {params}"
         assert "Content-Type" not in params, "Content-Type should not be in query params"
 
-    @patch.dict('os.environ', {}, clear=True)
-    @patch('litellm.llms.gemini.common_utils.get_secret_str', return_value=None)
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("litellm.llms.gemini.common_utils.get_secret_str", return_value=None)
     def test_transform_retrieve_file_request_missing_api_key(self, mock_get_secret):
         """Test that transform_retrieve_file_request raises error when API key is missing"""
         file_id = "files/test123"
@@ -178,7 +181,7 @@ class TestGoogleAIStudioFilesTransformation:
     def test_transform_retrieve_file_response_missing_createTime(self):
         """
         Test that transform_retrieve_file_response raises proper error when createTime is missing
-        
+
         This tests the error scenario that occurs when API returns an error response
         without the expected file metadata fields.
         """
@@ -221,15 +224,13 @@ class TestGoogleAIStudioFilesTransformation:
         assert "x-goog-api-key" in result_headers
         assert result_headers["x-goog-api-key"] == api_key
 
-    @patch.dict('os.environ', {}, clear=True)
-    @patch('litellm.llms.gemini.common_utils.get_secret_str', return_value=None)
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("litellm.llms.gemini.common_utils.get_secret_str", return_value=None)
     def test_validate_environment_missing_api_key(self, mock_get_secret):
         """Test that validate_environment raises error when API key is missing"""
         headers = {}
 
-        with pytest.raises(
-            ValueError, match="GEMINI_API_KEY is required for Google AI Studio file operations"
-        ):
+        with pytest.raises(ValueError, match="GEMINI_API_KEY is required for Google AI Studio file operations"):
             self.handler.validate_environment(
                 headers=headers,
                 model="gemini-pro",
@@ -243,7 +244,7 @@ class TestGoogleAIStudioFilesTransformation:
         """Test that get_complete_url constructs proper upload URL"""
         api_base = "https://generativelanguage.googleapis.com"
         api_key = "test-api-key"
-        
+
         url = self.handler.get_complete_url(
             api_base=api_base,
             api_key=api_key,
@@ -274,7 +275,7 @@ class TestGoogleAIStudioFilesTransformation:
         # Verify URL extraction
         assert "files/test123" in url
         assert "generativelanguage.googleapis.com" in url
-        
+
         # Params should be empty (API key goes in header via validate_environment)
         assert params == {}
 
@@ -296,3 +297,28 @@ class TestGoogleAIStudioFilesTransformation:
         assert file_id in url
         assert "generativelanguage.googleapis.com" in url
         assert params == {}
+
+
+class TestParseGeminiCreateTime:
+    """Regression tests for _parse_gemini_create_time helper"""
+
+    def test_parses_createtime_with_microseconds(self):
+        """Standard format with microseconds should parse correctly"""
+        result = _parse_gemini_create_time("2024-01-15T10:30:00.123456Z")
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_parses_createtime_without_microseconds(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/24626
+        Gemini sometimes returns createTime without sub-second precision,
+        e.g. "2026-03-26T10:00:00Z". This used to raise ValueError with %f.
+        """
+        result = _parse_gemini_create_time("2026-03-26T10:00:00Z")
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_raises_on_invalid_format(self):
+        """Completely invalid format should raise ValueError"""
+        with pytest.raises(ValueError, match="Unable to parse Gemini createTime"):
+            _parse_gemini_create_time("not-a-date")

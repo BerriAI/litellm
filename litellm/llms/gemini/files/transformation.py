@@ -4,6 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
+from datetime import datetime
 from typing import Any, List, Literal, Optional
 
 import httpx
@@ -26,6 +27,24 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LlmProviders
 
 from ..common_utils import GeminiModelInfo
+
+
+def _parse_gemini_create_time(create_time: str) -> int:
+    """Parse Gemini's createTime string to a Unix timestamp.
+
+    Gemini sometimes omits sub-second precision (e.g. "2026-03-26T10:00:00Z"
+    instead of "2026-03-26T10:00:00.000000Z"), which causes strptime to fail
+    when using the %f directive. Try both formats before giving up.
+    Uses datetime.strptime(...).timestamp() to correctly handle UTC regardless
+    of the server's local timezone.
+    """
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return int(datetime.strptime(create_time, fmt).timestamp())
+        except ValueError:
+            continue
+    msg = f"Unable to parse Gemini createTime: {create_time!r}"
+    raise ValueError(msg)
 
 
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
@@ -52,9 +71,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         resolved_api_key = self.get_api_key(api_key)
         if not resolved_api_key:
-            raise ValueError(
-                "GEMINI_API_KEY is required for Google AI Studio file operations"
-            )
+            raise ValueError("GEMINI_API_KEY is required for Google AI Studio file operations")
 
         headers["x-goog-api-key"] = resolved_api_key
         return headers
@@ -88,9 +105,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url = "{}/{}?key={}".format(api_base, endpoint, final_api_key)
         return url
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         return []
 
     def map_openai_params(
@@ -137,11 +152,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         headers.update(extracted_data["headers"])  # Add any custom headers
 
         # Initial metadata request body
-        initial_data = {
-            "file": {
-                "display_name": extracted_data["filename"] or str(int(time.time()))
-            }
-        }
+        initial_data = {"file": {"display_name": extracted_data["filename"] or str(int(time.time()))}}
 
         # Step 2: Actual file upload data
         upload_headers = {
@@ -171,25 +182,14 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         try:
             response_json = raw_response.json()
 
-            response_object = GeminiCreateFilesResponseObject(
-                **response_json.get("file", {})  # type: ignore
-            )
+            response_object = GeminiCreateFilesResponseObject(**response_json.get("file", {}))  # type: ignore
 
             # Extract file information from Gemini response
 
             return OpenAIFileObject(
                 id=response_object["uri"],  # Gemini uses URI as identifier
-                bytes=int(
-                    response_object["sizeBytes"]
-                ),  # Gemini doesn't return file size
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_object["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
+                bytes=int(response_object["sizeBytes"]),  # Gemini doesn't return file size
+                created_at=_parse_gemini_create_time(response_object.get("createTime", "")),
                 filename=response_object["displayName"],
                 object="file",
                 purpose="user_data",  # Default to assistants as that's the main use case
@@ -220,10 +220,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             url = "{}?key={}".format(file_id, api_key)
         else:
             # Fallback for just file name (files/...)
-            api_base = (
-                self.get_api_base(litellm_params.get("api_base"))
-                or "https://generativelanguage.googleapis.com"
-            )
+            api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
             api_base = api_base.rstrip("/")
             url = "{}/v1beta/{}?key={}".format(api_base, file_id, api_key)
 
@@ -255,21 +252,12 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             return OpenAIFileObject(
                 id=response_json.get("uri", ""),
                 bytes=int(response_json.get("sizeBytes", 0)),
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_json["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
+                created_at=_parse_gemini_create_time(response_json.get("createTime", "")),
                 filename=response_json.get("displayName", ""),
                 object="file",
                 purpose="user_data",
                 status=status,
-                status_details=str(response_json.get("error", ""))
-                if gemini_state == "FAILED"
-                else None,
+                status_details=str(response_json.get("error", "")) if gemini_state == "FAILED" else None,
             )
         except Exception as e:
             verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")
@@ -354,9 +342,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file listing"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_list_files_response(
         self,
@@ -364,9 +350,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> List[OpenAIFileObject]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file listing"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_file_content_request(
         self,
@@ -374,9 +358,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file content retrieval"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
 
     def transform_file_content_response(
         self,
@@ -384,6 +366,4 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file content retrieval"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
