@@ -39,6 +39,7 @@ Enter the plugin information:
 - **Name**: Plugin identifier (kebab-case, e.g., `my-plugin`)
 - **Source Type**: Choose GitHub, Git URL, or Git Subdir
 - **Repository/URL**: The git source (e.g., `org/repo` for GitHub)
+- **Path**: Subdirectory path (required only for Git Subdir source)
 - **Version**: Semantic version (optional)
 - **Description**: What the plugin does
 - **Category**: Plugin category for organization

@@ -875,24 +875,32 @@ When enabled, Gemini can execute Google Search server-side, use those results to
 ```python
 from litellm import completion
 
-response = completion(
-    model="gemini/gemini-3-flash-preview",
-    messages=[{"role": "user", "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting."}],
-    tools=[
-        {"type": "web_search_preview"},  # Google Search (server-side)
-        {
-            "type": "function",
-            "function": {
-                "name": "schedule_meeting",
-                "description": "Schedule a meeting",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"reason": {"type": "string"}},
-                    "required": ["reason"],
-                },
+messages = [
+    {
+        "role": "user",
+        "content": "What's the weather in Buenos Aires? If it's raining, schedule a meeting.",
+    }
+]
+tools = [
+    {"type": "web_search_preview"},  # Google Search (server-side)
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_meeting",
+            "description": "Schedule a meeting",
+            "parameters": {
+                "type": "object",
+                "properties": {"reason": {"type": "string"}},
+                "required": ["reason"],
             },
         },
-    ],
+    },
+]
+
+response = completion(
+    model="gemini/gemini-3-flash-preview",
+    messages=messages,
+    tools=tools,
     include_server_side_tool_invocations=True,
 )
 

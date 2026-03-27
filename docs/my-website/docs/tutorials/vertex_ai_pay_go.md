@@ -135,7 +135,7 @@ curl -X POST \
 
 ---
 
-## Troubleshooting 
+## Troubleshooting
 
 **Q: What does `403 Permission denied` or `IAM_PERMISSION_DENIED` mean?**  
 A: The service account or Application Default Credentials (ADC) user does not have the `roles/aiplatform.user` role. To resolve this, re-run the `gcloud projects add-iam-policy-binding`.

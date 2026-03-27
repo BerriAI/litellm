@@ -13,6 +13,62 @@ Use these as two separate guardrails in `config.yaml`:
 - `guardrail_name: "akto-validate"`
 - `guardrail_name: "akto-ingest"`
 
+### Migration Example
+
+**Before (Old `on_flagged` single entry):**
+```yaml
+guardrails:
+  - guardrail_name: "akto"
+    litellm_params:
+      guardrail: akto
+      mode: all
+      on_flagged: "block" # This is now removed
+      ...
+```
+
+**After (New split entries):**
+```yaml
+guardrails:
+  - guardrail_name: "akto-validate" # Handles pre_call blocking
+    litellm_params:
+      guardrail: akto
+      mode: pre_call
+      ...
+  - guardrail_name: "akto-ingest" # Handles post_call monitoring
+    litellm_params:
+      guardrail: akto
+      mode: post_call
+      ...
+```
+
+### Migration Example
+
+**Before (Old `on_flagged` single entry):**
+```yaml
+guardrails:
+  - guardrail_name: "akto"
+    litellm_params:
+      guardrail: akto
+      mode: all
+      on_flagged: "block" # This is now removed
+      ...
+```
+
+**After (New split entries):**
+```yaml
+guardrails:
+  - guardrail_name: "akto-validate" # Handles pre_call blocking
+    litellm_params:
+      guardrail: akto
+      mode: pre_call
+      ...
+  - guardrail_name: "akto-ingest" # Handles post_call monitoring
+    litellm_params:
+      guardrail: akto
+      mode: post_call
+      ...
+```
+
 ## 1. Get Your Akto Credentials
 
 Set up the Akto Guardrail API Service and grab:
@@ -132,8 +188,18 @@ When blocked in `pre_call`, LiteLLM sends one fire-and-forget ingest payload wit
 
 ## 7. Error Handling
 
+**`pre_call` (`akto-validate`) Error Handling:**
+
 | Scenario | `fail_closed` (default) | `fail_open` |
 |----------|------------------------|-------------|
 | Akto unreachable | ❌ Blocked (503) | ✅ Passes through |
 | Akto returns error | ❌ Blocked (503) | ✅ Passes through |
 | Guardrail says no | ❌ Blocked (403) | ❌ Blocked (403) |
+
+**`post_call` (`akto-ingest`) Error Handling:**
+`post_call` acts as a fire-and-forget monitoring step. Even if Akto is unreachable or returns an error, the original request will not be blocked.
+
+| Scenario | Behavior |
+|----------|----------|
+| Akto unreachable | ✅ Passes through (Monitoring only) |
+| Akto returns error | ✅ Passes through (Monitoring only) |
