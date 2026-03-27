@@ -1,7 +1,6 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
-import asyncio
 import base64
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
@@ -74,6 +73,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self.internal_usage_cache = internal_usage_cache
         self.prisma_client = prisma_client
 
+    @staticmethod
+    def _get_prometheus_logger():
+        """Find PrometheusLogger from litellm.callbacks, if registered."""
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        return PrometheusLogger.get_instance()
+
     async def store_unified_file_id(
         self,
         file_id: str,
@@ -118,7 +124,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 db_data["storage_backend"] = hidden_params["storage_backend"]
             if "storage_url" in hidden_params:
                 db_data["storage_url"] = hidden_params["storage_url"]
-            
+
             verbose_logger.debug(
                 f"Storage metadata: storage_backend={db_data.get('storage_backend')}, "
                 f"storage_url={db_data.get('storage_url')}"
@@ -278,28 +284,28 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             raise Exception(
                 "Filtering by 'target_model_names' is not supported when using managed batches."
             )
-        
+
         where_clause: Dict[str, Any] = {"file_purpose": "batch"}
-        
+
         # Filter by user who created the batch
         if user_api_key_dict.user_id:
             where_clause["created_by"] = user_api_key_dict.user_id
-        
+
         if after:
             where_clause["id"] = {"gt": after}
-        
+
         # Fetch more than needed to allow for post-fetch filtering
         fetch_limit = limit or 20
         if target_model_names:
             # Fetch extra to account for filtering
             fetch_limit = max(fetch_limit * 3, 100)
-        
+
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where=where_clause,
             take=fetch_limit,
             order={"created_at": "desc"},
         )
-                
+
         batch_objects: List[LiteLLMBatch] = []
         for batch in batches:
             try:
@@ -307,7 +313,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if len(batch_objects) >= (limit or 20):
                     break
 
-                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
+                batch_data = (
+                    json.loads(batch.file_object)
+                    if isinstance(batch.file_object, str)
+                    else batch.file_object
+                )
                 batch_obj = LiteLLMBatch(**batch_data)
                 batch_obj.id = batch.unified_object_id
                 batch_objects.append(batch_obj)
@@ -317,7 +327,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     f"Failed to parse batch object {batch.unified_object_id}: {e}"
                 )
                 continue
-        
+
         return {
             "object": "list",
             "data": batch_objects,
@@ -370,11 +380,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Check if the user has access to a list of file IDs.
         Only checks managed (unified) file IDs.
-        
+
         Args:
             file_ids: List of file IDs to check access for
             user_api_key_dict: User API key authentication details
-            
+
         Raises:
             HTTPException: If user doesn't have access to any of the files
         """
@@ -412,10 +422,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         ### HANDLE TRANSFORMATIONS ###
         # Check both completion and acompletion call types
         is_completion_call = (
-            call_type == CallTypes.completion.value 
+            call_type == CallTypes.completion.value
             or call_type == CallTypes.acompletion.value
         )
-        
+
         if is_completion_call:
             messages = data.get("messages")
             model = data.get("model", "")
@@ -424,22 +434,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if file_ids:
                     # Check user has access to all managed files
                     await self.check_file_ids_access(file_ids, user_api_key_dict)
-                    
+
                     # Check if any files are stored in storage backends and need base64 conversion
                     # This is needed for Vertex AI/Gemini which requires base64 content
-                    is_vertex_ai = model and ("vertex_ai" in model or "gemini" in model.lower())
+                    is_vertex_ai = model and (
+                        "vertex_ai" in model or "gemini" in model.lower()
+                    )
                     if is_vertex_ai:
                         await self._convert_storage_files_to_base64(
                             messages=messages,
                             file_ids=file_ids,
                             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                         )
-                    
+
                     model_file_id_mapping = await self.get_model_file_id_mapping(
                         file_ids, user_api_key_dict.parent_otel_span
                     )
                     data["model_file_id_mapping"] = model_file_id_mapping
-        elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
+        elif (
+            call_type == CallTypes.aresponses.value
+            or call_type == CallTypes.responses.value
+        ):
             # Handle managed files in responses API input and tools
             file_ids = []
 
@@ -604,7 +619,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if model_id is None:
                 model_id = cast(
                     Optional[str],
-                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+                    kwargs.get("litellm_metadata", {})
+                    .get("model_info", {})
+                    .get("id", None),
                 )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
@@ -641,7 +658,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[str]:
         """
         Gets file ids from responses API input.
-        
+
         The input can be:
         - A string (no files)
         - A list of input items, where each item can have:
@@ -649,32 +666,35 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
           - content: a list that can contain items with type: "input_file" and file_id
         """
         file_ids: List[str] = []
-        
+
         if isinstance(input, str):
             return file_ids
-        
+
         if not isinstance(input, list):
             return file_ids
-        
+
         for item in input:
             if not isinstance(item, dict):
                 continue
-            
+
             # Check for direct input_file type
             if item.get("type") == "input_file":
                 file_id = item.get("file_id")
                 if file_id:
                     file_ids.append(file_id)
-            
+
             # Check for input_file in content array
             content = item.get("content")
             if isinstance(content, list):
                 for content_item in content:
-                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "input_file"
+                    ):
                         file_id = content_item.get("file_id")
                         if file_id:
                             file_ids.append(file_id)
-        
+
         return file_ids
 
     def get_file_ids_from_responses_tools(
@@ -682,7 +702,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[str]:
         """
         Gets file ids from responses API tools parameter.
-        
+
         The tools can contain code_interpreter with container.file_ids:
         [
             {
@@ -692,14 +712,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         ]
         """
         file_ids: List[str] = []
-        
+
         if not isinstance(tools, list):
             return file_ids
-        
+
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            
+
             # Check for code_interpreter with container file_ids
             if tool.get("type") == "code_interpreter":
                 container = tool.get("container")
@@ -709,7 +729,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         for file_id in container_file_ids:
                             if isinstance(file_id, str):
                                 file_ids.append(file_id)
-        
+
         return file_ids
 
     def get_vector_store_ids_from_file_search_tools(
@@ -905,6 +925,38 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_mappings=model_mappings,
             user_api_key_dict=user_api_key_dict,
         )
+
+        # Emit Prometheus metrics for managed file creation
+        prom_logger = self._get_prometheus_logger()
+        if prom_logger:
+            first_model = (
+                target_model_names_list[0] if target_model_names_list else None
+            )
+            first_provider = ""
+            if responses:
+                first_provider = (
+                    getattr(responses[0], "_hidden_params", {}).get(
+                        "custom_llm_provider"
+                    )
+                    or ""
+                )
+            prom_logger.record_managed_file_created(
+                model=first_model or "",
+                api_provider=first_provider,
+                user=user_api_key_dict.user_id or "",
+                user_email=getattr(user_api_key_dict, "user_email", None) or "",
+                api_key_alias=user_api_key_dict.key_alias or "",
+            )
+            if response.bytes and response.bytes > 0:
+                prom_logger.record_managed_file_size(
+                    size_bytes=response.bytes,
+                    purpose=response.purpose or "batch",
+                    file_type="input",
+                    model=first_model,
+                    api_provider=first_provider,
+                    user=user_api_key_dict.user_id,
+                )
+
         return response
 
     @staticmethod
@@ -995,7 +1047,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
         return file_id.split("llm_output_file_id,")[1].split(";")[0]
 
-    async def async_post_call_success_hook(
+    async def async_post_call_success_hook(  # noqa: PLR0915
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
         if isinstance(response, LiteLLMBatch):
@@ -1007,7 +1059,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_batch_id"
             )  # managed batch id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(
+                Optional[str], response._hidden_params.get("litellm_model_name")
+            )
             resolved_model_name = model_name
 
             # Some providers (e.g. Vertex batch retrieve) do not set model_name on
@@ -1041,16 +1095,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_name=resolved_model_name,
                         )
                         setattr(response, file_attr, unified_file_id)
-                        
+
                         # Use llm_router credentials when available. Without credentials,
                         # Azure and other auth-required providers return 500/401.
                         file_object = None
                         try:
                             # Import module and use getattr for better testability with mocks
                             import litellm.proxy.proxy_server as proxy_server_module
-                            _llm_router = getattr(proxy_server_module, 'llm_router', None)
+
+                            _llm_router = getattr(
+                                proxy_server_module, "llm_router", None
+                            )
                             if _llm_router is not None and model_id:
-                                _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                                _creds = (
+                                    _llm_router.get_deployment_credentials_with_provider(
+                                        model_id
+                                    )
+                                    or {}
+                                )
                                 file_object = await litellm.afile_retrieve(
                                     file_id=original_file_id,
                                     **_creds,
@@ -1067,7 +1129,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             verbose_logger.warning(
                                 f"Failed to retrieve file object for {file_attr}={original_file_id}: {str(e)}. Storing with None and will fetch on-demand."
                             )
-                        
+
                         await self.store_unified_file_id(
                             file_id=unified_file_id,
                             file_object=file_object,
@@ -1083,6 +1145,32 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
             )
+
+            # Record batch creation metric only on actual create (not retrieve/cancel).
+            # unified_file_id in _hidden_params is only set by the create_batch endpoint.
+            original_unified_file_id = response._hidden_params.get("unified_file_id")
+            if original_unified_file_id:
+                prom_logger = self._get_prometheus_logger()
+                if prom_logger:
+                    batch_provider = ""
+                    if model_name:
+                        try:
+                            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                                get_llm_provider,
+                            )
+
+                            _, batch_provider, _, _ = get_llm_provider(model=model_name)
+                        except Exception:
+                            if "/" in model_name:
+                                batch_provider = model_name.split("/")[0]
+                    prom_logger.record_managed_batch_created(
+                        model=model_name or "",
+                        api_provider=batch_provider,
+                        user=user_api_key_dict.user_id or "",
+                        user_email=getattr(user_api_key_dict, "user_email", None) or "",
+                        api_key_alias=user_api_key_dict.key_alias or "",
+                    )
+
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get(
@@ -1092,7 +1180,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "unified_finetuning_job_id"
             )  # managed finetuning job id
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            model_name = cast(
+                Optional[str], response._hidden_params.get("litellm_model_name")
+            )
             original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(
@@ -1142,7 +1232,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # Case 1 : This is not a managed file
         if not stored_file_object:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
-        
+
         # Case 2: Managed file and the file object exists in the database
         # The stored file_object has the raw provider ID. Replace with the unified ID
         # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
@@ -1160,13 +1250,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
 
         try:
-            model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id) or {}
-            response = await litellm.afile_retrieve(file_id=model_file_id, **credentials)
+            model_id, model_file_id = next(
+                iter(stored_file_object.model_mappings.items())
+            )
+            credentials = (
+                llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            )
+            response = await litellm.afile_retrieve(
+                file_id=model_file_id, **credentials
+            )
             response.id = file_id  # Replace with unified ID
             return response
         except Exception as e:
-            raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
+            raise Exception(
+                f"Failed to retrieve file {file_id} from provider: {str(e)}"
+            ) from e
 
     async def afile_list(
         self,
@@ -1188,19 +1286,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             import litellm.proxy.proxy_server as proxy_server_module
 
             # Check if the scheduler has the batch cost checking job registered
-            scheduler = getattr(proxy_server_module, 'scheduler', None)
+            scheduler = getattr(proxy_server_module, "scheduler", None)
             if scheduler is None:
                 return False
-            
+
             # Check if the check_batch_cost_job exists in the scheduler
             try:
-                job = scheduler.get_job('check_batch_cost_job')
+                job = scheduler.get_job("check_batch_cost_job")
                 if job is not None:
                     return True
             except Exception:
                 # Job not found or scheduler doesn't support get_job
                 pass
-            
+
             return False
         except Exception as e:
             verbose_logger.warning(
@@ -1208,28 +1306,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
             return False
 
-    async def _get_batches_referencing_file(
-        self, file_id: str
-    ) -> List[Dict[str, Any]]:
+    async def _get_batches_referencing_file(self, file_id: str) -> List[Dict[str, Any]]:
         """
         Find batches that reference this file and still need cost tracking.
         Find batches that are in non-terminal state and have not yet been processed by CheckBatchCost.
         Args:
             file_id: The unified file ID to check
-            
+
         Returns:
             List of batch objects referencing this file in non-terminal state
             (max 10 for error message display)
         """
         # Prepare list of file IDs to check (both unified and provider IDs)
         file_ids_to_check = [file_id]
-        
+
         # Get model-specific file IDs for this unified file ID if it's a managed file
         try:
             model_file_id_mapping = await self.get_model_file_id_mapping(
                 [file_id], litellm_parent_otel_span=None
             )
-            
+
             if model_file_id_mapping and file_id in model_file_id_mapping:
                 # Add all provider file IDs for this unified file
                 provider_file_ids = list(model_file_id_mapping[file_id].values())
@@ -1239,59 +1335,67 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"Could not get model file ID mapping for {file_id}: {e}. "
                 f"Will only check unified file ID."
             )
-        MAX_MATCHES_TO_RETURN = 10 
-        
+        MAX_MATCHES_TO_RETURN = 10
+
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
-                "status": {"not_in": ["failed", "expired", "cancelled"]}
+                "status": {"not_in": ["failed", "expired", "cancelled"]},
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
         )
-        
+
         referencing_batches = []
         for batch in batches:
             try:
                 # Parse the batch file_object to check for file references
-                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
-                
+                batch_data = (
+                    json.loads(batch.file_object)
+                    if isinstance(batch.file_object, str)
+                    else batch.file_object
+                )
+
                 # Extract file IDs from batch
                 # Batches typically reference the unified file ID in input_file_id
                 # Output and error files are generated by the provider
                 input_file_id = batch_data.get("input_file_id")
                 output_file_id = batch_data.get("output_file_id")
                 error_file_id = batch_data.get("error_file_id")
-                
-                referenced_file_ids = [fid for fid in [input_file_id, output_file_id, error_file_id] if fid]
-                
+
+                referenced_file_ids = [
+                    fid for fid in [input_file_id, output_file_id, error_file_id] if fid
+                ]
+
                 # Check if any referenced file ID matches the file we're trying to delete
                 if any(ref_id in file_ids_to_check for ref_id in referenced_file_ids):
-                    referencing_batches.append({
-                        "batch_id": batch.unified_object_id,
-                        "status": batch.status,
-                        "created_at": batch.created_at,
-                    })
+                    referencing_batches.append(
+                        {
+                            "batch_id": batch.unified_object_id,
+                            "status": batch.status,
+                            "created_at": batch.created_at,
+                        }
+                    )
             except Exception as e:
                 verbose_logger.warning(
                     f"Error parsing batch object {batch.unified_object_id}: {e}"
                 )
                 continue
-        
+
         return referencing_batches
 
     async def _check_file_deletion_allowed(self, file_id: str) -> None:
         """
         Check if file deletion should be blocked due to batch references.
-        
+
         Blocks deletion if:
         1. File is referenced by any batch in non-terminal state, AND
         2. Batch polling is configured (user wants cost tracking)
-        
+
         Args:
             file_id: The unified file ID to check
-            
+
         Raises:
             HTTPException: If file deletion should be blocked
         """
@@ -1299,39 +1403,50 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if not self._is_batch_polling_enabled():
             # Batch polling not configured, allow deletion
             return
-        
+
         # Check if file is referenced by any non-terminal batches
         referencing_batches = await self._get_batches_referencing_file(file_id)
-        
+
         if referencing_batches:
             # File is referenced by non-terminal batches and polling is enabled
-            MAX_BATCHES_IN_ERROR = 5  # Limit batches shown in error message for readability
-            
+            MAX_BATCHES_IN_ERROR = (
+                5  # Limit batches shown in error message for readability
+            )
+
             # Show up to MAX_BATCHES_IN_ERROR in the error message
             batches_to_show = referencing_batches[:MAX_BATCHES_IN_ERROR]
-            batch_statuses = [f"{b['batch_id']}: {b['status']}" for b in batches_to_show]
-            
+            batch_statuses = [
+                f"{b['batch_id']}: {b['status']}" for b in batches_to_show
+            ]
+
             # Determine the count message
             count_message = f"{len(referencing_batches)}"
-            if len(referencing_batches) >= 10:  # MAX_MATCHES_TO_RETURN from _get_batches_referencing_file
+            if (
+                len(referencing_batches) >= 10
+            ):  # MAX_MATCHES_TO_RETURN from _get_batches_referencing_file
                 count_message = "10+"
-            
+
             error_message = (
                 f"Cannot delete file {file_id}. "
                 f"The file is referenced by {count_message} batch(es) in non-terminal state"
             )
-            
+
             # Add specific batch details if not too many
             if len(referencing_batches) <= MAX_BATCHES_IN_ERROR:
                 error_message += f": {', '.join(batch_statuses)}. "
             else:
                 error_message += f" (showing {MAX_BATCHES_IN_ERROR} most recent): {', '.join(batch_statuses)}. "
-            
+
             error_message += (
-                f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
+                "To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
+                "Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
-            
+
+            # Record blocked deletion metric
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                prom_logger.record_managed_file_deleted(result="blocked")
+
             raise HTTPException(
                 status_code=400,
                 detail=error_message,
@@ -1344,7 +1459,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-
         # Check if file deletion should be blocked due to batch references
         await self._check_file_deletion_allowed(file_id)
 
@@ -1357,13 +1471,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
             # Remove conflicting keys from data to avoid duplicate keyword arguments
-            filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
+            filtered_data = {
+                k: v for k, v in data.items() if k not in ("model", "file_id")
+            }
             for model_id, model_file_id in specific_model_file_id_mapping.items():
                 delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
         )
+
+        # Record successful deletion metric only on actual success
+        if stored_file_object or delete_response:
+            prom_logger = self._get_prometheus_logger()
+            if prom_logger:
+                prom_logger.record_managed_file_deleted(result="success")
 
         if stored_file_object:
             return stored_file_object
@@ -1412,7 +1534,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         """
         Convert files stored in storage backends to base64 format for Vertex AI/Gemini.
-        
+
         This method checks if any managed files are stored in storage backends,
         downloads them, and converts them to base64 format in the messages.
         """
@@ -1420,29 +1542,29 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for file_id in file_ids:
             # Check if this is a base64 encoded unified file ID
             decoded_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-            
+
             if not decoded_unified_file_id:
                 continue
-            
+
             # Check database for storage backend info
             # IMPORTANT: The database stores the base64 encoded unified_file_id (not the decoded version)
             # So we query with the original file_id (which is base64 encoded)
             db_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
                 where={"unified_file_id": file_id}
             )
-            
+
             if not db_file or not db_file.storage_backend or not db_file.storage_url:
                 continue
-            
+
             # File is stored in a storage backend, download and convert to base64
             try:
                 from litellm.llms.base_llm.files.storage_backend_factory import (
                     get_storage_backend,
                 )
-                
+
                 storage_backend_name = db_file.storage_backend
                 storage_url = db_file.storage_url
-                
+
                 # Get storage backend (uses same env vars as callback)
                 try:
                     storage_backend = get_storage_backend(storage_backend_name)
@@ -1451,18 +1573,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         f"Storage backend '{storage_backend_name}' error for file {file_id}: {str(e)}"
                     )
                     continue
-                
+
                 file_content = await storage_backend.download_file(storage_url)
-                
+
                 # Determine content type from file object
-                content_type = self._get_content_type_from_file_object(db_file.file_object)
-                
+                content_type = self._get_content_type_from_file_object(
+                    db_file.file_object
+                )
+
                 # Convert to base64
                 base64_data = base64.b64encode(file_content).decode("utf-8")
                 base64_data_uri = f"data:{content_type};base64,{base64_data}"
-                
+
                 # Update messages to use base64 instead of file_id
-                self._update_messages_with_base64_data(messages, file_id, base64_data_uri, content_type)
+                self._update_messages_with_base64_data(
+                    messages, file_id, base64_data_uri, content_type
+                )
             except Exception as e:
                 verbose_logger.exception(
                     f"Error converting file {file_id} from storage backend to base64: {str(e)}"
@@ -1473,21 +1599,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
         """
         Determine content type from file object.
-        
+
         Uses the MIME type utility for consistent detection and normalization.
-        
+
         Args:
             file_object: The file object from the database (can be dict, JSON string, or None)
-        
+
         Returns:
             str: MIME type (defaults to "application/octet-stream" if cannot be determined)
         """
         # Use utility function for detection
         content_type = get_content_type_from_file_object(file_object)
-        
+
         # Normalize for Gemini/Vertex AI (requires image/jpeg, not image/jpg)
         content_type = normalize_mime_type_for_provider(content_type, provider="gemini")
-        
+
         return content_type
 
     def _update_messages_with_base64_data(
@@ -1499,7 +1625,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         """
         Update messages to replace file_id with base64 data URI.
-        
+
         Args:
             messages: List of messages to update
             file_id: The file ID to replace
@@ -1514,7 +1640,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         if element.get("type") == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_element_file = file_element.get("file", {})
-                            
+
                             if file_element_file.get("file_id") == file_id:
                                 # Replace file_id with base64 data
                                 file_element_file["file_data"] = base64_data_uri
@@ -1522,7 +1648,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_element_file["format"] = content_type
                                 # Remove file_id to ensure only file_data is used
                                 file_element_file.pop("file_id", None)
-                                
+
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
