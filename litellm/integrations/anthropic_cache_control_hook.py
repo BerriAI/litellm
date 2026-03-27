@@ -63,6 +63,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Separate message-level and non-message-level injection points
         remaining_points = []
         for point in injection_points:
+            if not isinstance(point, dict):
+                verbose_logger.warning(
+                    f"AnthropicCacheControlHook: invalid cache_control_injection_points entry type={type(point).__name__}. Skipping."
+                )
+                continue
             if point.get("location") == "message":
                 point = cast(CacheControlMessageInjectionPoint, point)
                 processed_messages = self._process_message_injection(

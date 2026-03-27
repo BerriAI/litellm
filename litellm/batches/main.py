@@ -1049,7 +1049,7 @@ def cancel_batch(
                 litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
-            api_base = optional_params.api_base or None
+            api_base = optional_params.api_base or ""
             vertex_ai_project = (
                 optional_params.vertex_project
                 or litellm.vertex_project
