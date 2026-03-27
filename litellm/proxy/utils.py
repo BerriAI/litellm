@@ -2638,7 +2638,7 @@ class PrismaClient:
             Original exception if not a cached plan error
         """
         try:
-            return await self.db.query_first(query=sql_query, *params)
+            return await self.db.query_first(sql_query, *params)
         except Exception as e:
             error_str = str(e)
             if "cached plan must not change result type" in error_str:
@@ -2653,7 +2653,7 @@ class PrismaClient:
                     "retrying with fresh plan. This may occur during rolling deployments "
                     "when schema changes are applied."
                 )
-                return await self.db.query_first(query=sql_query_retry, *params)
+                return await self.db.query_first(sql_query_retry, *params)
             else:
                 raise
 
