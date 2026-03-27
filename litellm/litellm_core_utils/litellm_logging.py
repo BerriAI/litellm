@@ -1723,9 +1723,6 @@ class Logging(LiteLLMLoggingBaseClass):
             md["hidden_params"] = existing or incoming
             return
         md["hidden_params"] = {**existing, **incoming}
-        self.model_call_details["litellm_params"]["metadata"][
-            "hidden_params"
-        ] = getattr(logging_result, "_hidden_params", {})
 
     def _process_hidden_params_and_response_cost(
         self,
