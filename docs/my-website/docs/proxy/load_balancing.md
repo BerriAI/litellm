@@ -324,17 +324,43 @@ model_list:
     litellm_params:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      order: 2  # 👈 Used when order=1 is unavailable
-
-router_settings:
-  enable_pre_call_checks: true  # 👈 Required for 'order' to work
+      order: 2  # 👈 Used when order=1 fails
 ```
 
-:::important
-The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
-:::
+### How order-based fallback works
 
-If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
+When a request to an `order=1` deployment fails (connection error, 404, 429, etc.), the router automatically tries `order=2` deployments, then `order=3`, and so on. Each order level gets its own set of retries before escalating to the next.
+
+If all order levels are exhausted, the router falls through to any configured [model-level fallbacks](#fallbacks).
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-secondary
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2
+
+  - model_name: gpt-4-fallback
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  fallbacks:
+    - gpt-4:
+        - gpt-4-fallback  # tried after all order levels fail
+```
+
+The fallback chain for the above config: `order=1` → `order=2` → `gpt-4-fallback`.
+
+For 429 (rate limit) errors specifically, the failed deployment is immediately placed on cooldown. If all `order=1` deployments are on cooldown, the router picks `order=2` deployments directly during retries without waiting for the fallback path.
 
 ### Team-scoped models and legacy `model_aliases` {#team-scoped-models-and-legacy-model_aliases}
 

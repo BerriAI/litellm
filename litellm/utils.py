@@ -4866,7 +4866,21 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
+def _get_order_filtered_deployments(
+    healthy_deployments: List[Dict], target_order: Optional[int] = None
+) -> List:
+    if target_order is not None:
+        filtered = [
+            d
+            for d in healthy_deployments
+            if d["litellm_params"].get("order") == target_order
+        ]
+        if filtered:
+            return filtered
+        # target_order doesn't match any deployment (e.g., external fallback model) — return all
+        return healthy_deployments
+
+    # Default: pick min order group
     min_order = min(
         (
             deployment["litellm_params"]["order"]
