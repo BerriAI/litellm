@@ -33,6 +33,20 @@ def get_response_hidden_params(response: Any) -> Union[HiddenParams, dict]:
     return {}
 
 
+def hidden_params_to_plain_dict(hp: Any) -> dict:
+    """
+    Normalize ``get_response_hidden_params`` output (``dict`` or ``HiddenParams``) to a
+    plain ``dict`` for merging into ``metadata['hidden_params']``.
+    """
+    if not hp:
+        return {}
+    if isinstance(hp, dict):
+        return dict(hp)
+    if hasattr(hp, "model_dump"):
+        return hp.model_dump(exclude_none=True)
+    return {}
+
+
 def strip_litellm_internal_keys_from_dict_response(response: Any) -> None:
     """Remove internal keys from dict API responses before JSON serialization."""
     if isinstance(response, dict):

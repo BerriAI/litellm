@@ -2333,6 +2333,43 @@ def test_merge_hidden_params_from_response_preserves_proxy_injected_timing():
     assert hp["model_id"] == "mid-2"
 
 
+def test_merge_hidden_params_from_response_preserves_proxy_injected_timing_with_hidden_params_model():
+    """Assembled streaming response may use HiddenParams object; merge must not drop fields."""
+    from litellm.types.llms.base import HiddenParams
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-hp-model",
+        function_id="merge-hp-hp-model-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "hidden_params": {
+                    "litellm_overhead_time_ms": 273.329,
+                    "_response_ms": 1590.0,
+                }
+            }
+        },
+    }
+
+    class _Assembled:
+        _hidden_params = HiddenParams(response_cost=0.001, model_id="mid-2")
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Assembled())
+    hp = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    assert hp["litellm_overhead_time_ms"] == 273.329
+    assert hp["_response_ms"] == 1590.0
+    assert hp["response_cost"] == 0.001
+    assert hp["model_id"] == "mid-2"
+
+
 def test_get_standard_logging_payload_includes_metadata_hidden_params_overhead():
     """Spend logs read overhead from standard_logging_object.hidden_params; merge metadata.hidden_params."""
     from datetime import datetime

@@ -36,10 +36,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    merge_hidden_params_with_logging_timings,
-    strip_litellm_internal_keys_from_dict_response,
-)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -1042,6 +1038,10 @@ class ProxyBaseLLMRequestProcessing:
 
         _exception_raised = False
         try:
+            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+                merge_hidden_params_with_logging_timings,
+            )
+
             # Async generators (e.g. Anthropic /v1/messages SSE) have no _hidden_params;
             # merge timing from logging_obj.model_call_details (llm_api_duration_ms, etc.).
             hidden_params = merge_hidden_params_with_logging_timings(
@@ -1286,6 +1286,11 @@ class ProxyBaseLLMRequestProcessing:
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
+
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            merge_hidden_params_with_logging_timings,
+            strip_litellm_internal_keys_from_dict_response,
+        )
 
         # Re-merge after post_call_success_hook so dict / CSW hidden_params + logging timings align.
         hidden_params = merge_hidden_params_with_logging_timings(

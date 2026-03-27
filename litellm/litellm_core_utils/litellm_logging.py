@@ -60,9 +60,6 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    get_response_hidden_params,
-)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -1705,7 +1702,17 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if logging_result is None:
             return
-        incoming = get_response_hidden_params(logging_result)
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            get_response_hidden_params,
+            hidden_params_to_plain_dict,
+        )
+
+        incoming_raw = get_response_hidden_params(logging_result)
+        incoming = hidden_params_to_plain_dict(incoming_raw)
+        if not incoming:
+            return
+        # Do not let explicit None values from model_dump wipe proxy-injected timing keys.
+        incoming = {k: v for k, v in incoming.items() if v is not None}
         if not incoming:
             return
         if self.model_call_details.get("litellm_params") is None:
@@ -1719,9 +1726,6 @@ class Logging(LiteLLMLoggingBaseClass):
         existing = md.get("hidden_params")
         if not isinstance(existing, dict):
             existing = {}
-        if not isinstance(incoming, dict):
-            md["hidden_params"] = existing or incoming
-            return
         md["hidden_params"] = {**existing, **incoming}
 
     def _process_hidden_params_and_response_cost(
@@ -1730,18 +1734,20 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
-        hidden_params = get_response_hidden_params(logging_result)
-        if hidden_params:
-            if self.model_call_details.get("litellm_params") is not None:
-                self.model_call_details["litellm_params"].setdefault("metadata", {})
-                if self.model_call_details["litellm_params"]["metadata"] is None:
-                    self.model_call_details["litellm_params"]["metadata"] = {}
-                self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = get_response_hidden_params(logging_result)  # type: ignore
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            get_response_hidden_params,
+            hidden_params_to_plain_dict,
+        )
+
+        hp_raw = get_response_hidden_params(logging_result)
+        if hp_raw:
+            self._merge_hidden_params_from_response_into_metadata(logging_result)
+        hp_dict = hidden_params_to_plain_dict(hp_raw) if hp_raw else {}
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-        elif "response_cost" in hidden_params:
-            self.model_call_details["response_cost"] = hidden_params["response_cost"]
+        elif "response_cost" in hp_dict:
+            self.model_call_details["response_cost"] = hp_dict["response_cost"]
         elif self.model_call_details.get("response_cost") is not None:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly)
@@ -5316,6 +5322,10 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            get_response_hidden_params,
+        )
+
         hp = get_response_hidden_params(init_response_obj)
         if hp:
             hidden_params = (
