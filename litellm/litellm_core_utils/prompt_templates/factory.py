@@ -4731,9 +4731,11 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
             return char
         return "_"
 
-    # If the string is empty, return a default valid identifier
+    # If the string is empty, return a default valid identifier.
+    # Bedrock requires toolSpec.name to be non-empty and match [a-zA-Z][a-zA-Z0-9_]*
+    # (see https://github.com/BerriAI/litellm/issues/24668)
     if input_tool_name is None or len(input_tool_name) == 0:
-        return input_tool_name
+        return "tool" 
     bedrock_tool_name = copy.copy(input_tool_name)
     # If it doesn't start with a letter, prepend 'a'
     if not bedrock_tool_name[0].isalpha():
