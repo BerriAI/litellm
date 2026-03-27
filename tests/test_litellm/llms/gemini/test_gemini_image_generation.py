@@ -1,5 +1,4 @@
 import pytest
-import litellm
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 
 def test_gemini_flash_image_generation_extra_body():
