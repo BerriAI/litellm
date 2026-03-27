@@ -19,6 +19,35 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+
+class TestOpenRouterTransformRequest:
+    """OpenrouterConfig.transform_request must strip doubled openrouter/ prefix."""
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            # Non-native: prefix must be stripped
+            ("openrouter/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            ("openrouter/meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            # Native: prefix must be preserved
+            ("openrouter/auto", "openrouter/auto"),
+            ("openrouter/free", "openrouter/free"),
+            # No prefix: unchanged
+            ("anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+        ],
+    )
+    def test_transform_request_strips_non_native_prefix(self, input_model, expected_model):
+        config = OpenrouterConfig()
+        result = config.transform_request(
+            model=input_model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["model"] == expected_model
 
 
 class TestOpenRouterNativeModelRouting:
@@ -86,5 +115,38 @@ class TestOpenRouterNativeModelRouting:
     def test_regular_models_still_strip_normally(self, input_model, expected_model):
         """Non-native OpenRouter models should still have their prefix stripped."""
         result_model, provider, _, _ = litellm.get_llm_provider(model=input_model)
+        assert provider == "openrouter"
+        assert result_model == expected_model
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            ("anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+            ("anthropic/claude-3-haiku", "anthropic/claude-3-haiku"),
+            ("meta-llama/llama-3-70b-instruct", "meta-llama/llama-3-70b-instruct"),
+            # Pre-prefixed model passed with explicit custom_llm_provider
+            ("openrouter/anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5"),
+        ],
+    )
+    def test_bridge_strips_prefix_for_non_native_models(
+        self, input_model, expected_model
+    ):
+        """Simulates the /v1/messages adapter bridge path for non-native models.
+
+        When the anthropic_messages adapter resolves an OpenRouter model, it
+        calls get_llm_provider a second time with the already-resolved model
+        and custom_llm_provider="openrouter".  The prepend logic adds the
+        "openrouter/" prefix back, creating e.g.
+        "openrouter/anthropic/claude-sonnet-4.5".  This prefix MUST be
+        stripped before the early return, otherwise the OpenRouter API receives
+        an invalid model ID and returns 400.
+
+        This is the regression introduced by PR #20516 and reported in #16353.
+        """
+        # Second call in the bridge chain: model already stripped, provider known
+        result_model, provider, _, _ = litellm.get_llm_provider(
+            model=input_model,
+            custom_llm_provider="openrouter",
+        )
         assert provider == "openrouter"
         assert result_model == expected_model

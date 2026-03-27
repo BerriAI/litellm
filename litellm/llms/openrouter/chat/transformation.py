@@ -70,9 +70,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params[
-            "extra_body"
-        ] = extra_body  # openai client supports `extra_body` param
+        mapped_openai_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
         return mapped_openai_params
 
     def _supports_cache_control_in_content(self, model: str) -> bool:
@@ -159,6 +159,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        # OpenRouter expects model names like "anthropic/claude-sonnet-4.5",
+        # not "openrouter/anthropic/claude-sonnet-4.5". Strip the prefix
+        # that get_llm_provider() prepends when routing through the adapter.
+        if model.startswith("openrouter/"):
+            stripped = model[len("openrouter/") :]
+            if "/" in stripped:
+                # Non-native model (e.g. "anthropic/claude-...") — strip prefix.
+                # Native models (openrouter/auto, openrouter/free) have no "/"
+                # after the prefix and must be kept intact.
+                model = stripped
+
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 
