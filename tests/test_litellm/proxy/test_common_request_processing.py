@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -896,6 +896,33 @@ class TestCommonRequestProcessingHelpers:
         # Use json.dumps to match the formatting in create_streaming_response's exception handler
         import json
 
+        assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
+        assert content[1] == "data: [DONE]\n\n"
+
+    async def test_create_streaming_response_generator_raises_http_exception(
+        self,
+    ):
+        """
+        Test that when a generator raises HTTPException, the response preserves
+        the original status code instead of hardcoding 500.
+        """
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400, detail="Content blocked by guardrail"
+        )
+
+        response = await create_response(mock_gen, "text/event-stream", {})
+        assert response.status_code == 400
+        content = await self.consume_stream(response)
+        import json
+
+        expected_error_data = {
+            "error": {
+                "message": "Content blocked by guardrail",
+                "code": 400,
+            }
+        }
+        assert len(content) == 2
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
         assert content[1] == "data: [DONE]\n\n"
 
