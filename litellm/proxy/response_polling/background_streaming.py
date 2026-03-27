@@ -342,7 +342,7 @@ async def background_streaming_task(  # noqa: PLR0915
         # received (e.g. the stream errored before response.completed), treat
         # as failed rather than silently reporting success.
         if terminal_status is None and terminal_error is None:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 f"No terminal event received for {polling_id}; "
                 "marking as failed (stream may have ended prematurely)"
             )
