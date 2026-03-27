@@ -210,20 +210,20 @@ async def _perform_health_check(
         _model_id = (model.get("model_info") or {}).get("id")
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            endpoint_data = {**litellm_params, **is_healthy}
             if _model_id:
-                cleaned["model_id"] = _model_id
-            healthy_endpoints.append(cleaned)
+                endpoint_data["model_id"] = _model_id
+            healthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         elif isinstance(is_healthy, dict):
-            cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            endpoint_data = {**litellm_params, **is_healthy}
             if _model_id:
-                cleaned["model_id"] = _model_id
-            unhealthy_endpoints.append(cleaned)
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         else:
-            cleaned = _clean_endpoint_data(litellm_params, details)
+            endpoint_data = {**litellm_params}
             if _model_id:
-                cleaned["model_id"] = _model_id
-            unhealthy_endpoints.append(cleaned)
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
 
     return healthy_endpoints, unhealthy_endpoints
 
