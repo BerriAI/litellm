@@ -23,6 +23,8 @@ from typing import (
     cast,
 )
 
+from fastapi import HTTPException
+
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -229,6 +231,60 @@ end
 return results
 """
 
+# Lua script for atomic check-and-increment of max_parallel_requests
+# This does NOT use sliding window - it's a simple counter with TTL safety net
+MAX_PARALLEL_REQUESTS_SCRIPT = """
+local counter_key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl_seconds = tonumber(ARGV[2])
+
+-- Get current counter value
+local current = redis.call('GET', counter_key)
+local current_count = 0
+if current then
+    current_count = tonumber(current)
+end
+
+-- Check if over limit
+if current_count >= limit then
+    -- Always refresh TTL even when rate limited (counter stays alive)
+    redis.call('EXPIRE', counter_key, ttl_seconds)
+    -- Return: was_incremented (0), previous_count, current_count
+    return {0, current_count, current_count}
+else
+    -- Increment atomically
+    local new_count = redis.call('INCR', counter_key)
+    -- Always refresh TTL after increment (key now exists)
+    redis.call('EXPIRE', counter_key, ttl_seconds)
+    -- Return: was_incremented (1), previous_count, new_count
+    return {1, current_count, new_count}
+end
+"""
+
+# Lua script for atomic decrement of max_parallel_requests
+# This resets TTL to keep the counter alive for active keys
+MAX_PARALLEL_REQUESTS_DECREMENT_SCRIPT = """
+local counter_key = KEYS[1]
+local ttl_seconds = tonumber(ARGV[1])
+
+-- Get current counter value
+local current = redis.call('GET', counter_key)
+local current_count = 0
+if current then
+    current_count = tonumber(current)
+end
+
+-- Always decrement (even if counter is 0 or negative)
+local previous_count = current_count
+current_count = redis.call('DECR', counter_key)
+
+-- Always refresh TTL after decrement (key now exists)
+redis.call('EXPIRE', counter_key, ttl_seconds)
+
+-- Return: previous_count, current_count
+return {previous_count, current_count}
+"""
+
 # Redis cluster slot count
 REDIS_CLUSTER_SLOTS = 16384
 REDIS_NODE_HASHTAG_NAME = "all_keys"
@@ -323,12 +379,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.check_and_increment_by_n_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
             )
+            self.max_parallel_requests_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    MAX_PARALLEL_REQUESTS_SCRIPT
+                )
+            )
+            self.max_parallel_requests_decrement_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    MAX_PARALLEL_REQUESTS_DECREMENT_SCRIPT
+                )
+            )
         else:
+            self.max_parallel_requests_script = None
+            self.max_parallel_requests_decrement_script = None
             self.batch_rate_limiter_script = None
             self.token_increment_script = None
             self.check_and_increment_by_n_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+        # TTL for max_parallel_requests counter (5 minutes default)
+        # Separate from window_size since max_parallel_requests uses a simple counter, not sliding window
+        self.max_parallel_requests_ttl = int(
+            os.getenv("LITELLM_MAX_PARALLEL_REQUESTS_TTL", 300)  # 5 minutes default
+        )
 
         # When disabled, TPM is enforced post-call from actual usage (pre-v1.82
         # behavior) instead of reserving an estimated budget upfront, shedding
@@ -1986,27 +2059,91 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     llm_provider=llm_provider,
                 )
 
-    async def _decrement_max_parallel_requests(
+    async def _increment_max_parallel_requests(
         self,
         api_key: str,
+        max_parallel_requests: int,
         parent_otel_span: Optional[Span] = None,
-    ) -> None:
+    ) -> Tuple[int, int]:
         """
-        Decrement the max_parallel_requests counter in Redis.
-        Called when a request fails before reaching the LLM (e.g., rate limited by RPM/TPM).
-        """
-        from litellm.types.caching import RedisPipelineIncrementOperation
+        Atomically check and increment the max_parallel_requests counter.
+        Returns (previous_count, new_count), raises HTTPException if limit exceeded.
 
+        This uses a dedicated Lua script for atomic check-and-increment without window logic.
+        The counter is a simple value that gets incremented/decremented, with TTL as safety net.
+        """
         counter_key = self.create_rate_limit_keys(
             key="api_key",
             value=api_key,
             rate_limit_type="max_parallel_requests",
         )
+
+        # Use dedicated Lua script for atomic check-and-increment (no window logic)
+        if self.max_parallel_requests_script is not None:
+            try:
+                results = await self.max_parallel_requests_script(
+                    keys=[counter_key],
+                    args=[max_parallel_requests, self.max_parallel_requests_ttl],
+                )
+                # Results: [was_incremented, previous_count, current_count]
+                was_incremented = results[0]
+                previous_count = results[1]
+                current_count = results[2]
+
+                print(f"\n[RATE_LIMITER] max_parallel_requests incremented for {api_key}: previous={previous_count}, current={current_count}, limit={max_parallel_requests}\n", flush=True)
+
+                if was_incremented == 0:
+                    # Counter was NOT incremented - limit exceeded
+                    raise HTTPException(
+                        status_code=429,
+                        detail=(
+                            f"Rate limit exceeded for api_key. "
+                            f"Limit type: max_parallel_requests. "
+                            f"Current limit: {max_parallel_requests}, Current: {current_count}."
+                        ),
+                        headers={
+                            "rate_limit_type": "max_parallel_requests",
+                        },
+                    )
+                return (previous_count, current_count)
+            except HTTPException:
+                raise
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Max parallel requests Lua script failed, falling back: {str(e)}"
+                )
+
+        # Fallback: use cache operations (non-atomic, may have race conditions)
+        current_value = await self.internal_usage_cache.async_get_cache(
+            key=counter_key,
+            litellm_parent_otel_span=parent_otel_span,
+        )
+        current_count = int(current_value) if current_value is not None else 0
+
+        if current_count >= max_parallel_requests:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Rate limit exceeded for api_key. "
+                    f"Limit type: max_parallel_requests (concurrency limit). "
+                    f"Current limit: {max_parallel_requests}, Currently running concurrent requests: {current_count}. "
+                    f"Retry when other requests complete."
+                ),
+                headers={
+                    # Note: No retry-after header because max_parallel_requests
+                    # is a concurrency limit (not time-based).
+                    "rate_limit_type": "max_parallel_requests",
+                },
+            )
+
+        # Increment the counter
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
         pipeline_operations: List[RedisPipelineIncrementOperation] = [
             RedisPipelineIncrementOperation(
                 key=counter_key,
-                increment_value=-1,
-                ttl=self.window_size,
+                increment_value=1,
+                ttl=self.max_parallel_requests_ttl,
             )
         ]
 
@@ -2015,10 +2152,65 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 increment_list=pipeline_operations,
                 litellm_parent_otel_span=parent_otel_span,
             )
+            # Return (previous, new) count (approximate since fallback is non-atomic)
+            return (current_count, current_count + 1)
         except Exception as e:
             verbose_proxy_logger.warning(
-                f"Failed to decrement max_parallel_requests counter: {str(e)}"
+                f"Failed to increment max_parallel_requests counter: {str(e)}"
             )
+            # Fail open - allow the request, return approximate count
+            return (current_count, current_count + 1)
+
+    async def _decrement_max_parallel_requests(
+        self,
+        api_key: str,
+        parent_otel_span: Optional[Span] = None,
+    ) -> Tuple[int, int]:
+        """
+        Decrement the max_parallel_requests counter in Redis.
+        Called when a request completes (success, failure, or cancellation).
+        Returns (previous_count, current_count).
+        """
+        counter_key = self.create_rate_limit_keys(
+            key="api_key",
+            value=api_key,
+            rate_limit_type="max_parallel_requests",
+        )
+
+        # Use Lua script for atomic decrement with TTL reset
+        if self.max_parallel_requests_decrement_script is not None:
+            try:
+                results = await self.max_parallel_requests_decrement_script(
+                    keys=[counter_key],
+                    args=[self.max_parallel_requests_ttl],
+                )
+                # Results: [previous_count, current_count]
+                previous_count = results[0]
+                current_count = results[1]
+                print(f"\n[RATE_LIMITER] max_parallel_requests decremented for {api_key}: previous={previous_count}, current={current_count}\n", flush=True)
+                return (previous_count, current_count)
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Max parallel requests decrement Lua script failed, falling back: {str(e)}"
+                )
+
+        # Fallback: use cache operations (non-atomic)
+        current_value = await self.internal_usage_cache.async_get_cache(
+            key=counter_key,
+            litellm_parent_otel_span=parent_otel_span,
+        )
+        current_count = int(current_value) if current_value is not None else 0
+        previous_count = current_count
+
+        if current_count > 0:
+            current_count = await self.internal_usage_cache.async_increment_cache(
+                key=counter_key,
+                value=-1,
+                ttl=self.max_parallel_requests_ttl,
+                litellm_parent_otel_span=parent_otel_span,
+            ) or 0
+
+        return (previous_count, current_count)
 
     async def async_pre_call_hook(
         self,

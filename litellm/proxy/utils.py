@@ -1472,14 +1472,13 @@ class ProxyLogging:
                 self._process_guardrail_metadata(data)
             return data
         except Exception as e:
-            # Handle cleanup for max_parallel_requests counter when pre-call fails
-            # If the counter was incremented but request failed before LLM call,
-            # we need to decrement it now
+            # Handle cleanup for max_parallel_requests counter when pre-call fails.
             flag_value = data.get("is_centralized_redis_cache_incremented") if data else None
             if data is not None and flag_value:
                 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
                     _PROXY_MaxParallelRequestsHandler_v3,
                 )
+
                 found_callback = False
                 for callback in litellm.callbacks:
                     if isinstance(callback, _PROXY_MaxParallelRequestsHandler_v3):
