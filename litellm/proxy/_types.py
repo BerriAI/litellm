@@ -432,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/server",
+        "/v1/mcp/server/{path:path}",
     ]
 
     agent_routes = [
