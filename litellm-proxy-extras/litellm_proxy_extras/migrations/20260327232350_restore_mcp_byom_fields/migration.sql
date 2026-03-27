@@ -1,0 +1,14 @@
+-- AlterTable: Restore BYOM lifecycle fields to LiteLLM_MCPServerTable
+-- These were dropped in 20260311180521_schema_sync due to schema drift.
+-- The proxy schema (source of truth) retained them.
+ALTER TABLE "LiteLLM_MCPServerTable"
+  ADD COLUMN IF NOT EXISTS "source_url" TEXT,
+  ADD COLUMN IF NOT EXISTS "approval_status" TEXT DEFAULT 'active',
+  ADD COLUMN IF NOT EXISTS "submitted_by" TEXT,
+  ADD COLUMN IF NOT EXISTS "submitted_at" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "reviewed_at" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "review_notes" TEXT;
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "LiteLLM_MCPServerTable_approval_status_idx"
+  ON "LiteLLM_MCPServerTable"("approval_status");
