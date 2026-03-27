@@ -37,7 +37,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json
 
-from litellm._uuid import uuid
+from litellm._litellm_uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
@@ -480,11 +480,11 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
-from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -2112,6 +2112,37 @@ def _schedule_background_health_check_db_save(
     )
 
 
+def _write_health_state_to_router_cache(
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+) -> None:
+    """
+    Write deployment health states to the router's health state cache
+    for health-check-driven routing. No-op if the feature is disabled.
+    """
+    from litellm.proxy.health_check import build_deployment_health_states
+
+    try:
+        if llm_router is None or not llm_router.enable_health_check_routing:
+            return
+
+        states = build_deployment_health_states(
+            healthy_endpoints=healthy_endpoints,
+            unhealthy_endpoints=unhealthy_endpoints,
+        )
+        if states:
+            llm_router.health_state_cache.set_deployment_health_states(states)
+            verbose_proxy_logger.debug(
+                "health_check_routing_state_updated healthy=%d unhealthy=%d",
+                sum(1 for s in states.values() if s.get("is_healthy")),
+                sum(1 for s in states.values() if not s.get("is_healthy")),
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to write health state to router cache: %s", str(e)
+        )
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -2280,6 +2311,9 @@ async def _run_background_health_check():
             healthy_endpoints,
             unhealthy_endpoints,
         )
+
+        # Write health state to router cache for health-check-driven routing
+        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints)
 
         await asyncio.sleep(health_check_interval)
 
@@ -3048,6 +3082,8 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        _enable_hc_routing = False
+        _hc_staleness = None
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3227,13 +3263,21 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            # Health-check-driven routing (opt-in, passes through to Router later)
+            _enable_hc_routing = general_settings.get(
+                "enable_health_check_routing", False
+            )
+            _hc_staleness = general_settings.get(
+                "health_check_staleness_threshold", None
+            )
             verbose_proxy_logger.info(
-                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s",
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
                 use_background_health_checks,
                 use_shared_health_check,
                 health_check_interval,
                 health_check_concurrency,
                 health_check_details,
+                _enable_hc_routing,
             )
 
             ### RBAC ###
@@ -3263,6 +3307,11 @@ class ProxyConfig:
             "cache_responses": litellm.cache
             is not None,  # cache if user passed in cache values
         }
+        # Health-check-driven routing params (from general_settings)
+        if _enable_hc_routing:
+            router_params["enable_health_check_routing"] = True
+        if _hc_staleness is not None:
+            router_params["health_check_staleness_threshold"] = _hc_staleness
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:
