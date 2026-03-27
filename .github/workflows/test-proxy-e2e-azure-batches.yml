@@ -68,7 +68,10 @@ jobs:
           poetry run pip install --force-reinstall --no-deps -e enterprise/
 
       - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
           poetry run prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run Prisma migrations
