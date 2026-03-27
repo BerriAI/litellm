@@ -220,3 +220,23 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_team_models_strips_all_team_models_sentinel():
+    """
+    Regression test: 'all-team-models' is a key/project-level sentinel and
+    should be stripped from team model lists rather than causing a circular
+    self-update.
+    """
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["all-team-models", "gpt-4"],
+        proxy_model_list=["model1", "model2"],
+        model_access_groups={},
+        include_model_access_groups=False,
+    )
+    assert "all-team-models" not in result
+    assert "gpt-4" in result
+    # Should NOT include proxy models since all-proxy-models wasn't set
+    assert "model1" not in result
