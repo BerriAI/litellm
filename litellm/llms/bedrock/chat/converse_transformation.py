@@ -703,28 +703,21 @@ class AmazonConverseConfig(BaseConfig):
         return _tool
 
     @staticmethod
-    def _supports_native_structured_outputs(model: str) -> bool:
+    def _supports_native_structured_outputs(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
         """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
 
-        Looks up the ``supports_native_structured_output`` flag in
-        ``litellm.model_cost`` (set in the cost JSON).
+        Delegates to the standard ``supports_native_structured_output`` utility
+        which looks up the flag in ``litellm.model_cost`` via
+        ``_get_model_info_helper``.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
-        from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+        from litellm.utils import supports_native_structured_output
 
-        base_model = get_bedrock_base_model(model)
-
-        # Try direct lookup
-        info = litellm.model_cost.get(base_model)
-
-        # Try without version suffix (e.g. "model-v1:0" -> "model-v1")
-        if info is None and ":" in base_model:
-            info = litellm.model_cost.get(base_model.rsplit(":", 1)[0])
-
-        if info is not None:
-            return info.get("supports_native_structured_output", False) is True
-
-        return False
+        return supports_native_structured_output(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     @staticmethod
     def _add_additional_properties_to_schema(schema: dict) -> dict:
@@ -951,7 +944,7 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if self._supports_native_structured_outputs(model) and json_schema is not None:
+        if self._supports_native_structured_outputs(model, self.custom_llm_provider) and json_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
             # Requires an explicit schema — json_object with no schema falls through

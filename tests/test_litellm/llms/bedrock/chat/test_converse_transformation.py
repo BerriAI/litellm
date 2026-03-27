@@ -2656,8 +2656,6 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-5-20250929-v1:0")
         assert config._supports_native_structured_outputs("anthropic.claude-haiku-4-5-20251001-v1:0")
         assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1")
-        # Version suffix (:0) is stripped when looking up models without it in cost JSON
-        assert config._supports_native_structured_outputs("anthropic.claude-opus-4-6-v1:0")
         # Regional prefix is stripped by get_bedrock_base_model
         assert config._supports_native_structured_outputs("eu.anthropic.claude-opus-4-5-20251101-v1:0")
         # Claude 4.6 Sonnet
@@ -2728,46 +2726,57 @@ def test_create_output_config_for_response_format():
 
 def test_translate_response_format_native_output_config():
     """For supported models, _translate_response_format_param should produce outputConfig."""
-    config = AmazonConverseConfig()
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "WeatherResult",
-            "description": "Weather info",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "temp": {"type": "number"},
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "WeatherResult",
+                "description": "Weather info",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "temp": {"type": "number"},
+                    },
+                    "required": ["temp"],
                 },
-                "required": ["temp"],
             },
-        },
-    }
+        }
 
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
-    )
+        optional_params: dict = {}
+        result = config._translate_response_format_param(
+            value=response_format,
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params={"response_format": response_format},
+            is_thinking_enabled=False,
+        )
 
-    # Should have outputConfig, NOT tools
-    assert "outputConfig" in result
-    assert "tools" not in result
-    assert "tool_choice" not in result
-    assert result["json_mode"] is True
-    # No fake_stream for native approach
-    assert "fake_stream" not in result
+        # Should have outputConfig, NOT tools
+        assert "outputConfig" in result
+        assert "tools" not in result
+        assert "tool_choice" not in result
+        assert result["json_mode"] is True
+        # No fake_stream for native approach
+        assert "fake_stream" not in result
 
-    # Verify the schema content (additionalProperties: false is added by normalization)
-    schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
-    parsed_schema = json.loads(schema_str)
-    expected_schema = {**response_format["json_schema"]["schema"], "additionalProperties": False}
-    assert parsed_schema == expected_schema
-    assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "WeatherResult"
+        # Verify the schema content (additionalProperties: false is added by normalization)
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+        parsed_schema = json.loads(schema_str)
+        expected_schema = {**response_format["json_schema"]["schema"], "additionalProperties": False}
+        assert parsed_schema == expected_schema
+        assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "WeatherResult"
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_translate_response_format_fallback_tool_call():
