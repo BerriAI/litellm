@@ -10,9 +10,11 @@ tags: [security, incident-report]
 hide_table_of_contents: false
 ---
 
+import Image from '@theme/IdealImage';
+
 Thank you to everyone who joined our town hall.
 
-We wanted to use that time to walk openly through what we know, what happened, what we've done so far, and how we're improving LiteLLM's release and security processes going forward. This post is a written version of that update.
+We wanted to use that time to walk through what we know, what we've done so far, and how we're improving LiteLLM's release and security processes going forward. This post is a written version of that update. [Slides available here](https://drive.google.com/file/d/17hsSG7nk-OYL7VRCTbTa7McrWREtS9OO/view?usp=sharing)
 
 {/* truncate */}
 
@@ -22,15 +24,20 @@ On March 24, 2026 at 10:39 UTC, LiteLLM v1.82.7 was pushed to PyPI. Version v1.8
 
 At this point, our understanding is that this was a supply-chain incident affecting those two published versions.
 
-### Were older packages impacted?
+### Q. Were older packages impacted?
 
 Our current findings show no indicators of compromise in the last 20 versions of LiteLLM. This was manually verified by our team and independently reviewed by Veria Labs.
 
-We have also published a new verified safe version for users to upgrade to.
+We have also published the verified versions for users to use. [Check Security Blog for release verification.](https://docs.litellm.ai/blog/security-update-march-2026#verified-safe-versions)
 
 ## How did this happen?
 
-Our current understanding is that the root issue came from a compromised dependency in our CI/CD pipeline.
+Our understanding is that the issue came from the [compromised Trivy security scanner](https://www.aquasec.com/blog/trivy-supply-chain-attack-what-you-need-to-know/) dependency in our CI/CD pipeline.
+
+<Image 
+  img={require('../../img/shared_ci_cd_environment.png')}
+  style={{width: '500px', height: '400px', display: 'block'}}
+/>
 
 There were three major contributing factors:
 
@@ -40,120 +47,132 @@ At the time, everything was running on CircleCI, and all steps shared a common e
 
 ### 2. Static credentials in environment variables
 
-Release credentials, including credentials for PyPI, GHCR, and Docker publishing, were available as static secrets in the environment. That meant a compromised step could potentially access long-lived release credentials.
+Release credentials, including credentials for PyPI, GHCR, and Docker publishing, were available as static secrets in the environment. That meant a compromised step could access long-lived release credentials.
 
 ### 3. Unpinned Trivy dependency
 
 In our security scanning component, we had an unpinned Trivy dependency. Our present understanding is that a compromised Trivy package ran during the scan, had access to environment variables, and enabled attackers to obtain those credentials.
 
-In plain terms: a compromised package in CI had access to secrets it should not have had, and those secrets were then used in the release path.
+**In summary:** a compromised package in CI had access to secrets it should not have had, and those secrets were then used in the release path.
 
 ## What we've already done
 
-Since the incident, we have taken immediate steps across credentials, repository hygiene, code verification, and release hardening.
 
-### Prevented further key abuse
+In the last 3 days, we've taken the following steps:
 
-We deleted or rotated all impacted secret keys, including PyPI, GitHub, Docker, and related credentials. We also rotated LiteLLM maintainer accounts.
+### 1. Minimize Scope of Impact
 
-### Reduced repository attack surface
+#### Prevented further key abuse
 
-We removed roughly 6,000 open branches and added an auto-deletion policy for branches merged into `main`. This reduces the surface area for branch-based abuse and keeps the repo easier to reason about during incident response.
+We deleted or rotated all impacted or adjacent secret keys, including PyPI, GitHub, Docker, and related credentials. Out of an abundance of caution, we've also rotated LiteLLM maintainer accounts. 
 
-### Paused releases
+#### Prevent branch attacks
 
-We paused new releases until we could confirm codebase security and put stronger release controls in place.
+We removed roughly 6,000 open branches and added an auto-deletion policy for branches merged into `main`. This reduces the surface area for branch-based abuse.
 
-### Verified the codebase
+#### Pinned CI/CD dependencies
+
+We've pinned all Github Actions, and are working on pinning all CircleCI dependencies as well.
+
+#### Paused releases
+
+We've paused new releases until we've confirmed codebase security and put stronger release controls in place.
+
+### 2. Secured LiteLLM
+
+#### Forensic analysis
 
 We are working with Google's Mandiant cybersecurity team to confirm the source of the attack and verify the security of the codebase. We also confirmed that no malicious code was pushed to `main`.
 
-In parallel, we are working with whitehat hackers at Veria Labs to verify application security and review improvements to our CI/CD process.
+#### Confirm Application Security
 
-We have also confirmed that the last 20 LiteLLM releases contain no indicators of compromise, and that no unauthenticated attacks can be made against LiteLLM Proxy based on our current investigation.
+In parallel, we are working with whitehat hackers at [Veria Labs](https://verialabs.com/) to verify application security and review improvements to our CI/CD process.
 
-### Created a security working group
+We have also confirmed that the last 20 LiteLLM releases contain no indicators of compromise, and that no unauthenticated attacks can be made against LiteLLM Proxy based on our current investigation. [Check Security Blog for release verification.](https://docs.litellm.ai/blog/security-update-march-2026#verified-safe-versions)
+
+#### Created a security working group
 
 We created a new security working group inside LiteLLM focused on:
 
 - Building threat models
 - Auditing the build process and dependencies
-- Reviewing release pipeline changes before rollout
 
-## CI/CD improvements already underway
+If you're interested in joining the security working group, please file an issue [here](https://github.com/BerriAI/litellm-security-wg).
 
-We are making structural changes to how releases are built and published. These changes focus on reducing credential exposure, preventing dependency-based compromise, and making releases auditable and tamper-evident.
+### 3. Improved CI/CD
 
-### 1. Reducing static credentials
+We've already begun making structural changes to how releases are built and published. These align with our goals (covered in the next section) around isolated environments, ephemeral credentials, and release auditing.
 
-We are setting up PyPI Trusted Publishing on GitHub Actions so releases can use short-lived, identity-based credentials instead of long-lived static secrets.
+## Roadmap
 
-The goal is simple: even if one part of CI is compromised, there should not be a reusable publishing credential sitting in an environment variable.
+We plan on following 4 guiding principles for our new CI/CD pipeline:
 
-### 2. Preventing unpinned dependencies
+1. **Limit** what each package can access
+2. **Reduce** the number of sensitive environment variables
+3. **Avoid** compromised packages
+4. **Prevent** release tampering
 
-We have pinned GitHub Actions and are working on pinning all CircleCI dependencies as well. We are also setting up Zizmor to harden GitHub Actions and catch issues such as unpinned dependencies and credential leakage.
 
-### 3. Ensuring immutable, auditable releases
+### Isolated environments
 
-We are working on Cosign keyless signing for both PyPI and GHCR releases. This will allow users to independently verify that a release came from us and help ensure published artifacts cannot be silently modified later.
+<Image 
+  img={require('../../img/isolated_ci_cd_environments.png')}
+  style={{width: '400px', height: 'auto'}}
+/>
 
-This is intended to protect against:
+We are breaking our CI/CD into 4 semantic concepts:
 
-- Stolen PyPI or GHCR credentials
-- Tampered registry artifacts
-- Tag mutation
+1. Unit tests
+2. Integration tests
+3. Security scans
+4. Release publishing
 
-## Our roadmap going forward
+And will be running each of these in isolated environments.
 
-We are using four guiding principles to redesign the release pipeline and improve our security posture.
+This will limit the damage that any single compromised component can cause.
 
-### 1. Limit what each package can access
+### Ephemeral credentials
 
-A package used in one step of CI should not automatically have access to the entire environment. We want each component to see only the minimum set of variables and permissions it needs.
+We plan to move to ephemeral credentials for PyPI (Trusted Publisher) and GHCR (Token-based authentication) releases. This will reduce the risk of credentials being leaked or compromised.
 
-### 2. Reduce the number of sensitive environment variables
+We have already begun doing this: 
 
-Especially for release and publishing systems, we want fewer standing secrets in the environment overall.
+- PyPI Trusted Publisher on GitHub Actions [PR](https://github.com/BerriAI/litellm/pull/24654)
+- GHCR Token-based authentication on GitHub Actions [PR](https://github.com/BerriAI/litellm/pull/24683)
 
-### 3. Avoid compromised packages
+### Release auditing
 
-We are moving toward pinned, verified SHAs for packages and actions used in CI/CD, avoiding `latest` wherever possible, and adding a cooldown period before dependency upgrades are trusted in release-critical paths.
+Our goal is to allow users to independently verify that a release came from us and prevent silent modifications of releases after they are published.
 
-### 4. Prevent release tampering
+This will ensure, your releases are safe, even when: 
+- Stolen PyPI/GHCR credentials are used to publish malicious releases
+- Tampered registry artifacts are published
+- Tag mutations are made after the release is published
 
-Every release should be attributable, auditable, and independently verifiable. That means ephemeral credentials, artifact signing, and clearer release provenance.
+We believe that [Cosign](https://github.com/sigstore/cosign) is a good fit for this, and have already begun working on it [PR](https://github.com/BerriAI/litellm/pull/24683).
 
-## Architectural direction: isolating environments
 
-One of the most important shifts is separating environments by function. Instead of one shared environment, we are moving toward distinct pipelines for:
+### Avoid Compromised Packages
 
-- Unit tests
-- Integration tests
-- Security scans
-- Release publishing
+- Move to pinned, verified SHAs for packages and actions used in CI/CD, avoiding `latest` wherever possible. 
+- Add a cooldown period before upgrading to a new version of a package - allows more time to investigate and verify the new version. 
 
-This limits the damage that any single compromised component can cause.
+We've added zizmor to help us catch issues such as unpinned dependencies and credential leakage. [commit](https://github.com/BerriAI/litellm/commit/a671275f5c5b0e1fb1adacdf3b6ef779aaa5d56c).
 
-## What this means for users
 
-The key takeaways are:
+## Questions & Support 
 
-- The malicious packages were live for about 40 minutes
-- The supply-chain attack appears to have originated from a compromised Trivy security scanner dependency
-- `main` is safe based on our current investigation
-- The last 20 releases show no indicators of compromise
-- We have formed a dedicated security working group
-- Our new CI/CD direction is centered on isolated environments, ephemeral credentials, and release auditing
+If you believe your systems may be affected, contact us immediately:
 
-## Closing
+- **Security:** security@berri.ai
+- **Support:** support@berri.ai
+- **Slack:** Reach out to the LiteLLM team directly [here](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA)
 
-We know incidents like this affect trust, and trust has to be earned back through transparency and concrete action.
+## Hiring 
 
-Our focus now is not just fixing the immediate problem, but building a safer release system with much tighter boundaries: isolated environments, fewer secrets, stronger dependency controls, and verifiable releases.
+We are currently hiring for: 
 
-We'll continue to share updates as we complete the RCA and roll out the next set of security improvements.
+- DevOps Engineer - to keep ci/cd secure and running smoothly
+- Security Engineer - to keep the application secure
 
----
-
-For real-time updates, follow [LiteLLM (YC W23) on X](https://x.com/LiteLLM). If you have questions, reach out at `security@berri.ai` or `support@berri.ai`.
+If you're interest in joining, please apply [here](https://jobs.ashbyhq.com/litellm)
