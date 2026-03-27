@@ -89,7 +89,9 @@ class JWTHandler:
         self.leeway = leeway
 
     @staticmethod
-    def is_jwt(token: str):
+    def is_jwt(token: Optional[str]):
+        if token is None:
+            return False
         parts = token.split(".")
         return len(parts) == 3
 
