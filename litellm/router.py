@@ -46,8 +46,8 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm._litellm_uuid import uuid
 from litellm._logging import verbose_router_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import (
     DualCache,
     InMemoryCache,
