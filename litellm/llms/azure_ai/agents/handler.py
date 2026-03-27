@@ -107,13 +107,17 @@ class AzureAIAgentsHandler:
         """
         for msg in messages_data.get("data", []):
             if msg.get("role") == "assistant":
+                content_text = ""
+                annotations_list = []
                 for content_item in msg.get("content", []):
                     if content_item.get("type") == "text":
                         text_obj = content_item.get("text", {})
-                        content = text_obj.get("value", "")
+                        content_text += text_obj.get("value", "")
                         raw_annotations = text_obj.get("annotations")
                         annotations = self._transform_annotations(raw_annotations)
-                        return content, annotations
+                        if annotations:
+                            annotations_list.extend(annotations)
+                return content_text, (annotations_list if annotations_list else None)
         return "", None
 
     def _transform_annotations(
@@ -137,7 +141,8 @@ class AzureAIAgentsHandler:
         for ann in raw_annotations:
             ann_type = ann.get("type")
             if ann_type == "url_citation":
-                url_citation = dict(ann.get("url_citation", {}))
+                url_citation_raw = ann.get("url_citation") or {}
+                url_citation = dict(url_citation_raw)
                 # Azure puts start/end_index at annotation level; OpenAI
                 # expects them inside url_citation
                 if "start_index" in ann and "start_index" not in url_citation:

@@ -65,9 +65,12 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
             # Get endpoint URL using simplified function
             api_base = litellm_params.get("api_base", None)
+            api_base = api_base if api_base else None
+            
             aws_bedrock_runtime_endpoint = litellm_params.get(
                 "aws_bedrock_runtime_endpoint", None
             )
+            aws_bedrock_runtime_endpoint = aws_bedrock_runtime_endpoint if aws_bedrock_runtime_endpoint else None
             endpoint_url = self.get_bedrock_count_tokens_endpoint(
                 model=resolved_model,
                 aws_region_name=aws_region_name,
