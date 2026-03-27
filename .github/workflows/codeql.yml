@@ -6,8 +6,8 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Run weekly on Sundays at 04:00 UTC
-    - cron: "0 4 * * 0"
+    # Run daily at 04:00 UTC
+    - cron: "0 4 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
