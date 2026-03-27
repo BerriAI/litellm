@@ -12,9 +12,14 @@ hide_table_of_contents: false
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import VersionVerificationTable from '@site/src/components/VersionVerificationTable';
 
 > **Status:** Active investigation
-> **Last updated:** March 25, 2026
+> **Last updated:** March 27, 2026
+
+> **Update (March 27):** Added [Verified safe versions](#verified-safe-versions) section with SHA-256 checksums for all audited PyPI and Docker releases.
+
+> **Update (March 26):** Added `checkmarx[.]zone` to [Indicators of compromise](#indicators-of-compromise-iocs).
 
 > **Update (March 25):** Added community-contributed scripts for scanning GitHub Actions and GitLab CI pipelines for the compromised versions. See [How to check if you are affected](#how-to-check-if-you-are-affected). s/o [@Zach Fury](https://www.linkedin.com/in/fryware/) for these scripts.
 
@@ -643,6 +648,8 @@ Review affected systems for the following indicators:
 - `litellm_init.pth` present in your `site-packages`
 - Outbound traffic or requests to `models.litellm[.]cloud`
   This domain is **not** affiliated with LiteLLM
+- Outbound traffic or requests to `checkmarx[.]zone`
+  This domain is **not** affiliated with LiteLLM
 
 
 ## Immediate actions for affected users
@@ -695,6 +702,72 @@ The LiteLLM AI Gateway team has already taken the following steps:
 - Removed compromised packages from PyPI
 - Rotated maintainer credentials and established new authorized maintainers
 - Engaged Google's Mandiant security team to assist with forensic analysis of the build and publishing chain
+
+
+## Verified safe versions
+
+We have audited every LiteLLM release published between v1.78.0 and v1.82.6 across both PyPI and Docker. Each artifact was verified by:
+
+1. Downloading the published artifact and computing its SHA-256 digest
+2. Scanning for the known [indicators of compromise](#indicators-of-compromise-iocs) (IOCs)
+3. Comparing the artifact contents against the corresponding Git commit in the BerriAI/litellm repository
+
+**All versions listed below are confirmed clean.**
+
+<Tabs>
+<TabItem value="pypi" label="PyPI Releases">
+
+<VersionVerificationTable entries={[
+  { version: "1.82.6", sha256: "164a3ef3e19f309e3cabc199bef3d2045212712fefdfa25fc7f75884a5b5b205", gitCommit: "38d477507dad" },
+  { version: "1.82.5", sha256: "e1012ab816352215c4e00776dd48b0c68058b537888a8ff82cca62af19e6fb11", gitCommit: "1998c4f3703f" },
+  { version: "1.82.4", sha256: "d37c34a847e7952a146ed0e2888a24d3edec7787955c6826337395e755ad5c4b", gitCommit: "cfeafbe38811" },
+  { version: "1.82.3", sha256: "609901f6c5a5cf8c24386e4e3f50738bb8a9db719709fd76b208c8ee6d00f7a7", gitCommit: "61409275c8d8" },
+  { version: "1.82.2", sha256: "641ed024774fa3d5b4dd9347f0efb1e31fa422fba2a6500aabedee085d1194cb", gitCommit: "f351bbdb3683" },
+  { version: "1.82.1", sha256: "a9ec3fe42eccb1611883caaf8b1bf33c9f4e12163f94c7d1004095b14c379eb2", gitCommit: "94b002066e3a" },
+  { version: "1.82.0", sha256: "5496b5d4532cccdc7a095c21cbac4042f7662021c57bc1d17be4e39838929e80", gitCommit: "6c6585af568e" },
+  { version: "1.81.16", sha256: "d6bcc13acbd26719e07bfa6b9923740e88409cbf1f9d626d85fc9ae0e0eec88c", gitCommit: "678200ee4887" },
+  { version: "1.81.15", sha256: "2fa253658702509ce09fe0e172e5a47baaadf697fb0f784c7fd4ff665ae76ae1", gitCommit: "2e819656cee9" },
+  { version: "1.81.14", sha256: "6394e61bbdef7121e5e3800349f6b01e9369e7cf611e034f1832750c481abfed", gitCommit: "96bcee0b0af7" },
+  { version: "1.81.13", sha256: "ae4aea2a55e85993f5f6dd36d036519422d24812a1a3e8540d9e987f2d7a4304", gitCommit: "cc957a19a560" },
+  { version: "1.81.12", sha256: "219cf9729e5ea30c6d3f75aa43fef3c56a717369939a6d717cbad0fd78e3c146", gitCommit: "ba0d541b1982" },
+  { version: "1.81.11", sha256: "06a66c24742e082ddd2813c87f40f5c12fe7baa73ce1f9457eaf453dc44a0f65", gitCommit: "231aedeeff7e" },
+  { version: "1.81.10", sha256: "9efa1cbe61ac051f6500c267b173d988ff2d511c2eecf1c8f2ee546c0870747c", gitCommit: "7488abece8e7" },
+  { version: "1.81.9", sha256: "24ee273bc8a62299fbb754035f83fb7d8d44329c383701a2bd034f4fd1c19084", gitCommit: "a09d3e9162eb" },
+  { version: "1.81.8", sha256: "78cca92f36bc6c267c191d1fe1e2630c812bff6daec32c58cade75748c2692f6", gitCommit: "4fea649f519b" },
+  { version: "1.81.7", sha256: "58466c88c3289c6a3830d88768cf8f307581d9e6c87861de874d1128bb2de90d", gitCommit: "3f6a281d0f7a" },
+  { version: "1.81.6", sha256: "573206ba194d49a1691370ba33f781671609ac77c35347f8a0411d852cf6341a", gitCommit: "8da3a93e6e63" },
+  { version: "1.81.5", sha256: "206505c5a0c6503e465154b9c979772be3ede3f5bf746d15b37dca5ae54d239f", gitCommit: "2cc3778761d4" },
+  { version: "1.81.3", sha256: "3f60fd8b727587952ad3dd18b68f5fed538d6f43d15bb0356f4c3a11bccb2b92", gitCommit: "f30742fe6e8e" },
+]} />
+
+</TabItem>
+<TabItem value="docker" label="Docker Images">
+
+<VersionVerificationTable entries={[
+  { version: "1.82.3", sha256: "0a571da849db5f9c3cf3fead2ffbf1df982eebff7e7b38b46dbec3f640dafdbb", gitCommit: "61409275c8d8" },
+  { version: "1.82.3-stable", sha256: "0c2b2a0ad3e50af1702fc493ecd07f22a5180b6d1cfb169440b429b40e340e29", gitCommit: "61409275c8d8" },
+  { version: "1.82.0-stable", sha256: "71bf7283767ca436edcfa9f1f26c1743487b5fa29736c61c3eb6977776007c42", gitCommit: "97947c254252" },
+  { version: "1.81.15", sha256: "303c31af87e7915e7b34d6c4d55a6ac753ef947a5deaa899e9ccfd3d1d58f7c2", gitCommit: "20bf3aa8070a" },
+  { version: "1.81.14-stable", sha256: "a34f9758048231817d799b703fb998e40e2a5cbabb89ab95039fc30798f01b3c", gitCommit: "0435375b1271" },
+  { version: "1.81.13", sha256: "a876f3f22f9b6fd481c9091c44a8a893d81c172d66dc2749298dcd3dc4a3d6f0", gitCommit: "cc957a19a560" },
+  { version: "1.81.12-stable", sha256: "e24022878ccc87f57d808ac9304f18b87b8359e6556746d81cc20a5dc85f423a", gitCommit: "ba0d541b1982" },
+  { version: "1.81.9-stable", sha256: "262e53d7702ed82579717faff0b08f7c0b7e9973a6406cfcc0e4af7826327627", gitCommit: "a09d3e9162eb" },
+  { version: "1.81.3-stable", sha256: "dff82ccc32fb648927c090607887401c7e8ec814fe7c951beb95fe51073ca02b", gitCommit: "61ed8f9e0355" },
+  { version: "1.81.0-stable", sha256: "f4913297d1bb3dc373eb8911a5ac816b597be9b5e08a91636b6c2786dd572aa8", gitCommit: "790a5ce0b323" },
+  { version: "1.80.15-stable", sha256: "0b4ec3861e978b4aa254f4070f292cd345496a5fb59c72e1ee21cd6db94b670b", gitCommit: "17c8d8d109b5" },
+  { version: "1.80.11-stable", sha256: "4068108d9101cd2affba3924310fd7f34f23d14e36dd4853733898b9e04d81ca", gitCommit: "57e07bddd341" },
+  { version: "1.80.8-stable", sha256: "0304c2eb1f3cf54262d1b4e0629487232bab459e95b99a21e5810231d2b27021", gitCommit: "3381d63152f8" },
+  { version: "1.80.5-stable", sha256: "a89e173135fff96af4b5b91ea31845164eadcf6497c82adeb64c36a23c8a3d11", gitCommit: "6c49b95a4ab7" },
+  { version: "1.80.0-stable", sha256: "a3416f4cd0c896c94a1f526d872ff6c19bee22ff4afcdcc6f9ff690707900176", gitCommit: "98365205acd0" },
+  { version: "1.79.3-stable", sha256: "27aae83d6ab6cb0b63bf8179e375ce0e11f5cfef51f2675b0c1e60c6f546dbc1", gitCommit: "c0548542d4a9" },
+  { version: "1.79.1-stable", sha256: "7780d29a9543c4ce762430db7dfb0640105f7357fc38e35bf3fb7bbb1e6ba63f", gitCommit: "c217bddb59ba" },
+  { version: "1.79.0-stable", sha256: "32bf6ac059a56641e11e4712f63b8467c295f988b6c160dc7229660417ee44bd", gitCommit: "8d495f56a9cc" },
+  { version: "1.78.5-stable", sha256: "d5e607648eafa15edc63b0b1a5ed01f8b31a1fa0c80f7d25b252ae18a593ee29", gitCommit: "c471bf1f16c2" },
+  { version: "1.78.0-stable", sha256: "7a56b32dc7153763d31c0a056123dc878a598959935d8c7daacb1fca5272c205", gitCommit: "5fde83d9f154" },
+]} />
+
+</TabItem>
+</Tabs>
 
 
 ## Questions and support
