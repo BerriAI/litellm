@@ -493,8 +493,7 @@ class AmazonConverseConfig(BaseConfig):
             budget = thinking.get("budget_tokens")
             if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
                 verbose_logger.debug(
-                    "Bedrock requires thinking.budget_tokens >= %d, got %d. "
-                    "Clamping to minimum.",
+                    "Bedrock requires thinking.budget_tokens >= %d, got %d. Clamping to minimum.",
                     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
                     budget,
                 )
@@ -778,39 +777,14 @@ class AmazonConverseConfig(BaseConfig):
         Bedrock's native structured-outputs API requires this field to be
         explicitly set on every object node, otherwise it returns a
         validation error.
+
+        Delegates to the shared implementation in ``bedrock/common_utils.py``.
         """
-        if not isinstance(schema, dict):
-            return schema
+        from litellm.llms.bedrock.common_utils import (
+            add_additional_properties_to_schema,
+        )
 
-        result = dict(schema)
-
-        if result.get("type") == "object" and "additionalProperties" not in result:
-            result["additionalProperties"] = False
-
-        # Recurse into nested schemas
-        if "properties" in result and isinstance(result["properties"], dict):
-            result["properties"] = {
-                k: AmazonConverseConfig._add_additional_properties_to_schema(v)
-                for k, v in result["properties"].items()
-            }
-        if "items" in result and isinstance(result["items"], dict):
-            result["items"] = AmazonConverseConfig._add_additional_properties_to_schema(
-                result["items"]
-            )
-        for defs_key in ("$defs", "definitions"):
-            if defs_key in result and isinstance(result[defs_key], dict):
-                result[defs_key] = {
-                    k: AmazonConverseConfig._add_additional_properties_to_schema(v)
-                    for k, v in result[defs_key].items()
-                }
-        for key in ("anyOf", "allOf", "oneOf"):
-            if key in result and isinstance(result[key], list):
-                result[key] = [
-                    AmazonConverseConfig._add_additional_properties_to_schema(item)
-                    for item in result[key]
-                ]
-
-        return result
+        return add_additional_properties_to_schema(schema)
 
     @staticmethod
     def _create_output_config_for_response_format(
@@ -913,7 +887,9 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value, drop_params=drop_params  # type: ignore
+                    model=model,
+                    tool_choice=value,
+                    drop_params=drop_params,  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -1758,9 +1734,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1777,9 +1751,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
@@ -1990,9 +1964,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
@@ -2011,17 +1985,17 @@ class AmazonConverseConfig(BaseConfig):
             provider_specific_fields["citationsContent"] = citationsContentBlocks
 
         if provider_specific_fields:
-            chat_completion_message[
-                "provider_specific_fields"
-            ] = provider_specific_fields
+            chat_completion_message["provider_specific_fields"] = (
+                provider_specific_fields
+            )
 
         if reasoningContentBlocks is not None:
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         filtered_tools = self._filter_json_mode_tools(
             json_mode=json_mode,

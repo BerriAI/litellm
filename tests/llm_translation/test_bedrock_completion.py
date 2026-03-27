@@ -16,9 +16,7 @@ import io
 import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -157,9 +155,9 @@ def test_completion_bedrock_guardrails(streaming):
                     saw_trace = True
                 print(chunk)
 
-            assert (
-                saw_trace is True
-            ), "Did not see trace in response even when trace=enabled sent in the guardrailConfig"
+            assert saw_trace is True, (
+                "Did not see trace in response even when trace=enabled sent in the guardrailConfig"
+            )
 
     except RateLimitError:
         pass
@@ -292,9 +290,7 @@ def bedrock_session_token_creds():
         # For circle-ci testing
         # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
         # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-        aws_role_name = (
-            "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-        )
+        aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
         aws_web_identity_token = "test-oidc-token-123"
 
         creds = bllm.get_credentials(
@@ -664,15 +660,9 @@ def test_bedrock_claude_3_tool_calling():
         print(f"response: {response}")
         # Add any assertions here to check the response
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert isinstance(
-            response.choices[0].message.tool_calls[0].function.arguments, str
-        )
-        messages.append(
-            response.choices[0].message.model_dump()
-        )  # Add assistant tool invokes
-        tool_result = (
-            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
-        )
+        assert isinstance(response.choices[0].message.tool_calls[0].function.arguments, str)
+        messages.append(response.choices[0].message.model_dump())  # Add assistant tool invokes
+        tool_result = '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
         # Add user submitted tool results in the OpenAI format
         messages.append(
             {
@@ -704,9 +694,7 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
+@pytest.mark.skip(reason="we already test claude-3, this is just another way to pass images")
 def test_completion_claude_3_base64():
     try:
         litellm.set_verbose = True
@@ -723,9 +711,7 @@ def test_completion_claude_3_base64():
                         {"type": "text", "text": "Whats in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
+                            "image_url": {"url": "data:image/jpeg;base64," + base64_image},
                         },
                     ],
                 }
@@ -790,9 +776,7 @@ def test_bedrock_ptu():
         litellm.set_verbose = True
         from openai.types.chat import ChatCompletion
 
-        model_id = (
-            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
-        )
+        model_id = "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
         try:
             response = litellm.completion(
                 model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -843,10 +827,7 @@ async def test_bedrock_custom_api_base():
         )
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
-        assert (
-            mock_client_post.call_args.kwargs["headers"]["Authorization"]
-            == "my-test-key"
-        )
+        assert mock_client_post.call_args.kwargs["headers"]["Authorization"] == "my-test-key"
         mock_client_post.assert_called_once()
 
 
@@ -881,10 +862,7 @@ async def test_bedrock_extra_headers(model):
         print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
-        assert (
-            mock_client_post.call_args.kwargs["headers"]["Authorization"]
-            == "my-test-key"
-        )
+        assert mock_client_post.call_args.kwargs["headers"]["Authorization"] == "my-test-key"
         mock_client_post.assert_called_once()
 
 
@@ -1023,10 +1001,7 @@ def test_bedrock_tool_calling():
         for tool_call in _choice_1.message.tool_calls:
             _tool_Call_name = tool_call.function.name
             if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
-                assert (
-                    _tool_Call_name
-                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
-                )
+                assert _tool_Call_name == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
 
 
 def test_bedrock_tools_pt_valid_names():
@@ -1149,12 +1124,8 @@ def test_bedrock_tools_transformation_valid_params():
     toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
     assert toolJsonSchema is not None
     print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
-    print(
-        "allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys()
-    )
-    assert set(toolJsonSchema.keys()).issubset(
-        set(ToolJsonSchemaBlock.__annotations__.keys())
-    )
+    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
+    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
 
     assert isinstance(result, list)
     assert len(result) == 1
@@ -1163,10 +1134,7 @@ def test_bedrock_tools_transformation_valid_params():
     assert result[0]["toolSpec"]["description"] == "Invalid name test"
     assert "inputSchema" in result[0]["toolSpec"]
     assert "json" in result[0]["toolSpec"]["inputSchema"]
-    assert (
-        result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"]
-        == "string"
-    )
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
 
 
@@ -1243,24 +1211,18 @@ def test_bedrock_converse_translation_tool_message():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
 
     print(translated_msg)
     assert translated_msg == [
         {
             "role": "user",
             "content": [
-                {
-                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
-                },
+                {"text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"},
                 {
                     "toolResult": {
                         "content": [
-                            {
-                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
-                            }
+                            {"text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}
                         ],
                         "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
                     }
@@ -1286,11 +1248,7 @@ def test_base_aws_llm_get_credentials():
     credentials = session.get_credentials().get_frozen_credentials()
     end_time = time.time()
 
-    print(
-        "Total time for credentials - {}. Credentials - {}".format(
-            end_time - start_time, credentials
-        )
-    )
+    print("Total time for credentials - {}. Credentials - {}".format(end_time - start_time, credentials))
 
     start_time = time.time()
     credentials = BaseAWSLLM().get_credentials(
@@ -1591,20 +1549,14 @@ def test_bedrock_completion_test_3():
         },
     ]
 
-    transformed_messages = _bedrock_converse_messages_pt(
-        messages=messages, model="", llm_provider=""
-    )
+    transformed_messages = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
     print(transformed_messages)
 
     assert transformed_messages[-1]["role"] == "user"
     assert transformed_messages[-1]["content"] == [
         {
             "toolResult": {
-                "content": [
-                    {
-                        "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
-                    }
-                ],
+                "content": [{"text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}],
                 "toolUseId": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
             }
         }
@@ -1840,9 +1792,7 @@ def test_bedrock_completion_test_4(modify_params):
     }
 
     if modify_params:
-        transformed_messages = _bedrock_converse_messages_pt(
-            messages=data["messages"], model="", llm_provider=""
-        )
+        transformed_messages = _bedrock_converse_messages_pt(messages=data["messages"], model="", llm_provider="")
         expected_messages = [
             {
                 "role": "user",
@@ -1942,9 +1892,7 @@ def test_bedrock_base_model_helper():
     assert base_model == "amazon.nova-pro-v1:0"
 
     assert (
-        BedrockModelInfo.get_base_model(
-            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
-        )
+        BedrockModelInfo.get_base_model("invoke/anthropic.claude-3-5-sonnet-20241022-v2:0")
         == "anthropic.claude-3-5-sonnet-20241022-v2:0"
     )
 
@@ -1975,9 +1923,7 @@ def test_bedrock_route_detection(model, expected_route):
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
     route = BedrockModelInfo.get_bedrock_route(model)
-    assert (
-        route == expected_route
-    ), f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
+    assert route == expected_route, f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
 
 
 @pytest.mark.parametrize(
@@ -2047,9 +1993,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
     ],
 )
 def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
-    supported_openai_params = (
-        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
-    )
+    supported_openai_params = litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     if expected_supports_tool_call:
         assert "tools" in supported_openai_params
     else:
@@ -2197,10 +2141,7 @@ def test_bedrock_empty_content_handling(messages, continue_message_index):
     # Verify assistant message with default text was inserted
     assert formatted_messages[0]["role"] == "user"
     assert formatted_messages[1]["role"] == "assistant"
-    assert (
-        formatted_messages[continue_message_index]["content"][0]["text"]
-        == "Please continue."
-    )
+    assert formatted_messages[continue_message_index]["content"][0]["text"] == "Please continue."
 
 
 def test_bedrock_custom_continue_message():
@@ -2249,9 +2190,7 @@ def test_bedrock_no_default_message():
     )
 
     # Verify empty message is replaced with placeholder and valid message remains
-    assistant_messages = [
-        msg for msg in formatted_messages if msg["role"] == "assistant"
-    ]
+    assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
@@ -2273,18 +2212,13 @@ def test_bedrock_nova_topk(top_k_param):
         captured_data = result
         return result
 
-    with patch(
-        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
-    ):
+    with patch("litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform):
         litellm.completion(**data)
 
         # Assert that additionalRequestParameters exists and contains topK
         assert "additionalModelRequestFields" in captured_data
         assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
-        assert (
-            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
-            == 10
-        )
+        assert captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
 def test_bedrock_cross_region_inference(monkeypatch):
@@ -2344,17 +2278,13 @@ def test_bedrock_process_empty_text_blocks():
     assert modified_message["content"][0]["text"] == "Please continue."
 
 
-@pytest.mark.skip(
-    reason="Skipping test due to bedrock changing their response schema support. Come back to this."
-)
+@pytest.mark.skip(reason="Skipping test due to bedrock changing their response schema support. Come back to this.")
 def test_nova_optional_params_tool_choice():
     try:
         litellm.drop_params = True
         litellm.set_verbose = True
         litellm.completion(
-            messages=[
-                {"role": "user", "content": "A WWII competitive game for 4-8 players"}
-            ],
+            messages=[{"role": "user", "content": "A WWII competitive game for 4-8 players"}],
             model="bedrock/us.amazon.nova-pro-v1:0",
             temperature=0.3,
             tools=[
@@ -2444,9 +2374,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
             "inference_params": {},
         }
 
-        transformed_request = (
-            AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
-        )
+        transformed_request = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
         transformed_request[
             "inputImage"
         ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
@@ -2510,9 +2438,7 @@ def test_bedrock_error_handling_streaming():
         }
     )
 
-    decoder = AWSEventStreamDecoder(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0")
     with pytest.raises(Exception) as e:
         decoder._parse_message_from_event(event)
     assert isinstance(e.value, BedrockError)
@@ -2591,9 +2517,7 @@ def test_bedrock_custom_deepseek():
     with patch.object(client, "post") as mock_post:
         # Mock the response
         mock_response = Mock()
-        mock_response.text = json.dumps(
-            {"generation": "Here's a joke...", "stop_reason": "stop"}
-        )
+        mock_response.text = json.dumps({"generation": "Here's a joke...", "stop_reason": "stop"})
         mock_response.status_code = 200
         # Add required response attributes
         mock_response.headers = {"Content-Type": "application/json"}
@@ -2641,14 +2565,8 @@ def test_bedrock_custom_deepseek():
     ],
 )
 def test_handle_top_k_value_helper(model, expected_output):
-    assert (
-        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3})
-        == expected_output
-    )
-    assert (
-        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3})
-        == expected_output
-    )
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3}) == expected_output
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3}) == expected_output
 
 
 @pytest.mark.parametrize(
@@ -2669,9 +2587,7 @@ def test_bedrock_top_k_param(model, expected_params):
         mock_response = Mock()
 
         if "mistral" in model:
-            mock_response.text = json.dumps(
-                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
-            )
+            mock_response.text = json.dumps({"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]})
         else:
             mock_response.text = json.dumps(
                 {
@@ -2713,9 +2629,7 @@ def test_bedrock_invoke_provider():
         == "anthropic"
     )
     assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-        )
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0")
         == "anthropic"
     )
     assert (
@@ -2724,40 +2638,12 @@ def test_bedrock_invoke_provider():
         )
         == "llama"
     )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "us.amazon.nova-pro-v1:0"
-        )
-        == "nova"
-    )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-pro-v1:0")
-        == "nova"
-    )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "amazon.nova-lite-v1:0"
-        )
-        == "nova"
-    )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "amazon.nova-micro-v1:0"
-        )
-        == "nova"
-    )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "amazon.nova-premier-v1:0"
-        )
-        == "nova"
-    )
-    assert (
-        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "amazon.nova-2-lite-v1:0"
-        )
-        == "nova"
-    )
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("us.amazon.nova-pro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-pro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-lite-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-micro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-premier-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-2-lite-v1:0") == "nova"
 
 
 def test_bedrock_description_param():
@@ -2770,9 +2656,7 @@ def test_bedrock_description_param():
         try:
             response = completion(
                 model="bedrock/us.amazon.nova-pro-v1:0",
-                messages=[
-                    {"role": "user", "content": "What is the meaning of this poem?"}
-                ],
+                messages=[{"role": "user", "content": "What is the meaning of this poem?"}],
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
@@ -2794,9 +2678,7 @@ def test_bedrock_description_param():
         request_body_str = json.dumps(request_body, indent=4, default=str)
         print("request_body=", request_body_str)
 
-        assert (
-            "Find the meaning inside a poem" in request_body_str
-        )  # assert description is passed
+        assert "Find the meaning inside a poem" in request_body_str  # assert description is passed
 
 
 @pytest.mark.parametrize(
@@ -2853,10 +2735,7 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
         print(mock_post.call_args.kwargs)
         json_data = mock_post.call_args.kwargs["data"]
 
-        assert (
-            "Alright, let's get started with resolving this issue about implementing"
-            in json_data
-        )
+        assert "Alright, let's get started with resolving this issue about implementing" in json_data
 
 
 @pytest.mark.asyncio
@@ -2900,32 +2779,20 @@ async def test_bedrock_stream_thinking_content_openwebui():
     # Assert there's exactly one opening and closing tag
     assert think_open_pos >= 0, "Opening <think> tag not found"
     assert think_close_pos > 0, "Closing </think> tag not found"
-    assert (
-        content.count("<think>") == 1
-    ), "There should be exactly one opening <think> tag"
-    assert (
-        content.count("</think>") == 1
-    ), "There should be exactly one closing </think> tag"
+    assert content.count("<think>") == 1, "There should be exactly one opening <think> tag"
+    assert content.count("</think>") == 1, "There should be exactly one closing </think> tag"
 
     # Assert the opening tag comes before the closing tag
-    assert (
-        think_open_pos < think_close_pos
-    ), "Opening tag should come before closing tag"
+    assert think_open_pos < think_close_pos, "Opening tag should come before closing tag"
 
     # Assert there's content between the tags
     thinking_content = content[think_open_pos + 7 : think_close_pos]
-    assert (
-        len(thinking_content.strip()) > 0
-    ), "There should be content between thinking tags"
+    assert len(thinking_content.strip()) > 0, "There should be content between thinking tags"
 
     # Assert there's content after the closing tag
-    assert (
-        len(content) > think_close_pos + 8
-    ), "There should be content after the thinking tags"
+    assert len(content) > think_close_pos + 8, "There should be content after the thinking tags"
     response_content = content[think_close_pos + 8 :].strip()
-    assert (
-        len(response_content) > 0
-    ), "There should be non-empty content after thinking tags"
+    assert len(response_content) > 0, "There should be non-empty content after thinking tags"
 
 
 def test_bedrock_application_inference_profile():
@@ -2958,9 +2825,7 @@ def test_bedrock_application_inference_profile():
         }
     ]
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        client2, "post"
-    ) as mock_post2:
+    with patch.object(client, "post") as mock_post, patch.object(client2, "post") as mock_post2:
         try:
             resp = completion(
                 model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2986,9 +2851,7 @@ def test_bedrock_application_inference_profile():
         mock_post2.assert_called_once()
         print(mock_post.call_args.kwargs)
         json_data = mock_post.call_args.kwargs["data"]
-        assert mock_post.call_args.kwargs["url"].startswith(
-            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
-        )
+        assert mock_post.call_args.kwargs["url"].startswith("https://bedrock-runtime.eu-central-1.amazonaws.com/")
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
 
 
@@ -3121,9 +2984,7 @@ async def test_bedrock_passthrough(sync_mode: bool):
             }
         ],
         "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
+        "metadata": {"user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"},
         "anthropic_version": "bedrock-2023-05-31",
         "anthropic_beta": ["claude-code-20250219"],
     }
@@ -3182,9 +3043,7 @@ async def test_bedrock_passthrough_router():
             }
         ],
         "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
+        "metadata": {"user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"},
         "anthropic_version": "bedrock-2023-05-31",
         "anthropic_beta": ["claude-code-20250219"],
     }
@@ -3220,11 +3079,7 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "text": "Write an article about impact of high inflation to GDP of a country"
-                    }
-                ],
+                "content": [{"text": "Write an article about impact of high inflation to GDP of a country"}],
             }
         ],
         "system": [{"text": "You are an economist with access to lots of data"}],
@@ -3276,9 +3131,7 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
             }
         ],
         "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
+        "metadata": {"user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"},
         "anthropic_version": "bedrock-2023-05-31",
         "anthropic_beta": ["claude-code-20250219"],
     }
@@ -3328,9 +3181,7 @@ async def test_bedrock_streaming_passthrough_test1(monkeypatch):
             }
         ],
         "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
+        "metadata": {"user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"},
         "anthropic_version": "bedrock-2023-05-31",
         "anthropic_beta": ["claude-code-20250219"],
     }
@@ -3412,9 +3263,7 @@ def test_bedrock_openai_imported_model():
         url = mock_post.call_args.kwargs["url"]
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
-        assert (
-            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy" in url
-        )
+        assert "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy" in url
         assert "/invoke" in url
 
         # Validate request body follows OpenAI format
@@ -3443,9 +3292,7 @@ def test_bedrock_openai_imported_model():
         # Check image_url content
         assert user_msg["content"][1]["type"] == "image_url"
         assert "image_url" in user_msg["content"][1]
-        assert user_msg["content"][1]["image_url"]["url"].startswith(
-            "data:image/jpeg;base64,"
-        )
+        assert user_msg["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
         assert user_msg["content"][2]["type"] == "image_url"
         assert "image_url" in user_msg["content"][2]
@@ -3481,9 +3328,7 @@ def test_bedrock_nova_provider_detection():
 
     for model, expected in nova_test_cases:
         provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
-        assert (
-            provider == expected
-        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+        assert provider == expected, f"Failed for model: {model}, expected: {expected}, got: {provider}"
 
     # Verify that Amazon Titan models still return "amazon"
     titan_test_cases = [
@@ -3493,9 +3338,7 @@ def test_bedrock_nova_provider_detection():
 
     for model, expected in titan_test_cases:
         provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
-        assert (
-            provider == expected
-        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+        assert provider == expected, f"Failed for model: {model}, expected: {expected}, got: {provider}"
 
 
 def test_bedrock_openai_provider_detection():
@@ -3512,9 +3355,7 @@ def test_bedrock_openai_provider_detection():
 
     for model in test_cases:
         provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
-        assert (
-            provider == "openai"
-        ), f"Failed for model: {model}, got provider: {provider}"
+        assert provider == "openai", f"Failed for model: {model}, got provider: {provider}"
         print(f"✓ Provider detection works for: {model}")
 
 
@@ -3524,14 +3365,10 @@ def test_bedrock_openai_model_id_extraction():
     """
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    model = (
-        "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
-    )
+    model = "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
     provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
 
-    model_id = BaseAWSLLM.get_bedrock_model_id(
-        model=model, provider=provider, optional_params={}
-    )
+    model_id = BaseAWSLLM.get_bedrock_model_id(model=model, provider=provider, optional_params={})
 
     # The ARN should be double URL encoded
     assert "arn" in model_id
@@ -3718,27 +3555,15 @@ def test_bedrock_openai_explicit_route_check():
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
     # Test with openai/ prefix
+    assert BedrockModelInfo._explicit_openai_route("openai/arn:aws:bedrock:us-east-1:123:imported-model/test") is True
     assert (
-        BedrockModelInfo._explicit_openai_route(
-            "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
-        )
-        is True
-    )
-    assert (
-        BedrockModelInfo._explicit_openai_route(
-            "bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
-        )
+        BedrockModelInfo._explicit_openai_route("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test")
         is True
     )
 
     # Test without openai/ prefix
     assert BedrockModelInfo._explicit_openai_route("anthropic.claude-3-sonnet") is False
-    assert (
-        BedrockModelInfo._explicit_openai_route(
-            "arn:aws:bedrock:us-east-1:123:imported-model/test"
-        )
-        is False
-    )
+    assert BedrockModelInfo._explicit_openai_route("arn:aws:bedrock:us-east-1:123:imported-model/test") is False
 
     print("✓ Explicit route check works correctly")
 
@@ -3850,9 +3675,11 @@ def test_bedrock_openai_error_handling():
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
 
+
 # ============================================================================
 # Nova Grounding (web_search_options) Unit Tests (Mocked)
 # ============================================================================
+
 
 def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
@@ -4094,8 +3921,8 @@ def test_bedrock_nova_grounding_request_transformation():
             json=lambda: {
                 "output": {"message": {"role": "assistant", "content": [{"text": "Test"}]}},
                 "stopReason": "end_turn",
-                "usage": {"inputTokens": 10, "outputTokens": 5}
-            }
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+            },
         )
 
         try:
@@ -4131,3 +3958,60 @@ def test_bedrock_nova_grounding_request_transformation():
 
             assert system_tool_found, "systemTool with nova_grounding should be present"
             print("✓ web_search_options correctly transformed to systemTool")
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+        "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+    ],
+)
+def test_bedrock_invoke_native_structured_output(model):
+    """
+    Integration test: verify native structured outputs via Bedrock InvokeModel
+    for each supported Claude model.
+
+    Uses output_config.format (Bedrock InvokeModel native API) instead of
+    the synthetic json_tool_call workaround.
+    """
+    response = completion(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": "Classify the sentiment of 'I love this product!' as positive, negative, or neutral.",
+            }
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "sentiment",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "sentiment": {
+                            "type": "string",
+                            "enum": ["positive", "negative", "neutral"],
+                        }
+                    },
+                    "required": ["sentiment"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        max_tokens=100,
+    )
+    print(f"Response for {model}: {response}")
+
+    # Validate the response is a ModelResponse with valid JSON content
+    assert isinstance(response, ModelResponse)
+    content = response.choices[0].message.content
+    assert content is not None
+
+    parsed = json.loads(content)
+    assert "sentiment" in parsed
+    assert parsed["sentiment"] in ["positive", "negative", "neutral"]
