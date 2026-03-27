@@ -1,6 +1,6 @@
 # /containers
 
-Manage OpenAI code interpreter containers (sessions) for executing code in isolated environments.
+Manage code interpreter containers (sessions) for executing code in isolated environments.
 
 :::tip
 Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/guides/code_interpreter).
@@ -13,7 +13,7 @@ Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/
 | Load Balancing | ✅ |
 | Proxy Server Support | ✅ Full proxy integration with virtual keys |
 | Spend Management | ✅ Budget tracking and rate limiting |
-| Supported Providers | `openai`|
+| Supported Providers | `openai`, `azure`|
 
 :::tip
 
@@ -23,15 +23,20 @@ Containers provide isolated execution environments for code interpreter sessions
 
 ## **LiteLLM Python SDK Usage**
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 ### Quick Start
 
 **Create a Container**
 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```python
 import litellm
-import os 
+import os
 
-# setup env
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
 container = litellm.create_container(
@@ -47,11 +52,40 @@ print(f"Container ID: {container.id}")
 print(f"Container Name: {container.name}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+import litellm
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+container = litellm.create_container(
+    name="My Code Interpreter Container",
+    custom_llm_provider="azure",
+    expires_after={
+        "anchor": "last_active_at",
+        "minutes": 20
+    }
+)
+
+print(f"Container ID: {container.id}")
+print(f"Container Name: {container.name}")
+```
+
+</TabItem>
+</Tabs>
+
 ### Async Usage
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
 
 ```python
 from litellm import acreate_container
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
@@ -68,11 +102,40 @@ print(f"Container ID: {container.id}")
 print(f"Container Name: {container.name}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import acreate_container
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+container = await acreate_container(
+    name="My Code Interpreter Container",
+    custom_llm_provider="azure",
+    expires_after={
+        "anchor": "last_active_at",
+        "minutes": 20
+    }
+)
+
+print(f"Container ID: {container.id}")
+print(f"Container Name: {container.name}")
+```
+
+</TabItem>
+</Tabs>
+
 ### List Containers
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
 
 ```python
 from litellm import list_containers
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
@@ -87,13 +150,37 @@ for container in containers.data:
     print(f"  - {container.id}: {container.name}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import list_containers
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+containers = list_containers(
+    custom_llm_provider="azure",
+    limit=20,
+    order="desc"
+)
+
+print(f"Found {len(containers.data)} containers")
+for container in containers.data:
+    print(f"  - {container.id}: {container.name}")
+```
+
+</TabItem>
+</Tabs>
+
 **Async Usage:**
 
 ```python
 from litellm import alist_containers
 
 containers = await alist_containers(
-    custom_llm_provider="openai",
+    custom_llm_provider="openai",  # or "azure"
     limit=20,
     order="desc"
 )
@@ -105,9 +192,12 @@ for container in containers.data:
 
 ### Retrieve a Container
 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```python
 from litellm import retrieve_container
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
@@ -121,6 +211,29 @@ print(f"Status: {container.status}")
 print(f"Created: {container.created_at}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import retrieve_container
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+container = retrieve_container(
+    container_id="cntr_123...",
+    custom_llm_provider="azure"
+)
+
+print(f"Container: {container.name}")
+print(f"Status: {container.status}")
+print(f"Created: {container.created_at}")
+```
+
+</TabItem>
+</Tabs>
+
 **Async Usage:**
 
 ```python
@@ -128,7 +241,7 @@ from litellm import aretrieve_container
 
 container = await aretrieve_container(
     container_id="cntr_123...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 
 print(f"Container: {container.name}")
@@ -138,9 +251,12 @@ print(f"Created: {container.created_at}")
 
 ### Delete a Container
 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```python
 from litellm import delete_container
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
 
@@ -153,6 +269,28 @@ print(f"Deleted: {result.deleted}")
 print(f"Container ID: {result.id}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import delete_container
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+result = delete_container(
+    container_id="cntr_123...",
+    custom_llm_provider="azure"
+)
+
+print(f"Deleted: {result.deleted}")
+print(f"Container ID: {result.id}")
+```
+
+</TabItem>
+</Tabs>
+
 **Async Usage:**
 
 ```python
@@ -160,7 +298,7 @@ from litellm import adelete_container
 
 result = await adelete_container(
     container_id="cntr_123...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 
 print(f"Deleted: {result.deleted}")
@@ -177,7 +315,12 @@ LiteLLM provides OpenAI API compatible container endpoints for managing code int
 **Setup**
 
 ```bash
+# For OpenAI
 $ export OPENAI_API_KEY="sk-..."
+
+# For Azure OpenAI
+$ export AZURE_API_KEY="your-azure-api-key"
+$ export AZURE_API_BASE="https://your-resource.openai.azure.com"
 
 $ litellm
 
@@ -187,15 +330,17 @@ $ litellm
 **Custom Provider Specification**
 
 You can specify the custom LLM provider in multiple ways (priority order):
-1. Header: `-H "custom-llm-provider: openai"`
-2. Query param: `?custom_llm_provider=openai`
-3. Request body: `{"custom_llm_provider": "openai", ...}`
+1. Header: `-H "custom-llm-provider: openai"` (or `azure`)
+2. Query param: `?custom_llm_provider=openai` (or `azure`)
+3. Request body: `{"custom_llm_provider": "openai", ...}` (or `"azure"`)
 4. Defaults to "openai" if not specified
 
 **Create a Container**
 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```bash
-# Default provider (openai)
 curl -X POST "http://localhost:4000/v1/containers" \
     -H "Authorization: Bearer sk-1234" \
     -H "Content-Type: application/json" \
@@ -208,31 +353,35 @@ curl -X POST "http://localhost:4000/v1/containers" \
     }'
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
 ```bash
-# Via header
 curl -X POST "http://localhost:4000/v1/containers" \
     -H "Authorization: Bearer sk-1234" \
-    -H "custom-llm-provider: openai" \
+    -H "custom-llm-provider: azure" \
     -H "Content-Type: application/json" \
     -d '{
-        "name": "My Container"
+        "name": "My Container",
+        "expires_after": {
+            "anchor": "last_active_at",
+            "minutes": 20
+        }
     }'
 ```
 
-```bash
-# Via query parameter
-curl -X POST "http://localhost:4000/v1/containers?custom_llm_provider=openai" \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "name": "My Container"
-    }'
-```
+</TabItem>
+</Tabs>
 
 **List Containers**
 
 ```bash
+# OpenAI (default)
 curl "http://localhost:4000/v1/containers?limit=20&order=desc" \
+    -H "Authorization: Bearer sk-1234"
+
+# Azure OpenAI
+curl "http://localhost:4000/v1/containers?limit=20&order=desc&custom_llm_provider=azure" \
     -H "Authorization: Bearer sk-1234"
 ```
 
@@ -460,12 +609,7 @@ print(f"Deleted: {result.deleted}")
 | Provider    | Support Status | Notes |
 |-------------|----------------|-------|
 | OpenAI      | ✅ Supported   | Full support for all container operations |
-
-:::info
-
-Currently, only OpenAI supports container management for code interpreter sessions. Support for additional providers may be added in the future.
-
-:::
+| Azure OpenAI | ✅ Supported  | Full support for all container operations |
 
 ## Related
 

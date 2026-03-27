@@ -8846,6 +8846,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIContainerConfig()
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.containers.transformation import (
+                AzureOpenAIContainerConfig,
+            )
+
+            return AzureOpenAIContainerConfig()
         return None
 
     @staticmethod
