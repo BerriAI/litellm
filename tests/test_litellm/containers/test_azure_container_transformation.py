@@ -156,6 +156,29 @@ class TestAzureContainerTransformations:
         assert container.id == "cntr_azure_123"
         assert container.name == "Azure Container"
 
+    def test_transform_container_create_response_uses_azure_provider_for_cost(self):
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "cntr_azure_cost",
+            "object": "container",
+            "created_at": 1747857508,
+            "status": "running",
+            "expires_after": {"anchor": "last_active_at", "minutes": 20},
+            "last_active_at": 1747857508,
+            "name": "Azure Cost Test",
+        }
+        from unittest.mock import patch
+
+        with patch(
+            "litellm.llms.azure.containers.transformation.StandardBuiltInToolCostTracking.get_cost_for_code_interpreter"
+        ) as mock_cost:
+            mock_cost.return_value = 0.03
+            self.config.transform_container_create_response(
+                raw_response=mock_response,
+                logging_obj=self.logging_obj,
+            )
+            mock_cost.assert_called_once_with(sessions=1, provider="azure")
+
     def test_transform_container_list_response(self):
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = {

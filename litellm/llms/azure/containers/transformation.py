@@ -1,8 +1,15 @@
 from typing import Optional
 
+import httpx
+
 from litellm.constants import AZURE_DEFAULT_CONTAINERS_API_VERSION
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.types.containers.main import ContainerObject
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -46,3 +53,33 @@ class AzureOpenAIContainerConfig(OpenAIContainerConfig):
         return BaseAzureLLM._base_validate_azure_environment(
                 headers=headers, litellm_params=litellm_params
         )
+
+    def transform_container_create_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ContainerObject:
+        """Transform the Azure container creation response.
+
+        Overrides OpenAI's method to use provider="azure" for cost tracking.
+        """
+        response_data = raw_response.json()
+        container_obj = ContainerObject(**response_data)  # type: ignore[arg-type]
+
+        container_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
+            sessions=1,
+            provider="azure",
+        )
+
+        if (
+            not hasattr(container_obj, "_hidden_params")
+            or container_obj._hidden_params is None
+        ):
+            container_obj._hidden_params = {}
+        if "additional_headers" not in container_obj._hidden_params:
+            container_obj._hidden_params["additional_headers"] = {}
+        container_obj._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ] = container_cost
+
+        return container_obj
