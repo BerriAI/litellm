@@ -60,8 +60,41 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
-        """No mapping applied since inputs are in OpenAI spec already"""
-        return dict(response_api_optional_params)
+        """No mapping applied since inputs are in OpenAI spec already.
+
+        GPT-5 models have restrictions on temperature (only temperature=1
+        is accepted unless reasoning_effort='none' on models that support it).
+        Apply the same validation used by the chat completions path.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        params = dict(response_api_optional_params)
+
+        if OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            temperature = params.get("temperature")
+            if temperature is not None and temperature != 1:
+                reasoning = params.get("reasoning") or {}
+                effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+                supports_none = OpenAIGPT5Config._supports_reasoning_effort_level(
+                    model=model, level="none"
+                )
+                if supports_none and (effort == "none" or effort is None):
+                    pass  # flexible temperature allowed
+                elif drop_params or litellm.drop_params:
+                    params.pop("temperature", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=(
+                            "gpt-5 models don't support temperature={}. "
+                            "Only temperature=1 is supported. "
+                            "For models like gpt-5.1/5.4, temperature is supported "
+                            "when reasoning.effort='none' (or not specified). "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ).format(temperature),
+                        status_code=400,
+                    )
+
+        return params
 
     def transform_responses_api_request(
         self,
