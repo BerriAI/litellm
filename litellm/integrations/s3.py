@@ -1,7 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import hashlib
+import zlib
 from datetime import datetime
 from typing import Optional, cast
 
@@ -10,6 +10,15 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.types.utils import StandardLoggingPayload
 
 MAX_S3_FILENAME_STEM_LENGTH = 250
+
+
+def _long_filename_suffix(s3_file_name: str) -> str:
+    encoded_file_name = s3_file_name.encode("utf-8")
+    # Keep the suffix deterministic for collision avoidance without using a cryptographic hash.
+    return (
+        f"{zlib.crc32(encoded_file_name) & 0xFFFFFFFF:08x}"
+        f"{zlib.adler32(encoded_file_name) & 0xFFFFFFFF:08x}"
+    )
 
 
 class S3Logger:
@@ -189,9 +198,9 @@ def get_s3_object_key(
     s3_file_name: str,
 ) -> str:
     if len(s3_file_name) > MAX_S3_FILENAME_STEM_LENGTH:
-        digest = hashlib.sha256(s3_file_name.encode("utf-8")).hexdigest()[:16]
-        prefix_length = MAX_S3_FILENAME_STEM_LENGTH - len(digest) - 1
-        s3_file_name = f"{s3_file_name[:prefix_length]}_{digest}"
+        suffix = _long_filename_suffix(s3_file_name)
+        prefix_length = MAX_S3_FILENAME_STEM_LENGTH - len(suffix) - 1
+        s3_file_name = f"{s3_file_name[:prefix_length]}_{suffix}"
 
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")

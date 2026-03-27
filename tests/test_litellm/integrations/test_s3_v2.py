@@ -904,6 +904,24 @@ def test_get_s3_object_key_truncates_long_filename_components():
     assert filename.startswith(f"time-{start_time.strftime('%H-%M-%S-%f')}_resp_")
 
 
+def test_get_s3_object_key_uses_deterministic_suffixes_for_long_filename_components():
+    start_time = datetime(2026, 3, 26, 12, 51, 27, 995047)
+    shared_prefix = "resp_" + ("a" * 400)
+    first_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{shared_prefix}first"
+    second_file_name = (
+        f"time-{start_time.strftime('%H-%M-%S-%f')}_{shared_prefix}second"
+    )
+
+    first_key = get_s3_object_key("", "", start_time, first_file_name)
+    first_key_again = get_s3_object_key("", "", start_time, first_file_name)
+    second_key = get_s3_object_key("", "", start_time, second_file_name)
+
+    assert first_key == first_key_again
+    assert first_key != second_key
+    assert len(first_key.split("/")[-1]) <= 255
+    assert len(second_key.split("/")[-1]) <= 255
+
+
 def test_create_s3_batch_logging_element_limits_long_ids():
     start_time = datetime(2026, 3, 26, 12, 51, 27, 995047)
     long_response_id = "resp_" + ("a" * 400)
