@@ -21,6 +21,24 @@ def _long_filename_suffix(s3_file_name: str) -> str:
     )
 
 
+def _truncate_to_utf8_bytes(value: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+
+    encoded_value = value.encode("utf-8")
+    if len(encoded_value) <= max_bytes:
+        return value
+
+    truncated_value = encoded_value[:max_bytes]
+    while truncated_value:
+        try:
+            return truncated_value.decode("utf-8")
+        except UnicodeDecodeError:
+            truncated_value = truncated_value[:-1]
+
+    return ""
+
+
 class S3Logger:
     # Class variables or attributes
     def __init__(
@@ -197,10 +215,14 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
-    if len(s3_file_name) > MAX_S3_FILENAME_STEM_LENGTH:
+    if len(s3_file_name.encode("utf-8")) > MAX_S3_FILENAME_STEM_LENGTH:
         suffix = _long_filename_suffix(s3_file_name)
-        prefix_length = MAX_S3_FILENAME_STEM_LENGTH - len(suffix) - 1
-        s3_file_name = f"{s3_file_name[:prefix_length]}_{suffix}"
+        prefix_byte_length = max(
+            MAX_S3_FILENAME_STEM_LENGTH - len(suffix.encode("utf-8")) - 1,
+            0,
+        )
+        truncated_prefix = _truncate_to_utf8_bytes(s3_file_name, prefix_byte_length)
+        s3_file_name = f"{truncated_prefix}_{suffix}"
 
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")

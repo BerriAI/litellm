@@ -898,8 +898,8 @@ def test_get_s3_object_key_truncates_long_filename_components():
     )
     filename = key.split("/")[-1]
 
-    assert len(f"{original_file_name}.json") > 255
-    assert len(filename) <= 255
+    assert len(f"{original_file_name}.json".encode("utf-8")) > 255
+    assert len(filename.encode("utf-8")) <= 255
     assert filename.endswith(".json")
     assert filename.startswith(f"time-{start_time.strftime('%H-%M-%S-%f')}_resp_")
 
@@ -918,8 +918,23 @@ def test_get_s3_object_key_uses_deterministic_suffixes_for_long_filename_compone
 
     assert first_key == first_key_again
     assert first_key != second_key
-    assert len(first_key.split("/")[-1]) <= 255
-    assert len(second_key.split("/")[-1]) <= 255
+    assert len(first_key.split("/")[-1].encode("utf-8")) <= 255
+    assert len(second_key.split("/")[-1].encode("utf-8")) <= 255
+
+
+def test_get_s3_object_key_truncates_non_ascii_filename_components_by_utf8_bytes():
+    start_time = datetime(2026, 3, 26, 12, 51, 27, 995047)
+    long_response_id = "resp_" + ("漢" * 120)
+    original_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{long_response_id}"
+
+    key = get_s3_object_key("", "", start_time, original_file_name)
+    filename = key.split("/")[-1]
+
+    assert len(original_file_name) < 250
+    assert len(f"{original_file_name}.json".encode("utf-8")) > 255
+    assert len(filename.encode("utf-8")) <= 255
+    assert filename.endswith(".json")
+    assert filename.startswith(f"time-{start_time.strftime('%H-%M-%S-%f')}_resp_")
 
 
 def test_create_s3_batch_logging_element_limits_long_ids():
@@ -939,5 +954,5 @@ def test_create_s3_batch_logging_element_limits_long_ids():
         result = logger.create_s3_batch_logging_element(start_time, payload)
 
     assert result is not None
-    assert len(result.s3_object_key.split("/")[-1]) <= 255
+    assert len(result.s3_object_key.split("/")[-1].encode("utf-8")) <= 255
     assert result.s3_object_key.endswith(".json")
