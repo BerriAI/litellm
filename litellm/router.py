@@ -54,7 +54,11 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
-from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.constants import (
+    DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
+    DEFAULT_MAX_LRU_CACHE_SIZE,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -113,6 +117,7 @@ from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
 )
+from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -303,6 +308,8 @@ class Router:
         deployment_affinity_ttl_seconds: int = 3600,
         model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
         ignore_invalid_deployments: bool = False,
+        enable_health_check_routing: bool = False,
+        health_check_staleness_threshold: Optional[int] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -493,6 +500,13 @@ class Router:
             cache=self.cache, default_cooldown_time=self.cooldown_time
         )
         self.disable_cooldowns = disable_cooldowns
+        self.enable_health_check_routing = enable_health_check_routing
+        _staleness = health_check_staleness_threshold or (
+            DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
+        )
+        self.health_state_cache = DeploymentHealthCache(
+            cache=self.cache, staleness_threshold=float(_staleness)
+        )
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
@@ -9154,6 +9168,14 @@ class Router:
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
 
+        # Health-check-based filtering (before cooldown)
+        healthy_deployments = (
+            await self._async_filter_health_check_unhealthy_deployments(
+                healthy_deployments=healthy_deployments,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+
         cooldown_deployments = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
@@ -9585,6 +9607,13 @@ class Router:
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
             request_kwargs
         )
+
+        # Health-check-based filtering (before cooldown)
+        healthy_deployments = self._filter_health_check_unhealthy_deployments(
+            healthy_deployments=healthy_deployments,
+            parent_otel_span=parent_otel_span,
+        )
+
         cooldown_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
@@ -9750,9 +9779,13 @@ class Router:
                 llm_provider="",
             )
 
-        # 4. Apply cooldown filtering
+        # 4. Apply health-check and cooldown filtering
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
             request_kwargs
+        )
+        pass_through_deployments = self._filter_health_check_unhealthy_deployments(
+            healthy_deployments=pass_through_deployments,
+            parent_otel_span=parent_otel_span,
         )
         cooldown_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
@@ -9874,6 +9907,67 @@ class Router:
             for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
         ]
+
+    async def _async_filter_health_check_unhealthy_deployments(
+        self,
+        healthy_deployments: List[Dict],
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[Dict]:
+        """
+        Filter out deployments marked unhealthy by background health checks.
+        No-op when enable_health_check_routing is False.
+        Returns all deployments if health state is unavailable, stale, or would
+        exclude every candidate (safety net).
+        """
+        if not self.enable_health_check_routing:
+            return healthy_deployments
+
+        unhealthy_ids = (
+            await self.health_state_cache.async_get_unhealthy_deployment_ids(
+                parent_otel_span=parent_otel_span
+            )
+        )
+        if not unhealthy_ids:
+            return healthy_deployments
+
+        filtered = [
+            d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids
+        ]
+
+        if not filtered:
+            verbose_router_logger.warning(
+                "All deployments marked unhealthy by health checks, bypassing health filter"
+            )
+            return healthy_deployments
+
+        return filtered
+
+    def _filter_health_check_unhealthy_deployments(
+        self,
+        healthy_deployments: List[Dict],
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[Dict]:
+        """Sync version of _async_filter_health_check_unhealthy_deployments."""
+        if not self.enable_health_check_routing:
+            return healthy_deployments
+
+        unhealthy_ids = self.health_state_cache.get_unhealthy_deployment_ids(
+            parent_otel_span=parent_otel_span
+        )
+        if not unhealthy_ids:
+            return healthy_deployments
+
+        filtered = [
+            d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids
+        ]
+
+        if not filtered:
+            verbose_router_logger.warning(
+                "All deployments marked unhealthy by health checks, bypassing health filter"
+            )
+            return healthy_deployments
+
+        return filtered
 
     def _filter_pass_through_deployments(
         self, healthy_deployments: List[Dict]
