@@ -33,6 +33,7 @@ jobs:
           # attacker-controlled string (the branch name) and could contain
           # unusual characters that cause unexpected git behavior.
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true  # needed for git push
 
       - name: Reject symlinked schema files
         run: |
