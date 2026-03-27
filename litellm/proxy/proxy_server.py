@@ -37,7 +37,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json
 
-from litellm._litellm_uuid import uuid
+from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
