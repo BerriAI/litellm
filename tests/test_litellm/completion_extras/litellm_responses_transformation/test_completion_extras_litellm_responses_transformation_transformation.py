@@ -2127,9 +2127,10 @@ def test_convert_chat_completion_file_type_to_input_file():
         }
     ]
 
-    input_items, instructions = (
-        handler.convert_chat_completion_messages_to_responses_api(messages)
-    )
+    (
+        input_items,
+        instructions,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
 
     assert len(input_items) == 1
     msg = input_items[0]
@@ -2176,11 +2177,257 @@ def test_convert_chat_completion_file_type_with_file_id():
         }
     ]
 
-    input_items, instructions = (
-        handler.convert_chat_completion_messages_to_responses_api(messages)
-    )
+    (
+        input_items,
+        instructions,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
 
     content = input_items[0]["content"]
     assert content[1]["type"] == "input_file"
     assert content[1]["file_id"] == "file-abc123"
     assert "file_data" not in content[1]
+
+
+# =============================================================================
+# Tests for reasoning_items round-trip (encrypted_content preservation)
+# =============================================================================
+
+
+def test_reasoning_items_non_streaming_round_trip():
+    """
+    Non-streaming: verify that reasoning_items (with encrypted_content) are:
+      1. Extracted from ResponseReasoningItem and attached to the Message.
+      2. Emitted as a 'reasoning' input item when the assistant message is
+         passed back to convert_chat_completion_messages_to_responses_api.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    encrypted = "gAAAAABpw5abc123FAKE=="
+    summary_text = "**Thinking about it**\n\nSome reasoning here."
+
+    reasoning_item = ResponseReasoningItem(
+        id="rs_test001",
+        summary=[Summary(text=summary_text, type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted,
+        status=None,
+    )
+    output_message = ResponseOutputMessage(
+        id="msg_test001",
+        content=[
+            ResponseOutputText(
+                annotations=[],
+                text="The answer is 42.",
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
+        total_tokens=30,
+        cost=None,
+    )
+    raw_response = ResponsesAPIResponse(
+        id="resp_test001",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5-mini",
+        object="response",
+        output=[reasoning_item, output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-test001",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="gpt-5-mini",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5-mini"},
+        messages=[{"role": "user", "content": "What is the answer?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # ── Part 1: reasoning_items on the response message ──────────────────────
+    assert len(result.choices) == 1
+    msg = result.choices[0].message
+
+    assert (
+        msg.reasoning_content == summary_text
+    ), "reasoning_content should equal summary text"
+
+    assert msg.reasoning_items is not None, "reasoning_items should be set"
+    assert len(msg.reasoning_items) == 1
+    ri = msg.reasoning_items[0]
+    assert ri["type"] == "reasoning"
+    assert ri["id"] == "rs_test001"
+    assert ri["encrypted_content"] == encrypted, "encrypted_content must be preserved"
+    assert len(ri["summary"]) == 1
+    assert ri["summary"][0]["text"] == summary_text
+
+    # ── Part 2: reasoning item round-trips through message history ────────────
+    history = [
+        {"role": "user", "content": "What is the answer?"},
+        {
+            "role": "assistant",
+            "content": msg.content,
+            "reasoning_items": msg.reasoning_items,
+        },
+        {"role": "user", "content": "Can you elaborate?"},
+    ]
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(history)
+
+    # The reasoning input item must appear before the assistant message item
+    types = [item.get("type") for item in input_items]
+    assert (
+        "reasoning" in types
+    ), "reasoning input item must be emitted for the assistant turn"
+
+    reasoning_input = next(
+        item for item in input_items if item.get("type") == "reasoning"
+    )
+    assert reasoning_input["id"] == "rs_test001"
+    assert reasoning_input["encrypted_content"] == encrypted
+    assert reasoning_input["summary"][0]["text"] == summary_text
+
+    # reasoning item must come before the assistant message item
+    reasoning_idx = types.index("reasoning")
+    assistant_msg_idx = next(
+        i
+        for i, item in enumerate(input_items)
+        if item.get("type") == "message" and item.get("role") == "assistant"
+    )
+    assert (
+        reasoning_idx < assistant_msg_idx
+    ), "reasoning input item must precede the assistant message item"
+
+
+def test_reasoning_items_streaming_emitted_on_response_completed():
+    """
+    Streaming: verify that reasoning_items (with encrypted_content) are emitted
+    on the delta of the response.completed chunk, enabling the caller to
+    round-trip them in subsequent requests.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    encrypted = "gAAAAABpw5xyz987FAKE=="
+    summary_text = "**Reasoning summary**\n\nModel thought about this carefully."
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_stream001",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_stream001",
+                    "encrypted_content": encrypted,
+                    "summary": [{"type": "summary_text", "text": summary_text}],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_stream001",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "The answer."}],
+                    "status": "completed",
+                },
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) == 1
+    delta = result.choices[0].delta
+
+    # finish_reason must be set (response is complete)
+    assert result.choices[0].finish_reason == "stop"
+
+    # reasoning_items must be on the delta
+    assert (
+        getattr(delta, "reasoning_items", None) is not None
+    ), "reasoning_items must be present on the response.completed delta"
+    assert len(delta.reasoning_items) == 1
+    ri = delta.reasoning_items[0]
+    assert ri["type"] == "reasoning"
+    assert ri["id"] == "rs_stream001"
+    assert (
+        ri["encrypted_content"] == encrypted
+    ), "encrypted_content must be preserved in streaming"
+    assert ri["summary"][0]["text"] == summary_text
