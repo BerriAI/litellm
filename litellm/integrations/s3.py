@@ -1,12 +1,34 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
+import hashlib
 from datetime import datetime
 from typing import Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.utils import StandardLoggingPayload
+
+# Some S3-compatible servers with a filesystem backend (e.g. rustfs, MinIO on
+# Windows/Linux) enforce the 255-byte POSIX filename limit on individual path
+# components.  Standard AWS S3 supports keys up to 1 024 bytes total, so we
+# leave plenty of headroom while staying well within the POSIX limit.
+_MAX_S3_KEY_COMPONENT_LEN = 200
+
+
+def _truncate_s3_component(name: str) -> str:
+    """Shorten *name* to at most ``_MAX_S3_KEY_COMPONENT_LEN`` characters.
+
+    When truncation is needed the last 32 characters are replaced with the
+    MD5 hex-digest of the *full* original name so that the shortened key
+    remains unique.
+    """
+    if len(name) <= _MAX_S3_KEY_COMPONENT_LEN:
+        return name
+    digest = hashlib.md5(name.encode()).hexdigest()  # 32 hex chars
+    # Keep as much of the original prefix as possible, then append the digest.
+    prefix_len = _MAX_S3_KEY_COMPONENT_LEN - 33  # 32 digest + 1 separator
+    return name[:prefix_len] + "-" + digest
 
 
 class S3Logger:
@@ -146,11 +168,14 @@ class S3Logger:
                 s3_file_name,
             )
 
+            # Truncate the download filename so it fits within the 255-byte
+            # POSIX limit used by filesystem-backed S3-compatible servers.
+            payload_id = _truncate_s3_component(payload["id"])
             s3_object_download_filename = (
                 "time-"
                 + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f")
                 + "_"
-                + payload["id"]
+                + payload_id
                 + ".json"
             )
 
@@ -185,12 +210,23 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
+    """Build the S3 object key for a logging payload.
+
+    The ``s3_file_name`` component is automatically shortened when it exceeds
+    ``_MAX_S3_KEY_COMPONENT_LEN`` characters.  Filesystem-backed S3-compatible
+    servers (e.g. rustfs, MinIO on Windows/Linux) enforce the 255-byte POSIX
+    filename limit on individual path components, while standard AWS S3
+    supports keys up to 1 024 bytes total.  Shortening only the file-name
+    segment keeps the key unique and human-readable while staying safely
+    within both limits.
+    """
+    safe_file_name = _truncate_s3_component(s3_file_name)
     s3_object_key = (
         (s3_path.rstrip("/") + "/" if s3_path else "")
         + prefix
         + start_time.strftime("%Y-%m-%d")
         + "/"
-        + s3_file_name
+        + safe_file_name
     )  # we need the s3 key to include the time, so we log cache hits too
     s3_object_key += ".json"
     return s3_object_key
