@@ -180,9 +180,9 @@ class TestOllamaChatConfigResponseFormat:
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
         # Empty string content should NOT be forwarded to Ollama
-        assert result["messages"][0].get("content", None) in (None, "")
+        assert "content" not in result["messages"][0], "Empty content list must NOT forward 'content' key"
         # No images either
-        assert "images" not in result["messages"][0] or result["messages"][0]["images"] == []
+        assert "images" not in result["messages"][0], "Empty content list must NOT set images key"
 
     def test_transform_request_image_extraction(self):
         """Test that images are properly extracted from messages in transform_request"""
@@ -747,9 +747,10 @@ class TestOllamaImageUrlFix:
         # Image must be present
         assert "images" in msg
         assert msg["images"][0] == "/9j/abc123"
-        # Empty string content must NOT be forwarded
-        assert msg.get("content", "") == "", (
-            "Image-only messages should not have a non-empty 'content' key"
+        # Image-only messages must NOT forward empty content string
+        assert "content" not in msg, (
+            "Image-only messages must not set the 'content' key at all; "
+            "empty string content must NOT be forwarded to Ollama"
         )
 
     def test_text_only_message_no_empty_images_list(self):
