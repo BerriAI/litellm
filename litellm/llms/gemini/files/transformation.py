@@ -4,25 +4,8 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
+from datetime import datetime
 from typing import Any, List, Literal, Optional
-
-
-def _parse_gemini_create_time(create_time: str) -> int:
-    """Parse Gemini's createTime string to a Unix timestamp.
-
-    Gemini sometimes omits sub-second precision (e.g. "2026-03-26T10:00:00Z"
-    instead of "2026-03-26T10:00:00.000000Z"), which causes strptime to fail
-    when using the %f directive. Try both formats before giving up.
-    """
-    normalized = create_time.replace("Z", "+00:00")
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
-        try:
-            return int(time.mktime(time.strptime(normalized, fmt)))
-        except ValueError:
-            continue
-    msg = f"Unable to parse Gemini createTime: {create_time!r}"
-    raise ValueError(msg)
-
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -44,6 +27,24 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LlmProviders
 
 from ..common_utils import GeminiModelInfo
+
+
+def _parse_gemini_create_time(create_time: str) -> int:
+    """Parse Gemini's createTime string to a Unix timestamp.
+
+    Gemini sometimes omits sub-second precision (e.g. "2026-03-26T10:00:00Z"
+    instead of "2026-03-26T10:00:00.000000Z"), which causes strptime to fail
+    when using the %f directive. Try both formats before giving up.
+    Uses datetime.strptime(...).timestamp() to correctly handle UTC regardless
+    of the server's local timezone.
+    """
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return int(datetime.strptime(create_time, fmt).timestamp())
+        except ValueError:
+            continue
+    msg = f"Unable to parse Gemini createTime: {create_time!r}"
+    raise ValueError(msg)
 
 
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):

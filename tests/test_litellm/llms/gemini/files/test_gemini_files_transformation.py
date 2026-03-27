@@ -10,6 +10,7 @@ import httpx
 
 from litellm.llms.gemini.files.transformation import (
     GoogleAIStudioFilesHandler,
+    _parse_gemini_create_time,
 )
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -296,3 +297,28 @@ class TestGoogleAIStudioFilesTransformation:
         assert file_id in url
         assert "generativelanguage.googleapis.com" in url
         assert params == {}
+
+
+class TestParseGeminiCreateTime:
+    """Regression tests for _parse_gemini_create_time helper"""
+
+    def test_parses_createtime_with_microseconds(self):
+        """Standard format with microseconds should parse correctly"""
+        result = _parse_gemini_create_time("2024-01-15T10:30:00.123456Z")
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_parses_createtime_without_microseconds(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/24626
+        Gemini sometimes returns createTime without sub-second precision,
+        e.g. "2026-03-26T10:00:00Z". This used to raise ValueError with %f.
+        """
+        result = _parse_gemini_create_time("2026-03-26T10:00:00Z")
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_raises_on_invalid_format(self):
+        """Completely invalid format should raise ValueError"""
+        with pytest.raises(ValueError, match="Unable to parse Gemini createTime"):
+            _parse_gemini_create_time("not-a-date")
