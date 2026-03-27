@@ -1421,6 +1421,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
+        ## Ensure metadata only contains user_id (only documented field in Anthropic Messages API)
+        if "metadata" in optional_params and isinstance(
+            optional_params["metadata"], dict
+        ):
+            _user_id = optional_params["metadata"].get("user_id")
+            if _user_id is not None:
+                optional_params["metadata"] = {"user_id": _user_id}
+            else:
+                optional_params.pop("metadata")
+
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
 
