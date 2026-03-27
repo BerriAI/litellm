@@ -37,7 +37,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json
 
-from litellm._uuid import uuid
+from litellm._litellm_uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
@@ -2110,6 +2110,37 @@ def _schedule_background_health_check_db_save(
             checked_by=checked_by,
         )
     )
+
+
+def _write_health_state_to_router_cache(
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+) -> None:
+    """
+    Write deployment health states to the router's health state cache
+    for health-check-driven routing. No-op if the feature is disabled.
+    """
+    from litellm.proxy.health_check import build_deployment_health_states
+
+    try:
+        if llm_router is None or not llm_router.enable_health_check_routing:
+            return
+
+        states = build_deployment_health_states(
+            healthy_endpoints=healthy_endpoints,
+            unhealthy_endpoints=unhealthy_endpoints,
+        )
+        if states:
+            llm_router.health_state_cache.set_deployment_health_states(states)
+            verbose_proxy_logger.debug(
+                "health_check_routing_state_updated healthy=%d unhealthy=%d",
+                sum(1 for s in states.values() if s.get("is_healthy")),
+                sum(1 for s in states.values() if not s.get("is_healthy")),
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to write health state to router cache: %s", str(e)
+        )
 
 
 async def _run_background_health_check():
@@ -6282,9 +6313,8 @@ class ProxyStartupEvent:
                     KeyRotationManager,
                 )
 
-                # Get prisma_client and proxy_logging_obj from global scope
+                # Get prisma_client from global scope
                 global prisma_client
-                global proxy_logging_obj
                 if prisma_client is not None:
                     key_rotation_manager = KeyRotationManager(prisma_client)
                     verbose_proxy_logger.debug(

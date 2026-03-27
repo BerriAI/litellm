@@ -207,17 +207,23 @@ async def _perform_health_check(
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]
+        _model_id = (model.get("model_info") or {}).get("id")
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            healthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
-            )
+            endpoint_data = {**litellm_params, **is_healthy}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            healthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         elif isinstance(is_healthy, dict):
-            unhealthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
-            )
+            endpoint_data = {**litellm_params, **is_healthy}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         else:
-            unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
+            endpoint_data = {**litellm_params}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
 
     return healthy_endpoints, unhealthy_endpoints
 
