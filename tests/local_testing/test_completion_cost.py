@@ -583,12 +583,14 @@ def test_gemini_completion_cost(provider):
     output_cost = output_tokens * model_info["output_cost_per_token"]
 
     ## CALCULATED COST
-    calculated_input_cost, calculated_output_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model=model_name,
         prompt_tokens=prompt_tokens,
         completion_tokens=output_tokens,
         custom_llm_provider=provider,
     )
+    calculated_input_cost = input_bd["total"]
+    calculated_output_cost = output_bd["total"]
 
     assert calculated_input_cost == input_cost
     assert calculated_output_cost == output_cost
@@ -613,12 +615,14 @@ def test_vertex_ai_completion_cost():
     expected_input_cost = prompt_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATED COST
-    calculated_input_cost, calculated_output_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model="gemini-2.0-flash",
         custom_llm_provider="vertex_ai",
         prompt_tokens=prompt_tokens,
         completion_tokens=0,
     )
+    calculated_input_cost = input_bd["total"]
+    calculated_output_cost = output_bd["total"]
 
     assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
     print("expected_input_cost: {}".format(expected_input_cost))
@@ -721,12 +725,14 @@ def test_vertex_ai_embedding_completion_cost(caplog):
     expected_input_cost = input_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATED COST
-    calculated_input_cost, calculated_output_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model="text-embedding-004",
         custom_llm_provider="vertex_ai",
         prompt_tokens=input_tokens,
         call_type="aembedding",
     )
+    calculated_input_cost = input_bd["total"]
+    calculated_output_cost = output_bd["total"]
 
     assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
     print("expected_input_cost: {}".format(expected_input_cost))
@@ -908,7 +914,9 @@ def test_completion_cost_anthropic():
         "call_type": "acompletion",
     }
 
-    input_cost, output_cost = cost_per_token(**data)
+    input_bd, output_bd = cost_per_token(**data)
+    input_cost = input_bd["total"]
+    output_cost = output_bd["total"]
 
     assert input_cost > 0
     assert output_cost > 0
@@ -2261,25 +2269,31 @@ def test_completion_cost_params():
     Relevant Issue: https://github.com/BerriAI/litellm/issues/6133
     """
     litellm.set_verbose = True
-    resp1_prompt_cost, resp1_completion_cost = cost_per_token(
+    resp1_input_bd, resp1_output_bd = cost_per_token(
         model="gemini-2.0-flash",
         prompt_tokens=1000,
         completion_tokens=1000,
         custom_llm_provider="vertex_ai_beta",
     )
+    resp1_prompt_cost = resp1_input_bd["total"]
+    resp1_completion_cost = resp1_output_bd["total"]
 
-    resp2_prompt_cost, resp2_completion_cost = cost_per_token(
+    resp2_input_bd, resp2_output_bd = cost_per_token(
         model="gemini-2.0-flash", prompt_tokens=1000, completion_tokens=1000
     )
+    resp2_prompt_cost = resp2_input_bd["total"]
+    resp2_completion_cost = resp2_output_bd["total"]
 
     assert resp2_prompt_cost > 0
 
     assert resp1_prompt_cost == resp2_prompt_cost
     assert resp1_completion_cost == resp2_completion_cost
 
-    resp3_prompt_cost, resp3_completion_cost = cost_per_token(
+    resp3_input_bd, resp3_output_bd = cost_per_token(
         model="vertex_ai/gemini-2.0-flash", prompt_tokens=1000, completion_tokens=1000
     )
+    resp3_prompt_cost = resp3_input_bd["total"]
+    resp3_completion_cost = resp3_output_bd["total"]
 
     assert resp3_prompt_cost > 0
 
@@ -2295,11 +2309,13 @@ def test_completion_cost_params_2():
 
     prompt_tokens = 1000
     completion_tokens = 1000
-    resp1_prompt_cost, resp1_completion_cost = cost_per_token(
+    resp1_input_bd, resp1_output_bd = cost_per_token(
         model="gemini-2.0-flash",
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+    resp1_prompt_cost = resp1_input_bd["total"]
+    resp1_completion_cost = resp1_output_bd["total"]
 
     print(resp1_prompt_cost, resp1_completion_cost)
 

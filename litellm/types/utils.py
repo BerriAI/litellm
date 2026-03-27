@@ -2768,6 +2768,33 @@ class CachingDetails(TypedDict):
     """
 
 
+class _InputCostBreakdownPublicRequired(TypedDict):
+    total: float
+
+
+class InputCostBreakdownPublic(_InputCostBreakdownPublicRequired, total=False):
+    """Granular breakdown of input/prompt token costs (public-facing, stored in spend logs)."""
+
+    text_cost: float
+    cache_read_cost: float
+    cache_creation_cost: float
+    audio_cost: float
+    image_cost: float
+
+
+class _OutputCostBreakdownPublicRequired(TypedDict):
+    total: float
+
+
+class OutputCostBreakdownPublic(_OutputCostBreakdownPublicRequired, total=False):
+    """Granular breakdown of output/completion token costs (public-facing, stored in spend logs)."""
+
+    text_cost: float
+    reasoning_cost: float
+    audio_cost: float
+    image_cost: float
+
+
 class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request
@@ -2788,6 +2815,8 @@ class CostBreakdown(TypedDict, total=False):
     margin_percent: float  # Margin percentage applied (e.g., 0.10 = 10%) (optional)
     margin_fixed_amount: float  # Fixed margin amount in USD (optional)
     margin_total_amount: float  # Total margin added in USD (optional)
+    input_cost_breakdown: InputCostBreakdownPublic  # Granular input cost components
+    output_cost_breakdown: OutputCostBreakdownPublic  # Granular output cost components
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):

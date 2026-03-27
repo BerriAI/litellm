@@ -12,6 +12,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import InputCostBreakdown, OutputCostBreakdown
 from litellm.types.utils import ServerToolUse
 
 
@@ -3103,13 +3104,21 @@ def test_fast_mode_cost_calculation():
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        InputCostBreakdown,
+        OutputCostBreakdown,
+    )
+
     base_prompt = 0.005
     base_completion = 0.025
 
     with patch(
         "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
     ) as mock_cost, patch("litellm.get_model_info") as mock_info:
-        mock_cost.return_value = (base_prompt, base_completion)
+        mock_cost.return_value = (
+            InputCostBreakdown(total=base_prompt, text_cost=base_prompt),
+            OutputCostBreakdown(total=base_completion, text_cost=base_completion),
+        )
         mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
 
         usage_fast = Usage(
@@ -3118,7 +3127,7 @@ def test_fast_mode_cost_calculation():
             speed="fast",
         )
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="claude-opus-4-6",
             usage=usage_fast,
         )
@@ -3129,8 +3138,8 @@ def test_fast_mode_cost_calculation():
         assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
 
         # 1.1x multiplier applied
-        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
-        assert abs(completion_cost - base_completion * 1.1) < 1e-10
+        assert abs(input_bd["total"] - base_prompt * 1.1) < 1e-10
+        assert abs(output_bd["total"] - base_completion * 1.1) < 1e-10
 
 
 def test_fast_mode_with_inference_geo():
@@ -3139,6 +3148,10 @@ def test_fast_mode_with_inference_geo():
     provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
 
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        InputCostBreakdown,
+        OutputCostBreakdown,
+    )
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
@@ -3148,7 +3161,10 @@ def test_fast_mode_with_inference_geo():
     with patch(
         "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
     ) as mock_cost, patch("litellm.get_model_info") as mock_info:
-        mock_cost.return_value = (base_prompt, base_completion)
+        mock_cost.return_value = (
+            InputCostBreakdown(total=base_prompt, text_cost=base_prompt),
+            OutputCostBreakdown(total=base_completion, text_cost=base_completion),
+        )
         mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
 
         usage = Usage(
@@ -3158,7 +3174,7 @@ def test_fast_mode_with_inference_geo():
             inference_geo="us",
         )
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="claude-opus-4-6",
             usage=usage,
         )
@@ -3170,8 +3186,8 @@ def test_fast_mode_with_inference_geo():
 
         # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
         expected_multiplier = 1.1 * 1.1
-        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
-        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
+        assert abs(input_bd["total"] - base_prompt * expected_multiplier) < 1e-10
+        assert abs(output_bd["total"] - base_completion * expected_multiplier) < 1e-10
 
 
 def test_fast_mode_parameter_in_supported_params():

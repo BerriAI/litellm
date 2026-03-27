@@ -7,6 +7,10 @@ Handles tiered pricing and prompt caching scenarios.
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    InputCostBreakdown,
+    OutputCostBreakdown,
+)
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -124,8 +128,8 @@ def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
     tiered_pricing: Optional[List[dict]],
-) -> float:
-    """Calculate total prompt cost including cached tokens."""
+) -> Tuple[float, float]:
+    """Calculate prompt text cost and cache read cost separately."""
     if tiered_pricing:
         text_cost = _calculate_tiered_cost(
             tokens=breakdown.text_tokens,
@@ -138,28 +142,27 @@ def _calculate_prompt_cost(
             cost_key="cache_read_input_token_cost",
             fallback_cost_key="input_cost_per_token",
         )
-        return text_cost + cache_cost
+        return text_cost, cache_cost
 
     input_cost = float(model_info.get("input_cost_per_token") or 0.0)
 
-    # For cache_cost, first try the specific key, then fall back to input_cost.
     cache_cost_val = model_info.get("cache_read_input_token_cost")
     if cache_cost_val is None:
-        cache_cost = input_cost
+        cache_rate = input_cost
     else:
-        cache_cost = float(cache_cost_val)
+        cache_rate = float(cache_cost_val)
 
-    return (breakdown.text_tokens * input_cost) + (breakdown.cached_tokens * cache_cost)
+    return (breakdown.text_tokens * input_cost), (breakdown.cached_tokens * cache_rate)
 
 
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
     tiered_pricing: Optional[List[dict]],
-) -> float:
-    """Calculate total completion cost including reasoning tokens."""
+) -> Tuple[float, float]:
+    """Calculate completion text cost and reasoning cost separately."""
     if tiered_pricing:
-        completion_cost = _calculate_tiered_cost(
+        text_cost = _calculate_tiered_cost(
             tokens=breakdown.completion_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="output_cost_per_token",
@@ -170,23 +173,24 @@ def _calculate_completion_cost(
             cost_key="output_cost_per_reasoning_token",
             fallback_cost_key="output_cost_per_token",
         )
-        return completion_cost + reasoning_cost
+        return text_cost, reasoning_cost
 
     output_cost = float(model_info.get("output_cost_per_token") or 0.0)
 
-    # For reasoning_cost, first try the specific key, then fall back to output_cost.
     reasoning_cost_val = model_info.get("output_cost_per_reasoning_token")
     if reasoning_cost_val is None:
-        reasoning_cost = output_cost
+        reasoning_rate = output_cost
     else:
-        reasoning_cost = float(reasoning_cost_val)
+        reasoning_rate = float(reasoning_cost_val)
 
-    return (breakdown.completion_tokens * output_cost) + (
-        breakdown.reasoning_tokens * reasoning_cost
+    return (breakdown.completion_tokens * output_cost), (
+        breakdown.reasoning_tokens * reasoning_rate
     )
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculate cost per token for Dashscope models.
 
@@ -197,7 +201,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         usage: LiteLLM Usage block
 
     Returns:
-        Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
+        Tuple[InputCostBreakdown, OutputCostBreakdown] - granular input and output cost breakdowns
     """
     model_info = get_model_info(model=model, custom_llm_provider="dashscope")
     breakdown = _extract_token_breakdown(usage)
@@ -207,11 +211,22 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         else None
     )
 
-    prompt_cost = _calculate_prompt_cost(
+    text_cost, cache_read_cost = _calculate_prompt_cost(
         breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
     )
-    completion_cost = _calculate_completion_cost(
+    output_text_cost, reasoning_cost = _calculate_completion_cost(
         breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
     )
 
-    return prompt_cost, completion_cost
+    return (
+        InputCostBreakdown(
+            total=text_cost + cache_read_cost,
+            text_cost=text_cost,
+            cache_read_cost=cache_read_cost,
+        ),
+        OutputCostBreakdown(
+            total=output_text_cost + reasoning_cost,
+            text_cost=output_text_cost,
+            reasoning_cost=reasoning_cost,
+        ),
+    )

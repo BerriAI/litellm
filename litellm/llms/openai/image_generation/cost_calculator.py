@@ -4,7 +4,7 @@ Cost calculator for OpenAI image generation models (gpt-image-1, gpt-image-1-min
 These models use token-based pricing instead of pixel-based pricing like DALL-E.
 """
 
-from typing import Optional
+from typing import Any, Optional, cast
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -48,21 +48,21 @@ def cost_calculator(
         from litellm.responses.utils import ResponseAPILoggingUtils
 
         chat_usage = (
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(cast(Any, usage))
         )
 
     # Use generic_cost_per_token for cost calculation
-    prompt_cost, completion_cost = generic_cost_per_token(
+    _input_bd, _output_bd = generic_cost_per_token(
         model=model,
         usage=chat_usage,
         custom_llm_provider=custom_llm_provider or "openai",
     )
 
-    total_cost = prompt_cost + completion_cost
+    total_cost = _input_bd["total"] + _output_bd["total"]
 
     verbose_logger.debug(
         f"OpenAI gpt-image cost calculation for {model}: "
-        f"prompt_cost=${prompt_cost:.6f}, completion_cost=${completion_cost:.6f}, "
+        f"prompt_cost=${_input_bd['total']:.6f}, completion_cost=${_output_bd['total']:.6f}, "
         f"total=${total_cost:.6f}"
     )
 

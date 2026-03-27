@@ -7,12 +7,16 @@ Handles the context caching for Gemini API.
 from typing import TYPE_CHECKING, Optional, Tuple
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        InputCostBreakdown,
+        OutputCostBreakdown,
+    )
     from litellm.types.utils import ModelInfo, Usage
 
 
 def cost_per_token(
     model: str, usage: "Usage", service_tier: Optional[str] = None
-) -> Tuple[float, float]:
+) -> Tuple["InputCostBreakdown", "OutputCostBreakdown"]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 

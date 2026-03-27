@@ -40,7 +40,9 @@ class TestXAICostCalculator:
         """Test basic cost calculation without reasoning tokens."""
         usage = Usage(prompt_tokens=12, completion_tokens=125, total_tokens=137)
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
@@ -66,7 +68,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
@@ -92,7 +96,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
@@ -119,7 +125,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-4", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-4:
         # Input: 10 tokens * $3e-6 = $0.00003
@@ -145,9 +153,11 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="grok-3-fast-beta", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-3-fast-beta:
         # Input: 20 tokens * $5e-6 = $0.0001
@@ -162,7 +172,9 @@ class TestXAICostCalculator:
         """Test cost calculation when completion_tokens_details is not present."""
         usage = Usage(prompt_tokens=12, completion_tokens=125, total_tokens=137)
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Should fall back to basic calculation
         expected_prompt_cost = 12 * 3e-7
@@ -186,7 +198,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs:
         # Input: 12 tokens * $3e-7 = $0.0000036
@@ -213,7 +227,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        input_bd, output_bd = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-4-fast-reasoning with tiered pricing:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -240,7 +256,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        input_bd, output_bd = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-4-fast-reasoning with regular pricing:
         # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
@@ -266,7 +284,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-latest", usage=usage)
+        input_bd, output_bd = cost_per_token(model="xai/grok-4-latest", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-4-latest with tiered pricing:
         # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
@@ -292,7 +312,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        input_bd, output_bd = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Expected costs for grok-4-fast-reasoning:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -311,7 +333,9 @@ class TestXAICostCalculator:
             total_tokens=200000,
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+        input_bd, output_bd = cost_per_token(model="grok-3-mini", usage=usage)
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # grok-3-mini doesn't have tiered pricing, so should use regular rates:
         # Input: 150000 tokens * $3e-7 (regular rate) = $0.045
@@ -396,9 +420,11 @@ class TestXAICostCalculator:
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
         usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="grok-4.20-beta-0309-reasoning", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Input: 100 tokens * $2e-6 = $0.0002
         # Output: 200 tokens * $6e-6 = $0.0012
@@ -412,9 +438,11 @@ class TestXAICostCalculator:
         """Test cost calculation for grok-4.20-beta-0309-non-reasoning model."""
         usage = Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150)
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="grok-4.20-beta-0309-non-reasoning", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Input: 50 tokens * $2e-6 = $0.0001
         # Output: 100 tokens * $6e-6 = $0.0006
@@ -428,9 +456,11 @@ class TestXAICostCalculator:
         """Test cost calculation for grok-4.20-multi-agent-beta-0309 model."""
         usage = Usage(prompt_tokens=200, completion_tokens=300, total_tokens=500)
 
-        prompt_cost, completion_cost = cost_per_token(
+        input_bd, output_bd = cost_per_token(
             model="grok-4.20-multi-agent-beta-0309", usage=usage
         )
+        prompt_cost = input_bd["total"]
+        completion_cost = output_bd["total"]
 
         # Input: 200 tokens * $2e-6 = $0.0004
         # Output: 300 tokens * $6e-6 = $0.0018

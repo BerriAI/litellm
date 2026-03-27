@@ -453,30 +453,36 @@ class TestBedrockGovCloudSupport:
         usage = Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)
         
         # Test base model with standard region
-        base_prompt_cost, base_completion_cost = cost_per_token(
+        base_input_bd, base_output_bd = cost_per_token(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
             region_name="us-east-1",
         )
+        base_prompt_cost = base_input_bd["total"]
+        base_completion_cost = base_output_bd["total"]
         
         # Test gov models with gov regions
-        gov_east_prompt_cost, gov_east_completion_cost = cost_per_token(
+        gov_east_input_bd, gov_east_output_bd = cost_per_token(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
             region_name="us-gov-east-1",
         )
+        gov_east_prompt_cost = gov_east_input_bd["total"]
+        gov_east_completion_cost = gov_east_output_bd["total"]
         
-        gov_west_prompt_cost, gov_west_completion_cost = cost_per_token(
+        gov_west_input_bd, gov_west_output_bd = cost_per_token(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
             region_name="us-gov-west-1",
         )
+        gov_west_prompt_cost = gov_west_input_bd["total"]
+        gov_west_completion_cost = gov_west_output_bd["total"]
         
         # Expected costs:
         # Base model: 20 * 3e-06 + 10 * 1.5e-05 = 0.00006 + 0.00015 = 0.00021

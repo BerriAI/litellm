@@ -237,11 +237,13 @@ def test_vercel_ai_gateway_glm46_cost_math():
     key = "vercel_ai_gateway/zai/glm-4.6"
     info = litellm.model_cost[key]
 
-    prompt_cost, completion_cost = cost_per_token(
+    input_bd, output_bd = cost_per_token(
         model="vercel_ai_gateway/zai/glm-4.6",
         prompt_tokens=1000,
         completion_tokens=500,
     )
+    prompt_cost = input_bd["total"]
+    completion_cost = output_bd["total"]
 
     assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
     assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)

@@ -422,6 +422,33 @@ def calculate_cache_writing_cost(
     return total_cost
 
 
+class _InputCostBreakdownRequired(TypedDict):
+    total: float
+
+
+class InputCostBreakdown(_InputCostBreakdownRequired, total=False):
+    """Granular breakdown of input/prompt token costs."""
+
+    text_cost: float
+    cache_read_cost: float
+    cache_creation_cost: float
+    audio_cost: float
+    image_cost: float
+
+
+class _OutputCostBreakdownRequired(TypedDict):
+    total: float
+
+
+class OutputCostBreakdown(_OutputCostBreakdownRequired, total=False):
+    """Granular breakdown of output/completion token costs."""
+
+    text_cost: float
+    reasoning_cost: float
+    audio_cost: float
+    image_cost: float
+
+
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
     cache_creation_tokens: int
@@ -549,41 +576,46 @@ def _calculate_input_cost(
     cache_creation_cost: float,
     cache_creation_cost_above_1hr: float,
     service_tier: Optional[str] = None,
-) -> float:
+) -> InputCostBreakdown:
     """
     Calculates the input cost for a given model, prompt tokens, and completion tokens.
+
+    Returns an InputCostBreakdown with per-component costs and a total.
     """
-    prompt_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
+    breakdown = InputCostBreakdown(total=0.0)
 
-    ### CACHE READ COST - Now uses tiered pricing
-    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
+    text_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
+    breakdown["text_cost"] = text_cost
 
-    ### AUDIO COST
+    cache_rd_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
+    breakdown["cache_read_cost"] = cache_rd_cost
+
+    audio_cost_val = 0.0
     if prompt_tokens_details["audio_tokens"]:
         audio_cost_key = _get_service_tier_cost_key(
             "input_cost_per_audio_token", service_tier
         )
-        prompt_cost += calculate_cost_component(
+        audio_cost_val = calculate_cost_component(
             model_info, audio_cost_key, prompt_tokens_details["audio_tokens"]
         )
+    breakdown["audio_cost"] = audio_cost_val
 
-    ### IMAGE TOKEN COST
+    image_cost_val = 0.0
     if prompt_tokens_details["image_tokens"]:
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
         image_token_cost_key = "input_cost_per_image_token"
         if model_info.get(image_token_cost_key) is None:
             image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(
+        image_cost_val = calculate_cost_component(
             model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
         )
+    breakdown["image_cost"] = image_cost_val
 
-    ### CACHE WRITING COST - Now uses tiered pricing
+    cache_cr_cost = 0.0
     if (
         prompt_tokens_details["cache_creation_tokens"]
         or prompt_tokens_details["cache_creation_token_details"] is not None
     ):
-        prompt_cost += calculate_cache_writing_cost(
+        cache_cr_cost = calculate_cache_writing_cost(
             cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
             cache_creation_token_details=prompt_tokens_details[
                 "cache_creation_token_details"
@@ -591,30 +623,37 @@ def _calculate_input_cost(
             cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
             cache_creation_cost=cache_creation_cost,
         )
+    breakdown["cache_creation_cost"] = cache_cr_cost
 
-    ### CHARACTER COST
+    extra_cost = 0.0
     if prompt_tokens_details["character_count"]:
-        prompt_cost += calculate_cost_component(
+        extra_cost += calculate_cost_component(
             model_info,
             "input_cost_per_character",
             prompt_tokens_details["character_count"],
         )
-
-    ### IMAGE COUNT COST
     if prompt_tokens_details["image_count"]:
-        prompt_cost += calculate_cost_component(
+        extra_cost += calculate_cost_component(
             model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
         )
-
-    ### VIDEO LENGTH COST
     if prompt_tokens_details["video_length_seconds"]:
-        prompt_cost += calculate_cost_component(
+        extra_cost += calculate_cost_component(
             model_info,
             "input_cost_per_video_per_second",
             prompt_tokens_details["video_length_seconds"],
         )
+    # Fold character/image-count/video costs into text_cost (they are non-token input costs)
+    breakdown["text_cost"] = breakdown.get("text_cost", 0.0) + extra_cost
 
-    return prompt_cost
+    breakdown["total"] = (
+        breakdown.get("text_cost", 0.0)
+        + breakdown.get("cache_read_cost", 0.0)
+        + breakdown.get("cache_creation_cost", 0.0)
+        + breakdown.get("audio_cost", 0.0)
+        + breakdown.get("image_cost", 0.0)
+    )
+
+    return breakdown
 
 
 def generic_cost_per_token(  # noqa: PLR0915
@@ -622,7 +661,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     usage: Usage,
     custom_llm_provider: str,
     service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -633,7 +672,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         - usage: LiteLLM Usage block, containing anthropic caching information
 
     Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        Tuple[InputCostBreakdown, OutputCostBreakdown] - granular input and output cost breakdowns
     """
 
     ## GET MODEL INFO
@@ -641,7 +680,6 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
     ### PROCESSING COST
     prompt_tokens_details = PromptTokensDetailsResult(
         cache_hit_tokens=0,
@@ -696,7 +734,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         model_info=model_info, usage=usage, service_tier=service_tier
     )
 
-    prompt_cost = _calculate_input_cost(
+    input_breakdown = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
         prompt_base_cost=prompt_base_cost,
@@ -719,15 +757,9 @@ def generic_cost_per_token(  # noqa: PLR0915
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
 
-    # Handle text_tokens calculation:
-    # 1. If text_tokens is explicitly provided and > 0, use it
-    # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
-    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
     has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
     if text_tokens == 0:
         if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
             text_tokens = max(
                 0,
                 usage.completion_tokens
@@ -736,13 +768,17 @@ def generic_cost_per_token(  # noqa: PLR0915
                 - image_tokens,
             )
         else:
-            # No breakdown at all, all tokens are text tokens
             text_tokens = usage.completion_tokens
             is_text_tokens_total = True
+
+    output_breakdown = OutputCostBreakdown(total=0.0)
+
     ## TEXT COST
-    completion_cost = float(text_tokens) * completion_base_cost
+    output_text_cost = float(text_tokens) * completion_base_cost
+    output_breakdown["text_cost"] = output_text_cost
 
     ## AUDIO COST
+    output_audio_cost = 0.0
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
         _output_cost_per_audio_token = _get_cost_per_unit(
             model_info, "output_cost_per_audio_token", None
@@ -752,9 +788,11 @@ def generic_cost_per_token(  # noqa: PLR0915
             if _output_cost_per_audio_token is not None
             else completion_base_cost
         )
-        completion_cost += float(audio_tokens) * _output_cost_per_audio_token
+        output_audio_cost = float(audio_tokens) * _output_cost_per_audio_token
+    output_breakdown["audio_cost"] = output_audio_cost
 
     ## REASONING COST
+    output_reasoning_cost = 0.0
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
         _output_cost_per_reasoning_token = _get_cost_per_unit(
             model_info, "output_cost_per_reasoning_token", None
@@ -764,9 +802,13 @@ def generic_cost_per_token(  # noqa: PLR0915
             if _output_cost_per_reasoning_token is not None
             else completion_base_cost
         )
-        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+        output_reasoning_cost = (
+            float(reasoning_tokens) * _output_cost_per_reasoning_token
+        )
+    output_breakdown["reasoning_cost"] = output_reasoning_cost
 
     ## IMAGE COST
+    output_image_cost = 0.0
     if not is_text_tokens_total and image_tokens and image_tokens > 0:
         _output_cost_per_image_token = _get_cost_per_unit(
             model_info, "output_cost_per_image_token", None
@@ -776,9 +818,14 @@ def generic_cost_per_token(  # noqa: PLR0915
             if _output_cost_per_image_token is not None
             else completion_base_cost
         )
-        completion_cost += float(image_tokens) * _output_cost_per_image_token
+        output_image_cost = float(image_tokens) * _output_cost_per_image_token
+    output_breakdown["image_cost"] = output_image_cost
 
-    return prompt_cost, completion_cost
+    output_breakdown["total"] = (
+        output_text_cost + output_audio_cost + output_reasoning_cost + output_image_cost
+    )
+
+    return input_breakdown, output_breakdown
 
 
 def calculate_image_response_cost_from_usage(
@@ -831,12 +878,12 @@ def calculate_image_response_cost_from_usage(
         ),
     )
 
-    prompt_cost, completion_cost = generic_cost_per_token(
+    input_breakdown, output_breakdown = generic_cost_per_token(
         model=model,
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
     )
-    return prompt_cost + completion_cost
+    return input_breakdown["total"] + output_breakdown["total"]
 
 
 class CostCalculatorUtils:

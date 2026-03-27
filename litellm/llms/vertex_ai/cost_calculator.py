@@ -5,6 +5,8 @@ from typing import Literal, Optional, Tuple, Union
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    InputCostBreakdown,
+    OutputCostBreakdown,
     _is_above_128k,
     generic_cost_per_token,
 )
@@ -89,11 +91,12 @@ def cost_per_character(
 
     ## CALCULATE INPUT COST
     if prompt_characters is None:
-        prompt_cost, _ = cost_per_token(
+        _input_bd, _ = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+        prompt_cost = _input_bd["total"]
     else:
         try:
             if (
@@ -126,19 +129,21 @@ def cost_per_character(
                     str(e)
                 )
             )
-            prompt_cost, _ = cost_per_token(
+            _input_bd, _ = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
             )
+            prompt_cost = _input_bd["total"]
 
     ## CALCULATE OUTPUT COST
     if completion_characters is None:
-        _, completion_cost = cost_per_token(
+        _, _output_bd = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+        completion_cost = _output_bd["total"]
     else:
         completion_tokens = usage.completion_tokens
         try:
@@ -173,11 +178,12 @@ def cost_per_character(
                     str(e)
                 )
             )
-            _, completion_cost = cost_per_token(
+            _, _output_bd = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
             )
+            completion_cost = _output_bd["total"]
 
     return prompt_cost, completion_cost
 
@@ -225,7 +231,7 @@ def cost_per_token(
     custom_llm_provider: str,
     usage: Usage,
     service_tier: Optional[str] = None,
-) -> Tuple[float, float]:
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -238,7 +244,7 @@ def cost_per_token(
           ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
 
     Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        Tuple[InputCostBreakdown, OutputCostBreakdown] - granular input and output cost breakdowns
 
     Raises:
         Exception if model requires >128k pricing, but model cost not mapped
@@ -260,9 +266,13 @@ def cost_per_token(
         input_cost_per_token_above_128k_tokens is not None
         or output_cost_per_token_above_128k_tokens is not None
     ):
-        return _handle_128k_pricing(
+        prompt_cost, completion_cost = _handle_128k_pricing(
             model_info=model_info,
             usage=usage,
+        )
+        return (
+            InputCostBreakdown(total=prompt_cost, text_cost=prompt_cost),
+            OutputCostBreakdown(total=completion_cost, text_cost=completion_cost),
         )
 
     return generic_cost_per_token(

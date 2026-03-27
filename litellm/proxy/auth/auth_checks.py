@@ -188,6 +188,7 @@ async def _run_project_checks(
     skip_budget_checks: bool,
     valid_token: Optional[UserAPIKeyAuth],
     proxy_logging_obj: ProxyLogging,
+    team_object: Optional[LiteLLM_TeamTable] = None,
 ) -> None:
     """
     Run all project-level checks: blocked, model access, budget, soft budget.
@@ -204,11 +205,28 @@ async def _run_project_checks(
 
     # 2.2 If project can call model
     if _model and len(project_object.models) > 0:
-        can_project_access_model(
-            model=_model,
-            project_object=project_object,
-            llm_router=llm_router,
-        )
+        resolved_models = list(project_object.models)
+
+        if SpecialModelNames.all_proxy_models.value in resolved_models:
+            pass  # all-proxy-models grants access to everything, skip the check
+        elif SpecialModelNames.all_team_models.value in resolved_models:
+            if team_object is not None and team_object.models:
+                resolved_models = list(team_object.models)
+            else:
+                resolved_models = []
+            if len(resolved_models) > 0:
+                _can_object_call_model(
+                    model=_model,
+                    llm_router=llm_router,
+                    models=resolved_models,
+                    object_type="project",
+                )
+        else:
+            can_project_access_model(
+                model=_model,
+                project_object=project_object,
+                llm_router=llm_router,
+            )
 
     if not skip_budget_checks:
         # 3.0.2. If project is in budget
@@ -464,6 +482,7 @@ async def common_checks(  # noqa: PLR0915
             skip_budget_checks=skip_budget_checks,
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
+            team_object=team_object,
         )
 
     # If this is a free model, skip all budget checks

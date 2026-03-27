@@ -6,7 +6,11 @@ Helper util for handling openai-specific cost calculation
 from typing import Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    InputCostBreakdown,
+    OutputCostBreakdown,
+    generic_cost_per_token,
+)
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -20,7 +24,7 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
 
 def cost_per_token(
     model: str, usage: Usage, service_tier: Optional[str] = None
-) -> Tuple[float, float]:
+) -> Tuple[InputCostBreakdown, OutputCostBreakdown]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -29,9 +33,8 @@ def cost_per_token(
         - usage: LiteLLM Usage block, containing anthropic caching information
 
     Returns:
-        Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
+        Tuple[InputCostBreakdown, OutputCostBreakdown] - granular input and output cost breakdowns
     """
-    ## CALCULATE INPUT COST
     return generic_cost_per_token(
         model=model,
         usage=usage,
