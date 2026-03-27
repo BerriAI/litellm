@@ -39,7 +39,7 @@ def _extract_cache_params() -> Dict[str, Any]:
     if litellm.cache is None:
         return {}
     try:
-        cache_params = vars(litellm.cache.cache)
+        cache_params = dict(vars(litellm.cache.cache))
         if cache_params.get("redis_kwargs"):
             if not cache_params.get("host"):
                 cache_params["host"] = cache_params["redis_kwargs"].get("host")
