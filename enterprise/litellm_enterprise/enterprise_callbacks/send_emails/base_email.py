@@ -612,9 +612,9 @@ class BaseEmailLogger(CustomLogger):
             else "LiteLLM Notification"
         )
 
-        recipient_email: Optional[str] = (
-            user_email or await self._lookup_user_email_from_db(user_id=user_id)
-        )
+        recipient_email: Optional[
+            str
+        ] = user_email or await self._lookup_user_email_from_db(user_id=user_id)
         if recipient_email is None:
             raise ValueError(
                 f"User email not found for user_id: {user_id}. User email is required to send email."

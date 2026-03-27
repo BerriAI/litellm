@@ -6,6 +6,7 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -176,6 +177,19 @@ class JWTHandler:
 
         return []
 
+    def get_team_aliases_from_jwt(self, token: dict) -> List[str]:
+        if self.litellm_jwtauth.team_aliases_jwt_field is not None:
+            team_aliases = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_aliases_jwt_field,
+                default=[],
+            )
+            if not isinstance(team_aliases, list):
+                return []
+            return team_aliases
+
+        return []
+
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
@@ -196,12 +210,14 @@ class JWTHandler:
     def is_required_team_id(self) -> bool:
         """
         Returns:
-        - True: if 'team_id_jwt_field' or 'team_alias_jwt_field' is set
-        - False: if neither is set
+        - True: if 'team_id_jwt_field', 'team_alias_jwt_field', 'team_ids_jwt_field', or 'team_aliases_jwt_field' is set
+        - False: if none is set
         """
         if (
             self.litellm_jwtauth.team_id_jwt_field is None
             and self.litellm_jwtauth.team_alias_jwt_field is None
+            and self.litellm_jwtauth.team_ids_jwt_field is None
+            and self.litellm_jwtauth.team_aliases_jwt_field is None
         ):
             return False
         return True
@@ -1014,6 +1030,38 @@ class JWTAuthManager:
         return all_team_ids
 
     @staticmethod
+    async def resolve_team_aliases_to_ids(
+        aliases: List[str],
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        parent_otel_span: Optional[Span],
+        proxy_logging_obj: ProxyLogging,
+    ) -> Set[str]:
+        """Resolve a list of team aliases to team IDs via concurrent DB lookups."""
+
+        async def _resolve_one(alias: str) -> Optional[str]:
+            try:
+                team_object = await get_team_object_by_alias(
+                    team_alias=alias,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                # get_team_object_by_alias raises on not-found; this is a defensive check
+                if team_object and team_object.team_id:
+                    return team_object.team_id
+                return None
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to resolve team alias '%s' to team_id: %s", alias, e
+                )
+                return None
+
+        results = await asyncio.gather(*[_resolve_one(alias) for alias in aliases])
+        return {team_id for team_id in results if team_id is not None}
+
+    @staticmethod
     async def find_team_with_model_access(
         team_ids: Set[str],
         requested_model: Optional[str],
@@ -1462,6 +1510,18 @@ class JWTAuthManager:
         )
         if specific_team_id:
             all_team_ids.add(specific_team_id)
+
+        # Resolve team_aliases_jwt_field (list of team names → team IDs)
+        team_aliases = jwt_handler.get_team_aliases_from_jwt(jwt_valid_token)
+        if team_aliases:
+            resolved_ids = await JWTAuthManager.resolve_team_aliases_to_ids(
+                aliases=team_aliases,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            all_team_ids.update(resolved_ids)
 
         header_team_id = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,

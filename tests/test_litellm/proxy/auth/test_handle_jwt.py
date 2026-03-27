@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
@@ -1761,4 +1762,112 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
 
     error_msg = str(exc_info.value)
     assert "Hint" not in error_msg
+
+
+@pytest.mark.asyncio
+async def test_get_team_aliases_from_jwt():
+    """Test that get_team_aliases_from_jwt() correctly extracts a list of team aliases."""
+    jwt_handler = JWTHandler()
+
+    token = {"team_names": ["engineering", "platform"]}
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_aliases_jwt_field="team_names"
+    )
+    assert jwt_handler.get_team_aliases_from_jwt(token) == ["engineering", "platform"]
+
+    # Returns empty list when field is not configured
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    assert jwt_handler.get_team_aliases_from_jwt(token) == []
+
+    # Returns empty list when field is absent from token
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_aliases_jwt_field="nonexistent"
+    )
+    assert jwt_handler.get_team_aliases_from_jwt(token) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_aliases_to_ids():
+    """Test that resolve_team_aliases_to_ids() correctly resolves aliases to team IDs.
+
+    get_team_object_by_alias raises HTTPException(404) when not found — it never
+    returns None — so the mock mirrors that contract.
+    """
+    from fastapi import HTTPException
+
+    team_a = LiteLLM_TeamTable(team_id="id-engineering", team_alias="engineering")
+    team_b = LiteLLM_TeamTable(team_id="id-platform", team_alias="platform")
+    _lookup = {"engineering": team_a, "platform": team_b}
+
+    async def mock_get_by_alias(team_alias, **kwargs):
+        if team_alias not in _lookup:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team '{team_alias}' not found"},
+            )
+        return _lookup[team_alias]
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+        side_effect=mock_get_by_alias,
+    ):
+        result = await JWTAuthManager.resolve_team_aliases_to_ids(
+            aliases=["engineering", "platform"],
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert result == {"id-engineering", "id-platform"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_aliases_skips_not_found():
+    """Test that aliases that cannot be resolved are silently skipped.
+
+    The real get_team_object_by_alias raises HTTPException(404) when the alias
+    does not exist in the database — it never returns None.  The exception
+    handler in resolve_team_aliases_to_ids is the only path that handles the
+    not-found case; this test exercises that path directly.
+    """
+    from fastapi import HTTPException
+
+    team_a = LiteLLM_TeamTable(team_id="id-engineering", team_alias="engineering")
+
+    async def mock_get_by_alias(team_alias, **kwargs):
+        if team_alias == "engineering":
+            return team_a
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team with alias '{team_alias}' doesn't exist in db"},
+        )
+
+    with patch(
+        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+        side_effect=mock_get_by_alias,
+    ):
+        result = await JWTAuthManager.resolve_team_aliases_to_ids(
+            aliases=["engineering", "unknown-team"],
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert result == {"id-engineering"}
+
+
+@pytest.mark.asyncio
+async def test_get_team_aliases_from_jwt_nested_field():
+    """Test that dot-notation nested fields are correctly extracted."""
+    jwt_handler = JWTHandler()
+
+    token = {"org": {"teams": ["engineering", "platform"]}}
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_aliases_jwt_field="org.teams"
+    )
+    assert jwt_handler.get_team_aliases_from_jwt(token) == ["engineering", "platform"]
 
