@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -300,6 +301,7 @@ class Router:
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
         deployment_affinity_ttl_seconds: int = 3600,
+        model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
         ignore_invalid_deployments: bool = False,
     ) -> None:
         """
@@ -640,6 +642,9 @@ class Router:
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
         ] = model_group_retry_policy
+        self.model_group_affinity_config: Optional[
+            Dict[str, List[str]]
+        ] = model_group_affinity_config
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -659,6 +664,26 @@ class Router:
 
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
+
+        # If model_group_affinity_config is set but no global affinity checks were
+        # enabled, we still need the DeploymentAffinityCheck callback (with global
+        # flags all False) so per-group config can activate affinity per model group.
+        if self.model_group_affinity_config and not any(
+            isinstance(cb, DeploymentAffinityCheck)
+            for cb in (self.optional_callbacks or [])
+        ):
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+            affinity_callback = DeploymentAffinityCheck(
+                cache=self.cache,
+                ttl_seconds=self.deployment_affinity_ttl_seconds,
+                enable_user_key_affinity=False,
+                enable_responses_api_affinity=False,
+                enable_session_id_affinity=False,
+                model_group_affinity_config=self.model_group_affinity_config,
+            )
+            self.optional_callbacks.append(affinity_callback)
+            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -728,8 +753,14 @@ class Router:
         """
         Initializes either a RedisCache or RedisClusterCache based on the cache_config.
         """
-        if cache_config.get("startup_nodes"):
-            return RedisClusterCache(**cache_config)
+        startup_nodes = cache_config.get("startup_nodes")
+        if not startup_nodes:
+            _env_cluster_nodes = get_secret("REDIS_CLUSTER_NODES")
+            if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
+                startup_nodes = json.loads(_env_cluster_nodes)
+
+        if startup_nodes:
+            return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})
         else:
             return RedisCache(**cache_config)
 
@@ -911,7 +942,19 @@ class Router:
 
     def _initialize_vector_store_endpoints(self):
         """Initialize vector store endpoints."""
-        from litellm.vector_stores.main import asearch, create, search
+        from litellm.vector_stores.main import (
+            adelete,
+            alist,
+            aretrieve,
+            asearch,
+            aupdate,
+            create,
+            delete,
+            list,
+            retrieve,
+            search,
+            update,
+        )
 
         self.avector_store_search = self.factory_function(
             asearch, call_type="avector_store_search"
@@ -921,6 +964,30 @@ class Router:
         )
         self.vector_store_create = self.factory_function(
             create, call_type="vector_store_create"
+        )
+        self.avector_store_retrieve = self.factory_function(
+            aretrieve, call_type="avector_store_retrieve"
+        )
+        self.vector_store_retrieve = self.factory_function(
+            retrieve, call_type="vector_store_retrieve"
+        )
+        self.avector_store_list = self.factory_function(
+            alist, call_type="avector_store_list"
+        )
+        self.vector_store_list = self.factory_function(
+            list, call_type="vector_store_list"
+        )
+        self.avector_store_update = self.factory_function(
+            aupdate, call_type="avector_store_update"
+        )
+        self.vector_store_update = self.factory_function(
+            update, call_type="vector_store_update"
+        )
+        self.avector_store_delete = self.factory_function(
+            adelete, call_type="avector_store_delete"
+        )
+        self.vector_store_delete = self.factory_function(
+            delete, call_type="vector_store_delete"
         )
 
     def _initialize_vector_store_file_endpoints(self):
@@ -1033,12 +1100,20 @@ class Router:
         """Initialize video endpoints."""
         from litellm.videos import (
             avideo_content,
+            avideo_create_character,
+            avideo_edit,
+            avideo_extension,
             avideo_generation,
+            avideo_get_character,
             avideo_list,
             avideo_remix,
             avideo_status,
             video_content,
+            video_create_character,
+            video_edit,
+            video_extension,
             video_generation,
+            video_get_character,
             video_list,
             video_remix,
             video_status,
@@ -1068,6 +1143,26 @@ class Router:
             avideo_remix, call_type="avideo_remix"
         )
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
+        self.avideo_create_character = self.factory_function(
+            avideo_create_character, call_type="avideo_create_character"
+        )
+        self.video_create_character = self.factory_function(
+            video_create_character, call_type="video_create_character"
+        )
+        self.avideo_get_character = self.factory_function(
+            avideo_get_character, call_type="avideo_get_character"
+        )
+        self.video_get_character = self.factory_function(
+            video_get_character, call_type="video_get_character"
+        )
+        self.avideo_edit = self.factory_function(avideo_edit, call_type="avideo_edit")
+        self.video_edit = self.factory_function(video_edit, call_type="video_edit")
+        self.avideo_extension = self.factory_function(
+            avideo_extension, call_type="avideo_extension"
+        )
+        self.video_extension = self.factory_function(
+            video_extension, call_type="video_extension"
+        )
 
     def _initialize_container_endpoints(self):
         """Initialize container endpoints."""
@@ -1240,6 +1335,10 @@ class Router:
                 existing_affinity_callback.ttl_seconds = (
                     self.deployment_affinity_ttl_seconds
                 )
+                if self.model_group_affinity_config:
+                    existing_affinity_callback.model_group_affinity_config = (
+                        self.model_group_affinity_config
+                    )
             else:
                 affinity_callback = DeploymentAffinityCheck(
                     cache=self.cache,
@@ -1247,6 +1346,7 @@ class Router:
                     enable_user_key_affinity=enable_user_key_affinity,
                     enable_responses_api_affinity=enable_responses_api_affinity,
                     enable_session_id_affinity=enable_session_id_affinity,
+                    model_group_affinity_config=self.model_group_affinity_config,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -1450,22 +1550,48 @@ class Router:
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
+
+        Guarantee metadata isolation: safe_deep_copy falls back to the original
+        reference when deepcopy fails (e.g. metadata contains UserAPIKeyAuth with
+        parent_otel_span — an OTel Span that is not deepcopy-able). Force a shallow
+        copy of the metadata dict so mutations (model_group, is_silent_experiment)
+        never corrupt the main call's metadata.
         """
-        # Copy kwargs to ensure isolation (use safe_deep_copy to handle non-serializable objects like OTEL spans)
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
         silent_kwargs = safe_deep_copy(kwargs)
+
+        # safe_deep_copy may fall back to the original metadata reference when
+        # deepcopy fails (UserAPIKeyAuth.parent_otel_span is not deepcopy-able).
+        # Detect this via identity check and force a shallow copy so that setting
+        # model_group / is_silent_experiment on the silent dict doesn't corrupt
+        # the primary call's metadata.
+        original_metadata = kwargs.get("metadata")
+        if (
+            original_metadata is not None
+            and silent_kwargs.get("metadata") is original_metadata
+        ):
+            silent_kwargs["metadata"] = dict(original_metadata)
+
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
 
+        # OTel spans are not safe to use across event loops. The silent
+        # experiment runs in a new event loop, so strip the span to prevent
+        # cross-loop tracing races or span corruption.
+        silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
+
         silent_kwargs["metadata"]["is_silent_experiment"] = True
+
+        # Force stream=False so the response is fully consumed and callbacks fire
+        silent_kwargs["stream"] = False
 
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)
         silent_kwargs.pop("litellm_call_id", None)
         silent_kwargs.pop("litellm_logging_obj", None)
         silent_kwargs.pop("standard_logging_object", None)
-        silent_kwargs.pop("proxy_server_request", None)
+        # DON'T pop proxy_server_request — it's needed for spend log metadata
 
         return silent_kwargs
 
@@ -1488,12 +1614,33 @@ class Router:
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
 
-            # Trigger the silent request
-            self.completion(
-                model=silent_model,
-                messages=cast(List[Dict[str, str]], messages),
-                **silent_kwargs,
-            )
+            # Override model_group to correctly attribute metrics to the silent model
+            silent_kwargs["metadata"]["model_group"] = silent_model
+
+            # Create a new event loop for this thread so that async success
+            # callbacks (e.g. _ProxyDBLogger) can schedule and run DB writes.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+
+                async def _run_silent_completion():
+                    await self.acompletion(
+                        model=silent_model,
+                        messages=cast(List[AllMessageValues], messages),
+                        **silent_kwargs,
+                    )
+                    # Drain any fire-and-forget tasks (e.g. alerting hooks)
+                    # scheduled via asyncio.create_task during acompletion.
+                    pending = asyncio.all_tasks()
+                    current = asyncio.current_task()
+                    if current is not None:
+                        pending.discard(current)
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+
+                loop.run_until_complete(_run_silent_completion())
+            finally:
+                loop.close()
         except Exception as e:
             verbose_router_logger.error(
                 f"Silent experiment failed for model {silent_model}: {str(e)}"
@@ -1699,7 +1846,9 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                self._combine_fallback_usage(
+                                    fallback_item, complete_response_object_usage
+                                )
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -1819,13 +1968,11 @@ class Router:
                     router_self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
-                    fallback_response = (
-                        router_self.function_with_fallbacks(
-                            **initial_kwargs,
-                            fallbacks=fallbacks,
-                            context_window_fallbacks=context_window_fallbacks,
-                            content_policy_fallbacks=content_policy_fallbacks,
-                        )
+                    fallback_response = router_self.function_with_fallbacks(
+                        **initial_kwargs,
+                        fallbacks=fallbacks,
+                        context_window_fallbacks=context_window_fallbacks,
+                        content_policy_fallbacks=content_policy_fallbacks,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -1835,7 +1982,9 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                router_self._combine_fallback_usage(
+                                    fallback_item, complete_response_object_usage
+                                )
                             yield fallback_item
                     else:
                         yield None
@@ -1885,6 +2034,8 @@ class Router:
             )
 
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
+            # Override model_group to correctly attribute metrics to the silent model
+            silent_kwargs["metadata"]["model_group"] = silent_model
 
             # Trigger the silent request
             await self.acompletion(
@@ -2747,10 +2898,9 @@ class Router:
         litellm_model = data.get("model", None)
 
         # litellm_agent/ prefix only strips the model name, no prompt_id needed
-        is_litellm_agent_model = (
-            isinstance(litellm_model, str)
-            and litellm_model.startswith("litellm_agent/")
-        )
+        is_litellm_agent_model = isinstance(
+            litellm_model, str
+        ) and litellm_model.startswith("litellm_agent/")
 
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
@@ -3753,14 +3903,23 @@ class Router:
             The response from the handler function
         """
         handler_name = original_function.__name__
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name="generic_api_call"
+        )
         try:
             verbose_router_logger.debug(
                 f"Inside _generic_api_call() - handler: {handler_name}, model: {model}; kwargs: {kwargs}"
+            )
+            self._update_kwargs_before_fallbacks(
+                model=model,
+                kwargs=kwargs,
+                metadata_variable_name=metadata_variable_name,
             )
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
@@ -4698,6 +4857,10 @@ class Router:
             "generate_content_stream",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_retrieve",
+            "avector_store_list",
+            "avector_store_update",
+            "avector_store_delete",
             "avector_store_file_create",
             "avector_store_file_list",
             "avector_store_file_retrieve",
@@ -4706,6 +4869,10 @@ class Router:
             "avector_store_file_delete",
             "vector_store_search",
             "vector_store_create",
+            "vector_store_retrieve",
+            "vector_store_list",
+            "vector_store_update",
+            "vector_store_delete",
             "vector_store_file_create",
             "vector_store_file_list",
             "vector_store_file_retrieve",
@@ -4727,6 +4894,14 @@ class Router:
             "video_content",
             "avideo_remix",
             "video_remix",
+            "avideo_create_character",
+            "video_create_character",
+            "avideo_get_character",
+            "video_get_character",
+            "avideo_edit",
+            "video_edit",
+            "avideo_extension",
+            "video_extension",
             "acreate_container",
             "create_container",
             "alist_containers",
@@ -4794,6 +4969,28 @@ class Router:
                 )
 
             return sync_wrapper
+
+        if call_type in (
+            "vector_store_retrieve",
+            "vector_store_list",
+            "vector_store_update",
+            "vector_store_delete",
+        ):
+
+            def vector_store_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(
+                        original_function=original_function, **kwargs
+                    )
+                return original_function(**kwargs)
+
+            return vector_store_sync_wrapper
 
         if call_type in (
             "vector_store_file_create",
@@ -4872,6 +5069,10 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "avideo_create_character",
+                "avideo_get_character",
+                "avideo_edit",
+                "avideo_extension",
                 "acreate_skill",
                 "alist_skills",
                 "aget_skill",
@@ -4919,6 +5120,10 @@ class Router:
             elif call_type in (
                 "avector_store_search",
                 "avector_store_create",
+                "avector_store_retrieve",
+                "avector_store_list",
+                "avector_store_update",
+                "avector_store_delete",
             ):
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
@@ -5478,6 +5683,10 @@ class Router:
                     return response
 
                 except Exception as e:
+                    # Always track the latest error so we raise the most
+                    # recent exception instead of the first one.
+                    original_exception = e
+
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
@@ -5492,6 +5701,24 @@ class Router:
                         )
                     else:
                         _healthy_deployments = []
+
+                    # Check if this error is non-retryable (e.g., 400 context
+                    # window exceeded). If so, raise immediately instead of
+                    # continuing the retry loop. Respect retry policy
+                    # precedence - only check when no retry policy applies.
+                    if not _retry_policy_applies:
+                        try:
+                            self.should_retry_this_error(
+                                error=e,
+                                healthy_deployments=_healthy_deployments,
+                                all_deployments=_all_deployments,
+                                context_window_fallbacks=context_window_fallbacks,
+                                regular_fallbacks=fallbacks,
+                                content_policy_fallbacks=content_policy_fallbacks,
+                            )
+                        except Exception:
+                            raise e
+
                     _timeout = self._time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
@@ -6419,6 +6646,18 @@ class Router:
                 )
                 return None
 
+            # Validate tag_regex patterns BEFORE adding the deployment so we never
+            # have partially-initialised router state if a pattern is invalid.
+            _tag_regex = deployment.litellm_params.get("tag_regex") or []
+            for pattern in _tag_regex:
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
+                        f"{pattern!r} — {exc}"
+                    ) from exc
+
             deployment = self._add_deployment(deployment=deployment)
 
             model = deployment.to_json(exclude_none=True)
@@ -6532,7 +6771,7 @@ class Router:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
             default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
-        
+
         if default_model is None:
             raise ValueError(
                 "complexity_router_default_model is required for complexity-router deployments, "
@@ -6765,7 +7004,9 @@ class Router:
         #########################################################
         # Check if this is a complexity-router deployment
         #########################################################
-        if self._is_complexity_router_deployment(litellm_params=deployment.litellm_params):
+        if self._is_complexity_router_deployment(
+            litellm_params=deployment.litellm_params
+        ):
             self.init_complexity_router_deployment(deployment=deployment)
 
         return deployment
@@ -6857,9 +7098,7 @@ class Router:
         # zero-cost models, causing budget checks to block free models.
         _model_id = deployment.model_info.id
         if _model_id is not None:
-            _model_info_dict: dict = deployment.model_info.model_dump(
-                exclude_none=True
-            )
+            _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
             for field in CustomPricingLiteLLMParams.model_fields.keys():
                 field_value = deployment.litellm_params.get(field)
                 if field_value is not None:
@@ -7151,7 +7390,10 @@ class Router:
 
     @overload
     def get_router_model_info(
-        self, deployment: Union[dict, "Deployment"], received_model_name: str, id: None = None
+        self,
+        deployment: Union[dict, "Deployment"],
+        received_model_name: str,
+        id: None = None,
     ) -> ModelMapInfo:
         pass
 
@@ -7191,7 +7433,9 @@ class Router:
         ## GET BASE MODEL
         base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
+            base_model = (deployment.get("litellm_params") or {}).get(
+                "base_model", None
+            )
 
         model = base_model
 
@@ -7226,12 +7470,12 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if (potential_model.get("model_info") or {}).get(
-                                "id"
-                            ) == (deployment.get("model_info") or {}).get("id"):
-                                model = (potential_model.get("litellm_params") or {}).get(
-                                    "model"
-                                )
+                            if (potential_model.get("model_info") or {}).get("id") == (
+                                deployment.get("model_info") or {}
+                            ).get("id"):
+                                model = (
+                                    potential_model.get("litellm_params") or {}
+                                ).get("model")
                                 break
                         except Exception:
                             pass
@@ -8154,7 +8398,9 @@ class Router:
         - team_id: Optional[str] - the team id, to resolve team-specific models
         """
         # Check if this is the no-args hot path (cacheable)
-        _use_cache = model_name is None and model_access_group is None and team_id is None
+        _use_cache = (
+            model_name is None and model_access_group is None and team_id is None
+        )
 
         # Return cached result for the no-args hot path
         if _use_cache and self._access_groups_cache is not None:
@@ -8403,6 +8649,7 @@ class Router:
             _model_info = deployment.get("model_info", {})
 
             # see if we have the info for this model
+            _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
             try:
                 base_model = _model_info.get("base_model", None)
                 if base_model is None:
@@ -8410,7 +8657,7 @@ class Router:
                 model_info = self.get_router_model_info(
                     deployment=deployment, received_model_name=model
                 )
-                model = base_model or _litellm_params.get("model", None)
+                _deployment_model = base_model or _litellm_params.get("model", None)
 
                 if (
                     isinstance(model_info, dict)
@@ -8424,7 +8671,9 @@ class Router:
                         _context_window_error = True
                         _potential_error_str += (
                             "Model={}, Max Input Tokens={}, Got={}".format(
-                                model, model_info["max_input_tokens"], input_tokens
+                                _deployment_model,
+                                model_info["max_input_tokens"],
+                                input_tokens,
                             )
                         )
                         continue
@@ -8480,13 +8729,21 @@ class Router:
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params
-                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                    model=model, litellm_params=LiteLLM_Params(**_litellm_params)
+                # get supported params — use per-deployment model to avoid overwriting the outer model group name
+                _dep_model_for_params = _deployment_model or model
+                (
+                    _dep_model_for_params,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(
+                    model=_dep_model_for_params,
+                    litellm_params=LiteLLM_Params(**_litellm_params),
                 )
 
                 supported_openai_params = litellm.get_supported_openai_params(
-                    model=model, custom_llm_provider=custom_llm_provider
+                    model=_dep_model_for_params,
+                    custom_llm_provider=custom_llm_provider,
                 )
 
                 if supported_openai_params is None:

@@ -8,6 +8,8 @@ Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
+Provider-specific cost tracking (e.g., [Vertex AI PayGo / priority pricing](../providers/vertex.md#paygo--priority-cost-tracking), [Bedrock service tiers](../providers/bedrock.md#usage---service-tier), [Azure base model mapping](./custom_pricing.md#set-base_model-for-cost-tracking-eg-azure-deployments)) is applied automatically when the response includes tier metadata.
+
 :::tip Keep Pricing Data Updated
 [Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
 :::
@@ -161,7 +163,7 @@ Use this when you want non-proxy admins to access `/spend` endpoints
 
 :::info
 
-Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+Schedule a [meeting with us to get your Enterprise License](https://enterprise.litellm.ai/demo)
 
 :::
 

@@ -15,7 +15,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     MiniMax provides an OpenAI-compatible API at:
     - International: https://api.minimax.io/v1
     - China: https://api.minimaxi.com/v1
-    
+
     Supported models:
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
@@ -27,11 +27,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         """
         Get MiniMax API key from environment or parameters.
         """
-        return (
-            api_key
-            or get_secret_str("MINIMAX_API_KEY")
-            or litellm.api_key
-        )
+        return api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
     @staticmethod
     def get_api_base(
@@ -63,7 +59,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         """
         # Get the base URL (either provided or default MiniMax endpoint)
         base_url = self.get_api_base(api_base=api_base)
-        
+
         # Ensure it ends with /chat/completions
         if base_url.endswith("/chat/completions"):
             return base_url
@@ -94,13 +90,12 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         """
         base_params = super().get_supported_openai_params(model=model)
         additional_params = ["reasoning_split"]
-        
+
         # Add thinking parameter if model supports reasoning
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider="minimax"):
                 additional_params.append("thinking")
         except Exception:
             pass
-        
-        return base_params + additional_params
 
+        return base_params + additional_params

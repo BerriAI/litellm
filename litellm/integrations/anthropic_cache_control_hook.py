@@ -60,13 +60,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Create a deep copy of messages to avoid modifying the original list
         processed_messages = copy.deepcopy(messages)
 
-        # Process message-level cache controls
+        # Separate message-level and non-message-level injection points
+        remaining_points = []
         for point in injection_points:
             if point.get("location") == "message":
                 point = cast(CacheControlMessageInjectionPoint, point)
                 processed_messages = self._process_message_injection(
                     point=point, messages=processed_messages
                 )
+            else:
+                remaining_points.append(point)
+
+        # Pass through non-message injection points for provider-specific handling
+        if remaining_points:
+            non_default_params["cache_control_injection_points"] = remaining_points
 
         return model, processed_messages, non_default_params
 
@@ -82,8 +89,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         _targetted_index: Optional[Union[int, str]] = point.get("index", None)
         targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
-            if _targetted_index.isdigit():
+            try:
                 targetted_index = int(_targetted_index)
+            except ValueError:
+                pass
         else:
             targetted_index = _targetted_index
 
@@ -97,10 +106,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 targetted_index += len(messages)
 
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
-                    )
+                messages[
+                    targetted_index
+                ] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    messages[targetted_index], control
                 )
             else:
                 verbose_logger.warning(

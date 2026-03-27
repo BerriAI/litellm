@@ -75,11 +75,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request, _tool_name_mapping = (
-            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
-                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
-            )
+        (
+            chat_completion_compatible_request,
+            _tool_name_mapping,
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
 
         structured_messages = chat_completion_compatible_request.get("messages", [])
@@ -126,7 +127,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                # Convert tools back from OpenAI format to Anthropic format
+                anthropic_config = AnthropicConfig()
+                anthropic_tools: List[AllAnthropicToolsValues] = []
+                for tool in guardrailed_tools:
+                    converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
+                    if converted_tool is not None:
+                        anthropic_tools.append(converted_tool)
+                    # Note: MCP servers are handled separately in the main transformation
+                data["tools"] = anthropic_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -205,7 +214,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(List[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools) # type: ignore
+            tools_to_check.extend(openai_tools)  # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -243,6 +252,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -314,15 +324,21 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a standalone dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
 
             # Add user API key metadata with prefixed keys
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+            if "litellm_metadata" not in request_data:
+                user_metadata = self.transform_user_api_key_dict_to_metadata(
+                    user_api_key_dict
+                )
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -366,6 +382,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> List[Any]:
         """
         Process output streaming response by applying guardrails to text content.
@@ -375,10 +392,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                all_chunks=responses_so_far,
-                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                model="",
+            built_response = (
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=responses_so_far,
+                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                    model="",
+                )
             )
 
             # Check if model_response is valid and has choices before accessing
@@ -402,18 +421,20 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
                     inputs=guardrail_inputs,
-                    request_data={},
+                    request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
             else:
-                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
+                verbose_proxy_logger.debug(
+                    "Skipping output guardrail - model response has no choices"
+                )
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
             inputs={"texts": [string_so_far]},
-            request_data={},
+            request_data=request_data if request_data is not None else {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )

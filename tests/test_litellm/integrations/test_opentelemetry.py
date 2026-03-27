@@ -3,7 +3,8 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -425,6 +426,7 @@ class TestOpenTelemetry(unittest.TestCase):
         ) as mock_get_headers, patch.object(
             otel, "_get_tracer_with_dynamic_headers"
         ) as mock_get_tracer:
+
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -2165,25 +2167,30 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")
 
-    def test_handle_failure_langfuse_otel_nulls_parent_span(self):
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_nulls_parent_span_if_ignore_context_propagation(
+        self, handle_method: str
+    ):
         """
-        For langfuse_otel, _handle_failure should ignore parent spans from other providers
-        and create a root-level error span (symmetric with _handle_success).
+        If ignore_context_propagation is True, _handle_success should ignore any parent span
+        and create a root-level span. This could be useful for langfuse_otel where
+        _handle_success may ignore parent spans from other providers and create a root-level
+        span (symmetric with _handle_failure).
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
         otel = OpenTelemetry(
-            callback_name="langfuse_otel",
+            config=OpenTelemetryConfig(ignore_context_propagation=True),
             tracer_provider=tracer_provider,
         )
         otel.tracer = tracer_provider.get_tracer("litellm")
 
         other_tracer = tracer_provider.get_tracer("other_provider")
-        other_span = other_tracer.start_span("other_provider_span")
+        other_span = other_tracer.start_span("parent_span")
 
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         end = start + timedelta(seconds=1)
 
         kwargs = {
@@ -2202,23 +2209,33 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
             "exception": Exception("test error"),
         }
 
-        otel._handle_failure(kwargs, None, start, end)
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         other_span.end()
 
         spans = span_exporter.get_finished_spans()
-        failure_spans = [s for s in spans if s.name != "other_provider_span"]
+        child_spans = [s for s in spans if s.name != "parent_span"]
+        child_span_ids = {s.context.span_id for s in child_spans if s.context}
 
-        self.assertTrue(failure_spans, "Expected at least one failure span")
-        for span in failure_spans:
-            self.assertIsNone(
-                span.parent,
-                f"langfuse_otel failure span should be a root span, but has parent: {span.parent}",
-            )
+        self.assertTrue(child_spans, "Expected at least one child span")
+        for span in child_spans:
+            assert (
+                span.parent is None or span.parent.span_id in child_span_ids
+            ), f"if ignore_context_propagation is True, span should not have parent from other providers, but got parent: {span.parent}"
 
-    def test_handle_failure_non_langfuse_preserves_parent_span(self):
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_default_preserves_parent_span(
+        self, handle_method: str
+    ):
         """
-        For non-langfuse_otel callbacks, _handle_failure should still use parent spans normally.
+        For default otel callbacks, _handle_success should use parent spans normally.
+        (symmetric with _handle_failure)
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -2229,7 +2246,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         parent_span = otel.tracer.start_span("parent_span")
 
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         end = start + timedelta(seconds=1)
 
         kwargs = {
@@ -2249,19 +2266,81 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
-            otel._handle_failure(kwargs, None, start, end)
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         parent_span.end()
 
         spans = span_exporter.get_finished_spans()
         child_spans = [s for s in spans if s.name != "parent_span"]
 
-        self.assertTrue(child_spans, "Expected at least one child failure span")
+        self.assertTrue(child_spans, "Expected at least one child span")
         for span in child_spans:
-            self.assertIsNotNone(
-                span.parent,
-                "Non-langfuse_otel failure span should have a parent",
-            )
+            assert (
+                span.parent is not None
+            ), f"By default parent span should be preserved, but got None parent for span: {span.name}"
+
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_with_context_propagation_preserves_parent_span(
+        self, handle_method: str
+    ):
+        """
+        For otel callbacks with context propagation enabled, _handle_success should
+        use parent spans normally. (symmetric with _handle_failure)
+        """
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(ignore_context_propagation=False),
+            tracer_provider=tracer_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer("litellm")
+
+        parent_span = otel.tracer.start_span("parent_span")
+
+        start = datetime.now(timezone.utc)
+        end = start + timedelta(seconds=1)
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "metadata": {"litellm_parent_otel_span": parent_span},
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+            "exception": Exception("test error"),
+        }
+
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
+
+        parent_span.end()
+
+        spans = span_exporter.get_finished_spans()
+        child_spans = [s for s in spans if s.name != "parent_span"]
+
+        self.assertTrue(child_spans, "Expected at least one child span")
+        for span in child_spans:
+            assert (
+                span.parent is not None
+            ), f"If ignore_context_propagation is False, parent span should be preserved, but got None parent for span: {span.name}"
 
     def test_handle_failure_hasattr_guard_on_parent_name(self):
         """
@@ -2336,3 +2415,339 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         error_spans = [s for s in spans if s.status.status_code == StatusCode.ERROR]
         self.assertTrue(error_spans, "Expected at least one span with ERROR status")
+
+
+class TestRawSpanAttributeIsolation(unittest.TestCase):
+    """Issue #3: raw_gen_ai_request span should only contain provider-specific
+    llm.{provider}.* attributes, not the duplicated gen_ai.* / metadata.* attrs."""
+
+    @patch("litellm.turn_off_message_logging", False)
+    def test_raw_span_does_not_duplicate_parent_attributes(self):
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.message_logging = True
+
+        mock_tracer = tracer_provider.get_tracer(__name__)
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+
+        raw_span = mock_tracer.start_span("raw_gen_ai_request")
+
+        kwargs = {
+            "litellm_params": {"custom_llm_provider": "vertex_ai"},
+            "optional_params": {"temperature": 0.7},
+            "original_response": '{"predictions": [1,2,3]}',
+            "additional_args": {
+                "complete_input_dict": {"instances": [{"content": "hello"}]}
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "embedding",
+                "metadata": {"user_api_key_hash": "abc123"},
+                "hidden_params": {},
+            },
+        }
+        response_obj = {"model": "text-embedding-004", "usage": {"total_tokens": 5}}
+
+        otel.set_raw_request_attributes(raw_span, kwargs, response_obj)
+        raw_span.end()
+
+        spans = span_exporter.get_finished_spans()
+        raw = [s for s in spans if s.name == "raw_gen_ai_request"][0]
+        attr_keys = set(raw.attributes.keys()) if raw.attributes else set()
+
+        # Provider-specific attributes SHOULD be present
+        self.assertTrue(
+            any(k.startswith("llm.vertex_ai.") for k in attr_keys),
+            f"Expected llm.vertex_ai.* attributes, got: {attr_keys}",
+        )
+        # Standard gen_ai / metadata attributes should NOT be present
+        self.assertFalse(
+            any(k.startswith("gen_ai.") for k in attr_keys),
+            f"raw span should not contain gen_ai.* attributes, got: {attr_keys}",
+        )
+        self.assertFalse(
+            any(k.startswith("metadata.") for k in attr_keys),
+            f"raw span should not contain metadata.* attributes, got: {attr_keys}",
+        )
+
+
+class TestNoParentSpanDuplication(unittest.TestCase):
+    """Issue #4: When litellm_request child span exists, the parent
+    litellm_proxy_request span should NOT get set_attributes() called."""
+
+    HERE = os.path.dirname(__file__)
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}, clear=False)
+    def test_parent_proxy_span_not_duplicated(self):
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+
+        # Simulate proxy flow: create a parent proxy span
+        tracer = tracer_provider.get_tracer(__name__)
+        from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
+
+        parent_span = tracer.start_span(name=LITELLM_PROXY_REQUEST_SPAN_NAME)
+        # Inject parent span into kwargs so _get_span_context finds it
+        kwargs["litellm_params"]["metadata"]["litellm_parent_otel_span"] = parent_span
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj, start, end)
+
+        spans = span_exporter.get_finished_spans()
+        proxy_spans = [s for s in spans if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME]
+        self.assertEqual(len(proxy_spans), 1, "Should have exactly one proxy span")
+
+        proxy_attrs = proxy_spans[0].attributes or {}
+        # The parent proxy span should NOT have gen_ai.request.model set
+        self.assertNotIn(
+            "gen_ai.request.model",
+            proxy_attrs,
+            "Parent proxy span should NOT duplicate gen_ai.request.model (Issue #4)",
+        )
+
+
+class TestGuardrailSpanParenting(unittest.TestCase):
+    """Issue #5: Guardrail spans must not be orphaned — they should always
+    be children of the litellm_request span (or parent span)."""
+
+    def test_guardrail_span_is_child_of_litellm_request(self):
+        """When no parent proxy span exists, guardrail spans should be
+        children of the litellm_request span, not orphaned root spans."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        guardrail_info = {
+            "guardrail_name": "pii_filter",
+            "guardrail_mode": "pre_call",
+            "guardrail_response": "ok",
+            "start_time": time.time(),
+            "end_time": time.time() + 0.1,
+        }
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": {
+                "id": "test-guardrail-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+                "guardrail_information": [guardrail_info],
+            },
+        }
+        response_obj = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Hi!", "role": "assistant"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj, start, end)
+
+        spans = span_exporter.get_finished_spans()
+        guardrail_spans = [s for s in spans if s.name == "guardrail"]
+        litellm_spans = [s for s in spans if s.name == "litellm_request"]
+
+        self.assertTrue(guardrail_spans, "Expected at least one guardrail span")
+        self.assertTrue(litellm_spans, "Expected a litellm_request span")
+
+        litellm_span = litellm_spans[0]
+        for gs in guardrail_spans:
+            # All spans should share the same trace_id (not orphaned)
+            self.assertEqual(
+                gs.context.trace_id,
+                litellm_span.context.trace_id,
+                "Guardrail span should share trace_id with litellm_request (not orphaned)",
+            )
+            # Guardrail should be a child of the litellm_request span
+            self.assertIsNotNone(
+                gs.parent,
+                "Guardrail span should have a parent (not be a root span)",
+            )
+            self.assertEqual(
+                gs.parent.span_id,
+                litellm_span.context.span_id,
+                "Guardrail span should be a child of litellm_request",
+            )
+
+    def test_guardrail_span_parented_on_failure(self):
+        """Guardrail spans should also be properly parented in the failure path."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        guardrail_info = {
+            "guardrail_name": "content_filter",
+            "guardrail_mode": "pre_call",
+            "guardrail_response": "blocked",
+            "start_time": time.time(),
+            "end_time": time.time() + 0.05,
+        }
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": {
+                "id": "test-fail-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+                "guardrail_information": [guardrail_info],
+            },
+            "exception": Exception("test error"),
+        }
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_failure(kwargs, None, start, end)
+
+        spans = span_exporter.get_finished_spans()
+        guardrail_spans = [s for s in spans if s.name == "guardrail"]
+
+        self.assertTrue(guardrail_spans, "Expected at least one guardrail span")
+        for gs in guardrail_spans:
+            self.assertIsNotNone(
+                gs.parent,
+                "Guardrail span should have a parent on failure path too",
+            )
+
+
+class TestResponseIdFallback(unittest.TestCase):
+    """Issue #8: gen_ai.response.id should be set for embeddings and image gen
+    using standard_logging_payload['id'] as fallback."""
+
+    def test_response_id_from_response_obj(self):
+        """When response_obj has an id, it should be used."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "litellm-call-id-123",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {
+            "id": "chatcmpl-provider-id-456",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Hi", "role": "assistant"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        # Should use provider response ID, not litellm call ID
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.response.id", "chatcmpl-provider-id-456"
+        )
+
+    def test_response_id_fallback_for_embeddings(self):
+        """When response_obj has no id (embeddings), fallback to
+        standard_logging_payload['id']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "text-embedding-ada-002",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "litellm-embed-call-789",
+                "call_type": "embedding",
+                "metadata": {},
+            },
+        }
+        # Embedding response has no "id" field
+        response_obj = {
+            "object": "list",
+            "data": [{"embedding": [0.1, 0.2], "index": 0}],
+            "model": "text-embedding-ada-002",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        # Should fallback to litellm call ID
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.response.id", "litellm-embed-call-789"
+        )
+
+    def test_response_id_fallback_for_image_gen(self):
+        """When response_obj has no id (image gen), fallback to
+        standard_logging_payload['id']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "dall-e-3",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "litellm-img-call-101",
+                "call_type": "image_generation",
+                "metadata": {},
+            },
+        }
+        # Image response has no "id" field
+        response_obj = {
+            "created": 1234567890,
+            "data": [{"url": "https://example.com/img.png"}],
+        }
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        # Should fallback to litellm call ID
+        mock_span.set_attribute.assert_any_call(
+            "gen_ai.response.id", "litellm-img-call-101"
+        )

@@ -78,9 +78,7 @@ class TestUnifiedLLMGuardrails:
 
             data = {
                 "guardrail_to_apply": guardrail,
-                "messages": [
-                    {"role": "user", "content": "Tool: test\nArguments: {}"}
-                ],
+                "messages": [{"role": "user", "content": "Tool: test\nArguments: {}"}],
                 "model": "mcp-tool-call",
             }
 
@@ -102,9 +100,7 @@ class TestUnifiedLLMGuardrails:
 
             data = {
                 "guardrail_to_apply": guardrail,
-                "messages": [
-                    {"role": "user", "content": "Tool: test\nArguments: {}"}
-                ],
+                "messages": [{"role": "user", "content": "Tool: test\nArguments: {}"}],
                 "model": "mcp-tool-call",
             }
 
@@ -168,6 +164,7 @@ class TestUnifiedLLMGuardrails:
                     guardrail_to_apply,
                     litellm_logging_obj=None,
                     user_api_key_dict=None,
+                    request_data=None,
                 ):
                     # Simulate what the real handler does:
                     # put combined text in first chunk, clear the rest
@@ -200,10 +197,12 @@ class TestUnifiedLLMGuardrails:
             chunks = []
             for i in range(10):
                 chunk = ModelResponseStream(
-                    choices=[StreamingChoices(
-                        delta=Delta(content=f"word{i} ", role="assistant"),
-                        finish_reason=None,
-                    )],
+                    choices=[
+                        StreamingChoices(
+                            delta=Delta(content=f"word{i} ", role="assistant"),
+                            finish_reason=None,
+                        )
+                    ],
                 )
                 chunks.append(chunk)
 
@@ -228,7 +227,9 @@ class TestUnifiedLLMGuardrails:
                 response=mock_stream(),
                 request_data=request_data,
             ):
-                content = item.choices[0].delta.content if item.choices[0].delta else None
+                content = (
+                    item.choices[0].delta.content if item.choices[0].delta else None
+                )
                 yielded_contents.append(content)
 
             # Every chunk should have non-empty content
@@ -271,10 +272,15 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.event_history == [GuardrailEventHooks.pre_call]
             assert len(guardrail.apply_calls) == 1
             assert guardrail.apply_calls[0]["input_type"] == "request"
-            assert "https://arxiv.org/pdf/2201.04234" in guardrail.apply_calls[0]["inputs"]["texts"]
+            assert (
+                "https://arxiv.org/pdf/2201.04234"
+                in guardrail.apply_calls[0]["inputs"]["texts"]
+            )
 
             # Data should be returned with document intact
-            assert result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
+            assert (
+                result["document"]["document_url"] == "https://arxiv.org/pdf/2201.04234"
+            )
 
         @pytest.mark.asyncio
         async def test_moderation_hook_invokes_ocr_handler(self):
@@ -302,7 +308,10 @@ class TestUnifiedLLMGuardrails:
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
             assert len(guardrail.apply_calls) == 1
-            assert "https://example.com/scan.png" in guardrail.apply_calls[0]["inputs"]["texts"]
+            assert (
+                "https://example.com/scan.png"
+                in guardrail.apply_calls[0]["inputs"]["texts"]
+            )
 
         @pytest.mark.asyncio
         async def test_post_call_success_hook_guardrails_ocr_output(self):
@@ -318,7 +327,9 @@ class TestUnifiedLLMGuardrails:
                 def should_run_guardrail(self, data, event_type):  # type: ignore[override]
                     return True
 
-                async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, **kwargs
+                ):
                     texts = inputs.get("texts", [])
                     return {"texts": [t.replace("SECRET", "[REDACTED]") for t in texts]}
 

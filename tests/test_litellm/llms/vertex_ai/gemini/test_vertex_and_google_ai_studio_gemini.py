@@ -674,34 +674,32 @@ def test_check_finish_reason():
 
 def test_finish_reason_unspecified_and_malformed_function_call():
     """
-    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL 
-    return their lowercase values instead of being mapped to 'stop'
-    since we don't have good mappings for these.
+    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL
+    are mapped to OpenAI-compatible 'stop' finish reason.
     """
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
-    
-    # Test FINISH_REASON_UNSPECIFIED returns lowercase version
-    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "finish_reason_unspecified"
+
+    # Test FINISH_REASON_UNSPECIFIED maps to "stop"
+    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "stop"
     assert (
         VertexGeminiConfig._check_finish_reason(
             chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
         )
-        == "finish_reason_unspecified"
+        == "stop"
     )
-    
-    # Test MALFORMED_FUNCTION_CALL returns lowercase version
-    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "malformed_function_call"
+
+    # Test MALFORMED_FUNCTION_CALL maps to "stop"
+    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "stop"
     assert (
         VertexGeminiConfig._check_finish_reason(
             chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
         )
-        == "malformed_function_call"
+        == "stop"
     )
-    
-    # Ensure these values are in the OpenAI finish reasons constant
-    from litellm import OPENAI_FINISH_REASONS
-    assert "finish_reason_unspecified" in OPENAI_FINISH_REASONS
-    assert "malformed_function_call" in OPENAI_FINISH_REASONS
+
+    # Test new Gemini finish reasons
+    assert finish_reason_mappings["TOO_MANY_TOOL_CALLS"] == "stop"
+    assert finish_reason_mappings["MALFORMED_RESPONSE"] == "stop"
 
 
 def test_vertex_ai_usage_metadata_response_token_count():
@@ -860,6 +858,42 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
         + result.prompt_tokens_details.image_tokens
         == result.prompt_tokens
     )
+
+
+def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
+    """Ensure _calculate_usage accumulates repeated modality entries."""
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 210,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 260,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 20},
+            {"modality": "IMAGE", "tokenCount": 90},
+            {"modality": "IMAGE", "token_count": 100},
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 30},
+            {"modality": "TEXT", "tokenCount": 15},
+            {"modality": "TEXT", "token_count": 5},
+        ],
+        "cacheTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 4},
+            {"modality": "IMAGE", "tokenCount": 40},
+            {"modality": "IMAGE", "token_count": 10},
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    # prompt details are total - cached per modality
+    assert result.prompt_tokens_details.text_tokens == 16  # 20 - 4
+    assert result.prompt_tokens_details.image_tokens == 140  # (90 + 100) - (40 + 10)
+
+    # candidates details accumulate duplicate modalities
+    assert result.completion_tokens_details.text_tokens == 20  # 15 + 5
+    assert result.completion_tokens_details.image_tokens == 30
+    assert result.completion_tokens == 50
 
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
@@ -3724,3 +3758,70 @@ def test_vertex_ai_usage_metadata_video_tokens_with_caching():
     assert result.prompt_tokens_details.text_tokens == 9
     assert result.prompt_tokens_details.audio_tokens == 200
 
+
+def test_async_streaming_uses_custom_client():
+    """
+    Test that user-specified async client is correctly passed to make_call
+    for async streaming calls.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17148
+    """
+    from functools import partial
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_call,
+    )
+
+    # Create a mock async client
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+
+    # Create a partial function like the code does in async_streaming
+    partial_make_call = partial(
+        make_call,
+        gemini_client=mock_client,
+        api_base="https://example.com",
+        headers={},
+        data="{}",
+        model="gemini-pro",
+        messages=[],
+        logging_obj=MagicMock(),
+    )
+
+    # Verify that gemini_client is in the partial's keywords
+    assert "gemini_client" in partial_make_call.keywords
+    assert partial_make_call.keywords["gemini_client"] is mock_client
+
+
+def test_sync_streaming_uses_custom_client():
+    """
+    Test that user-specified sync client is correctly passed to make_sync_call
+    for sync streaming calls.
+
+    This verifies the existing behavior that we want to match for async.
+    """
+    from functools import partial
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_sync_call,
+    )
+
+    # Create a mock sync client
+    mock_client = MagicMock(spec=HTTPHandler)
+
+    # Create a partial function like the code does in sync streaming
+    partial_make_sync_call = partial(
+        make_sync_call,
+        gemini_client=mock_client,
+        api_base="https://example.com",
+        headers={},
+        data="{}",
+        model="gemini-pro",
+        messages=[],
+        logging_obj=MagicMock(),
+    )
+
+    # Verify that gemini_client is in the partial's keywords
+    assert "gemini_client" in partial_make_sync_call.keywords
+    assert partial_make_sync_call.keywords["gemini_client"] is mock_client

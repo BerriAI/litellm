@@ -91,7 +91,10 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # Transform messages
         user_messages = []
         for message in messages:
-            transformed_message: Dict[str, Any] = {"role": message.get("role"), "content": []}
+            transformed_message: Dict[str, Any] = {
+                "role": message.get("role"),
+                "content": [],
+            }
             content = message.get("content", "")
             if isinstance(content, str):
                 transformed_message["content"].append({"text": content})
@@ -121,10 +124,16 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             return [{"text": system}]
         if isinstance(system, list):
             # Already in blocks format (e.g. [{"type": "text", "text": "..."}])
-            return [{"text": block.get("text", "")} for block in system if isinstance(block, dict)]
+            return [
+                {"text": block.get("text", "")}
+                for block in system
+                if isinstance(block, dict)
+            ]
         return []
 
-    def _transform_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    def _transform_tools(
+        self, tools: Optional[List[Dict[str, Any]]]
+    ) -> Optional[Dict[str, Any]]:
         """Transform Anthropic tools to Bedrock toolConfig format."""
         if not tools:
             return None
@@ -139,15 +148,19 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             name = name[:64]
 
             description = tool.get("description") or name
-            input_schema = tool.get("input_schema", {"type": "object", "properties": {}})
+            input_schema = tool.get(
+                "input_schema", {"type": "object", "properties": {}}
+            )
 
-            bedrock_tools.append({
-                "toolSpec": {
-                    "name": name,
-                    "description": description,
-                    "inputSchema": {"json": input_schema},
+            bedrock_tools.append(
+                {
+                    "toolSpec": {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": {"json": input_schema},
+                    }
                 }
-            })
+            )
 
         return {"tools": bedrock_tools}
 
@@ -164,7 +177,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         return {"input": {"invokeModel": {"body": json.dumps(body_data)}}}
 
     def get_bedrock_count_tokens_endpoint(
-        self, model: str, aws_region_name: str
+        self,
+        model: str,
+        aws_region_name: str,
+        api_base: Optional[str] = None,
+        aws_bedrock_runtime_endpoint: Optional[str] = None,
     ) -> str:
         """
         Construct the AWS Bedrock CountTokens API endpoint using existing LiteLLM functions.
@@ -172,6 +189,8 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Args:
             model: The resolved model ID from router lookup
             aws_region_name: AWS region (e.g., "eu-west-1")
+            api_base: Optional custom API base URL (takes highest priority)
+            aws_bedrock_runtime_endpoint: Optional custom Bedrock runtime endpoint
 
         Returns:
             Complete endpoint URL for CountTokens API
@@ -183,7 +202,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if model_id.startswith("bedrock/"):
             model_id = model_id[8:]  # Remove "bedrock/" prefix
 
-        base_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        base_url, _ = self.get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
         endpoint = f"{base_url}/model/{model_id}/count-tokens"
 
         return endpoint

@@ -22,6 +22,7 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -585,7 +586,11 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
-    base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
+    base_target_url = (
+        os.getenv("ANTHROPIC_API_BASE")
+        or os.getenv("ANTHROPIC_BASE_URL")
+        or "https://api.anthropic.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -606,10 +611,11 @@ async def anthropic_proxy_route(
     is_streaming_request = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
+    auth_header = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
+        custom_headers=auth_header if auth_header is not None else {},
         _forward_headers=True,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
@@ -695,10 +701,10 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
 
         if action_index is not None and action_index > model_index + 1:
             # Join all parts between "model" and the action (excluding "model" itself)
-            return "/".join(endpoint_parts[model_index + 1:action_index])
+            return "/".join(endpoint_parts[model_index + 1 : action_index])
 
         # Fallback to taking everything after "model" if no action found
-        model_parts = [p for p in endpoint_parts[model_index + 1:] if p]
+        model_parts = [p for p in endpoint_parts[model_index + 1 :] if p]
         if model_parts:
             return "/".join(model_parts)
 
@@ -866,10 +872,10 @@ async def handle_bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {str(e)}")
-        raise HTTPException(
-            status_code=e.status_code, detail={"error": e.message}
+        verbose_proxy_logger.error(
+            f"BedrockError in handle_bedrock_count_tokens: {str(e)}"
         )
+        raise HTTPException(status_code=e.status_code, detail={"error": e.message})
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
@@ -1078,7 +1084,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
-        _forward_headers=True
+        _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -1100,7 +1106,7 @@ def _resolve_vertex_model_from_router(
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Resolve Vertex AI model configuration from router.
-    
+
     Args:
         model_id: The model ID extracted from the URL (e.g., "gcp/google/gemini-2.5-flash")
         llm_router: The LiteLLM router instance
@@ -1108,21 +1114,23 @@ def _resolve_vertex_model_from_router(
         endpoint: The original endpoint path
         vertex_project: Current vertex project (may be from URL)
         vertex_location: Current vertex location (may be from URL)
-    
+
     Returns:
         Tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
         with resolved values from router config
     """
     if not llm_router:
         return encoded_endpoint, endpoint, vertex_project, vertex_location
-    
+
     try:
-        deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
+        deployment = llm_router.get_available_deployment_for_pass_through(
+            model=model_id
+        )
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location
-        
+
         litellm_params = deployment.get("litellm_params", {})
-        
+
         # Always override with router config values (they take precedence over URL values)
         config_vertex_project = litellm_params.get("vertex_project")
         config_vertex_location = litellm_params.get("vertex_location")
@@ -1130,12 +1138,11 @@ def _resolve_vertex_model_from_router(
             vertex_project = config_vertex_project
         if config_vertex_location:
             vertex_location = config_vertex_location
-        
+
         # Get the actual Vertex AI model name by stripping the provider prefix
         # e.g., "vertex_ai/gemini-2.0-flash-exp" -> "gemini-2.0-flash-exp"
         model_from_config = litellm_params.get("model", "")
         if model_from_config:
-
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:
             # model="gemini-2.0-flash-exp", custom_llm_provider="vertex_ai"
@@ -1164,12 +1171,12 @@ def _resolve_vertex_model_from_router(
                 )
                 encoded_endpoint = encoded_endpoint.replace(model_id, actual_model)
                 endpoint = endpoint.replace(model_id, actual_model)
-    
+
     except Exception as e:
         verbose_proxy_logger.debug(
             f"Error resolving vertex model from router for model {model_id}: {e}"
         )
-    
+
     return encoded_endpoint, endpoint, vertex_project, vertex_location
 
 
@@ -1634,7 +1641,7 @@ async def _prepare_vertex_auth_headers(
             vertex_credentials_str = None
         elif vertex_credentials is not None:
             # Use credentials from vertex_credentials
-            # When vertex_credentials are provided (including default credentials), 
+            # When vertex_credentials are provided (including default credentials),
             # use their project/location values if available
             if vertex_credentials.vertex_project is not None:
                 vertex_project = vertex_credentials.vertex_project
@@ -1740,10 +1747,14 @@ async def _base_vertex_proxy_route(
     # Check if model is in router config - always do this to resolve custom model names
     model_id = get_vertex_model_id_from_url(endpoint)
     if model_id:
-
         if llm_router:
             # Resolve model configuration from router
-            encoded_endpoint, endpoint, vertex_project, vertex_location = _resolve_vertex_model_from_router(
+            (
+                encoded_endpoint,
+                endpoint,
+                vertex_project,
+                vertex_location,
+            ) = _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
                 encoded_endpoint=encoded_endpoint,
@@ -1936,25 +1947,25 @@ async def openai_proxy_route(
 ):
     """
     Pass-through endpoint for OpenAI API calls.
-    
+
     Available on both routes:
     - /openai/{endpoint:path} - Standard OpenAI passthrough route
     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-    
+
     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
-    
+
     Examples:
         Standard route:
         - /openai/v1/chat/completions
         - /openai/v1/assistants
         - /openai/v1/threads
-        
+
         Dedicated passthrough (for Responses API):
         - /openai_passthrough/v1/responses
         - /openai_passthrough/v1/responses/{response_id}
         - /openai_passthrough/v1/responses/{response_id}/input_items
-    
+
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
@@ -2154,9 +2165,7 @@ async def cursor_proxy_route(
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
-    auth_value = base64.b64encode(
-        f"{cursor_api_key}:".encode("utf-8")
-    ).decode("ascii")
+    auth_value = base64.b64encode(f"{cursor_api_key}:".encode("utf-8")).decode("ascii")
 
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,

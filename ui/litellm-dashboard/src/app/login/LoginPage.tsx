@@ -3,13 +3,15 @@
 import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { getProxyBaseUrl } from "@/components/networking";
-import { getCookie } from "@/utils/cookieUtils";
+import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Form, Input, Popover, Space, Typography } from "antd";
+import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { InfoCircleOutlined, CloudServerOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useWorker } from "@/hooks/useWorker";
 
 function LoginPageContent() {
   const [username, setUsername] = useState("");
@@ -18,6 +20,17 @@ function LoginPageContent() {
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
   const router = useRouter();
+  const { workers, selectWorker } = useWorker();
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+
+  // Pre-select worker from URL param (e.g. /ui/login?worker=team-b)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const workerParam = params.get("worker");
+    if (workerParam) {
+      setSelectedWorkerId(workerParam);
+    }
+  }, []);
 
   useEffect(() => {
     if (isConfigLoading) {
@@ -30,14 +43,64 @@ function LoginPageContent() {
       return;
     }
 
+    // Cross-origin SSO: worker redirected back with a single-use code.
+    // Exchange it for the JWT via the worker's /v3/login/exchange endpoint.
+    const params = new URLSearchParams(window.location.search);
+    const ssoCode = params.get("code");
+    if (ssoCode) {
+      const workerUrl = localStorage.getItem("litellm_worker_url");
+      exchangeLoginCode(ssoCode, workerUrl).then(() => {
+        params.delete("code");
+        const cleanSearch = params.toString();
+        window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
+        router.replace("/ui/?login=success");
+      });
+      return;
+    }
+
+    // Backwards compat: handle direct token in URL (legacy flow)
+    const urlToken = params.get("token");
+    if (urlToken && !isJwtExpired(urlToken)) {
+      document.cookie = `token=${urlToken}; path=/; SameSite=Lax`;
+      params.delete("token");
+      const cleanSearch = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""),
+      );
+      router.replace("/ui/?login=success");
+      return;
+    }
+
+    // If switching workers on a control plane, clear the old token and show login
+    const switchingWorker = params.has("worker");
+    if (switchingWorker && uiConfig?.is_control_plane) {
+      clearTokenCookies();
+      setIsLoading(false);
+      return;
+    }
+
     const rawToken = getCookie("token");
     if (rawToken && !isJwtExpired(rawToken)) {
-      router.replace(`${getProxyBaseUrl()}/ui`);
+      // User already logged in - redirect to return URL or default
+      const returnUrl = consumeReturnUrl();
+      if (returnUrl) {
+        router.replace(returnUrl);
+      } else {
+        router.replace("/ui");
+      }
       return;
     }
 
     if (uiConfig && uiConfig.auto_redirect_to_sso) {
-      router.push(`${getProxyBaseUrl()}/sso/key/generate`);
+      // For SSO, pass the return URL to the SSO endpoint
+      const returnUrl = getReturnUrl();
+      let ssoUrl = `${getProxyBaseUrl()}/sso/key/generate`;
+      if (returnUrl && isValidReturnUrl(returnUrl)) {
+        ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
+      }
+      router.push(ssoUrl);
       return;
     }
 
@@ -45,11 +108,36 @@ function LoginPageContent() {
   }, [isConfigLoading, router, uiConfig]);
 
   const handleSubmit = () => {
+    // If a worker is selected, point proxyBaseUrl at it before login
+    const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
+    if (selectedWorker) {
+      switchToWorkerUrl(selectedWorker.url);
+    }
+
     loginMutation.mutate(
-      { username, password },
+      { username, password, useV3: !!selectedWorker },
       {
         onSuccess: (data) => {
-          router.push(data.redirect_url);
+          // Update the worker context with the selected worker
+          if (selectedWorker) {
+            selectWorker(selectedWorker.worker_id);
+            // Stay on the CP's UI — proxyBaseUrl already points at the worker
+            router.push("/ui/?login=success");
+          } else {
+            // Normal (non-control-plane) login — follow the server's redirect
+            const returnUrl = consumeReturnUrl();
+            if (returnUrl) {
+              router.push(returnUrl);
+            } else {
+              router.push(data.redirect_url);
+            }
+          }
+        },
+        onError: () => {
+          // Reset proxyBaseUrl on login failure
+          if (selectedWorker) {
+            switchToWorkerUrl(null);
+          }
         },
       },
     );
@@ -134,7 +222,23 @@ function LoginPageContent() {
 
           {error && <Alert message={error} type="error" showIcon />}
 
-          <Form onFinish={handleSubmit} layout="vertical" requiredMark={true}>
+          <Form onFinish={handleSubmit} layout="vertical" requiredMark={false}>
+            {uiConfig?.is_control_plane && workers.length > 0 && (
+              <Form.Item label="Worker" style={{ marginBottom: 16 }}>
+                <Select
+                  value={selectedWorkerId || undefined}
+                  onChange={(value) => setSelectedWorkerId(value)}
+                  placeholder="Choose a worker to connect to"
+                  size="large"
+                  suffixIcon={<CloudServerOutlined />}
+                  options={workers.map((w) => ({
+                    label: w.name,
+                    value: w.worker_id,
+                  }))}
+                />
+              </Form.Item>
+            )}
+
             <Form.Item
               label="Username"
               name="username"
@@ -190,10 +294,20 @@ function LoginPageContent() {
                 </Popover>
               ) : (
                 <Button
-                  disabled={isLoginLoading}
-                  onClick={() =>
-                    router.push(`${getProxyBaseUrl()}/sso/key/generate`)
-                  }
+                  disabled={isLoginLoading || (!!selectedWorkerId && workers.length === 0)}
+                  onClick={() => {
+                    const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
+                    if (selectedWorker) {
+                      // Store worker selection so useWorker hook restores it after redirect
+                      localStorage.setItem("litellm_selected_worker_id", selectedWorkerId!);
+                      switchToWorkerUrl(selectedWorker.url);
+                    }
+                    // SSO on the worker (or this instance if no worker), always
+                    // include return_to so the callback redirects back here
+                    const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
+                    const returnTo = encodeURIComponent(window.location.origin + "/ui/login");
+                    router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                  }}
                   block
                   size="large"
                 >

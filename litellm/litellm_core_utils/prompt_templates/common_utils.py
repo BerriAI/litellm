@@ -257,6 +257,15 @@ def detect_first_expected_role(
     return None
 
 
+def _counts_for_alternation(message: AllMessageValues) -> bool:
+    role = message.get("role")
+    if role == "user":
+        return True
+    if role == "assistant":
+        return not bool(message.get("tool_calls"))
+    return False
+
+
 def _insert_user_continue_message(
     messages: List[AllMessageValues],
     user_continue_message: Optional[ChatCompletionUserMessage],
@@ -269,8 +278,8 @@ def _insert_user_continue_message(
     2. Final assistant message
     3. Consecutive assistant messages
 
-    Only inserts messages between consecutive assistant messages,
-    ignoring all other role types.
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not messages:
         return messages
@@ -278,25 +287,42 @@ def _insert_user_continue_message(
     result_messages = messages.copy()  # Don't modify the input list
     continue_message = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
 
-    # Handle first message if it's an assistant message
+    # Handle first message if it's an assistant message — always prepend
+    # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
         result_messages.insert(0, continue_message)
 
-    # Handle consecutive assistant messages and final message
-    i = 1  # Start from second message since we handled first message
+    # Handle consecutive assistant messages in the counted sequence
+    i = 1
     while i < len(result_messages):
         curr_message = result_messages[i]
-        prev_message = result_messages[i - 1]
-
-        # Only check for consecutive assistant messages
-        # Ignore all other role types
-        if curr_message["role"] == "assistant" and prev_message["role"] == "assistant":
-            result_messages.insert(i, continue_message)
-            i += 2  # Skip over the message we just inserted
-        else:
+        inserted_continue_message = False
+        if (
+            _counts_for_alternation(curr_message)
+            and curr_message["role"] == "assistant"
+        ):
+            # Preserve old behavior for malformed adjacent assistant sequences like
+            # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
+            if i > 0 and result_messages[i - 1].get("role") == "assistant":
+                result_messages.insert(i, continue_message)
+                i += 2
+                inserted_continue_message = True
+            else:
+                j = i - 1
+                while j >= 0:
+                    previous_message = result_messages[j]
+                    if _counts_for_alternation(previous_message):
+                        if previous_message["role"] == "assistant":
+                            result_messages.insert(i, continue_message)
+                            i += 2
+                            inserted_continue_message = True
+                        break
+                    j -= 1
+        if not inserted_continue_message:
             i += 1
 
-    # Handle final message
+    # Handle final message — append user_continue after any trailing assistant,
+    # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
         result_messages.append(continue_message)
 
@@ -311,34 +337,24 @@ def _insert_assistant_continue_message(
     """
     Add assistant continuation messages between consecutive user messages.
 
-    Args:
-        messages: List of message dictionaries
-        assistant_continue_message: Optional custom assistant message
-        ensure_alternating_roles: Whether to enforce alternating roles
-
-    Returns:
-        Modified list of messages with inserted assistant messages
+    Only checks directly adjacent messages to preserve backward compatibility.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    # Create a new list to store modified messages
+    continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+
     modified_messages: List[AllMessageValues] = []
-
     for i, message in enumerate(messages):
-        modified_messages.append(message)
-
-        # Check if we need to insert an assistant message
         if (
-            i < len(messages) - 1  # Not the last message
-            and message.get("role") == "user"  # Current is user
+            i < len(messages) - 1
+            and message.get("role") == "user"
             and messages[i + 1].get("role") == "user"
-        ):  # Next is user
-            # Insert assistant message
-            continue_message = (
-                assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
-            )
+        ):
+            modified_messages.append(message)
             modified_messages.append(continue_message)
+        else:
+            modified_messages.append(message)
 
     return modified_messages
 
@@ -536,6 +552,61 @@ def update_responses_input_with_model_file_ids(
     return updated_input
 
 
+def _decode_vector_store_ids_in_tools(
+    tools: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
+    provider-native IDs.  Non-unified IDs are passed through unchanged.
+
+    This runs unconditionally — no file-ID mapping is required.
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+
+    from litellm.llms.base_llm.managed_resources.utils import (
+        is_base64_encoded_unified_id,
+        parse_unified_id,
+    )
+
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "file_search":
+            updated_tools.append(tool)
+            continue
+
+        vector_store_ids = tool.get("vector_store_ids")
+        if not isinstance(vector_store_ids, list):
+            updated_tools.append(tool)
+            continue
+
+        decoded_ids = []
+        for vs_id in vector_store_ids:
+            if not isinstance(vs_id, str) or not is_base64_encoded_unified_id(vs_id):
+                decoded_ids.append(vs_id)
+                continue
+
+            parsed = parse_unified_id(vs_id)
+            provider_resource_id = (
+                parsed.get("provider_resource_id") if parsed else None
+            )
+
+            if not provider_resource_id:
+                verbose_logger.warning(
+                    "file_search tool contains unified vector_store_id '%s' that could "
+                    "not be decoded to a provider resource ID — passing original ID. "
+                    "Ensure the vector store was created via LiteLLM.",
+                    vs_id,
+                )
+                decoded_ids.append(vs_id)
+            else:
+                decoded_ids.append(provider_resource_id)
+
+        updated_tools.append({**tool, "vector_store_ids": decoded_ids})
+
+    return updated_tools
+
+
 def update_responses_tools_with_model_file_ids(
     tools: Optional[List[Dict[str, Any]]],
     model_id: Optional[str] = None,
@@ -544,7 +615,8 @@ def update_responses_tools_with_model_file_ids(
     """
     Updates responses API tools with provider-specific file IDs.
 
-    Handles code_interpreter tools with container.file_ids.
+    Pass 1 (always): decode unified vector_store_ids in file_search tools.
+    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
 
     Args:
         tools: The responses API tools parameter
@@ -555,6 +627,10 @@ def update_responses_tools_with_model_file_ids(
     if not tools or not isinstance(tools, list):
         return tools
 
+    # Pass 1: decode unified vector_store_ids (no mapping needed)
+    tools = _decode_vector_store_ids_in_tools(tools) or tools
+
+    # Pass 2: map code_interpreter file IDs (requires mapping)
     if not model_file_id_mapping or not model_id:
         return tools
 
@@ -644,6 +720,10 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
         # If it's a file-like object
+        # Try to get filename from file handle if not already set
+        if not filename and hasattr(file_content, "name"):
+            filename = Path(file_content.name).name
+
         content = file_content.read()
 
         if isinstance(content, str):

@@ -50,12 +50,19 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
+from litellm.types.responses.main import (
+    OutputCodeInterpreterCall,
+    build_code_interpreter_log_outputs,
+)
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -173,8 +180,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """Check if the model is specifically Claude Opus 4.6."""
         model_lower = model.lower()
         return any(
-            v in model_lower
-            for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
+            v in model_lower for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
         )
 
     def get_supported_openai_params(self, model: str):
@@ -194,6 +200,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "web_search_options",
             "speed",
             "context_management",
+            "cache_control",
         ]
 
         if (
@@ -316,6 +323,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else:
                 result[key] = value
 
+        # Anthropic requires additionalProperties=false for object schemas
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
+        if result.get("type") == "object" and "additionalProperties" not in result:
+            result["additionalProperties"] = False
+
         return result
 
     def get_json_schema_from_pydantic_object(
@@ -389,6 +401,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
+            # Anthropic requires input_schema.type to be "object". Normalize
+            # schemas from external sources (MCP servers, OpenAI callers) that
+            # may omit the type field or use a non-object type.
+            if _input_schema.get("type") != "object":
+                litellm.verbose_logger.debug(
+                    "_map_tool_helper: coercing input_schema type from %r to "
+                    "'object' for Anthropic compatibility (tool: %s)",
+                    _input_schema.get("type"),
+                    tool["function"].get("name"),
+                )
+                _input_schema = dict(_input_schema)  # avoid mutating caller's dict
+                _input_schema["type"] = "object"
+                if "properties" not in _input_schema:
+                    _input_schema["properties"] = {}
+
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
@@ -400,6 +427,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
                 input_schema=input_anthropic_schema,
+                type="custom",
             )
 
             _description = tool["function"].get("description")
@@ -769,6 +797,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_schema is None:
             return None
 
+        # Resolve $ref/$defs before filtering — Anthropic doesn't support
+        # external schema references (e.g., /$defs/CalendarEvent).
+        import copy
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        json_schema = copy.deepcopy(json_schema)
+        defs = json_schema.pop("$defs", json_schema.pop("definitions", {}))
+        if defs:
+            unpack_defs(json_schema, defs)
+
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema = self.filter_anthropic_output_schema(json_schema)
 
@@ -923,11 +964,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -1025,12 +1066,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params["context_management"] = (
-                            anthropic_context_management
-                        )
+                        optional_params[
+                            "context_management"
+                        ] = anthropic_context_management
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+            elif param == "cache_control" and isinstance(value, dict):
+                # Pass through top-level cache_control for automatic prompt caching
+                optional_params["cache_control"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -1098,9 +1142,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1124,9 +1168,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1423,7 +1467,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1480,7 +1526,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         tool_results = []
                     tool_results.append(content)
 
-            elif content.get("thinking", None) is not None:
+            elif content.get("type") == "thinking":
                 if thinking_blocks is None:
                     thinking_blocks = []
                 thinking_blocks.append(cast(ChatCompletionThinkingBlock, content))
@@ -1640,6 +1686,96 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return usage
 
+    def _build_code_by_id_map(
+        self, tool_calls: List[ChatCompletionToolCallChunk]
+    ) -> Dict[str, str]:
+        code_by_id: Dict[str, str] = {}
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                call_id = tc.get("id")
+                command = args.get("command", "")
+                if isinstance(call_id, str):
+                    code_by_id[call_id] = command if isinstance(command, str) else ""
+            except Exception:
+                pass
+        return code_by_id
+
+    def _build_code_interpreter_results(
+        self,
+        tool_results: List[Any],
+        code_by_id: Dict[str, str],
+        container_id: Optional[str],
+    ) -> List[OutputCodeInterpreterCall]:
+        code_interpreter_results = []
+        for tr in tool_results:
+            if tr.get("type") != "bash_code_execution_tool_result":
+                continue
+            call_id = tr.get("tool_use_id", "")
+            content = tr.get("content", {})
+            log_outputs = build_code_interpreter_log_outputs(content)
+            code_interpreter_results.append(
+                OutputCodeInterpreterCall(
+                    type="code_interpreter_call",
+                    id=call_id,
+                    code=code_by_id.get(call_id, ""),
+                    container_id=container_id,
+                    status="completed",
+                    outputs=log_outputs,
+                )
+            )
+        return code_interpreter_results
+
+    def _build_provider_specific_fields(
+        self,
+        completion_response: dict,
+        citations: Optional[List[Any]],
+        thinking_blocks: Optional[
+            List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ]
+        ],
+        web_search_results: Optional[List[Any]],
+        tool_results: Optional[List[Any]],
+        compaction_blocks: Optional[List[Any]],
+        tool_calls: List[ChatCompletionToolCallChunk],
+    ) -> Dict[str, Any]:
+        provider_specific_fields: Dict[str, Any] = {
+            "citations": citations,
+            "thinking_blocks": thinking_blocks,
+        }
+
+        context_management = completion_response.get("context_management")
+        if context_management is not None:
+            provider_specific_fields["context_management"] = context_management
+
+        if web_search_results is not None:
+            provider_specific_fields["web_search_results"] = web_search_results
+
+        if tool_results is not None:
+            provider_specific_fields["tool_results"] = tool_results
+            container_id = (
+                completion_response.get("container", {}).get("id")
+                if isinstance(completion_response.get("container"), dict)
+                else None
+            )
+            code_by_id = self._build_code_by_id_map(tool_calls)
+            code_interpreter_results = self._build_code_interpreter_results(
+                tool_results, code_by_id, container_id
+            )
+            provider_specific_fields[
+                "code_interpreter_results"
+            ] = code_interpreter_results
+
+        container = completion_response.get("container")
+        if container is not None:
+            provider_specific_fields["container"] = container
+
+        if compaction_blocks is not None:
+            provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        return provider_specific_fields
+
     def transform_parsed_response(
         self,
         completion_response: dict,
@@ -1660,98 +1796,73 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
-        else:
-            text_content = ""
-            citations: Optional[List[Any]] = None
-            thinking_blocks: Optional[
-                List[
-                    Union[
-                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                    ]
-                ]
-            ] = None
-            reasoning_content: Optional[str] = None
-            tool_calls: List[ChatCompletionToolCallChunk] = []
 
-            (
-                text_content,
-                citations,
-                thinking_blocks,
-                reasoning_content,
-                tool_calls,
-                web_search_results,
-                tool_results,
-                compaction_blocks,
-            ) = self.extract_response_content(completion_response=completion_response)
+        (
+            text_content,
+            citations,
+            thinking_blocks,
+            reasoning_content,
+            tool_calls,
+            web_search_results,
+            tool_results,
+            compaction_blocks,
+        ) = self.extract_response_content(completion_response=completion_response)
 
-            if (
-                prefix_prompt is not None
-                and not text_content.startswith(prefix_prompt)
-                and not litellm.disable_add_prefix_to_prompt
-            ):
-                text_content = prefix_prompt + text_content
+        if (
+            prefix_prompt is not None
+            and not text_content.startswith(prefix_prompt)
+            and not litellm.disable_add_prefix_to_prompt
+        ):
+            text_content = prefix_prompt + text_content
 
-            context_management: Optional[Dict] = completion_response.get(
-                "context_management"
-            )
+        provider_specific_fields = self._build_provider_specific_fields(
+            completion_response,
+            citations,
+            thinking_blocks,
+            web_search_results,
+            tool_results,
+            compaction_blocks,
+            tool_calls,
+        )
 
-            container: Optional[Dict] = completion_response.get("container")
+        _message = litellm.Message(
+            tool_calls=tool_calls,
+            content=text_content or None,
+            provider_specific_fields=provider_specific_fields,
+            thinking_blocks=thinking_blocks,
+            reasoning_content=reasoning_content,
+        )
+        _message.provider_specific_fields = provider_specific_fields
 
-            provider_specific_fields: Dict[str, Any] = {
-                "citations": citations,
-                "thinking_blocks": thinking_blocks,
-            }
-            if context_management is not None:
-                provider_specific_fields["context_management"] = context_management
-            if web_search_results is not None:
-                provider_specific_fields["web_search_results"] = web_search_results
-            if tool_results is not None:
-                provider_specific_fields["tool_results"] = tool_results
-            if container is not None:
-                provider_specific_fields["container"] = container
-            if compaction_blocks is not None:
-                provider_specific_fields["compaction_blocks"] = compaction_blocks
+        json_mode_message = self._transform_response_for_json_mode(
+            json_mode=json_mode,
+            tool_calls=tool_calls,
+        )
+        if json_mode_message is not None:
+            completion_response["stop_reason"] = "stop"
+            _message = json_mode_message
 
-            _message = litellm.Message(
-                tool_calls=tool_calls,
-                content=text_content or None,
-                provider_specific_fields=provider_specific_fields,
-                thinking_blocks=thinking_blocks,
-                reasoning_content=reasoning_content,
-            )
-            _message.provider_specific_fields = provider_specific_fields
+        model_response.choices[0].message = _message
+        model_response._hidden_params["original_response"] = completion_response[
+            "content"
+        ]
+        model_response.choices[0].finish_reason = cast(
+            OpenAIChatCompletionFinishReason,
+            map_finish_reason(completion_response["stop_reason"]),
+        )
 
-            ## HANDLE JSON MODE - anthropic returns single function call
-            json_mode_message = self._transform_response_for_json_mode(
-                json_mode=json_mode,
-                tool_calls=tool_calls,
-            )
-            if json_mode_message is not None:
-                completion_response["stop_reason"] = "stop"
-                _message = json_mode_message
-
-            model_response.choices[0].message = _message  # type: ignore
-            model_response._hidden_params["original_response"] = completion_response[
-                "content"
-            ]  # allow user to access raw anthropic tool calling response
-
-            model_response.choices[0].finish_reason = cast(
-                OpenAIChatCompletionFinishReason,
-                map_finish_reason(completion_response["stop_reason"]),
-            )
-
-        ## CALCULATING USAGE
         usage = self.calculate_usage(
             usage_object=completion_response["usage"],
             reasoning_content=reasoning_content,
             completion_response=completion_response,
             speed=speed,
         )
-        setattr(model_response, "usage", usage)  # type: ignore
+        setattr(model_response, "usage", usage)
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
 
+        _hidden_params["provider_specific_fields"] = provider_specific_fields
         model_response._hidden_params = _hidden_params
         return model_response
 

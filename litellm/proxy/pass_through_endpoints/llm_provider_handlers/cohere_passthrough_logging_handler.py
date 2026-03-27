@@ -176,7 +176,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     request_body=request_body,
                     **kwargs,
                 )
-        
+
         # For non-embed routes (e.g., /v2/chat), fall back to chat handler
         return super().passthrough_chat_handler(
             httpx_response=httpx_response,

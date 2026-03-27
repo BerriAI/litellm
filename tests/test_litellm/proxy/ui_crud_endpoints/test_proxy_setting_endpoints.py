@@ -111,6 +111,37 @@ class TestProxySettingEndpoints:
         assert "user_role" in data["field_schema"]["properties"]
         assert "description" in data["field_schema"]["properties"]["user_role"]
 
+    def test_get_internal_user_settings_fresh_db_defaults_to_viewer(
+        self, mock_auth, monkeypatch
+    ):
+        """
+        On a fresh DB with no saved settings, the GET endpoint should return
+        INTERNAL_USER_VIEW_ONLY as the default role — matching the runtime
+        fallback in SSO/SCIM/JWT provisioning paths.
+        """
+        # Simulate fresh DB: no default_internal_user_params in config
+        empty_config = {
+            "litellm_settings": {},
+            "general_settings": {},
+            "environment_variables": {},
+        }
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        async def mock_get_config():
+            return empty_config
+
+        monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+        response = client.get("/get/internal_user_settings")
+        assert response.status_code == 200
+
+        values = response.json()["values"]
+        assert values["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, (
+            f"Fresh DB should default to INTERNAL_USER_VIEW_ONLY, got {values['user_role']}. "
+            "The Pydantic default must match the runtime fallback."
+        )
+
     def test_update_internal_user_settings(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -230,6 +261,56 @@ class TestProxySettingEndpoints:
 
         # Verify save_config was called exactly once
         assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_get_default_team_settings_includes_team_member_permissions_schema(
+        self, mock_proxy_config, mock_auth
+    ):
+        """Test that team_member_permissions field appears in schema with enum items"""
+        response = client.get("/get/default_team_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check that team_member_permissions is in the schema
+        props = data["field_schema"]["properties"]
+        assert "team_member_permissions" in props
+
+        perm_schema = props["team_member_permissions"]
+        assert perm_schema["type"] == "array"
+        assert "items" in perm_schema
+        assert "enum" in perm_schema["items"]
+        # Verify some known enum values are present
+        enum_values = perm_schema["items"]["enum"]
+        assert "/key/generate" in enum_values
+        assert "/key/info" in enum_values
+        assert "/key/delete" in enum_values
+
+    def test_update_default_team_settings_with_permissions(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating default team settings with team_member_permissions"""
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+
+        new_settings = {
+            "models": ["gpt-4"],
+            "team_member_permissions": ["/key/generate", "/key/update", "/key/delete"],
+        }
+
+        response = client.patch("/update/default_team_settings", json=new_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        settings = data["settings"]
+        assert settings["team_member_permissions"] == [
+            "/key/generate",
+            "/key/update",
+            "/key/delete",
+        ]
 
     def test_get_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting the SSO settings from the dedicated database table"""
@@ -867,6 +948,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {"disable_model_add_for_internal_users": True}
@@ -908,6 +990,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         payload = {

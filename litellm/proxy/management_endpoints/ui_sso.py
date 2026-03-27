@@ -15,8 +15,24 @@ import inspect
 import os
 import secrets
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
+from urllib.parse import urlencode, urlparse
 
+if TYPE_CHECKING:
+    import httpx
+
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
@@ -84,6 +100,7 @@ from litellm.proxy.utils import (
     get_server_root_path,
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
+from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -92,7 +109,6 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     RoleMappings,
     TeamMappings,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.ui_sso import ParsedOpenIDResult
 
 if TYPE_CHECKING:
@@ -101,6 +117,12 @@ else:
     from typing import Any as OpenID
 
 router = APIRouter()
+
+# OAuth bearer credential fields that must not appear in SSO debug responses
+# (received_response is included in restricted-group error messages).
+# Metadata fields (token_type, expires_in, scope) are intentionally kept so
+# response convertors see the same fields in the PKCE path as in the non-PKCE path.
+_OAUTH_TOKEN_FIELDS = frozenset({"access_token", "id_token", "refresh_token"})
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
@@ -291,6 +313,7 @@ async def google_login(
     source: Optional[str] = None,
     key: Optional[str] = None,
     existing_key: Optional[str] = None,
+    return_to: Optional[str] = None,
 ):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -326,7 +349,7 @@ async def google_login(
                 total_users = await prisma_client.db.litellm_usertable.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -384,13 +407,23 @@ async def google_login(
         is True
     ):
         verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
+        sso_redirect = await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url=redirect_url,
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
         )
+        if return_to is not None and sso_redirect is not None:
+            if SSOAuthenticationHandler._validate_return_to(return_to):
+                sso_redirect.set_cookie(
+                    key="litellm_cp_return_to",
+                    value=return_to,
+                    max_age=600,
+                    httponly=True,
+                    samesite="lax",
+                )
+        return sso_redirect
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -679,9 +712,9 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: Dict[LitellmUserRoles, List[str]] = (
-                ast.literal_eval(generic_role_mappings)
-            )
+            generic_user_role_mappings_data: Dict[
+                LitellmUserRoles, List[str]
+            ] = ast.literal_eval(generic_role_mappings)
             if isinstance(generic_user_role_mappings_data, dict):
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
@@ -702,6 +735,78 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                 f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic."
             )
     return role_mappings
+
+
+def _parse_generic_sso_headers() -> dict:
+    """Parse comma-separated GENERIC_SSO_HEADERS env var into a dict."""
+    raw = os.getenv("GENERIC_SSO_HEADERS", None)
+    if raw is None:
+        return {}
+    result: Dict[str, str] = {}
+    for header in raw.split(","):
+        header = header.strip()
+        if header:
+            key, value = header.split("=")
+            result[key] = value
+    return result
+
+
+def _handle_generic_sso_error(
+    e: Exception,
+    generic_authorization_endpoint: Optional[str],
+    generic_token_endpoint: Optional[str],
+    additional_headers: dict,
+) -> NoReturn:
+    """Handle errors from generic SSO verify_and_process. Always re-raises."""
+    error_message = str(e)
+
+    # Surface a helpful PKCE misconfiguration hint only when:
+    # 1. The error mentions PKCE/code verifier, AND
+    # 2. PKCE is not currently configured (GENERIC_CLIENT_USE_PKCE != true)
+    pkce_configured = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+    if not pkce_configured and (
+        "PKCE" in error_message or "code verifier" in error_message.lower()
+    ):
+        is_okta = (
+            generic_authorization_endpoint
+            and "okta" in generic_authorization_endpoint.lower()
+        ) or (generic_token_endpoint and "okta" in generic_token_endpoint.lower())
+        provider_name = "Okta" if is_okta else "Your OAuth provider"
+
+        detailed_message = (
+            f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
+            f"but it's not enabled in your LiteLLM configuration.\n\n"
+            f"SOLUTION: Add this environment variable and restart your proxy:\n"
+            f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
+        )
+        if is_okta:
+            detailed_message += (
+                "For AWS ECS: Add the environment variable to your task definition.\n"
+                "For Docker: Add -e GENERIC_CLIENT_USE_PKCE=true to your docker run command.\n"
+                "For .env file: Add GENERIC_CLIENT_USE_PKCE=true to your .env file.\n\n"
+            )
+        detailed_message += f"Original error: {error_message}"
+
+        raise ProxyException(
+            message=detailed_message,
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_CLIENT_USE_PKCE",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if isinstance(e, ProxyException):
+        verbose_proxy_logger.error(
+            "SSO authentication failed: %s. Passed in headers: %s",
+            e,
+            additional_headers,
+        )
+    else:
+        verbose_proxy_logger.exception(
+            "Error verifying and processing generic SSO: %s. Passed in headers: %s",
+            e,
+            additional_headers,
+        )
+    raise e
 
 
 async def get_generic_sso_response(
@@ -762,38 +867,114 @@ async def get_generic_sso_response(
         scope=generic_scope,
     )
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-    additional_generic_sso_headers = os.getenv(
-        "GENERIC_SSO_HEADERS", None
-    )  # Comma-separated list of headers to add to the request - e.g. Authorization=Bearer <token>, Content-Type=application/json, etc.
-    additional_generic_sso_headers_dict = {}
-    if additional_generic_sso_headers is not None:
-        additional_generic_sso_headers_split = additional_generic_sso_headers.split(",")
-        for header in additional_generic_sso_headers_split:
-            header = header.strip()
-            if header:
-                key, value = header.split("=")
-                additional_generic_sso_headers_dict[key] = value
+    additional_generic_sso_headers_dict = _parse_generic_sso_headers()
+
+    code_verifier: Optional[
+        str
+    ] = None  # assigned inside try; initialized for type tracking
 
     try:
-        result = await generic_sso.verify_and_process(
-            request,
-            params=await SSOAuthenticationHandler.prepare_token_exchange_parameters(
+        token_exchange_params = (
+            await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=request,
                 generic_include_client_id=generic_include_client_id,
-            ),
-            headers=additional_generic_sso_headers_dict,
+            )
         )
 
-        access_token_str: Optional[str] = generic_sso.access_token
+        # Extract code_verifier (and the cache key for deferred deletion) before calling fastapi-sso
+        code_verifier = token_exchange_params.pop("code_verifier", None)
+        pkce_cache_key = token_exchange_params.pop("_pkce_cache_key", None)
+
+        # Get authorization code from query params (only used in the PKCE path below;
+        # the non-PKCE path delegates to verify_and_process which handles OAuth error
+        # callbacks — user-denied, CSRF mismatch — internally).
+        authorization_code = request.query_params.get("code")
+
+        if code_verifier:
+            if not authorization_code:
+                raise ProxyException(
+                    message="Missing authorization code in callback",
+                    type=ProxyErrorTypes.auth_error,
+                    param="code",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            if not generic_client_id:
+                raise ProxyException(
+                    message="GENERIC_CLIENT_ID must be set when PKCE is enabled",
+                    type=ProxyErrorTypes.auth_error,
+                    param="GENERIC_CLIENT_ID",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            if not generic_token_endpoint:
+                raise ProxyException(
+                    message="GENERIC_TOKEN_ENDPOINT must be set when PKCE is enabled",
+                    type=ProxyErrorTypes.auth_error,
+                    param="GENERIC_TOKEN_ENDPOINT",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            # All guards above raise, so authorization_code is a non-empty str here.
+            # Use an explicit type guard rather than assert (assert is a no-op with -O).
+            if not isinstance(authorization_code, str):
+                raise ProxyException(
+                    message="Missing authorization code in callback",
+                    type=ProxyErrorTypes.auth_error,
+                    param="code",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            combined_response = await SSOAuthenticationHandler._pkce_token_exchange(
+                authorization_code=authorization_code,
+                code_verifier=code_verifier,
+                client_id=generic_client_id,
+                client_secret=generic_client_secret,
+                token_endpoint=generic_token_endpoint,
+                userinfo_endpoint=generic_userinfo_endpoint,
+                include_client_id=generic_include_client_id,
+                redirect_url=redirect_url,
+                additional_headers=additional_generic_sso_headers_dict,
+            )
+            # Pass the full response so custom response_convertor implementations
+            # can access all fields (including id_token for claim extraction).
+            result = response_convertor(combined_response, generic_sso)
+            # Strip bearer credentials from combined_response before storing in
+            # received_response. received_response may appear in restricted-group
+            # error messages — bearer tokens (access_token, id_token, refresh_token)
+            # must not be exposed to callers.
+            # Assign directly rather than relying on nonlocal mutation so that Pyright
+            # can track that received_response is non-None from this point on.
+            received_response = {
+                k: v
+                for k, v in combined_response.items()
+                if k not in _OAUTH_TOKEN_FIELDS
+            }
+            # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
+            # is never set. Read the token directly from the exchange response instead so
+            # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
+            access_token_str: Optional[str] = combined_response.get("access_token")
+        else:
+            result = await generic_sso.verify_and_process(
+                request,
+                params=token_exchange_params,
+                headers=additional_generic_sso_headers_dict,
+            )
+            access_token_str = generic_sso.access_token
+
         process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
         )
+        # Delete the single-use PKCE verifier only after all downstream processing
+        # (response_convertor and process_sso_jwt_access_token) has completed
+        # successfully.  Deleting earlier would consume the verifier on a transient
+        # failure, forcing the user to restart the entire OAuth flow from scratch.
+        if pkce_cache_key:
+            await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
 
     except Exception as e:
-        verbose_proxy_logger.exception(
-            f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
+        _handle_generic_sso_error(
+            e,
+            generic_authorization_endpoint,
+            generic_token_endpoint,
+            additional_generic_sso_headers_dict,
         )
-        raise e
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}, received_response
 
@@ -1017,9 +1198,9 @@ def apply_user_info_values_to_sso_user_defined_values(
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = (
-                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            )
+            user_defined_values[
+                "user_role"
+            ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
             verbose_proxy_logger.debug(
                 "No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY"
             )
@@ -1154,12 +1335,17 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             request=request, key=key_id, existing_key=existing_key, result=result
         )
 
+    # Control-plane cross-origin: read return_to from cookie.
+    # Starlette's cookie_parser already handles RFC 2109 unquoting.
+    cp_return_to: Optional[str] = request.cookies.get("litellm_cp_return_to")
+
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
         request=request,
         received_response=received_response,
         generic_client_id=generic_client_id,
         ui_access_mode=ui_access_mode,
+        return_to=cp_return_to,
     )
 
 
@@ -1447,9 +1633,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1601,6 +1787,37 @@ class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
     """
+
+    @staticmethod
+    def _validate_return_to(return_to: str) -> bool:
+        """
+        Validate that return_to matches the configured control_plane_url origin.
+
+        Returns True if return_to is valid and should be used.
+        Returns False if control_plane_url is not configured (return_to is ignored).
+        Raises HTTPException(400) if return_to origin does not match control_plane_url origin.
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        control_plane_url = general_settings.get("control_plane_url")
+        if control_plane_url is None:
+            return False
+
+        def _origin(url: str) -> tuple:
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or "").lower()
+            hostname = (parsed.hostname or "").lower()
+            default_port = 443 if scheme == "https" else 80
+            port = parsed.port if parsed.port is not None else default_port
+            return (scheme, hostname, port)
+
+        if _origin(return_to) != _origin(control_plane_url):
+            raise HTTPException(
+                status_code=400,
+                detail="return_to does not match the configured control_plane_url",
+            )
+
+        return True
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -1773,21 +1990,25 @@ class SSOAuthenticationHandler:
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
-                # Store code_verifier in cache (10 min TTL). Use Redis when available
-                # so callbacks landing on another pod can retrieve it (multi-pod SSO).
+                # Store code_verifier in cache (10 min TTL). Wrap in dict for proper
+                # JSON serialization in Redis. Use Redis when available so callbacks
+                # landing on another pod can retrieve it (multi-pod SSO).
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
                 if redis_usage_cache is not None:
                     await redis_usage_cache.async_set_cache(
                         key=cache_key,
-                        value=code_verifier,
+                        value={"code_verifier": code_verifier},
                         ttl=600,
                     )
                 else:
                     await user_api_key_cache.async_set_cache(
                         key=cache_key,
-                        value=code_verifier,
+                        value={"code_verifier": code_verifier},
                         ttl=600,
                     )
+                verbose_proxy_logger.debug(
+                    "PKCE code_verifier stored in cache (TTL: 600s)"
+                )
 
                 # Add PKCE parameters to the authorization URL
                 if pkce_params:
@@ -1813,9 +2034,6 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
-                    verbose_proxy_logger.debug(
-                        "PKCE parameters added to authorization URL"
-                    )
             return redirect_response
 
     @staticmethod
@@ -1859,6 +2077,7 @@ class SSOAuthenticationHandler:
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
         use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+
         if use_pkce:
             (
                 code_verifier,
@@ -1866,9 +2085,7 @@ class SSOAuthenticationHandler:
             ) = SSOAuthenticationHandler.generate_pkce_params()
             redirect_params["code_challenge"] = code_challenge
             redirect_params["code_challenge_method"] = "S256"
-            verbose_proxy_logger.debug(
-                "PKCE enabled - code_challenge added to authorization request"
-            )
+            verbose_proxy_logger.debug("PKCE enabled for authorization request")
 
         return redirect_params, code_verifier
 
@@ -2200,6 +2417,7 @@ class SSOAuthenticationHandler:
         received_response: Optional[dict] = None,
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
+        return_to: Optional[str] = None,
     ) -> RedirectResponse:
         import jwt
 
@@ -2209,6 +2427,7 @@ class SSOAuthenticationHandler:
             master_key,
             premium_user,
             proxy_logging_obj,
+            redis_usage_cache,
             user_api_key_cache,
             user_custom_sso,
         )
@@ -2376,6 +2595,36 @@ class SSOAuthenticationHandler:
             master_key or "",
             algorithm="HS256",
         )
+
+        # Control-plane cross-origin: store JWT behind a single-use opaque
+        # code (60s TTL) so the token never appears in browser history / logs.
+        # The control plane redeems it via POST /v3/login/exchange.
+        if return_to is not None and SSOAuthenticationHandler._validate_return_to(
+            return_to
+        ):
+            code = secrets.token_urlsafe(32)
+            cache_key = f"login_code:{code}"
+            cache_value = {"token": jwt_token, "redirect_url": return_to}
+            if redis_usage_cache is not None:
+                await redis_usage_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+            else:
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key, value=cache_value, ttl=60
+                )
+
+            separator = "&" if "?" in return_to else "?"
+            redirect_url = (
+                return_to + separator + urlencode({"login": "success", "code": code})
+            )
+            verbose_proxy_logger.info(
+                "Cross-origin SSO: redirecting to control plane with login code"
+            )
+            redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+            redirect_response.delete_cookie("litellm_cp_return_to")
+            return redirect_response
+
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
@@ -2402,35 +2651,194 @@ class SSOAuthenticationHandler:
         token_params: Dict[str, Any] = {"include_client_id": generic_include_client_id}
 
         # Retrieve PKCE code_verifier if PKCE was used in authorization.
-        # Use same cache as store: Redis when available (multi-pod), else in-memory.
+        # Gate on GENERIC_CLIENT_USE_PKCE to avoid an unnecessary Redis round-trip
+        # on every non-PKCE SSO callback.
         query_params = dict(request.query_params)
         state = query_params.get("state")
-        if state:
+
+        use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
+
+        if use_pkce and not state:
+            verbose_proxy_logger.warning(
+                "PKCE is enabled (GENERIC_CLIENT_USE_PKCE=true) but no 'state' parameter "
+                "was found in the callback. The PKCE verifier cannot be retrieved without "
+                "a state value — the token exchange will proceed without code_verifier, "
+                "which the provider may reject. Ensure your OAuth provider returns 'state' "
+                "in the callback redirect."
+            )
+
+        if state and use_pkce:
             from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
             cache_key = f"pkce_verifier:{state}"
             if redis_usage_cache is not None:
-                code_verifier = await redis_usage_cache.async_get_cache(key=cache_key)
+                cached_data = await redis_usage_cache.async_get_cache(key=cache_key)
             else:
-                code_verifier = await user_api_key_cache.async_get_cache(key=cache_key)
+                cached_data = await user_api_key_cache.async_get_cache(key=cache_key)
+
+            code_verifier = None
+            # Track why code_verifier is absent for accurate strict-mode diagnostics.
+            _empty_value_in_dict = False  # dict format correct but value is empty/null
+
+            if cached_data:
+                # Extract code_verifier from dict (stored as dict for JSON serialization)
+                if isinstance(cached_data, dict) and "code_verifier" in cached_data:
+                    code_verifier = cached_data["code_verifier"]
+                    if not code_verifier:
+                        # Dict format is correct but value is empty or null.  This is
+                        # a distinct case from an unrecognized format — the entry exists
+                        # but was stored with an empty/null verifier (data integrity issue).
+                        _empty_value_in_dict = True
+                        verbose_proxy_logger.warning(
+                            "PKCE verifier dict for state '%s' has an empty/null code_verifier "
+                            "value — may indicate a storage bug. Treating as a cache miss.",
+                            state,
+                        )
+                    else:
+                        verbose_proxy_logger.debug(
+                            "PKCE code_verifier retrieved from cache"
+                        )
+                elif isinstance(cached_data, str):
+                    # Handle legacy format (plain string) for backward compatibility
+                    code_verifier = cached_data
+                    verbose_proxy_logger.warning(
+                        "Retrieved code_verifier in legacy plain-string format. "
+                        "Future storage will use dict format."
+                    )
+                else:
+                    # Defer the detailed ERROR log to the strict-mode branch below
+                    # (which includes state and a diagnostic message).  Log at DEBUG
+                    # here to avoid duplicate ERROR entries in the same request.
+                    verbose_proxy_logger.debug(
+                        "Unexpected PKCE verifier cache format (type=%s); skipping.",
+                        type(cached_data).__name__,
+                    )
 
             if code_verifier:
-                # Add code_verifier to token exchange parameters (Redis returns decoded string)
-                token_params["code_verifier"] = (
-                    code_verifier
-                    if isinstance(code_verifier, str)
-                    else str(code_verifier)
+                # Add code_verifier to token exchange parameters.
+                token_params["code_verifier"] = code_verifier
+                # Return the cache key so the caller can delete it *after* a
+                # successful token exchange (avoids losing the verifier on retry
+                # if the exchange fails partway through).
+                token_params["_pkce_cache_key"] = cache_key
+            else:
+                await SSOAuthenticationHandler._handle_missing_pkce_verifier(
+                    state=state,
+                    cache_key=cache_key,
+                    cached_data=cached_data,
+                    empty_value_in_dict=_empty_value_in_dict,
+                    redis_usage_cache=redis_usage_cache,
+                    user_api_key_cache=user_api_key_cache,
                 )
-                verbose_proxy_logger.debug(
-                    "PKCE code_verifier retrieved and will be included in token exchange"
-                )
-
-                # Clean up the cache entry (single-use verifier)
-                if redis_usage_cache is not None:
-                    await redis_usage_cache.async_delete_cache(key=cache_key)
-                else:
-                    await user_api_key_cache.async_delete_cache(key=cache_key)
         return token_params
+
+    @staticmethod
+    async def _handle_missing_pkce_verifier(
+        state: Optional[str],
+        cache_key: str,
+        cached_data: object,
+        empty_value_in_dict: bool,
+        redis_usage_cache: object,
+        user_api_key_cache: object,
+    ) -> None:
+        """Handle the case where PKCE verifier could not be extracted from cache.
+
+        In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
+        Otherwise logs a warning and returns (token exchange proceeds without verifier).
+        """
+        active_cache = (
+            redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        )
+        strict_cache_miss = (
+            os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
+        )
+        if strict_cache_miss:
+            if empty_value_in_dict:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                raise ProxyException(
+                    message=(
+                        f"PKCE verifier for state '{state}' was found in cache but "
+                        f"has an empty or null code_verifier value — possible storage bug."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            elif cached_data is not None:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                verbose_proxy_logger.error(
+                    "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
+                    "treating as a cache miss. Investigate the cached value — it may be "
+                    "a corrupt or stale entry.",
+                    state,
+                    type(cached_data).__name__,
+                )
+                raise ProxyException(
+                    message=(
+                        f"PKCE verifier for state '{state}' has an unrecognized format "
+                        f"(type={type(cached_data).__name__}). The cached entry may be corrupt."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+            else:
+                if redis_usage_cache is not None:
+                    cause = (
+                        "The authorization and callback were likely handled by different "
+                        "instances — the verifier was stored on one pod but not found on another."
+                    )
+                else:
+                    cause = (
+                        "The verifier may have expired (TTL), been lost on a pod restart, "
+                        "or the PKCE authorization step was never completed. "
+                        "Configure Redis so all proxy instances share the PKCE verifier."
+                    )
+                verbose_proxy_logger.error(
+                    "PKCE is enabled but no verifier found in cache for state '%s'. "
+                    "%s Cache type: %s.",
+                    state,
+                    cause,
+                    type(active_cache).__name__,
+                )
+                raise ProxyException(
+                    message=f"PKCE verifier not found in cache for state '{state}'. {cause}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="PKCE_CACHE_MISS",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+        else:
+            if cached_data is not None:
+                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+            verbose_proxy_logger.warning(
+                "PKCE is enabled but verifier not found in cache for state '%s' "
+                "(cache type: %s, raw data present: %s). "
+                "Continuing without code_verifier — set PKCE_STRICT_CACHE_MISS=true to fail fast instead.",
+                state,
+                type(active_cache).__name__,
+                cached_data is not None,
+            )
+
+    @staticmethod
+    async def _delete_pkce_verifier(cache_key: str) -> None:
+        """Delete a single-use PKCE verifier from cache after a successful exchange.
+
+        Failure is non-fatal: a leftover verifier is a minor security concern
+        (unused key in cache) but not worth aborting an otherwise-successful login.
+        """
+        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+
+        try:
+            if redis_usage_cache is not None:
+                await redis_usage_cache.async_delete_cache(key=cache_key)
+            else:
+                await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as exc:
+            verbose_proxy_logger.warning(
+                "PKCE: failed to delete verifier cache key '%s' (best-effort cleanup): %s",
+                cache_key,
+                exc,
+            )
 
     @staticmethod
     def generate_pkce_params() -> Tuple[str, str]:
@@ -2459,6 +2867,310 @@ class SSOAuthenticationHandler:
         )
 
         return code_verifier, code_challenge
+
+    @staticmethod
+    def _validate_token_response(response: "httpx.Response") -> dict:
+        """
+        Parse and validate the token endpoint response.
+
+        Ensures the response is valid JSON, a dict, and contains a non-null
+        access_token string. Raises ProxyException on any validation failure.
+        """
+        try:
+            token_response_raw = response.json()
+        except Exception as json_err:
+            verbose_proxy_logger.error(
+                "Failed to parse token response as JSON: %s. Body: %s",
+                json_err,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=f"Token endpoint returned invalid JSON: {json_err}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not isinstance(token_response_raw, dict):
+            verbose_proxy_logger.error(
+                "Token endpoint returned non-dict JSON (type=%s). Body: %s",
+                type(token_response_raw).__name__,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=(
+                    f"Token endpoint returned unexpected response format "
+                    f"(expected JSON object, got {type(token_response_raw).__name__})"
+                ),
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+        token_response: dict = token_response_raw
+
+        access_token_val = token_response.get("access_token")
+        if not isinstance(access_token_val, str) or not access_token_val:
+            error = token_response.get("error")
+            error_desc = token_response.get("error_description", "")
+            if error:
+                detail = f"{error} - {error_desc}" if error_desc else error
+            else:
+                detail = (
+                    "token endpoint returned HTTP 200 but no access_token "
+                    f"(response keys: {sorted(token_response.keys())})"
+                )
+            verbose_proxy_logger.error(
+                "Token response missing or null access_token. detail=%s", detail
+            )
+            raise ProxyException(
+                message=f"Token exchange failed: {detail}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        return token_response
+
+    @staticmethod
+    async def _pkce_token_exchange(
+        authorization_code: str,
+        code_verifier: str,
+        client_id: str,
+        client_secret: Optional[str],
+        token_endpoint: str,
+        userinfo_endpoint: Optional[str],
+        include_client_id: bool,
+        redirect_url: Optional[str],
+        additional_headers: Dict[str, str],
+    ) -> dict:
+        """
+        Performs a direct OAuth token exchange including the PKCE code_verifier.
+
+        fastapi-sso does not forward code_verifier, so when PKCE is enabled we
+        bypass it and call the token endpoint ourselves, then fetch user info.
+
+        Returns a combined dict of the token response and user info, suitable
+        for passing to a response_convertor.
+        """
+        verbose_proxy_logger.debug(
+            "PKCE: performing direct token exchange (code_verifier length=%d)",
+            len(code_verifier),
+        )
+
+        token_data: Dict[str, str] = {
+            "grant_type": "authorization_code",
+            "code": authorization_code,
+            "code_verifier": code_verifier,
+        }
+        # Only include redirect_uri when set — omitting it avoids sending the
+        # literal string "None" to the provider if the env var is missing.
+        if redirect_url:
+            token_data["redirect_uri"] = redirect_url
+
+        request_headers = {
+            **additional_headers,
+            "Content-Type": "application/x-www-form-urlencoded",  # must not be overridden
+            "Accept": "application/json",
+        }
+
+        if not include_client_id:
+            # Use Basic Auth only when a secret is available; public PKCE clients omit it.
+            if client_secret:
+                credentials = base64.b64encode(
+                    f"{client_id}:{client_secret}".encode()
+                ).decode()
+                request_headers["Authorization"] = f"Basic {credentials}"
+            else:
+                token_data["client_id"] = client_id
+        else:
+            token_data["client_id"] = client_id
+            if client_secret:
+                token_data["client_secret"] = client_secret
+
+        http_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SSO_HANDLER
+        )
+        try:
+            response = await http_client.post(
+                url=token_endpoint,
+                data=token_data,
+                headers=request_headers,
+                timeout=30.0,
+            )
+        except Exception as exc:
+            # Catch network-level errors (SSL, DNS, TCP, timeout, etc.) and
+            # wrap them as a clean ProxyException rather than leaking raw
+            # httpx or OS exceptions to callers.
+            verbose_proxy_logger.error("PKCE token endpoint unreachable: %s", exc)
+            raise ProxyException(
+                message=f"Token endpoint request failed: {exc}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            ) from exc
+        if response.status_code != 200:
+            verbose_proxy_logger.error(
+                "PKCE token exchange failed. status=%s body=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            raise ProxyException(
+                message=f"Token exchange failed: {response.status_code} - {response.text[:500]}",
+                type=ProxyErrorTypes.auth_error,
+                param="token_exchange",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        token_response = SSOAuthenticationHandler._validate_token_response(response)
+
+        verbose_proxy_logger.debug(
+            "PKCE token exchange successful. id_token_present=%s",
+            bool(token_response.get("id_token")),
+        )
+        # Bearer credentials (access_token, id_token, refresh_token) are always sourced
+        # from token_response — not from userinfo — in the merge step below.
+        userinfo = await SSOAuthenticationHandler._get_pkce_userinfo(
+            access_token=token_response["access_token"],
+            id_token=token_response.get("id_token"),
+            userinfo_endpoint=userinfo_endpoint,
+            additional_headers=additional_headers,
+        )
+
+        # Merge: userinfo takes precedence for identity claims (sub, email, name, …) per
+        # the OpenID Connect spec (userinfo is the authoritative source for identity).
+        # Bearer credentials (access_token, id_token, refresh_token) from the token endpoint
+        # take precedence over same-named fields in userinfo — non-standard providers sometimes
+        # include token fields in userinfo, which must not shadow the real bearer token.
+        # If a bearer field is absent from the token response, any userinfo-provided value
+        # is preserved as a fallback (useful for non-standard providers that omit id_token
+        # from the token response but include it in userinfo).
+        #
+        # Three-way merge semantics for each bearer-credential field:
+        #   1. token_response has a non-null value → use it (token endpoint is authoritative)
+        #   2. token_response explicitly sent null  → remove the key so callers get a clean
+        #      absence signal; the null from the token endpoint overrides userinfo too
+        #   3. field absent from token_response     → leave whatever userinfo provided as-is
+        #      (e.g. userinfo-provided id_token from a non-standard provider)
+        merged = {**token_response, **userinfo}
+        for field in _OAUTH_TOKEN_FIELDS:
+            if token_response.get(field) is not None:
+                # Case 1: non-null in token_response — restore authoritative value.
+                merged[field] = token_response[field]
+            elif field in token_response:
+                # Case 2: key exists but value is explicitly null — remove from merged.
+                merged.pop(field, None)
+            # Case 3: field absent from token_response — leave userinfo value as-is.
+        return merged
+
+    @staticmethod
+    async def _get_pkce_userinfo(
+        access_token: str,
+        id_token: Optional[str],
+        userinfo_endpoint: Optional[str],
+        additional_headers: Dict[str, str],
+    ) -> dict:
+        """
+        Fetches user info from the userinfo endpoint.
+        Falls back to decoding the id_token if the endpoint is unavailable.
+        """
+        # None = request not yet attempted, failed, or returned empty/null (treated as failure
+        # so the id_token fallback can be attempted instead of returning a session with no claims).
+        userinfo: Optional[dict] = None
+
+        if userinfo_endpoint:
+            try:
+                client = get_async_httpx_client(
+                    llm_provider=httpxSpecialProvider.SSO_HANDLER
+                )
+                resp = await client.get(
+                    url=userinfo_endpoint,
+                    headers={
+                        **additional_headers,
+                        "Authorization": f"Bearer {access_token}",  # must not be overridden
+                    },
+                )
+                if resp.status_code == 200:
+                    try:
+                        userinfo_raw = resp.json()
+                        if not userinfo_raw:
+                            # JSON null (None) or empty dict ({}) — no identity claims.
+                            # Treat as failure so id_token fallback can be attempted.
+                            verbose_proxy_logger.warning(
+                                "Userinfo endpoint returned an empty or null response "
+                                "(type=%s); treating as failure and attempting id_token fallback. "
+                                "Check your provider's userinfo endpoint configuration.",
+                                type(userinfo_raw).__name__,
+                            )
+                            userinfo = None
+                        else:
+                            userinfo = userinfo_raw
+                    except Exception as json_err:
+                        verbose_proxy_logger.warning(
+                            "Userinfo endpoint returned non-JSON response (status 200): %s",
+                            json_err,
+                        )
+                else:
+                    verbose_proxy_logger.warning(
+                        "Userinfo endpoint returned %s (body: %s), falling back to id_token",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Userinfo endpoint error: %s, falling back to id_token", e
+                )
+
+        # Only fall back to id_token when the userinfo request failed (None).
+        # Empty dict ({}) and JSON null are both treated as failure (set to None above) since
+        # they contain no identity claims — id_token fallback is attempted in that case too.
+        # Explicitly check for a non-empty string to avoid attempting JWT decode on
+        # a blank or non-string id_token field from a misbehaving provider.
+        if userinfo is None and isinstance(id_token, str) and id_token:
+            try:
+                userinfo = jwt.decode(id_token, options={"verify_signature": False})
+                if not userinfo:
+                    # jwt.decode returned an empty dict (payload-free JWT or provider bug).
+                    # Treat this the same as a missing userinfo — the session would have no
+                    # identity claims, which is equivalent to a broken session.
+                    verbose_proxy_logger.warning(
+                        "id_token decoded to an empty payload — treating as failure."
+                    )
+                    userinfo = None
+            except Exception as decode_err:
+                verbose_proxy_logger.error("Failed to decode id_token: %s", decode_err)
+                raise ProxyException(
+                    message=f"Failed to decode id_token JWT: {decode_err}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="userinfo",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+
+        if userinfo is None:
+            id_token_attempted = isinstance(id_token, str) and bool(id_token)
+            if userinfo_endpoint:
+                if id_token_attempted:
+                    detail = (
+                        "userinfo endpoint failed and id_token was present but "
+                        "decoded to an empty payload — no identity claims available"
+                    )
+                else:
+                    detail = "userinfo endpoint failed and no id_token was present in the token response"
+            else:
+                if id_token_attempted:
+                    detail = (
+                        "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) "
+                        "and id_token decoded to an empty payload — no identity claims available"
+                    )
+                else:
+                    detail = "no userinfo endpoint is configured (GENERIC_USERINFO_ENDPOINT) and no id_token was present"
+            raise ProxyException(
+                message=f"SSO user info unavailable: {detail}.",
+                type=ProxyErrorTypes.auth_error,
+                param="userinfo",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        return userinfo
 
 
 class MicrosoftSSOHandler:
@@ -2550,9 +3262,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -2671,9 +3383,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -2902,7 +3614,7 @@ async def debug_sso_login(request: Request):
     ):
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,

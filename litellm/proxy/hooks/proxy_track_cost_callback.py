@@ -12,13 +12,15 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_key_object, get_team_object, log_db_metrics
-from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.utils import ProxyUpdateSpend
-from litellm.types.utils import (
-    StandardLoggingPayload,
-    StandardLoggingUserAPIKeyMetadata,
+from litellm.proxy.auth.auth_checks import (
+    get_key_object,
+    get_team_object,
+    log_db_metrics,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
@@ -38,33 +40,17 @@ class _ProxyDBLogger(CustomLogger):
         request_route = user_api_key_dict.request_route
         if _ProxyDBLogger._should_track_errors_in_db() is False:
             return
-        elif request_route is not None and not RouteChecks.is_llm_api_route(
-            route=request_route
+        elif request_route is not None and not (
+            RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.is_info_route(route=request_route)
         ):
             return
 
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
-            StandardLoggingUserAPIKeyMetadata(
-                user_api_key_hash=user_api_key_dict.api_key,
-                user_api_key_alias=user_api_key_dict.key_alias,
-                user_api_key_spend=user_api_key_dict.spend,
-                user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=(
-                    user_api_key_dict.budget_reset_at.isoformat()
-                    if user_api_key_dict.budget_reset_at
-                    else None
-                ),
-                user_api_key_user_email=user_api_key_dict.user_email,
-                user_api_key_user_id=user_api_key_dict.user_id,
-                user_api_key_team_id=user_api_key_dict.team_id,
-                user_api_key_org_id=user_api_key_dict.org_id,
-                user_api_key_project_id=user_api_key_dict.project_id,
-                user_api_key_team_alias=user_api_key_dict.team_alias,
-                user_api_key_end_user_id=user_api_key_dict.end_user_id,
-                user_api_key_request_route=user_api_key_dict.request_route,
-                user_api_key_auth_metadata=user_api_key_dict.metadata,
+            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                user_api_key_dict=user_api_key_dict
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
@@ -109,6 +95,22 @@ class _ProxyDBLogger(CustomLogger):
             request_data["custom_llm_provider"] = existing_litellm_params.get(
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
+
+        # Propagate standard_logging_object and litellm_trace_id from the
+        # Logging instance so that _get_session_id_for_spend_log uses the same
+        # trace_id that Langfuse received (via async_failure_handler).
+        # Without this, the DB session_id would be a random UUID that doesn't
+        # match the Langfuse trace_id, making failed requests unsearchable.
+        _litellm_logging_obj = request_data.get("litellm_logging_obj")
+        if _litellm_logging_obj is not None:
+            if not request_data.get("standard_logging_object"):
+                request_data["standard_logging_object"] = getattr(
+                    _litellm_logging_obj, "model_call_details", {}
+                ).get("standard_logging_object")
+            if request_data.get("litellm_trace_id") is None:
+                request_data["litellm_trace_id"] = getattr(
+                    _litellm_logging_obj, "litellm_trace_id", None
+                )
 
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
