@@ -53,7 +53,9 @@ class CheckBatchCost:
                 "user_api_key_alias": getattr(user_row, "user_alias", None),
             }
         except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}"
+            )
             return {}
 
     async def _cleanup_stale_managed_objects(self) -> None:
@@ -62,11 +64,22 @@ class CheckBatchCost:
         in non-terminal states as 'stale_expired'. These will never complete and
         should not be polled.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
+        )
         result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
-                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "status": {
+                    "not_in": [
+                        "completed",
+                        "complete",
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "stale_expired",
+                    ]
+                },
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -152,7 +165,11 @@ class CheckBatchCost:
                     order={"created_at": "asc"},
                 )
             except Exception as query_err:
-                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
+                if (
+                    "batch_processed" not in str(query_err).lower()
+                    and "unknown column" not in str(query_err).lower()
+                    and "does not exist" not in str(query_err).lower()
+                ):
                     raise
                 # Permanent schema gap — cache the result so future cycles skip straight to fallback
                 self._has_batch_processed_column = False
@@ -205,10 +222,7 @@ class CheckBatchCost:
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
-            if (
-                response.status == "completed"
-                and response.output_file_id is not None
-            ):
+            if response.status == "completed" and response.output_file_id is not None:
                 verbose_proxy_logger.info(
                     f"Batch ID: {batch_id} is complete, tracking cost and usage"
                 )
@@ -235,20 +249,25 @@ class CheckBatchCost:
                 decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
                 if decoded:
                     try:
-                        raw_output_file_id = decoded.split("llm_output_file_id,")[1].split(";")[0]
+                        raw_output_file_id = decoded.split("llm_output_file_id,")[
+                            1
+                        ].split(";")[0]
                     except (IndexError, AttributeError):
                         pass
 
-                credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                credentials = (
+                    self.llm_router.get_deployment_credentials_with_provider(model_id)
+                    or {}
+                )
                 _file_content = await afile_content(
                     file_id=raw_output_file_id,
                     **credentials,
                 )
 
                 # Access content - handle both direct attribute and method call
-                if hasattr(_file_content, 'content'):
+                if hasattr(_file_content, "content"):
                     content_bytes = _file_content.content  # type: ignore[union-attr]
-                elif hasattr(_file_content, 'read'):
+                elif hasattr(_file_content, "read"):
                     content_bytes = await _file_content.read()  # type: ignore[misc]
                 else:
                     content_bytes = _file_content  # type: ignore[assignment]
@@ -273,14 +292,20 @@ class CheckBatchCost:
 
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
-                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
-                batch_cost, batch_usage, batch_models = (
-                    await calculate_batch_cost_and_usage(
-                        file_content_dictionary=file_content_as_dict,
-                        custom_llm_provider=llm_provider,  # type: ignore
-                        model_name=model_name,
-                        model_info=deployment_model_info,  # type: ignore[arg-type]
-                    )
+                deployment_model_info = (
+                    deployment_info.model_info.model_dump()
+                    if deployment_info.model_info
+                    else {}
+                )
+                (
+                    batch_cost,
+                    batch_usage,
+                    batch_models,
+                ) = await calculate_batch_cost_and_usage(
+                    file_content_dictionary=file_content_as_dict,
+                    custom_llm_provider=llm_provider,  # type: ignore
+                    model_name=model_name,
+                    model_info=deployment_model_info,  # type: ignore[arg-type]
                 )
                 logging_obj = LiteLLMLogging(
                     model=batch_models[0],
