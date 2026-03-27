@@ -86,6 +86,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         reasoning_effort = completion_kwargs.get("reasoning_effort")
         summary = thinking.get("summary")
+        if summary is not None and not isinstance(summary, str):
+            raise ValueError(
+                f"'summary' in 'thinking' block must be a string, got {type(summary).__name__}"
+            )
+
         if isinstance(reasoning_effort, str) and reasoning_effort:
             reasoning_dict: Dict[str, Any] = {"effort": reasoning_effort}
             if summary:
@@ -102,8 +107,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     summary if summary else ("detailed" if auto_summary else None)
                 )
                 if effective_summary:
-                    updated_reasoning_effort = dict(reasoning_effort)
-                    updated_reasoning_effort["summary"] = effective_summary
+                    updated_reasoning_effort = {**reasoning_effort, "summary": effective_summary}
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod

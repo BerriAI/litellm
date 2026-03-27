@@ -13,7 +13,7 @@ from litellm.utils import (
 )
 
 from .azure import AzureChatCompletion
-from .common_utils import AzureOpenAIError
+from .common_utils import AzureOpenAIError, validate_azure_request_payload
 
 
 class AzureAudioTranscription(AzureChatCompletion):
@@ -66,6 +66,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 message="azure_client is not an instance of AzureOpenAI",
             )
 
+        data = validate_azure_request_payload(data)
         ## LOGGING
         logging_obj.pre_call(
             input=f"audio_file_{uuid.uuid4()}",
@@ -79,7 +80,8 @@ class AzureAudioTranscription(AzureChatCompletion):
         )
 
         response = azure_client.audio.transcriptions.create(
-            **data, timeout=timeout  # type: ignore
+            **data,
+            timeout=timeout,  # type: ignore
         )
 
         if isinstance(response, BaseModel):
@@ -95,7 +97,12 @@ class AzureAudioTranscription(AzureChatCompletion):
             original_response=stringified_response,
         )
         hidden_params = {"model": model, "custom_llm_provider": "azure"}
-        final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response: TranscriptionResponse = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            hidden_params=hidden_params,
+            response_type="audio_transcription",
+        )  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -115,6 +122,7 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse:
         response = None
         try:
+            data = validate_azure_request_payload(data)
             async_azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,

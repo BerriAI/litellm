@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import litellm
 
@@ -30,6 +30,83 @@ def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
     return extra_body
 
 
+def contains_surrogate_code_point(value: str) -> bool:
+    return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+
+
+def sanitize_surrogate_code_points(value: str) -> str:
+    if not contains_surrogate_code_point(value):
+        return value
+    return value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def _format_path_key(key: str) -> str:
+    return key.encode("unicode_escape").decode("ascii")
+
+
+def sanitize_request_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return sanitize_surrogate_code_points(value)
+
+    if isinstance(value, dict):
+        return {
+            (sanitize_surrogate_code_points(key) if isinstance(key, str) else key): sanitize_request_payload(
+                nested_value
+            )
+            for key, nested_value in value.items()
+        }
+
+    if isinstance(value, list):
+        return [sanitize_request_payload(nested_value) for nested_value in value]
+
+    return value
+
+
+def find_surrogate_code_point_path(
+    value: Any,
+    path: str = "payload",
+) -> Optional[str]:
+    """
+    Recursively searches nested structures for strings or dict keys containing Unicode surrogate code points.
+
+    Args:
+        value: The value to inspect (str, dict, list, or other).
+        path: Base path to use when reporting the surrogate location.
+
+    Returns:
+        Optional[str] path to the first occurrence or None.
+        Examples: "payload.key", "payload[key][0]"
+    """
+    if isinstance(value, str):
+        if contains_surrogate_code_point(value):
+            return path
+        return None
+
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if isinstance(key, str) and contains_surrogate_code_point(key):
+                return f"{path}.{_format_path_key(key)}"
+            nested_path = find_surrogate_code_point_path(
+                nested_value,
+                path=f"{path}.{_format_path_key(key) if isinstance(key, str) else key}",
+            )
+            if nested_path is not None:
+                return nested_path
+        return None
+
+    if isinstance(value, list):
+        for index, nested_value in enumerate(value):
+            nested_path = find_surrogate_code_point_path(
+                nested_value,
+                path=f"{path}[{index}]",
+            )
+            if nested_path is not None:
+                return nested_path
+        return None
+
+    return None
+
+
 def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     """
     Pick the n cheapest chat models from the LLM provider.
@@ -49,16 +126,12 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
     for model in known_models:
         try:
-            model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = model_info.get("input_cost_per_token", 0) + model_info.get(
-            "output_cost_per_token", 0
-        )
+        _cost = model_info.get("input_cost_per_token", 0) + model_info.get("output_cost_per_token", 0)
         model_costs.append((model, _cost))
 
     # Sort by cost (ascending)
@@ -77,8 +150,6 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-    )
+    proxy_request_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
     return proxy_request_headers

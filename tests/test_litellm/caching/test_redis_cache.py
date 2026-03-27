@@ -442,3 +442,88 @@ async def test_async_lpop_with_float_redis_version(
             
             # Verify the method completed without error
             assert result is not None
+
+import time
+from litellm.caching.redis_cache import RedisCircuitBreaker, RedisCircuitBreakerOpenError, _redis_circuit_breaker_guard, _redis_sync_circuit_breaker_guard
+
+def test_redis_circuit_breaker_state_transitions():
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=0.1)
+    assert not cb.is_open()
+    
+    cb.record_failure()
+    assert not cb.is_open()
+    cb.record_failure()
+    assert not cb.is_open()
+    
+    # 3rd failure should open the breaker
+    cb.record_failure()
+    assert cb.is_open()
+    
+    # After recovery timeout, it should be half-open (which allows requests, so is_open() is false)
+    time.sleep(0.15)
+    assert not cb.is_open()
+    
+    # Success in half-open state should close it
+    cb.record_success()
+    assert not cb.is_open()
+    cb.record_failure()
+    assert not cb.is_open()
+
+@pytest.mark.asyncio
+async def test_redis_circuit_breaker_async_guard():
+    class DummyCache:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=1)
+            self.calls = 0
+            
+        @_redis_circuit_breaker_guard
+        async def do_something(self, fail=False):
+            if fail:
+                raise ValueError("failed")
+            self.calls += 1
+            return "success"
+            
+    cache = DummyCache()
+    await cache.do_something()
+    assert cache.calls == 1
+    
+    # Fail twice to open circuit breaker
+    with pytest.raises(ValueError):
+        await cache.do_something(fail=True)
+    with pytest.raises(ValueError):
+        await cache.do_something(fail=True)
+        
+    # Circuit breaker should be open now
+    with pytest.raises(RedisCircuitBreakerOpenError, match="Redis circuit breaker is open"):
+        await cache.do_something()
+        
+    assert cache.calls == 1
+
+def test_redis_circuit_breaker_sync_guard():
+    class DummySyncCache:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=1)
+            self.calls = 0
+            
+        @_redis_sync_circuit_breaker_guard
+        def do_something(self, fail=False):
+            if fail:
+                raise ValueError("failed")
+            self.calls += 1
+            return "success"
+            
+    cache = DummySyncCache()
+    cache.do_something()
+    assert cache.calls == 1
+    
+    # Fail twice to open circuit breaker
+    with pytest.raises(ValueError):
+        cache.do_something(fail=True)
+    with pytest.raises(ValueError):
+        cache.do_something(fail=True)
+        
+    # Circuit breaker should be open now
+    with pytest.raises(RedisCircuitBreakerOpenError, match="Redis circuit breaker is open"):
+        cache.do_something()
+        
+    assert cache.calls == 1

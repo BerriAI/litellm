@@ -23,7 +23,7 @@ function InfraChip({ color, label }: { color: string; label: string }) {
 
 function ArchitectureView() {
   return (
-    <div className={styles.diagram}>
+    <figure className={styles.diagram} aria-label="Admin -> Control Plane -> Worker A, Worker B">
       {/* User */}
       <div className={styles.userRow}>
         <div className={styles.userIcon}>&#128100;</div>
@@ -80,7 +80,7 @@ function ArchitectureView() {
           </div>
         </div>
       </div>
-    </div>
+    </figure>
   );
 }
 

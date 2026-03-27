@@ -18,7 +18,7 @@ from ...types.llms.openai import (
     SyncCursorPage,
     Thread,
 )
-from .common_utils import BaseAzureLLM
+from .common_utils import BaseAzureLLM, validate_azure_request_payload
 
 
 class AzureAssistantsAPI(BaseAzureLLM):
@@ -203,8 +203,10 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
+        message_data = validate_azure_request_payload(message_data)
         thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+            thread_id,
+            **message_data,  # type: ignore
         )
 
         response_obj: Optional[OpenAIMessage] = None
@@ -291,8 +293,10 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
+        message_data = validate_azure_request_payload(message_data)
         thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+            thread_id,
+            **message_data,  # type: ignore
         )
 
         response_obj: Optional[OpenAIMessage] = None
@@ -437,6 +441,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             data["messages"] = messages  # type: ignore
         if metadata is not None:
             data["metadata"] = metadata  # type: ignore
+        data = validate_azure_request_payload(data)
 
         message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
 
@@ -533,6 +538,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             data["messages"] = messages  # type: ignore
         if metadata is not None:
             data["metadata"] = metadata  # type: ignore
+        data = validate_azure_request_payload(data)
 
         message_thread = azure_openai_client.beta.threads.create(**data)  # type: ignore
 
@@ -712,6 +718,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
+        data = validate_azure_request_payload(data)
         return client.beta.threads.runs.stream(**data)  # type: ignore
 
     def run_thread_stream(
@@ -738,6 +745,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         }
         if event_handler is not None:
             data["event_handler"] = event_handler
+        data = validate_azure_request_payload(data)
         return client.beta.threads.runs.stream(**data)  # type: ignore
 
     # fmt: off
@@ -912,9 +920,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.create(
-            **create_assistant_data
-        )
+        create_assistant_data = validate_azure_request_payload(create_assistant_data)
+        response = await azure_openai_client.beta.assistants.create(**create_assistant_data)
         return response
 
     def create_assistants(
@@ -953,6 +960,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
+        create_assistant_data = validate_azure_request_payload(create_assistant_data)
         response = azure_openai_client.beta.assistants.create(**create_assistant_data)
         return response
 
@@ -980,9 +988,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
             litellm_params=litellm_params,
         )
 
-        response = await azure_openai_client.beta.assistants.delete(
-            assistant_id=assistant_id
-        )
+        response = await azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response
 
     def delete_assistant(

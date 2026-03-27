@@ -6,7 +6,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
 from ...openai.completion.transformation import OpenAITextCompletionConfig
-from ..common_utils import AzureOpenAIError, BaseAzureLLM
+from ..common_utils import (
+    AzureOpenAIError,
+    BaseAzureLLM,
+    validate_azure_request_payload,
+)
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 
@@ -126,6 +130,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 )
             else:
                 ## LOGGING
+                data = validate_azure_request_payload(data)
                 logging_obj.pre_call(
                     input=prompt,
                     api_key=api_key,
@@ -229,6 +234,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 )
 
             ## LOGGING
+            data = validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["prompt"],
                 api_key=azure_client.api_key,
@@ -294,6 +300,7 @@ class AzureTextCompletion(BaseAzureLLM):
             )
 
         ## LOGGING
+        data = validate_azure_request_payload(data)
         logging_obj.pre_call(
             input=data["prompt"],
             api_key=azure_client.api_key,
@@ -346,6 +353,7 @@ class AzureTextCompletion(BaseAzureLLM):
                     message="azure_client is not an instance of AsyncAzureOpenAI",
                 )
             ## LOGGING
+            data = validate_azure_request_payload(data)
             logging_obj.pre_call(
                 input=data["prompt"],
                 api_key=azure_client.api_key,

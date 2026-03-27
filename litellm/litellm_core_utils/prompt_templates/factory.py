@@ -1509,7 +1509,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
             if content_str[:5].lower() == "data:" and ";base64," in content_str:
                 try:
                     mime_rest = content_str[5:].split(";base64,", 1)
-                    if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
+                    if len(mime_rest) == 2:
                         # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
                         clean_mime = mime_rest[0].split(";")[0].strip()
                         inline_data_list.append(
@@ -1540,6 +1540,21 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                         except Exception as e:
                             verbose_logger.warning(
                                 f"Failed to process Anthropic image block in tool response: {e}"
+                            )
+                    elif isinstance(source, dict) and source.get("type") == "url":
+                        try:
+                            image_obj = convert_to_anthropic_image_obj(
+                                cast(str, source.get("url", "")), format=None
+                            )
+                            inline_data_list.append(
+                                BlobType(
+                                    data=image_obj["data"],
+                                    mime_type=image_obj["media_type"],
+                                )
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process Anthropic image URL block in tool response: {e}"
                             )
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
