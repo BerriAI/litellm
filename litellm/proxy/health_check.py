@@ -207,19 +207,63 @@ async def _perform_health_check(
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]
+        _model_id = (model.get("model_info") or {}).get("id")
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            healthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
-            )
+            endpoint_data = {**litellm_params, **is_healthy}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            healthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         elif isinstance(is_healthy, dict):
-            unhealthy_endpoints.append(
-                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
-            )
+            endpoint_data = {**litellm_params, **is_healthy}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
         else:
-            unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
+            endpoint_data = {**litellm_params}
+            if _model_id:
+                endpoint_data["model_id"] = _model_id
+            unhealthy_endpoints.append(_clean_endpoint_data(endpoint_data, details))
 
     return healthy_endpoints, unhealthy_endpoints
+
+
+def build_deployment_health_states(
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+) -> dict:
+    """
+    Build a dict mapping deployment_id -> DeploymentHealthStateValue from
+    health check endpoint results.
+
+    Each endpoint dict includes a 'model_id' field (added by _perform_health_check)
+    that maps back to the deployment's model_info.id.
+
+    Used by the background health check loop to feed health state into
+    the router's DeploymentHealthCache for health-check-driven routing.
+    """
+    now = time.time()
+    states: dict = {}
+
+    for ep in healthy_endpoints:
+        model_id = ep.get("model_id")
+        if model_id:
+            states[model_id] = {
+                "is_healthy": True,
+                "timestamp": now,
+                "reason": "",
+            }
+
+    for ep in unhealthy_endpoints:
+        model_id = ep.get("model_id")
+        if model_id:
+            states[model_id] = {
+                "is_healthy": False,
+                "timestamp": now,
+                "reason": "background_health_check_failed",
+            }
+
+    return states
 
 
 def _update_litellm_params_for_health_check(
