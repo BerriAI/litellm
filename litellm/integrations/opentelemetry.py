@@ -1,4 +1,5 @@
 import os
+import types
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
@@ -2089,36 +2090,32 @@ class OpenTelemetry(CustomLogger):
             return BatchSpanProcessor(ConsoleSpanExporter())
 
     def _wrap_exporter_with_failure_tracking(self, exporter: SpanExporter) -> Any:
+        if getattr(exporter, "_litellm_failure_tracking_wrapped", False):
+            return exporter
+
+        original_export = exporter.export
         parent = self
 
-        class _FailureTrackingExporter:
-            def __init__(self, wrapped_exporter: SpanExporter):
-                self._wrapped_exporter = wrapped_exporter
+        def _export_with_failure_tracking(self, spans):
+            try:
+                result = original_export(spans)
+            except Exception:
+                parent._report_span_export_failure()
+                raise
 
-            def export(self, spans):
-                try:
-                    result = self._wrapped_exporter.export(spans)
-                except Exception:
-                    parent._report_span_export_failure()
-                    raise
+            if parent._is_failed_span_export_result(result):
+                parent._report_span_export_failure()
+            else:
+                parent._mark_span_export_success()
+            return result
 
-                if parent._is_failed_span_export_result(result):
-                    parent._report_span_export_failure()
-                else:
-                    parent._mark_span_export_success()
-                return result
-
-            def shutdown(self):
-                if hasattr(self._wrapped_exporter, "shutdown"):
-                    return self._wrapped_exporter.shutdown()
-                return None
-
-            def force_flush(self, timeout_millis: int = 30000):
-                if hasattr(self._wrapped_exporter, "force_flush"):
-                    return self._wrapped_exporter.force_flush(timeout_millis)
-                return True
-
-        return _FailureTrackingExporter(exporter)
+        setattr(
+            exporter,
+            "export",
+            types.MethodType(_export_with_failure_tracking, exporter),
+        )
+        setattr(exporter, "_litellm_failure_tracking_wrapped", True)
+        return exporter
 
     @staticmethod
     def _is_failed_span_export_result(result: Any) -> bool:
