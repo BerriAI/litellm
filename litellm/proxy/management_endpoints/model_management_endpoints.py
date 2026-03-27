@@ -42,6 +42,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
     team_model_delete,
 )
+from litellm.proxy.management_endpoints.team_endpoints import (
+    update_team as _legacy_update_team,
+)
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -56,6 +59,14 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+async def update_team(*args, **kwargs):
+    """
+    Backward-compatible shim for tests/legacy call sites that patch this symbol.
+    Team model management now uses team_model_add/team_model_delete directly.
+    """
+    return await _legacy_update_team(*args, **kwargs)
 
 
 class UpdatePublicModelGroupsRequest(BaseModel):
