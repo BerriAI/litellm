@@ -2408,6 +2408,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
+        self._metrics_collector: Optional["PrismaMetricsCollector"] = None  # type: ignore[name-defined]
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -4047,6 +4048,11 @@ class PrismaClient:
             return False
 
         # Escalate to heavy reconnect after consecutive lightweight failures.
+        # Capture before the escalation block can flip _engine_confirmed_dead
+        engine_was_dead = self._engine_confirmed_dead or (
+            self._engine_pid > 0 and not self._is_engine_alive()
+        )
+
         # When the Prisma engine process is alive but not accepting connections
         # (e.g., startup race condition), lightweight reconnects (disconnect +
         # connect) will never succeed. Force a full Prisma client recreation
@@ -4062,7 +4068,6 @@ class PrismaClient:
         verbose_proxy_logger.warning(
             "Attempting Prisma DB reconnect. reason=%s", reason
         )
-
         reconnect_succeeded = False
         try:
             await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
@@ -4071,6 +4076,8 @@ class PrismaClient:
             verbose_proxy_logger.info(
                 "Prisma DB reconnect succeeded. reason=%s", reason
             )
+            if self._metrics_collector is not None and engine_was_dead:
+                self._metrics_collector.increment_engine_restarts()
         except Exception as reconnect_err:
             self._consecutive_reconnect_failures += 1
             verbose_proxy_logger.error(
@@ -4177,6 +4184,13 @@ class PrismaClient:
             verbose_proxy_logger.debug(
                 "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
             )
+            from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
+
+            if PrismaMetricsCollector.should_enable():
+                verbose_proxy_logger.warning(
+                    "prometheus_system is enabled but PRISMA_HEALTH_WATCHDOG_ENABLED=false — "
+                    "DB pool and engine metrics will not be collected"
+                )
             return
         if self._db_health_watchdog_task is not None:
             return
@@ -4192,6 +4206,12 @@ class PrismaClient:
         )
         await self._start_engine_watcher()
 
+        from litellm.proxy.db.prisma_metrics_collector import PrismaMetricsCollector
+
+        if PrismaMetricsCollector.should_enable() and self._metrics_collector is None:
+            self._metrics_collector = PrismaMetricsCollector(self)
+            self._metrics_collector.start()
+
     async def stop_db_health_watchdog_task(self) -> None:
         """Stop DB health watchdog task and engine watcher gracefully."""
         self._stop_engine_watcher()
@@ -4204,6 +4224,10 @@ class PrismaClient:
             pass
         self._db_health_watchdog_task = None
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+        if self._metrics_collector is not None:
+            await self._metrics_collector.stop()
+            self._metrics_collector = None
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:
