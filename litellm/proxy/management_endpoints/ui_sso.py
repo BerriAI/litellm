@@ -15,7 +15,18 @@ import inspect
 import os
 import secrets
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlencode, urlparse
 
 if TYPE_CHECKING:
@@ -338,7 +349,7 @@ async def google_login(
                 total_users = await prisma_client.db.litellm_usertable.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -404,14 +415,14 @@ async def google_login(
             state=cli_state,
         )
         if return_to is not None and sso_redirect is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-            sso_redirect.set_cookie(
-                key="litellm_cp_return_to",
-                value=return_to,
-                max_age=600,
-                httponly=True,
-                samesite="lax",
-            )
+            if SSOAuthenticationHandler._validate_return_to(return_to):
+                sso_redirect.set_cookie(
+                    key="litellm_cp_return_to",
+                    value=return_to,
+                    max_age=600,
+                    httponly=True,
+                    samesite="lax",
+                )
         return sso_redirect
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -745,7 +756,7 @@ def _handle_generic_sso_error(
     generic_authorization_endpoint: Optional[str],
     generic_token_endpoint: Optional[str],
     additional_headers: dict,
-) -> None:
+) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message = str(e)
 
@@ -1778,22 +1789,19 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
-    def _validate_return_to(return_to: str) -> None:
+    def _validate_return_to(return_to: str) -> bool:
         """
         Validate that return_to matches the configured control_plane_url origin.
 
-        Raises HTTPException(400) if:
-        - control_plane_url is not configured in general_settings
-        - return_to origin does not match control_plane_url origin
+        Returns True if return_to is valid and should be used.
+        Returns False if control_plane_url is not configured (return_to is ignored).
+        Raises HTTPException(400) if return_to origin does not match control_plane_url origin.
         """
         from litellm.proxy.proxy_server import general_settings
 
         control_plane_url = general_settings.get("control_plane_url")
         if control_plane_url is None:
-            raise HTTPException(
-                status_code=400,
-                detail="return_to is not allowed: control_plane_url is not configured",
-            )
+            return False
 
         def _origin(url: str) -> tuple:
             parsed = urlparse(url)
@@ -1808,6 +1816,8 @@ class SSOAuthenticationHandler:
                 status_code=400,
                 detail="return_to does not match the configured control_plane_url",
             )
+
+        return True
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -2589,9 +2599,9 @@ class SSOAuthenticationHandler:
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.
         # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-
+        if return_to is not None and SSOAuthenticationHandler._validate_return_to(
+            return_to
+        ):
             code = secrets.token_urlsafe(32)
             cache_key = f"login_code:{code}"
             cache_value = {"token": jwt_token, "redirect_url": return_to}
@@ -3604,7 +3614,7 @@ async def debug_sso_login(request: Request):
     ):
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,

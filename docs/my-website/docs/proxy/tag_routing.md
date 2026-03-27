@@ -315,7 +315,7 @@ LiteLLM Proxy supports team-based tag routing, allowing you to associate specifi
 
 :::info
 
-This is an enterprise feature, [Contact us here to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+This is an enterprise feature, [Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 
