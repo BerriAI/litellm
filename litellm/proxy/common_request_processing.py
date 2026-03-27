@@ -9,6 +9,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    List,
     Literal,
     Optional,
     Tuple,
@@ -839,6 +840,272 @@ class ProxyBaseLLMRequestProcessing:
                 json.dumps(self.data, indent=4, default=str),
             )
 
+    async def _execute_with_parallel_tracking(
+        self,
+        tasks: List[Any],
+        user_api_key_dict: UserAPIKeyAuth,
+        is_streaming_request: Optional[bool] = False,
+        route_type: str = "",
+        proxy_logging_obj: Optional[Any] = None,
+        logging_obj: Optional[Any] = None,
+        llm_router: Optional[Any] = None,
+        version: Optional[str] = None,
+        select_data_generator: Optional[Callable] = None,
+    ) -> Any:
+        """
+        Execute tasks with parallel request tracking.
+        For non-streaming: uses try/finally for guaranteed cleanup
+        For streaming: wraps generators so decrement happens when stream completes
+        """
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            _PROXY_MaxParallelRequestsHandler_v3,
+        )
+
+        # Find the rate limiter callback
+        rate_limiter: Optional[_PROXY_MaxParallelRequestsHandler_v3] = None
+        for callback in litellm.callbacks:
+            if isinstance(callback, _PROXY_MaxParallelRequestsHandler_v3):
+                rate_limiter = callback
+                break
+
+        # Check if rate limiting is enabled
+        max_parallel_requests = getattr(user_api_key_dict, "max_parallel_requests", None)
+        use_rate_limiter = (
+            rate_limiter is not None
+            and user_api_key_dict.api_key
+            and max_parallel_requests is not None
+        )
+
+        if not use_rate_limiter:
+            # No rate limiting, just execute tasks normally
+            responses = await asyncio.gather(*tasks)
+            return await self._handle_responses(
+                responses=responses,
+                is_streaming_request=is_streaming_request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                logging_obj=logging_obj,
+                llm_router=llm_router,
+                route_type=route_type,
+                version=version,
+                select_data_generator=select_data_generator,
+            )
+
+        # 1. INCREMENT BEFORE LLM CALL (enforces rate limit)
+        await rate_limiter._increment_max_parallel_requests(
+            api_key=user_api_key_dict.api_key,
+            max_parallel_requests=max_parallel_requests,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+
+        is_streaming = False  # Initialize for finally block access
+        try:
+            # 2. EXECUTE LLM CALL
+            responses = await asyncio.gather(*tasks)
+
+            is_streaming = (
+                self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
+                or self._is_streaming_response(responses[1])
+            )
+
+            if is_streaming:
+                # 3a. STREAMING: Create wrapper generator with finally-decrement
+                api_key = user_api_key_dict.api_key
+                parent_span = user_api_key_dict.parent_otel_span
+
+                async def _wrapped_generator(original_gen: AsyncGenerator) -> AsyncGenerator:
+                    """Wrap generator to decrement counter when stream completes."""
+                    try:
+                        async for chunk in original_gen:
+                            yield chunk
+                    finally:
+                        # Stream complete or client disconnected - decrement
+                        await rate_limiter._decrement_max_parallel_requests(api_key, parent_span)
+
+                return await self._process_streaming_response(
+                    responses=responses,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_logging_obj=proxy_logging_obj,
+                    logging_obj=logging_obj,
+                    llm_router=llm_router,
+                    route_type=route_type,
+                    version=version,
+                    select_data_generator=select_data_generator,
+                    stream_wrapper=_wrapped_generator,
+                )
+            else:
+                # 3b. NON-STREAMING: Return responses
+                return responses
+
+        finally:
+            # 4. NON-STREAMING DECREMENT (streaming decrements in generator wrapper)
+            if not is_streaming:
+                await rate_limiter._decrement_max_parallel_requests(
+                    user_api_key_dict.api_key, user_api_key_dict.parent_otel_span
+                )
+
+    async def _handle_responses(
+        self,
+        responses: List[Any],
+        is_streaming_request: Optional[bool],
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: Any,
+        logging_obj: Any,
+        llm_router: Any,
+        route_type: str,
+        version: Optional[str],
+        select_data_generator: Optional[Callable],
+    ) -> Any:
+        """Handle responses (no rate limiting)."""
+        is_streaming = (
+            self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
+            or self._is_streaming_response(responses[1])
+        )
+
+        if is_streaming:
+            return await self._process_streaming_response(
+                responses=responses,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                logging_obj=logging_obj,
+                llm_router=llm_router,
+                route_type=route_type,
+                version=version,
+                select_data_generator=select_data_generator,
+            )
+        return responses
+
+    async def _process_streaming_response(
+        self,
+        responses: List[Any],
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: Any,
+        logging_obj: Any,
+        llm_router: Any,
+        route_type: str,
+        version: Optional[str],
+        select_data_generator: Optional[Callable],
+        stream_wrapper: Optional[Callable[[AsyncGenerator], AsyncGenerator]] = None,
+    ) -> Any:
+        """
+        Process streaming response and return StreamingResponse.
+        If stream_wrapper is provided, generators are wrapped to handle cleanup.
+        """
+        response = responses[1]
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+
+        # Fallback: extract model_id from litellm_metadata if not in hidden_params
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+
+        # Post Call Processing
+        if llm_router is not None:
+            self.data["deployment"] = llm_router.get_deployment(model_id=model_id)
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=self.data.get("litellm_call_id", ""), status="success"
+            )
+        )
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=logging_obj.litellm_call_id,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            request_data=self.data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+            **additional_headers,
+        )
+
+        if route_type == "allm_passthrough_route":
+            # Check if response is an async generator
+            if self._is_streaming_response(response):
+                if asyncio.iscoroutine(response):
+                    generator = await response
+                else:
+                    generator = response
+
+                # Apply stream wrapper if provided (for rate limiting cleanup)
+                if stream_wrapper:
+                    generator = stream_wrapper(generator)
+
+                # For passthrough routes, stream directly without error parsing
+                # since we're dealing with raw binary data (e.g., AWS event streams)
+                return StreamingResponse(
+                    content=generator,
+                    status_code=status.HTTP_200_OK,
+                    headers=custom_headers,
+                )
+            else:
+                # Traditional HTTP response with aiter_bytes
+                content = response.aiter_bytes()
+                if stream_wrapper:
+                    content = stream_wrapper(content)
+                return StreamingResponse(
+                    content=content,
+                    status_code=response.status_code,
+                    headers=custom_headers,
+                )
+        elif route_type == "anthropic_messages":
+            # Check if response is actually a streaming response (async generator)
+            # Non-streaming responses (dict) should be returned directly
+            # This handles cases like websearch_interception agentic loop
+            # which returns a non-streaming dict even for streaming requests
+            if self._is_streaming_response(response):
+                selected_data_generator = (
+                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=self.data,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                )
+                # Apply stream wrapper if provided (for rate limiting cleanup)
+                if stream_wrapper:
+                    selected_data_generator = stream_wrapper(selected_data_generator)
+                return await create_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
+            # Non-streaming response - fall through
+            return response
+        elif select_data_generator:
+            selected_data_generator = select_data_generator(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=self.data,
+            )
+            # Apply stream wrapper if provided (for rate limiting cleanup)
+            if stream_wrapper:
+                selected_data_generator = stream_wrapper(selected_data_generator)
+            return await create_response(
+                generator=selected_data_generator,
+                media_type="text/event-stream",
+                headers=custom_headers,
+            )
+
+        # Default: return the response directly
+        return response
+
     async def base_process_llm_request(  # noqa: PLR0915
         self,
         request: Request,
@@ -1021,11 +1288,22 @@ class ProxyBaseLLMRequestProcessing:
         tasks.append(llm_call)
 
         # wait for call to end
-        llm_responses = asyncio.gather(
-            *tasks
-        )  # run the moderation check in parallel to the actual llm api call
+        # Wrap in track_parallel_request context manager for guaranteed cleanup
+        responses = await self._execute_with_parallel_tracking(
+            tasks=tasks,
+            user_api_key_dict=user_api_key_dict,
+            is_streaming_request=is_streaming_request,
+            route_type=route_type,
+            proxy_logging_obj=proxy_logging_obj,
+            logging_obj=logging_obj,
+            llm_router=llm_router,
+            version=version,
+            select_data_generator=select_data_generator,
+        )
 
-        responses = await llm_responses
+        # For streaming requests, _execute_with_parallel_tracking returns StreamingResponse directly
+        if isinstance(responses, StreamingResponse):
+            return responses
 
         response = responses[1]
 
