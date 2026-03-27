@@ -51,7 +51,7 @@ class AzureOpenAIContainerConfig(OpenAIContainerConfig):
 
         # Azure uses BaseAzureLLM's validation which handles api-key header
         return BaseAzureLLM._base_validate_azure_environment(
-                headers=headers, litellm_params=litellm_params
+            headers=headers, litellm_params=litellm_params
         )
 
     def transform_container_create_response(
