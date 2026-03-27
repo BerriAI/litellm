@@ -4352,3 +4352,183 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
 
         # add_deployment should NOT have been called since store_model_in_db is False
         mock_proxy_config.add_deployment.assert_not_called()
+
+
+# =====================================================================
+# Spend counter tests (v2 — Redis-backed spend counters)
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_reads_redis_first():
+    """get_current_spend should prefer Redis over in-memory."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+
+    # In-memory has stale value
+    counter_cache.in_memory_cache.set_cache(key="spend:key:test", value=0.30)
+
+    # Mock Redis with cross-pod authoritative value
+    mock_redis = AsyncMock()
+    mock_redis.async_get_cache = AsyncMock(return_value=0.90)
+    counter_cache.redis_cache = mock_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        result = await get_current_spend(
+            counter_key="spend:key:test",
+            fallback_spend=0.0,
+        )
+        # Should return Redis value (0.90), not in-memory (0.30)
+        assert result == 0.90
+        mock_redis.async_get_cache.assert_called_once_with(key="spend:key:test")
+    finally:
+        ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fallback_to_in_memory():
+    """When Redis is not configured, get_current_spend uses in-memory."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()  # no redis_cache
+    counter_cache.in_memory_cache.set_cache(key="spend:key:test", value=0.50)
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        result = await get_current_spend(
+            counter_key="spend:key:test",
+            fallback_spend=0.0,
+        )
+        assert result == 0.50
+    finally:
+        ps.spend_counter_cache = original
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_initializes_and_increments():
+    """Counter should initialize from cached object spend, then increment.
+
+    Uses a pre-hashed token to match production: metadata["user_api_key"]
+    is always hashed by the auth flow before reaching the cost callback.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_VerificationTokenView, hash_token
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+
+    # In production, the auth flow hashes the raw key before it reaches
+    # the cost callback. Simulate that by passing the hashed token.
+    hashed_token = hash_token("sk-test-token-for-counter")
+
+    # Simulate a cached key object with existing spend from DB
+    cached_key = LiteLLM_VerificationTokenView(
+        token=hashed_token,
+        spend=5.0,
+        max_budget=10.0,
+    )
+    key_cache.in_memory_cache.set_cache(key=hashed_token, value=cached_key)
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import increment_spend_counters
+
+        # Pass pre-hashed token (as the cost callback would in production)
+        await increment_spend_counters(
+            token=hashed_token,
+            team_id=None,
+            user_id=None,
+            response_cost=0.50,
+        )
+
+        # Counter should be: base(5.0) + increment(0.50) = 5.50
+        counter = counter_cache.in_memory_cache.get_cache(
+            key=f"spend:key:{hashed_token}"
+        )
+        assert counter == 5.50
+
+        # Second increment — counter already exists, just increment
+        await increment_spend_counters(
+            token=hashed_token,
+            team_id=None,
+            user_id=None,
+            response_cost=0.25,
+        )
+
+        counter = counter_cache.in_memory_cache.get_cache(
+            key=f"spend:key:{hashed_token}"
+        )
+        assert counter == 5.75
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_team_and_member():
+    """Counter should track team and team member spend separately."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+
+    # Cached team object
+    team_obj = LiteLLM_TeamTable(team_id="team-1", spend=2.0)
+    key_cache.in_memory_cache.set_cache(key="team_id:team-1", value=team_obj)
+
+    # Cached team membership
+    key_cache.in_memory_cache.set_cache(
+        key="team_membership:user-1:team-1",
+        value={"user_id": "user-1", "team_id": "team-1", "spend": 1.0},
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import increment_spend_counters
+
+        await increment_spend_counters(
+            token=None,
+            team_id="team-1",
+            user_id="user-1",
+            response_cost=0.30,
+        )
+
+        team_counter = counter_cache.in_memory_cache.get_cache(
+            key="spend:team:team-1"
+        )
+        assert team_counter == 2.30
+
+        member_counter = counter_cache.in_memory_cache.get_cache(
+            key="spend:team_member:user-1:team-1"
+        )
+        assert member_counter == 1.30
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
