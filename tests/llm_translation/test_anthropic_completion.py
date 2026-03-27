@@ -1800,3 +1800,81 @@ def test_anthropic_structured_output_chat_completion_api():
     )
     assert response is not None
     print(f"response: {response}")
+
+
+def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    return AnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+
+def test_metadata_only_user_id_passes_through():
+    """metadata with only user_id is forwarded as-is."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"user_id": "abc123"}},
+        litellm_params={},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+def test_metadata_extra_keys_are_stripped():
+    """Extra keys in metadata are removed; only user_id is sent."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"user_id": "abc123", "extra_key": "val"}},
+        litellm_params={},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+def test_metadata_without_user_id_is_dropped():
+    """metadata with no user_id is removed entirely."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"only_other_key": "val"}},
+        litellm_params={},
+    )
+    assert "metadata" not in data
+
+
+def test_metadata_user_id_from_litellm_params_strips_extras():
+    """user_id from litellm_params metadata is extracted; extra keys are not forwarded."""
+    data = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": "abc123", "trace_id": "xyz"}},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+def test_metadata_filter_applies_to_vertex_anthropic():
+    """VertexAIAnthropicConfig inherits the metadata filter."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    data = VertexAIAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"metadata": {"user_id": "u1", "extra": "drop_me"}},
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("metadata") == {"user_id": "u1"}
+
+
+def test_metadata_filter_applies_to_azure_anthropic():
+    """AzureAnthropicConfig inherits the metadata filter."""
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+
+    data = AzureAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"metadata": {"user_id": "u2", "extra": "drop_me"}},
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("metadata") == {"user_id": "u2"}
