@@ -1,3 +1,4 @@
+import ast
 import inspect
 import json
 import os
@@ -17,6 +18,61 @@ import litellm
 from litellm import constants
 
 
+def _build_constant_env_var_map() -> dict[str, str]:
+    """
+    Build a mapping of CONSTANT_NAME -> ENV_VAR_NAME by parsing constants.py.
+
+    This keeps the test resilient when a constant name and env var name differ
+    (e.g., aliases like LITELLM_* env vars).
+    """
+    env_var_map: dict[str, str] = {}
+    constants_source = inspect.getsource(constants)
+    parsed = ast.parse(constants_source)
+
+    for node in parsed.body:
+        if not isinstance(node, ast.Assign):
+            continue
+
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+
+        constant_name = node.targets[0].id
+        env_var_name = None
+
+        for child in ast.walk(node.value):
+            if not isinstance(child, ast.Call):
+                continue
+
+            # os.getenv("ENV_NAME", default)
+            if (
+                isinstance(child.func, ast.Attribute)
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "os"
+                and child.func.attr == "getenv"
+                and len(child.args) >= 1
+                and isinstance(child.args[0], ast.Constant)
+                and isinstance(child.args[0].value, str)
+            ):
+                env_var_name = child.args[0].value
+                break
+
+            # get_env_int("ENV_NAME", default)
+            if (
+                isinstance(child.func, ast.Name)
+                and child.func.id == "get_env_int"
+                and len(child.args) >= 1
+                and isinstance(child.args[0], ast.Constant)
+                and isinstance(child.args[0].value, str)
+            ):
+                env_var_name = child.args[0].value
+                break
+
+        if env_var_name:
+            env_var_map[constant_name] = env_var_name
+
+    return env_var_map
+
+
 def test_all_numeric_constants_can_be_overridden():
     """
     Test that all integer and float constants in constants.py can be overridden with environment variables.
@@ -30,7 +86,9 @@ def test_all_numeric_constants_can_be_overridden():
     numeric_constants = [
         (name, value)
         for name, value in constants_attributes
-        if name.isupper() and isinstance(value, (int, float)) and not isinstance(value, bool)
+        if name.isupper()
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
     ]
 
     # Ensure we found some constants to test
@@ -38,14 +96,8 @@ def test_all_numeric_constants_can_be_overridden():
 
     print("all numeric constants", json.dumps(numeric_constants, indent=4))
 
-    # Constants that use a different env var name than the constant name
-    constant_to_env_var = {
-        "MAX_CALLBACKS": "LITELLM_MAX_CALLBACKS",
-        "MCP_CLIENT_TIMEOUT": "LITELLM_MCP_CLIENT_TIMEOUT",
-        "MCP_TOOL_LISTING_TIMEOUT": "LITELLM_MCP_TOOL_LISTING_TIMEOUT",
-        "MCP_METADATA_TIMEOUT": "LITELLM_MCP_METADATA_TIMEOUT",
-        "MCP_HEALTH_CHECK_TIMEOUT": "LITELLM_MCP_HEALTH_CHECK_TIMEOUT",
-    }
+    # Discover exact env vars from constants.py to avoid brittle hardcoded mappings.
+    constant_to_env_var = _build_constant_env_var_map()
 
     # Verify all numeric constants have environment variable support
     for name, value in numeric_constants:
