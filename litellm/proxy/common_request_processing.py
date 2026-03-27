@@ -1359,6 +1359,35 @@ class ProxyBaseLLMRequestProcessing:
         return False
 
     @staticmethod
+    def _get_exception_status_code(e: Exception) -> Optional[int]:
+        """
+        Return a best-effort HTTP status code from proxy exceptions.
+        """
+        status_code = getattr(e, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        if isinstance(status_code, str) and status_code.isdigit():
+            return int(status_code)
+
+        code = getattr(e, "code", None)
+        if isinstance(code, int):
+            return code
+        if isinstance(code, str) and code.isdigit():
+            return int(code)
+
+        return None
+
+    @staticmethod
+    def should_log_exception_with_traceback(e: Exception) -> bool:
+        """
+        Return True when this exception should be logged with traceback.
+        """
+        status_code = ProxyBaseLLMRequestProcessing._get_exception_status_code(e)
+        if status_code is None:
+            return True
+        return not (400 <= status_code < 500)
+
+    @staticmethod
     def _has_post_call_guardrails() -> bool:
         """
         True when a guardrail explicitly registers post_call. event_hook=None
@@ -1492,9 +1521,18 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
-        )
+        if ProxyBaseLLMRequestProcessing.should_log_exception_with_traceback(e):
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s",
+                str(e),
+            )
+        else:
+            status_code = ProxyBaseLLMRequestProcessing._get_exception_status_code(e)
+            verbose_proxy_logger.warning(
+                "litellm.proxy.proxy_server._handle_llm_api_exception(): Request rejected (%s) - %s",
+                status_code,
+                str(e),
+            )
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,

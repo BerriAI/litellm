@@ -7817,7 +7817,12 @@ async def realtime_websocket_endpoint(
             route_type="_arealtime",
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Realtime pre-call error")
+        if ProxyBaseLLMRequestProcessing.should_log_exception_with_traceback(e):
+            verbose_proxy_logger.exception("Realtime pre-call error")
+        else:
+            verbose_proxy_logger.warning(
+                "Realtime pre-call request rejected: %s", str(e)
+            )
         try:
             await websocket.send_text(
                 json.dumps(

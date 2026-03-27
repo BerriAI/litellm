@@ -5096,15 +5096,26 @@ class StandardLoggingPayloadSetup:
         )
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
 
+        include_traceback = True
+        if error_class in ("HTTPException", "ProxyException"):
+            try:
+                error_status_int = int(error_status)
+            except (TypeError, ValueError):
+                error_status_int = None
+            if error_status_int is not None and 400 <= error_status_int < 500:
+                include_traceback = False
+
         # Get traceback information (first 100 lines)
         traceback_info = traceback_str or ""
-        if original_exception:
+        if include_traceback and original_exception:
             tb = getattr(original_exception, "__traceback__", None)
             if tb:
                 tb_lines = traceback.format_tb(tb)
                 traceback_info += "".join(
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
+        if not include_traceback:
+            traceback_info = ""
 
         # Get additional error details
         error_message = str(original_exception)
