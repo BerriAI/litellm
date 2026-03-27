@@ -2138,7 +2138,7 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
     except Exception as e:
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
         )
 
