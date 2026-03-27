@@ -137,9 +137,9 @@ class RedisCircuitBreaker:
 
     def record_failure(self) -> None:
         self._failure_count += 1
-        self._opened_at = time.time()
         if self._failure_count >= self.failure_threshold:
             if self._state != self.OPEN:
+                self._opened_at = time.time()
                 verbose_logger.warning(
                     "Redis circuit breaker OPENED after %d consecutive failures — fast-failing Redis calls for %ds",
                     self._failure_count,
@@ -154,6 +154,12 @@ class RedisCircuitBreaker:
         self._state = self.CLOSED
 
 
+class RedisCircuitBreakerOpenError(Exception):
+    """Raised when Redis circuit breaker is open."""
+
+    pass
+
+
 def _redis_circuit_breaker_guard(method):  # type: ignore
     """
     Decorator for RedisCache async methods.
@@ -164,7 +170,7 @@ def _redis_circuit_breaker_guard(method):  # type: ignore
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):  # type: ignore
         if self._circuit_breaker.is_open():
-            raise Exception(f"Redis circuit breaker is open — skipping {method.__name__}")
+            raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {method.__name__}")
         try:
             result = await method(self, *args, **kwargs)
             self._circuit_breaker.record_success()
@@ -186,7 +192,7 @@ def _redis_sync_circuit_breaker_guard(method):  # type: ignore
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):  # type: ignore
         if self._circuit_breaker.is_open():
-            raise Exception(f"Redis circuit breaker is open — skipping {method.__name__}")
+            raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {method.__name__}")
         try:
             result = method(self, *args, **kwargs)
             self._circuit_breaker.record_success()
