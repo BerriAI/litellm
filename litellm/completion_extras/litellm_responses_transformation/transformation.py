@@ -149,6 +149,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> Tuple[List[Any], Optional[str]]:
         input_items: List[Any] = []
         instructions: Optional[str] = None
+        tool_output_ids = {
+            str(msg.get("tool_call_id"))
+            for msg in messages
+            if isinstance(msg, dict)
+            and msg.get("role") == "tool"
+            and msg.get("tool_call_id")
+        }
 
         for msg in messages:
             role = msg.get("role")
@@ -165,16 +172,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     else:
                         instructions = content
                 else:
-                    input_items.append(
-                        {
-                            "type": "message",
-                            "role": role,
-                            "content": self._convert_content_to_responses_format(
-                                content,  # type: ignore[arg-type]
-                                role,  # type: ignore
-                            ),
-                        }
-                    )
+                    system_parts: List[str] = []
+                    if isinstance(content, list):
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            block_type = block.get("type")
+                            if block_type in ("text", "input_text", "output_text"):
+                                text = block.get("text")
+                                if isinstance(text, str) and text:
+                                    system_parts.append(text)
+                    if system_parts:
+                        system_text = "\n".join(system_parts)
+                        if instructions:
+                            instructions = f"{instructions}\n{system_text}"
+                        else:
+                            instructions = system_text
             elif role == "tool":
                 # Convert tool message to function call output format
                 # The Responses API expects 'output' to be a list with input_text/input_image types
@@ -205,9 +218,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
+                        tool_call_id = tool_call.get("id")
+                        # ChatGPT rejects orphaned function_call items without a
+                        # matching tool output. Drop these during replay.
+                        if not tool_call_id or tool_call_id not in tool_output_ids:
+                            continue
                         input_tool_call = {
                             "type": "function_call",
-                            "call_id": tool_call["id"],
+                            "call_id": tool_call_id,
                         }
                         if "name" in function:
                             input_tool_call["name"] = function["name"]

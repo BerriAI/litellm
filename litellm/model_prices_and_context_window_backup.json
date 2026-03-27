@@ -16338,6 +16338,36 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "chatgpt/gpt-5.4-mini": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.4-nano": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "chatgpt/gpt-5.4-pro": {
         "litellm_provider": "chatgpt",
         "max_input_tokens": 1050000,

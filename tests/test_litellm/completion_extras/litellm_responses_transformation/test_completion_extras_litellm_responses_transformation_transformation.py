@@ -222,6 +222,70 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     )
 
 
+def test_convert_chat_completion_messages_to_responses_api_system_array_becomes_instructions():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are Claude Code."},
+                {"type": "text", "text": "Respond in Japanese."},
+            ],
+        },
+        {
+            "role": "user",
+            "content": "Hello",
+        },
+    ]
+
+    response, instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert instructions == "You are Claude Code.\nRespond in Japanese."
+    assert all(item.get("role") != "system" for item in response if item.get("type") == "message")
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_orphaned_tool_calls():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": "Find a tool.",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_orphaned",
+                    "type": "function",
+                    "function": {
+                        "name": "ToolSearch",
+                        "arguments": '{"query":"Read"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "Tool loaded.",
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assert all(item.get("type") != "function_call" for item in response)
+
+
 def test_openai_responses_chunk_parser_reasoning_summary():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
