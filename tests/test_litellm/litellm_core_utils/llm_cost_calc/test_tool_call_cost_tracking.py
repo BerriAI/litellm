@@ -1,17 +1,14 @@
-import json
 import os
 import sys
-from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
-from litellm.types.utils import ModelInfo, ModelResponse, StandardBuiltInToolsParams
+from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
 sys.path.insert(
     0, os.path.abspath("../../..")
