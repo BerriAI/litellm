@@ -206,7 +206,7 @@ class LiteLLMCompletionResponsesConfig:
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
-            "metadata": kwargs.get("metadata"),
+            # NOTE: Responses API 'metadata' is for LiteLLM tracking only, not forwarded to providers
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
@@ -922,9 +922,13 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            _raw_role = input_item.get("role") or "user"
+            # The Responses API uses "developer" as the equivalent of "system".
+            # Non-OpenAI providers only understand "system", so translate it here.
+            _chat_role = "system" if _raw_role == "developer" else _raw_role
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=_chat_role,
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
