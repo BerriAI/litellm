@@ -8,6 +8,7 @@ Litellm Proxy has the following release cycle:
 
 In production, we recommend using the latest `v1.x.x:main-stable` release.
 
+All Docker images and PyPI packages are signed with [Sigstore](https://www.sigstore.dev/) keyless signing. See [Verify Image & Package Signatures](./docker_quick_start.md#verify-image--package-signatures) for instructions.
 
 Follow our release notes [here](https://github.com/BerriAI/litellm/releases).
 
