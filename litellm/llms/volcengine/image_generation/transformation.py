@@ -22,7 +22,11 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ImageObject, ImageResponse
 
-from ..common_utils import VolcEngineError, get_volcengine_base_url, get_volcengine_headers
+from ..common_utils import (
+    VolcEngineError,
+    get_volcengine_base_url,
+    get_volcengine_headers,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
