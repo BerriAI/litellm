@@ -56,10 +56,6 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedModels.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one model to make public");
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -109,17 +105,12 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   }, [visible, modelHubData]);
 
   const handleSubmit = async () => {
-    if (selectedModels.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one model to make public");
-      return;
-    }
-
     setLoading(true);
     try {
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      NotificationsManager.success(`Successfully updated public model groups!`);
       handleClose();
       onSuccess();
     } catch (error) {
@@ -228,6 +219,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="space-y-3">
           <Text className="font-medium">Models to be made public:</Text>
+          {selectedModels.size === 0 ? (
+            <div className="border rounded-lg p-3 text-center text-gray-500">
+              <Text>No models selected — all models will be made private.</Text>
+            </div>
+          ) : (
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedModels).map((modelGroup) => {
@@ -251,6 +247,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
               })}
             </div>
           </div>
+          )}
         </div>
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
@@ -283,7 +280,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedModels.size === 0}>
+            <Button onClick={handleNext}>
               Next
             </Button>
           )}

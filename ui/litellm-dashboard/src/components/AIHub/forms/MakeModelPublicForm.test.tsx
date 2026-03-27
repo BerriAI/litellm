@@ -272,24 +272,29 @@ describe("MakeModelPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no models selected", async () => {
+  it("should allow proceeding to step 2 with no models selected", async () => {
     render(<MakeModelPublicForm {...mockProps} />);
 
-    // Deselect all models first
+    // Deselect all models
     const checkboxes = screen.getAllByRole("checkbox");
     await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all to select all
-      fireEvent.click(checkboxes[0]); // Click select all again to deselect all
+      fireEvent.click(checkboxes[0]); // select all (already partially selected, so this selects all)
+      fireEvent.click(checkboxes[0]); // deselect all
     });
 
-    // Try to go to next step
+    // Next button should still be enabled
     const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).not.toBeDisabled();
+
+    // Should be able to proceed to step 2
     await act(async () => {
       fireEvent.click(nextButton);
     });
 
-    // Should stay on same step
-    expect(screen.getByText("Select Models to Make Public")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
+      expect(screen.getByText("No models selected — all models will be made private.")).toBeInTheDocument();
+    });
   });
 
   it("should display empty state when no models are available", () => {
@@ -306,9 +311,9 @@ describe("MakeModelPublicForm", () => {
     const selectAllCheckbox = screen.getByLabelText("Select All");
     expect(selectAllCheckbox).toBeDisabled();
 
-    // Next button should be disabled
+    // Next button should still be enabled (no models to select but user can proceed)
     const nextButton = screen.getByRole("button", { name: "Next" });
-    expect(nextButton).toBeDisabled();
+    expect(nextButton).not.toBeDisabled();
   });
 
   it("should handle Cancel button functionality", async () => {
@@ -530,6 +535,41 @@ describe("MakeModelPublicForm", () => {
     // Should show that 1 model is selected (gpt-3.5-turbo is preselected)
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("model selected")).toBeInTheDocument();
+  });
+
+  it("should submit with empty selection and call API with empty array", async () => {
+    mockMakeModelGroupPublic.mockResolvedValueOnce({});
+
+    render(<MakeModelPublicForm {...mockProps} />);
+
+    // Deselect all models
+    const checkboxes = screen.getAllByRole("checkbox");
+    await act(async () => {
+      fireEvent.click(checkboxes[0]); // select all
+      fireEvent.click(checkboxes[0]); // deselect all
+    });
+
+    // Navigate to confirm step
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    await act(async () => {
+      fireEvent.click(nextButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
+    });
+
+    // Submit with no models selected
+    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    await waitFor(() => {
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", []);
+      expect(mockProps.onSuccess).toHaveBeenCalled();
+      expect(mockProps.onClose).toHaveBeenCalled();
+    });
   });
 
   it("should show confirmation step with selected models", async () => {
