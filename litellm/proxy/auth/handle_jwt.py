@@ -90,6 +90,8 @@ class JWTHandler:
 
     @staticmethod
     def is_jwt(token: str):
+        if not token:
+            return False
         parts = token.split(".")
         return len(parts) == 3
 
