@@ -2299,3 +2299,91 @@ def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
     assert "hidden_params" not in logging_obj.model_call_details["litellm_params"][
         "metadata"
     ]
+
+
+def test_merge_hidden_params_from_response_preserves_proxy_injected_timing():
+    """Proxy may inject timing before stream end; assembled response merge must not drop it."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="merge-hp-timing",
+        function_id="merge-hp-timing-fn",
+    )
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "hidden_params": {"litellm_overhead_time_ms": 273.329, "_response_ms": 1590.0}
+            }
+        },
+    }
+
+    class _Assembled:
+        _hidden_params = {"response_cost": 0.001, "model_id": "mid-2"}
+
+    logging_obj._merge_hidden_params_from_response_into_metadata(_Assembled())
+    hp = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    assert hp["litellm_overhead_time_ms"] == 273.329
+    assert hp["_response_ms"] == 1590.0
+    assert hp["response_cost"] == 0.001
+    assert hp["model_id"] == "mid-2"
+
+
+def test_get_standard_logging_payload_includes_metadata_hidden_params_overhead():
+    """Spend logs read overhead from standard_logging_object.hidden_params; merge metadata.hidden_params."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging as LiteLLMLoggingObj,
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="sl-overhead-meta",
+        function_id="sl-overhead-meta-fn",
+    )
+    kwargs = {
+        "model": "claude-3-5-sonnet-20240620",
+        "stream": True,
+        "litellm_params": {
+            "metadata": {
+                "hidden_params": {
+                    "litellm_overhead_time_ms": 88.5,
+                    "_response_ms": 1200.0,
+                    "model_id": "router-model-id",
+                }
+            }
+        },
+        "response_cost": 0.0,
+        "custom_llm_provider": "anthropic",
+    }
+    # Dict body without _hidden_params (timing only on metadata.hidden_params)
+    init_response_obj = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+        "model": "claude-3-5-sonnet-20240620",
+        "usage": {"input_tokens": 1, "output_tokens": 2},
+    }
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=init_response_obj,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 88.5
+    assert payload["hidden_params"]["model_id"] == "router-model-id"

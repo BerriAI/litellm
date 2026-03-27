@@ -35,6 +35,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    merge_hidden_params_with_logging_timings,
+    strip_litellm_internal_keys_from_dict_response,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -416,6 +420,49 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+
+    @staticmethod
+    def _inject_proxy_timing_into_logging_metadata(
+        logging_obj: Optional[LiteLLMLoggingObj],
+        hidden_params: dict,
+    ) -> None:
+        """
+        When the response object has no _hidden_params (e.g. messages SSE), spend logs and
+        callbacks still read timing from litellm_params.metadata.hidden_params.
+        """
+        if logging_obj is None or not hasattr(logging_obj, "model_call_details"):
+            return
+        timing_keys = (
+            "litellm_overhead_time_ms",
+            "_response_ms",
+            "callback_duration_ms",
+            "timing_llm_api_ms",
+            "timing_pre_processing_ms",
+            "timing_post_processing_ms",
+            "timing_message_copy_ms",
+        )
+        to_merge = {
+            k: hidden_params[k]
+            for k in timing_keys
+            if k in hidden_params and hidden_params[k] is not None
+        }
+        if not to_merge:
+            return
+        mcd = logging_obj.model_call_details
+        lp = mcd.get("litellm_params")
+        if not isinstance(lp, dict):
+            return
+        md = lp.get("metadata")
+        if md is None:
+            md = {}
+            lp["metadata"] = md
+        elif not isinstance(md, dict):
+            return
+        existing = md.get("hidden_params")
+        if existing is None:
+            md["hidden_params"] = to_merge
+        elif isinstance(existing, dict):
+            existing.update(to_merge)
 
     @staticmethod
     def get_custom_headers(
@@ -986,7 +1033,16 @@ class ProxyBaseLLMRequestProcessing:
 
         _exception_raised = False
         try:
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            # Async generators (e.g. Anthropic /v1/messages SSE) have no _hidden_params;
+            # merge timing from logging_obj.model_call_details (llm_api_duration_ms, etc.).
+            hidden_params = merge_hidden_params_with_logging_timings(
+                response,
+                logging_obj,
+                end_time=datetime.now(),
+            )
+            ProxyBaseLLMRequestProcessing._inject_proxy_timing_into_logging_metadata(
+                logging_obj, hidden_params
+            )
             model_id = self._get_model_id_from_response(hidden_params, self.data)
 
             cache_key, api_base, response_cost = (
@@ -1217,9 +1273,22 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
-        hidden_params = (
-            getattr(response, "_hidden_params", {}) or {}
-        )  # get any updated response headers
+        # Re-merge after post_call_success_hook so dict / CSW hidden_params + logging timings align.
+        hidden_params = merge_hidden_params_with_logging_timings(
+            response,
+            logging_obj,
+            end_time=datetime.now(),
+        )
+        ProxyBaseLLMRequestProcessing._inject_proxy_timing_into_logging_metadata(
+            logging_obj, hidden_params
+        )
+        model_id = self._get_model_id_from_response(hidden_params, self.data)
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
@@ -1251,6 +1320,8 @@ class ProxyBaseLLMRequestProcessing:
             fastapi_response.headers.update(callback_headers)
 
         await check_response_size_is_safe(response=response)
+
+        strip_litellm_internal_keys_from_dict_response(response)
 
         return response
 

@@ -144,6 +144,32 @@ MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    # Expose LiteLLM proxy response headers to browser clients (fetch / dashboard).
+    # Without these, Access-Control-Expose-Headers hides them from JavaScript.
+    "x-litellm-call-id",
+    "x-litellm-model-id",
+    "x-litellm-cache-key",
+    "x-litellm-model-api-base",
+    "x-litellm-version",
+    "x-litellm-model-region",
+    "x-litellm-response-cost",
+    "x-litellm-response-cost-original",
+    "x-litellm-response-cost-discount-amount",
+    "x-litellm-response-cost-margin-amount",
+    "x-litellm-response-cost-margin-percent",
+    "x-litellm-key-tpm-limit",
+    "x-litellm-key-rpm-limit",
+    "x-litellm-key-max-budget",
+    "x-litellm-key-spend",
+    "x-litellm-response-duration-ms",
+    "x-litellm-overhead-duration-ms",
+    "x-litellm-callback-duration-ms",
+    "x-litellm-timing-pre-processing-ms",
+    "x-litellm-timing-llm-api-ms",
+    "x-litellm-timing-post-processing-ms",
+    "x-litellm-timing-message-copy-ms",
+    "x-litellm-fastest_response_batch_completion",
+    "x-litellm-timeout",
 ]
 
 # Gemini model-specific minimal thinking budget constants

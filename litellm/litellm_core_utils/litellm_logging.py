@@ -60,6 +60,9 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    get_response_hidden_params,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -1693,20 +1696,31 @@ class Logging(LiteLLMLoggingBaseClass):
         Non-streaming success uses _process_hidden_params_and_response_cost (skipped when
         stream=True). Streaming assembles the full response later; without this merge,
         OTEL/callbacks that read metadata.hidden_params miss cost-related fields.
+
+        Merge with any existing metadata.hidden_params (e.g. proxy-injected timing for
+        /v1/messages SSE) instead of replacing, so litellm_overhead_time_ms is not dropped
+        when the assembled response omits it.
         """
         if logging_result is None:
             return
-        hidden_params = getattr(logging_result, "_hidden_params", None)
-        if not hidden_params:
+        incoming = get_response_hidden_params(logging_result)
+        if not incoming:
             return
         if self.model_call_details.get("litellm_params") is None:
             return
         self.model_call_details["litellm_params"].setdefault("metadata", {})
         if self.model_call_details["litellm_params"]["metadata"] is None:
             self.model_call_details["litellm_params"]["metadata"] = {}
-        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(
-            logging_result, "_hidden_params", {}
-        )
+        md = self.model_call_details["litellm_params"]["metadata"]
+        if not isinstance(md, dict):
+            return
+        existing = md.get("hidden_params")
+        if not isinstance(existing, dict):
+            existing = {}
+        if not isinstance(incoming, dict):
+            md["hidden_params"] = existing or incoming
+            return
+        md["hidden_params"] = {**existing, **incoming}
 
     def _process_hidden_params_and_response_cost(
         self,
@@ -1714,13 +1728,13 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
-        hidden_params = getattr(logging_result, "_hidden_params", {})
+        hidden_params = get_response_hidden_params(logging_result)
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
                 self.model_call_details["litellm_params"].setdefault("metadata", {})
                 if self.model_call_details["litellm_params"]["metadata"] is None:
                     self.model_call_details["litellm_params"]["metadata"] = {}
-                self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(logging_result, "_hidden_params", {})  # type: ignore
+                self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = get_response_hidden_params(logging_result)  # type: ignore
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
@@ -5299,6 +5313,13 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+        hp = get_response_hidden_params(init_response_obj)
+        if hp:
+            hidden_params = (
+                hp if isinstance(hp, dict) else hp.model_dump(exclude_none=True)
+            )
+        else:
+            hidden_params = None
     else:
         response_obj = {}
 
@@ -5345,6 +5366,15 @@ def get_standard_logging_object_payload(
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
+
+        # Proxy injects timing into litellm_params.metadata.hidden_params (e.g. /v1/messages SSE) while
+        # _extract_response_obj_and_hidden_params only reads from the response object. Merge so
+        # StandardLoggingPayload.hidden_params (and spend log metadata) include litellm_overhead_time_ms.
+        md = litellm_params.get("metadata")
+        if isinstance(md, dict):
+            meta_hp = md.get("hidden_params")
+            if isinstance(meta_hp, dict) and meta_hp:
+                hidden_params = {**(hidden_params or {}), **meta_hp}
 
         # Merge both litellm_metadata and metadata to get complete metadata
         metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(
