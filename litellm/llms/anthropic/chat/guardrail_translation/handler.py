@@ -246,7 +246,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     "text"
                 ] = guardrail_response
 
-    async def process_output_response(
+    async def process_output_response(  # noqa: PLR0915
         self,
         response: "AnthropicMessagesResponse",
         guardrail_to_apply: "CustomGuardrail",

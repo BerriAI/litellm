@@ -697,24 +697,82 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+async def resolve_output_file_ids_to_unified(
+    response,
+    prisma_client,
+    managed_files_obj=None,
+    user_api_key_dict=None,
+) -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
     the managed file table and replace them in-place.
+
+    If the managed file row does not exist yet but the managed files hook is
+    available, synthesize and persist a managed output file ID so downstream
+    files.retrieve/files.content calls can enforce access checks consistently.
     """
-    if not prisma_client:
-        return
     for attr in ("output_file_id", "error_file_id"):
         raw_id = getattr(response, attr, None)
         if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
-                where={"flat_model_file_ids": {"has": raw_id}}
-            )
+            managed_file = None
+            if prisma_client:
+                managed_file = (
+                    await prisma_client.db.litellm_managedfiletable.find_first(
+                        where={"flat_model_file_ids": {"has": raw_id}}
+                    )
+                )
             if managed_file:
                 setattr(response, attr, managed_file.unified_file_id)
+                continue
+
+            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            model_id = hidden_params.get("model_id")
+            get_unified_output_file_id = getattr(
+                managed_files_obj, "get_unified_output_file_id", None
+            )
+            store_unified_file_id = getattr(
+                managed_files_obj, "store_unified_file_id", None
+            )
+
+            if (
+                not model_id
+                or user_api_key_dict is None
+                or not callable(get_unified_output_file_id)
+                or not callable(store_unified_file_id)
+            ):
+                continue
+
+            resolved_model_name = hidden_params.get("model_name")
+            unified_input_file_id = hidden_params.get("unified_file_id")
+            if not resolved_model_name and isinstance(unified_input_file_id, str):
+                decoded_input_file_id = (
+                    _is_base64_encoded_unified_file_id(unified_input_file_id)
+                    or unified_input_file_id
+                )
+                target_model_names = get_models_from_unified_file_id(
+                    decoded_input_file_id
+                )
+                if target_model_names:
+                    resolved_model_name = ",".join(target_model_names)
+
+            synthesized_unified_file_id = get_unified_output_file_id(
+                output_file_id=raw_id,
+                model_id=model_id,
+                model_name=resolved_model_name,
+            )
+            await store_unified_file_id(
+                file_id=synthesized_unified_file_id,
+                file_object=None,
+                litellm_parent_otel_span=getattr(
+                    user_api_key_dict, "parent_otel_span", None
+                ),
+                model_mappings={model_id: raw_id},
+                user_api_key_dict=user_api_key_dict,
+            )
+            setattr(response, attr, synthesized_unified_file_id)
         except Exception:
             pass
 
@@ -767,8 +825,19 @@ async def get_batch_from_database(
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
 
+        hidden_params = getattr(response, "_hidden_params", None) or {}
+        response._hidden_params = hidden_params
+        response._hidden_params["unified_batch_id"] = unified_batch_id
+
+        model_id = get_model_id_from_unified_batch_id(unified_batch_id)
+        if model_id:
+            response._hidden_params["model_id"] = model_id
+
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
         await resolve_input_file_id_to_unified(response, prisma_client)
+
+        if _is_base64_encoded_unified_file_id(response.input_file_id):
+            response._hidden_params["unified_file_id"] = response.input_file_id
 
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"

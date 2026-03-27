@@ -424,7 +424,12 @@ async def retrieve_batch(  # noqa: PLR0915
             # Resolve any raw input/output/error file IDs to unified IDs.
             if unified_batch_id:
                 await resolve_input_file_id_to_unified(response, prisma_client)
-                await resolve_output_file_ids_to_unified(response, prisma_client)
+                await resolve_output_file_ids_to_unified(
+                    response,
+                    prisma_client,
+                    managed_files_obj,
+                    user_api_key_dict,
+                )
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -540,7 +545,12 @@ async def retrieve_batch(  # noqa: PLR0915
         # Resolve raw provider file IDs (input, output, error) to unified IDs.
         if unified_batch_id:
             await resolve_input_file_id_to_unified(response, prisma_client)
-            await resolve_output_file_ids_to_unified(response, prisma_client)
+            await resolve_output_file_ids_to_unified(
+                response,
+                prisma_client,
+                managed_files_obj,
+                user_api_key_dict,
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -931,6 +941,15 @@ async def cancel_batch(
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
+            await resolve_output_file_ids_to_unified(
+                response,
+                prisma_client,
+                managed_files_obj,
+                user_api_key_dict,
+            )
 
         ### ALERTING ###
         asyncio.create_task(

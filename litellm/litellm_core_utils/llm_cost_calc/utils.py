@@ -668,15 +668,35 @@ def generic_cost_per_token(  # noqa: PLR0915
     cache_creation = prompt_tokens_details["cache_creation_tokens"]
     image_tokens = prompt_tokens_details["image_tokens"]
 
-    # Check for double-counting: sum of details > prompt_tokens means overlap
+    # Normalize prompt-token breakdowns when providers under-report token
+    # categories (e.g. text + cache hit but omit PDF tokens) or when cached
+    # tokens are double-counted in text_tokens. Skip this fallback for count-
+    # based pricing paths (image_count / character_count / video length) where
+    # prompt_tokens may not map cleanly back to text tokens.
     total_details = (
         text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     )
-    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+    has_non_token_pricing_components = (
+        prompt_tokens_details["image_count"] > 0
+        or prompt_tokens_details["character_count"] > 0
+        or prompt_tokens_details["video_length_seconds"] > 0
+    )
+    has_partial_breakdown = (
+        usage.prompt_tokens_details is not None
+        and total_details < usage.prompt_tokens
+        and not has_non_token_pricing_components
+    )
+    has_cached_token_overlap = cache_hit > 0 and total_details > usage.prompt_tokens
 
     if (
-        text_tokens == 0 and prompt_tokens_details["image_count"] == 0
-    ) or has_double_counting:
+        (
+            text_tokens == 0
+            and not has_non_token_pricing_components
+            and total_details == 0
+        )
+        or has_partial_breakdown
+        or has_cached_token_overlap
+    ):
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
@@ -684,6 +704,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - cache_creation
             - image_tokens
         )
+        text_tokens = max(0, text_tokens)
         prompt_tokens_details["text_tokens"] = text_tokens
 
     (
@@ -719,15 +740,19 @@ def generic_cost_per_token(  # noqa: PLR0915
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
 
-    # Handle text_tokens calculation:
-    # 1. If text_tokens is explicitly provided and > 0, use it
-    # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
-    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
+    # Normalize partial completion-token breakdowns so any unaccounted
+    # remainder is billed as text tokens rather than silently dropped.
     has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
-    if text_tokens == 0:
-        if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
+    total_completion_details = (
+        text_tokens + reasoning_tokens + audio_tokens + image_tokens
+    )
+    has_partial_breakdown = (
+        usage.completion_tokens_details is not None
+        and total_completion_details < usage.completion_tokens
+    )
+
+    if text_tokens == 0 or has_partial_breakdown:
+        if has_token_breakdown or has_partial_breakdown:
             text_tokens = max(
                 0,
                 usage.completion_tokens
@@ -736,7 +761,6 @@ def generic_cost_per_token(  # noqa: PLR0915
                 - image_tokens,
             )
         else:
-            # No breakdown at all, all tokens are text tokens
             text_tokens = usage.completion_tokens
             is_text_tokens_total = True
     ## TEXT COST
