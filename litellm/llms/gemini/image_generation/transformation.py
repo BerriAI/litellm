@@ -184,6 +184,15 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"response_modalities": ["IMAGE", "TEXT"]},
             }
+            extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+            if extra_body is not None:
+                for k, v in extra_body.items():
+                    if k in {"cache", "tags"}:
+                        continue
+                    if k in request_body and isinstance(request_body[k], dict) and isinstance(v, dict):
+                        request_body[k].update(v)
+                    else:
+                        request_body[k] = v
             return request_body
         else:
             # For other Imagen models, use the original Imagen format
