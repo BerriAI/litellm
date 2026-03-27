@@ -1530,6 +1530,9 @@ shared_aiohttp_session: Optional[
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+spend_counter_cache = DualCache(
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
@@ -1692,6 +1695,134 @@ def cost_tracking():
         litellm.logging_callback_manager.add_litellm_async_success_callback(
             _ProxyDBLogger()
         )
+
+
+async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
+    """
+    Read current spend from the cross-pod spend counter.
+
+    Reads Redis FIRST (authoritative cross-pod value), not DualCache's
+    async_get_cache which returns in-memory first. This is critical:
+    DualCache.async_get_cache returns stale per-pod values because each
+    pod's in-memory cache is only updated by that pod's own increments.
+
+    Fallback chain:
+    1. Redis counter (cross-pod, authoritative)
+    2. In-memory counter (single-instance or Redis failure)
+    3. Cached object's .spend from DB (cold start, no counter yet)
+    """
+    # 1. Try Redis first (cross-pod authoritative)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            val = await spend_counter_cache.redis_cache.async_get_cache(
+                key=counter_key
+            )
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
+                counter_key,
+                e,
+            )
+
+    # 2. Fall back to in-memory counter (single-instance or Redis failure)
+    val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    if val is not None:
+        return float(val)
+
+    # 3. Final fallback: cached object's spend from DB
+    return fallback_spend
+
+
+async def increment_spend_counters(
+    token: Optional[str],
+    team_id: Optional[str],
+    user_id: Optional[str],
+    response_cost: Optional[float],
+):
+    """
+    Atomically increment spend counters for budget enforcement.
+
+    Uses spend_counter_cache (DualCache with Redis backend when available)
+    so counters are shared across all pods. Budget check functions read
+    from these counters via get_current_spend() (Redis-first).
+
+    Awaited (not create_task) in the cost callback, so the counter is
+    updated before the next request's auth check runs.
+    """
+    if response_cost is None or response_cost == 0:
+        return
+
+    if token is not None:
+        # token arrives pre-hashed from metadata["user_api_key"] (auth flow
+        # hashes raw "sk-..." keys before they reach the callback). The
+        # startswith("sk-") check is a safety net matching update_cache —
+        # if a raw key somehow arrives, hash it; otherwise use as-is to
+        # avoid double-hashing (budget checks read valid_token.token which
+        # is single-hashed).
+        hashed_token = (
+            hash_token(token=token)
+            if isinstance(token, str) and token.startswith("sk-")
+            else token
+        )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:key:{hashed_token}",
+            source_cache_key=hashed_token,
+            increment=response_cost,
+        )
+
+    if team_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team:{team_id}",
+            source_cache_key=f"team_id:{team_id}",
+            increment=response_cost,
+        )
+
+    if user_id is not None and team_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team_member:{user_id}:{team_id}",
+            source_cache_key=f"team_membership:{user_id}:{team_id}",
+            increment=response_cost,
+        )
+
+
+async def _init_and_increment_spend_counter(
+    counter_key: str,
+    source_cache_key: str,
+    increment: float,
+):
+    """
+    Initialize counter from cached object's DB-loaded spend if not yet set,
+    then atomically increment in both in-memory and Redis.
+
+    On first access per pod:
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
+    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
+       check-then-set race: if two pods cold-start simultaneously, both may see
+       the counter as absent and seed it. Using increment instead of set means
+       the worst case is over-counting (conservative — blocks slightly early)
+       rather than under-counting (would allow overspend).
+    4. Increment atomically (both in-memory + Redis)
+    """
+    current = await spend_counter_cache.async_get_cache(key=counter_key)
+    if current is None:
+        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+        base_spend = 0.0
+        if source is not None:
+            if isinstance(source, dict):
+                base_spend = source.get("spend", 0.0) or 0.0
+            else:
+                base_spend = getattr(source, "spend", 0.0) or 0.0
+        if base_spend > 0:
+            await spend_counter_cache.async_increment_cache(
+                key=counter_key, value=base_spend
+            )
+
+    await spend_counter_cache.async_increment_cache(
+        key=counter_key, value=increment
+    )
 
 
 async def update_cache(  # noqa: PLR0915
@@ -2562,6 +2693,7 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+            spend_counter_cache.redis_cache = redis_usage_cache
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
 

@@ -54,16 +54,49 @@ class ResetBudgetJob:
         """
         Resets the budget for all LiteLLM Team Members if their budget has expired
         """
+        budget_ids = [
+            budget.budget_id
+            for budget in budgets_to_reset
+            if budget.budget_id is not None
+        ]
+
+        # Reset spend counters for affected team members.
+        # Reset Redis directly so a transient failure doesn't leave stale
+        # counters that get_current_spend would read as authoritative.
+        try:
+            from litellm.proxy.proxy_server import spend_counter_cache
+
+            memberships = (
+                await self.prisma_client.db.litellm_teammembership.find_many(
+                    where={"budget_id": {"in": budget_ids}}
+                )
+            )
+            for m in memberships:
+                counter_key = f"spend:team_member:{m.user_id}:{m.team_id}"
+                # Always reset in-memory
+                spend_counter_cache.in_memory_cache.set_cache(
+                    key=counter_key, value=0.0
+                )
+                # Explicitly reset Redis with warning on failure
+                if spend_counter_cache.redis_cache is not None:
+                    try:
+                        await spend_counter_cache.redis_cache.async_set_cache(
+                            key=counter_key, value=0.0
+                        )
+                    except Exception as redis_err:
+                        verbose_proxy_logger.warning(
+                            "Failed to reset team member spend counter in Redis %s: %s. "
+                            "Budget may be over-enforced until counter expires.",
+                            counter_key,
+                            redis_err,
+                        )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to reset team member spend counters: %s", e
+            )
+
         return await self.prisma_client.db.litellm_teammembership.update_many(
-            where={
-                "budget_id": {
-                    "in": [
-                        budget.budget_id
-                        for budget in budgets_to_reset
-                        if budget.budget_id is not None
-                    ]
-                }
-            },
+            where={"budget_id": {"in": budget_ids}},
             data={
                 "spend": 0,
             },
@@ -531,6 +564,39 @@ class ResetBudgetJob:
         """
         try:
             item.spend = 0.0
+
+            # Reset the cross-pod spend counter.
+            # Reset Redis directly (not via DualCache) so a Redis failure
+            # doesn't silently leave a stale counter that get_current_spend
+            # would read as authoritative, permanently blocking the user.
+            from litellm.proxy.proxy_server import spend_counter_cache
+
+            counter_key = None
+            if item_type == "key" and hasattr(item, "token") and item.token is not None:
+                counter_key = f"spend:key:{item.token}"
+            elif item_type == "team" and hasattr(item, "team_id") and item.team_id is not None:
+                counter_key = f"spend:team:{item.team_id}"
+
+            if counter_key is not None:
+                # Always reset in-memory (local fallback)
+                spend_counter_cache.in_memory_cache.set_cache(
+                    key=counter_key, value=0.0
+                )
+                # Explicitly reset Redis with warning on failure
+                if spend_counter_cache.redis_cache is not None:
+                    try:
+                        await spend_counter_cache.redis_cache.async_set_cache(
+                            key=counter_key, value=0.0
+                        )
+                    except Exception as redis_err:
+                        verbose_proxy_logger.warning(
+                            "Failed to reset spend counter in Redis for %s key=%s: %s. "
+                            "Budget may be over-enforced until counter expires.",
+                            item_type,
+                            counter_key,
+                            redis_err,
+                        )
+
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 # Get standardized reset time based on budget duration
                 from litellm.proxy.common_utils.timezone_utils import (
