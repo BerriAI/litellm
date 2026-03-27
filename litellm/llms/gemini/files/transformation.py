@@ -5,6 +5,7 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
 from typing import Any, List, Literal, Optional
+from urllib.parse import urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -209,26 +210,57 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         Get the URL to retrieve a file from Google AI Studio.
 
-        We expect file_id to be the URI (e.g. https://generativelanguage.googleapis.com/v1beta/files/...)
-        as returned by the upload response.
+        Endpoint:
+        GET https://generativelanguage.googleapis.com/v1beta/{name=files/*}
+
+        The URL should look like:
+        https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key=API_KEY
+
+        We expect file_id to be just the file identifier (e.g., files/abc123 or abc123)
+        as returned by the upload response. (If it's a full URL, extract the file name.)
         """
         api_key = litellm_params.get("api_key") or self.get_api_key()
         if not api_key:
             raise ValueError("api_key is required")
 
-        if file_id.startswith("http"):
-            url = "{}?key={}".format(file_id, api_key)
-        else:
-            # Fallback for just file name (files/...)
-            api_base = (
-                self.get_api_base(litellm_params.get("api_base"))
-                or "https://generativelanguage.googleapis.com"
-            )
-            api_base = api_base.rstrip("/")
-            url = "{}/v1beta/{}?key={}".format(api_base, file_id, api_key)
+        file_part = self._normalize_gemini_file_id(file_id)
+
+        api_base = (
+            self.get_api_base(litellm_params.get("api_base"))
+            or "https://generativelanguage.googleapis.com"
+        )
+        api_base = api_base.rstrip("/")
+
+        url = f"{api_base}/v1beta/{file_part}?key={api_key}"
 
         # Return empty params dict - API key is already in URL, no query params needed
         return url, {}
+
+    def _normalize_gemini_file_id(self, file_id: str) -> str:
+        """
+        Normalize file identifier into `files/{id}` form.
+
+        Supports:
+        - `abc123`
+        - `files/abc123`
+        - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
+        """
+        if file_id.startswith(("http://", "https://")):
+            parsed = urlparse(file_id)
+            path = parsed.path.lstrip("/")
+            files_index = path.find("files/")
+            if files_index != -1:
+                normalized_file_id = path[files_index:]
+            else:
+                normalized_file_id = path
+        else:
+            normalized_file_id = file_id
+
+        normalized_file_id = normalized_file_id.strip("/")
+        if not normalized_file_id.startswith("files/"):
+            normalized_file_id = f"files/{normalized_file_id}"
+
+        return normalized_file_id
 
     def transform_retrieve_file_response(
         self,
@@ -240,8 +272,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         Transform Gemini's file retrieval response into OpenAI-style FileObject
         """
         try:
+            verbose_logger.debug(f"Retrieve file response: {raw_response.text}")
             response_json = raw_response.json()
-
+            verbose_logger.debug(f"Response JSON: {response_json}")
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
             # Explicitly type status as the Literal union
