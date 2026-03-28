@@ -1325,9 +1325,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate messages to anthropic format.
         """
         ## VALIDATE REQUEST
-        """
-        Anthropic doesn't support tool calling without `tools=` param specified.
-        """
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
