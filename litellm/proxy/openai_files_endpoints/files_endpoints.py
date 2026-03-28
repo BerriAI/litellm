@@ -321,8 +321,9 @@ async def create_file(  # noqa: PLR0915
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        # Read the file content
-        file_content = await file.read()
+        # NOTE: do NOT call await file.read() here — that would load the entire
+        # file into memory.  We pass file.file (the underlying SpooledTemporaryFile
+        # or BytesIO) directly so the content is streamed to the provider.
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -363,10 +364,10 @@ async def create_file(  # noqa: PLR0915
         expires_after: Optional[FileExpiresAfter] = None
         form_data_raw = await request.form()
         form_data_dict: Dict[str, Any] = dict(form_data_raw)
-        extracted_litellm_metadata: Optional[
-            Dict[str, Any]
-        ] = extract_nested_form_metadata(
-            form_data=form_data_dict, prefix="litellm_metadata["
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = (
+            extract_nested_form_metadata(
+                form_data=form_data_dict, prefix="litellm_metadata["
+            )
         )
         expires_after_anchor = form_data_raw.get("expires_after[anchor]")
         expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")
@@ -441,14 +442,36 @@ async def create_file(  # noqa: PLR0915
             proxy_config=proxy_config,
         )
 
-        # Prepare the file data according to FileTypes
-        file_data = (file.filename, file_content, file.content_type)
+        # Prepare the file data according to FileTypes.
+        # Pass file.file (the underlying SpooledTemporaryFile / BytesIO) rather than
+        # reading all bytes into memory — the IO object is fully compatible with
+        # FileTypes and lets downstream providers stream the upload.
+        # Ensure pointer is at 0 before any code reads from file.file, so that
+        # subsequent seek-based operations (file_size, JSONL sniff, upload) start
+        # from the beginning of the file regardless of prior reads.
+        file.file.seek(0)
+        file_data = (file.filename, file.file, file.content_type)
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
         is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
-            json_obj = get_first_json_object(file_content_bytes=file_content)
+            # Read the first complete JSONL line for model detection.
+            # Read in 4096-byte chunks until we find a newline, capping at 1 MB
+            # to avoid loading the entire file for pathologically long lines.
+            _FIRST_LINE_MAX = 1024 * 1024  # 1 MB
+            first_line_bytes = b""
+            while len(first_line_bytes) < _FIRST_LINE_MAX:
+                chunk = file.file.read(4096)
+                if not chunk:
+                    break
+                newline_pos = chunk.find(b"\n")
+                if newline_pos != -1:
+                    first_line_bytes += chunk[:newline_pos]
+                    break
+                first_line_bytes += chunk
+            file.file.seek(0)
+            json_obj = get_first_json_object(file_content_bytes=first_line_bytes)
             if json_obj:
                 router_model = get_model_from_json_obj(json_object=json_obj)
                 is_router_model = is_known_model(

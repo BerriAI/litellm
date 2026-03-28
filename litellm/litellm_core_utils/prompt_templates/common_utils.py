@@ -2,12 +2,12 @@
 Common utility functions used for translating messages across providers
 """
 
-import io
 import mimetypes
 import re
 from os import PathLike
 from pathlib import Path
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Dict,
@@ -718,18 +718,33 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
                 filename = Path(str(file_content)).name
         with open(file_content, "rb") as f:
             content = f.read()
-    elif isinstance(file_content, io.IOBase):
-        # If it's a file-like object
-        # Try to get filename from file handle if not already set
-        if not filename and hasattr(file_content, "name"):
-            filename = Path(file_content.name).name
+    elif hasattr(file_content, "read") and hasattr(file_content, "seek"):
+        # Duck-type check covers io.IOBase subclasses AND SpooledTemporaryFile on
+        # Python < 3.11 (which does not inherit from io.IOBase but is still
+        # file-like).  Keep as-is to avoid loading the entire file into memory.
+        file_like = cast(IO[bytes], file_content)
+        if not filename and hasattr(file_like, "name"):
+            filename = Path(file_like.name).name
 
-        content = file_content.read()
+        # Compute file size via seek/tell so providers that need Content-Length
+        # (e.g. Gemini resumable upload) don't have to load all bytes.
+        file_like.seek(0, 2)
+        file_size: int = file_like.tell()
+        file_like.seek(0)
 
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        # Reset file pointer to beginning
-        file_content.seek(0)
+        return ExtractedFileData(
+            filename=filename,
+            content=file_content,  # type: ignore[typeddict-item]
+            content_type=content_type
+            or (
+                mimetypes.guess_type(filename)[0]
+                if filename
+                else "application/octet-stream"
+            )
+            or "application/octet-stream",
+            headers=file_headers,
+            file_size=file_size,
+        )
     elif isinstance(file_content, bytes):
         content = file_content
     else:
@@ -748,6 +763,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
         content=content,
         content_type=content_type,
         headers=file_headers,
+        file_size=len(content),
     )
 
 

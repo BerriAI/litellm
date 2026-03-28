@@ -3,6 +3,7 @@ Supports writing files to Google AI Studio Files API.
 
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
+
 import time
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -124,8 +125,15 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         # Use the common utility function to extract file data
         extracted_data = extract_file_data(file_data)
 
-        # Get file size
-        file_size = len(extracted_data["content"])
+        # Get file size — prefer the pre-computed value (available when content is
+        # an IO[bytes] object so we didn't have to load all bytes into memory).
+        # Use explicit `is not None` to avoid treating a 0-byte file as falsy.
+        _precomputed = extracted_data.get("file_size")
+        file_size = (
+            _precomputed
+            if _precomputed is not None
+            else len(extracted_data["content"])  # type: ignore[arg-type]
+        )
 
         # Step 1: Initial resumable upload request
         headers = {
@@ -144,7 +152,10 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             }
         }
 
-        # Step 2: Actual file upload data
+        # Step 2: Actual file upload data.
+        # Pass the content object directly — httpx accepts both bytes and IO[bytes]
+        # as `content=`, so large files are streamed to the provider without being
+        # fully materialised in memory.
         upload_headers = {
             "Content-Length": str(file_size),
             "X-Goog-Upload-Offset": "0",
@@ -300,9 +311,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 object="file",
                 purpose="user_data",
                 status=status,
-                status_details=str(response_json.get("error", ""))
-                if gemini_state == "FAILED"
-                else None,
+                status_details=(
+                    str(response_json.get("error", ""))
+                    if gemini_state == "FAILED"
+                    else None
+                ),
             )
         except Exception as e:
             verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")

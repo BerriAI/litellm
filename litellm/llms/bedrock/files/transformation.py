@@ -93,7 +93,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             with open(str(file_content), "rb") as f:
                 content = f.read()
         elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
+            # Seek to start so a second call (e.g. from transform_create_file_request)
+            # reads the full content even if the pointer has already advanced.
+            if hasattr(file_content, "seek"):
+                file_content.seek(0)
             content = file_content.read()
 
         # Ensure content is string
@@ -390,6 +393,26 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             file_content = extracted_file_data_content.decode("utf-8")
         elif isinstance(extracted_file_data_content, str):
             file_content = extracted_file_data_content
+        elif hasattr(extracted_file_data_content, "read") and hasattr(
+            extracted_file_data_content, "seek"
+        ):
+            # IO[bytes] path (e.g. SpooledTemporaryFile from FastAPI UploadFile).
+            # seek(0) is already called inside _get_content_from_openai_file, but we
+            # handle this branch directly to surface a clear error for binary uploads.
+            #
+            # NOTE: Bedrock requires UTF-8 text content for SigV4 request signing
+            # and does not support binary file uploads.  We must materialize the
+            # entire file in memory here — there is no streaming alternative.
+            # Operators uploading large files to Bedrock should be aware that memory
+            # usage will spike proportionally to file size at this point.
+            extracted_file_data_content.seek(0)
+            raw = extracted_file_data_content.read()
+            try:
+                file_content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ValueError(
+                    "Bedrock file uploads require UTF-8 text content. Binary files are not supported."
+                )
         else:
             raise ValueError("Unsupported file content type")
 
@@ -753,7 +776,9 @@ class BedrockJsonlFilesTransformation:
             with open(str(file_content), "rb") as f:
                 content = f.read()
         elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
+            # Seek to start so this helper is idempotent across multiple calls.
+            if hasattr(file_content, "seek"):
+                file_content.seek(0)
             content = file_content.read()
 
         # Ensure content is string

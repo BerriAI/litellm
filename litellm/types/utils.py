@@ -2,6 +2,7 @@ import json
 import time
 from enum import Enum
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Dict,
@@ -40,7 +41,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -3498,15 +3499,23 @@ class ExtractedFileData(TypedDict):
 
     Attributes:
         filename: Name of the file if provided
-        content: The file content in bytes
+        content: The file content as bytes or a seekable IO[bytes] object.
+            When an IO[bytes] is returned the file pointer is positioned at offset 0.
+            Callers that need the full bytes (e.g. to compute a hash) should call
+            .read() themselves; callers that pass the content to an HTTP request
+            should prefer to pass the IO object directly so the data is streamed
+            rather than copied into memory.
         content_type: MIME type of the file
         headers: Any additional headers for the file
+        file_size: The size of the file in bytes (pre-computed via seek/tell to
+            avoid loading the file into memory just for its length).
     """
 
     filename: Optional[str]
-    content: bytes
+    content: Union[bytes, "IO[bytes]"]
     content_type: Optional[str]
     headers: Mapping[str, str]
+    file_size: NotRequired[Optional[int]]
 
 
 class SpecialEnums(Enum):
