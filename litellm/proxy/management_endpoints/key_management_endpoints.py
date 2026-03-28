@@ -1487,7 +1487,12 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check(k)
+                # Empty collections are used by UI clients to explicitly clear
+                # previously configured premium metadata fields (e.g. guardrails).
+                # Preserve the value in metadata, but only enforce premium checks
+                # when the field carries a non-empty value.
+                if v != [] and v != {}:
+                    _premium_user_check(k)
                 casted_metadata[k] = v
 
     except Exception as e:

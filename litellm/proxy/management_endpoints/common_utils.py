@@ -338,7 +338,10 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check(field_name)
+        # Allow explicit clearing of premium metadata fields by sending empty
+        # collections (e.g. guardrails=[]), without triggering premium checks.
+        if value is not None and value != [] and value != {}:
+            _premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
