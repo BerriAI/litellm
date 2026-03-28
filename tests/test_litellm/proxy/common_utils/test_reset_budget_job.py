@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -11,9 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.utils import ProxyLogging
 
 
 # Mock classes for testing
@@ -393,7 +390,7 @@ def test_enduser_budget_reset_reproduces_stale_cache_bug():
     This test simulates the full flow using real LiteLLM_EndUserTable and
     LiteLLM_BudgetTable Pydantic objects.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
 
@@ -596,8 +593,6 @@ def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_c
     This covers the case where keys were created with budget_id but
     budget_duration was not inherited to the key (pre-fix keys).
     """
-    from litellm.proxy._types import LiteLLM_BudgetTableFull
-
     now = datetime.now(timezone.utc)
 
     # Create a budget tier that is due for reset
