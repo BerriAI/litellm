@@ -9293,7 +9293,7 @@ async def _add_access_group_models_to_team_models(
         )
     )
     ag_model_map: Dict[str, List[str]] = {
-        row.access_group_id: getattr(row, "access_model_names", []) or []
+        row.access_group_id: row.access_model_names or []
         for row in access_group_rows
     }
 
