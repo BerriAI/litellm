@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  documentation:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: "tests/documentation_tests"

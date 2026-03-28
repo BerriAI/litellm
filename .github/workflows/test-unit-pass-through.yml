@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  pass-through:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: "tests/pass_through_unit_tests"

@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  litellm-utils:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: "tests/litellm_utils_tests"
