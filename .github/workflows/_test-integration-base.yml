@@ -1,0 +1,238 @@
+name: _Integration Test Base (Reusable)
+
+# Reusable workflow for integration tests that require real API keys.
+# The environment is derived internally — callers cannot choose arbitrary environments.
+#
+# Security: Only triggered via workflow_call from push-triggered callers
+# (litellm_* branches). Never runs on pull_request.
+
+on:
+  workflow_call:
+    inputs:
+      test-path:
+        description: "Pytest path(s) to run"
+        required: true
+        type: string
+      workers:
+        description: "Number of pytest-xdist workers (0 = no parallelism)"
+        required: false
+        type: number
+        default: 2
+      reruns:
+        description: "Number of reruns for flaky tests"
+        required: false
+        type: number
+        default: 2
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        required: false
+        type: number
+        default: 20
+      max-failures:
+        description: "Stop after this many failures"
+        required: false
+        type: number
+        default: 10
+      per-test-timeout:
+        description: "Per-test timeout in seconds (0 = disabled)"
+        required: false
+        type: number
+        default: 0
+      litellm-log-level:
+        description: "LITELLM_LOG level (e.g. WARNING, DEBUG). Empty = default."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      AZURE_API_KEY:
+        required: false
+      AZURE_API_BASE:
+        required: false
+      AZURE_API_VERSION:
+        required: false
+      AZURE_SWEDEN_API_KEY:
+        required: false
+      AZURE_DOCUMENT_INTELLIGENCE_API_KEY:
+        required: false
+      AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:
+        required: false
+      GEMINI_API_KEY:
+        required: false
+      COHERE_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      MISTRAL_API_KEY:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_REGION_NAME:
+        required: false
+      LITELLM_LICENSE:
+        required: false
+      GOOGLE_APPLICATION_CREDENTIALS:
+        required: false
+      GCS_PATH_SERVICE_ACCOUNT:
+        required: false
+      MANUS_API_KEY:
+        required: false
+      BRAVE_API_KEY:
+        required: false
+      SERPER_API_KEY:
+        required: false
+      TAVILY_API_KEY:
+        required: false
+      LINKUP_API_KEY:
+        required: false
+      SEARCHAPI_API_KEY:
+        required: false
+      PERPLEXITYAI_API_KEY:
+        required: false
+      DATAFORSEO_LOGIN:
+        required: false
+      DATAFORSEO_PASSWORD:
+        required: false
+      LASSO_API_KEY:
+        required: false
+      LASSO_USER_ID:
+        required: false
+      LASSO_CONVERSATION_ID:
+        required: false
+      AKTO_GUARDRAIL_API_BASE:
+        required: false
+      AKTO_API_KEY:
+        required: false
+      AKTO_ACCOUNT_ID:
+        required: false
+      AKTO_VXLAN_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run tests
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    environment: integration-providers
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install 'poetry==2.3.2'
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-integration-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-integration-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install google-genai==1.22.0 \
+            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
+
+      - name: Setup litellm-enterprise
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run tests
+        env:
+          TEST_PATH: ${{ inputs.test-path }}
+          MAX_FAILURES: ${{ inputs.max-failures }}
+          WORKERS: ${{ inputs.workers }}
+          RERUNS: ${{ inputs.reruns }}
+          PER_TEST_TIMEOUT: ${{ inputs.per-test-timeout }}
+          LITELLM_LOG: ${{ inputs.litellm-log-level }}
+          # Provider API keys — populated only if the GHA environment contains them.
+          # Empty vars are harmless; tests that need a missing key will fail visibly.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+          AZURE_API_VERSION: ${{ secrets.AZURE_API_VERSION }}
+          AZURE_SWEDEN_API_KEY: ${{ secrets.AZURE_SWEDEN_API_KEY }}
+          AZURE_DOCUMENT_INTELLIGENCE_API_KEY: ${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_API_KEY }}
+          AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: ${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION_NAME: ${{ secrets.AWS_REGION_NAME }}
+          LITELLM_LICENSE: ${{ secrets.LITELLM_LICENSE }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          GCS_PATH_SERVICE_ACCOUNT: ${{ secrets.GCS_PATH_SERVICE_ACCOUNT }}
+          MANUS_API_KEY: ${{ secrets.MANUS_API_KEY }}
+          # Search provider keys
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+          SEARCHAPI_API_KEY: ${{ secrets.SEARCHAPI_API_KEY }}
+          PERPLEXITYAI_API_KEY: ${{ secrets.PERPLEXITYAI_API_KEY }}
+          DATAFORSEO_LOGIN: ${{ secrets.DATAFORSEO_LOGIN }}
+          DATAFORSEO_PASSWORD: ${{ secrets.DATAFORSEO_PASSWORD }}
+          # Guardrail keys
+          LASSO_API_KEY: ${{ secrets.LASSO_API_KEY }}
+          LASSO_USER_ID: ${{ secrets.LASSO_USER_ID }}
+          LASSO_CONVERSATION_ID: ${{ secrets.LASSO_CONVERSATION_ID }}
+          AKTO_GUARDRAIL_API_BASE: ${{ secrets.AKTO_GUARDRAIL_API_BASE }}
+          AKTO_API_KEY: ${{ secrets.AKTO_API_KEY }}
+          AKTO_ACCOUNT_ID: ${{ secrets.AKTO_ACCOUNT_ID }}
+          AKTO_VXLAN_ID: ${{ secrets.AKTO_VXLAN_ID }}
+        run: |
+          TIMEOUT_ARGS=""
+          if [ "${PER_TEST_TIMEOUT}" != "0" ]; then
+            TIMEOUT_ARGS="--timeout=${PER_TEST_TIMEOUT} --timeout_method=thread"
+          fi
+
+          if [ "${WORKERS}" = "0" ]; then
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --durations=20 \
+              ${TIMEOUT_ARGS}
+          else
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              -n "${WORKERS}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --dist=loadscope \
+              --durations=20 \
+              ${TIMEOUT_ARGS}
+          fi

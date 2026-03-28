@@ -1,0 +1,33 @@
+name: "Integration Tests: Search"
+
+# Phase 3h — replaces CircleCI `search_testing`
+# Secrets needed: BRAVE_API_KEY, SERPER_API_KEY, TAVILY_API_KEY, LINKUP_API_KEY,
+#   SEARCHAPI_API_KEY, PERPLEXITYAI_API_KEY, DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD
+on:
+  push:
+    branches: ["litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search:
+    uses: ./.github/workflows/_test-integration-base.yml
+    with:
+      test-path: tests/search_tests
+      workers: 4
+      reruns: 2
+      timeout-minutes: 20
+    secrets:
+      BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+      SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
+      SEARCHAPI_API_KEY: ${{ secrets.SEARCHAPI_API_KEY }}
+      PERPLEXITYAI_API_KEY: ${{ secrets.PERPLEXITYAI_API_KEY }}
+      DATAFORSEO_LOGIN: ${{ secrets.DATAFORSEO_LOGIN }}
+      DATAFORSEO_PASSWORD: ${{ secrets.DATAFORSEO_PASSWORD }}

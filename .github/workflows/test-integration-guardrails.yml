@@ -1,0 +1,37 @@
+name: "Integration Tests: Guardrails"
+
+# Phase 3d — replaces CircleCI `guardrails_testing`
+# Secrets needed: OPENAI_API_KEY, ANTHROPIC_API_KEY, LASSO_API_KEY, LASSO_USER_ID,
+#   LASSO_CONVERSATION_ID, AKTO_GUARDRAIL_API_BASE, AKTO_API_KEY, AKTO_ACCOUNT_ID,
+#   AKTO_VXLAN_ID
+on:
+  push:
+    branches: ["litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guardrails:
+    uses: ./.github/workflows/_test-integration-base.yml
+    with:
+      test-path: tests/guardrails_tests
+      workers: 2
+      reruns: 2
+      timeout-minutes: 20
+      per-test-timeout: 120
+      litellm-log-level: WARNING
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LASSO_API_KEY: ${{ secrets.LASSO_API_KEY }}
+      LASSO_USER_ID: ${{ secrets.LASSO_USER_ID }}
+      LASSO_CONVERSATION_ID: ${{ secrets.LASSO_CONVERSATION_ID }}
+      AKTO_GUARDRAIL_API_BASE: ${{ secrets.AKTO_GUARDRAIL_API_BASE }}
+      AKTO_API_KEY: ${{ secrets.AKTO_API_KEY }}
+      AKTO_ACCOUNT_ID: ${{ secrets.AKTO_ACCOUNT_ID }}
+      AKTO_VXLAN_ID: ${{ secrets.AKTO_VXLAN_ID }}
