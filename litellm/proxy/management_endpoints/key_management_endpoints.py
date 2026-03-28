@@ -4181,13 +4181,13 @@ async def list_keys(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(10, description="Page size", ge=1, le=100),
-    user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
+    user_id: Optional[str] = Query(None, description="Filter keys by user ID. Supports partial matching (substring, case-insensitive)."),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
-    key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    key_alias: Optional[str] = Query(None, description="Filter keys by key alias. Supports partial matching (substring, case-insensitive)."),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
@@ -4543,9 +4543,15 @@ def _build_key_filter_conditions(
     # Base conditions for user's own keys
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        user_condition["user_id"] = user_id
+        user_condition["user_id"] = {
+            "contains": user_id,
+            "mode": "insensitive",
+        }
     if key_alias and isinstance(key_alias, str):
-        user_condition["key_alias"] = key_alias
+        user_condition["key_alias"] = {
+            "contains": key_alias,
+            "mode": "insensitive",
+        }
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
