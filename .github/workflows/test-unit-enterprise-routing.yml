@@ -1,0 +1,24 @@
+name: "Unit Tests: Enterprise, Google GenAI & Routing"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/test_litellm/enterprise
+        tests/test_litellm/google_genai
+        tests/test_litellm/router_utils
+        tests/test_litellm/router_strategy
+      workers: 2
+      reruns: 2
