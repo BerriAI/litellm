@@ -1,8 +1,7 @@
 name: "Unit Tests: Security"
 
+# Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main, "litellm_*"]
 
@@ -10,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,3 +22,5 @@ jobs:
       timeout-minutes: 20
       enable-redis: false
       enable-postgres: true
+    secrets:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}

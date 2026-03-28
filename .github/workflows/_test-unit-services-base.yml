@@ -44,6 +44,8 @@ on:
         required: false
       REDIS_PASSWORD:
         required: false
+      DATABASE_URL:
+        required: false
 
 permissions:
   contents: read
@@ -53,9 +55,15 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    # Environment is derived from enable-redis, not caller-controllable.
+    # Environment is derived from the enable-* flags, not caller-controllable.
     # This prevents callers from passing arbitrary environment names to bypass secret scoping.
-    environment: ${{ inputs.enable-redis && 'integration-redis' || '' }}
+    environment: >-
+      ${{
+        (inputs.enable-redis && inputs.enable-postgres) && 'integration-redis-postgres' ||
+        inputs.enable-redis && 'integration-redis' ||
+        inputs.enable-postgres && 'integration-postgres' ||
+        ''
+      }}
 
     services:
       postgres:
@@ -117,7 +125,7 @@ jobs:
       - name: Run Prisma migrations
         if: ${{ inputs.enable-postgres }}
         env:
-          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           poetry run prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
 
@@ -127,7 +135,7 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
-          DATABASE_URL: ${{ inputs.enable-postgres && 'postgresql://postgres:postgres@localhost:5432/litellm_test' || '' }}
+          DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
           REDIS_HOST: ${{ inputs.enable-redis && secrets.REDIS_HOST || '' }}
           REDIS_PORT: ${{ inputs.enable-redis && secrets.REDIS_PORT || '' }}
           REDIS_PASSWORD: ${{ inputs.enable-redis && secrets.REDIS_PASSWORD || '' }}
