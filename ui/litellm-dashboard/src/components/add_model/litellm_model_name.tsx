@@ -77,22 +77,25 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const customName = e.target.value;
 
-    // Immediately update the model mappings
-    const currentMappings = form.getFieldValue("model_mappings") || [];
-    const updatedMappings = currentMappings.map((mapping: any) => {
-      if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
-        if (selectedProvider === Providers.Azure) {
-          return {
-            public_name: customName,
-            litellm_model: `azure/${customName}`,
-          };
-        }
+    // Rebuild mappings from the current model selections (which preserve "custom" as a
+    // sentinel), substituting "custom" with the typed value.  The previous approach
+    // searched model_mappings for public_name === "custom", but that sentinel is
+    // overwritten on the very first keystroke, causing every subsequent keystroke to
+    // silently no-op and leaving the public model name frozen at the first character.
+    const currentModels = form.getFieldValue("model") || [];
+    const modelArray: string[] = Array.isArray(currentModels) ? currentModels : [currentModels];
+
+    const updatedMappings = modelArray.map((model: string) => {
+      if (model === "custom") {
         return {
           public_name: customName,
-          litellm_model: customName,
+          litellm_model: selectedProvider === Providers.Azure ? `azure/${customName}` : customName,
         };
       }
-      return mapping;
+      return {
+        public_name: model,
+        litellm_model: selectedProvider === Providers.Azure ? `azure/${model}` : model,
+      };
     });
 
     form.setFieldsValue({ model_mappings: updatedMappings });
