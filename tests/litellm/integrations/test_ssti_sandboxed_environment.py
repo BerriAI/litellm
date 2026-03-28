@@ -152,9 +152,7 @@ class TestGitLabSandboxedEnvironment:
             GitLabTemplateManager,
         )
 
-        with patch(
-            "litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient"
-        ):
+        with patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient"):
             self.manager = GitLabTemplateManager(
                 gitlab_config={
                     "project": "test/repo",
