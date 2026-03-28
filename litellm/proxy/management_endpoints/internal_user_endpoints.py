@@ -6,6 +6,7 @@ These are members of a Team on LiteLLM
 
 /user/new
 /user/update
+/user/bulk_update
 /user/delete
 /user/info
 /user/list

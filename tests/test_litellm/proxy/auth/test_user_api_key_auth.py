@@ -567,6 +567,10 @@ class TestJWTOAuth2Coexistence:
         assert JWTHandler.is_jwt("Bearer token") is False
         assert JWTHandler.is_jwt("two.parts") is False
 
+    def test_is_jwt_returns_false_for_none(self):
+        """None token (missing Authorization header) should not be treated as JWT."""
+        assert JWTHandler.is_jwt(None) is False
+
     @pytest.mark.asyncio
     async def test_both_enabled_opaque_token_uses_oauth2(self):
         """
