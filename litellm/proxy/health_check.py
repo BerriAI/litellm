@@ -325,7 +325,7 @@ def _update_litellm_params_for_health_check(
                 filtered_parts.append(part)
 
         model = "/".join(filtered_parts)
-        litellm_params["model"] = model
+        litellm_params["model"] = "bedrock/" + model
 
     return litellm_params
 
