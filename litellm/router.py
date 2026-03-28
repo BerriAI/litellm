@@ -7799,9 +7799,22 @@ class Router:
                 if supported_openai_params is None:
                     supported_openai_params = []
 
-                # Get mode from database model_info if available, otherwise default to "chat"
+                # Get mode from database model_info if available, otherwise look
+                # up from the litellm model map (e.g. azure/text-embedding-3-small
+                # is an embedding model, not a chat model).
                 db_model_info = model.get("model_info", {})
-                mode = db_model_info.get("mode", "chat")
+                mode = db_model_info.get("mode", None)
+
+                if mode is None:
+                    # Try the litellm model map with the resolved provider
+                    try:
+                        _map_info = litellm.get_model_info(
+                            model=litellm_model,
+                            custom_llm_provider=llm_provider if llm_provider else None,
+                        )
+                        mode = _map_info.get("mode", "chat") if _map_info else "chat"
+                    except Exception:
+                        mode = "chat"
 
                 model_info = ModelMapInfo(
                     key=model_group,
