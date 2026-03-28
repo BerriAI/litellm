@@ -3571,6 +3571,23 @@ class ProxyConfig:
                 )
 
                 CyberArkSecretManager()
+            elif (
+                key_management_system
+                == KeyManagementSystem.DOCKER_SECRET_MANAGER.value
+            ):
+                from litellm.secret_managers.docker_secret_manager import (
+                    DockerSecretsManager,
+                )
+
+                _docker_kwargs = {}
+                if (
+                    litellm._key_management_settings is not None
+                    and litellm._key_management_settings.secrets_dir is not None
+                ):
+                    _docker_kwargs["secrets_dir"] = (
+                        litellm._key_management_settings.secrets_dir
+                    )
+                DockerSecretsManager(**_docker_kwargs)
             elif key_management_system == KeyManagementSystem.CUSTOM.value:
                 ### LOAD CUSTOM SECRET MANAGER ###
                 from litellm.secret_managers.custom_secret_manager_loader import (
