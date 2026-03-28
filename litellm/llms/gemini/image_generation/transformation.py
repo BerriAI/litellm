@@ -189,7 +189,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 for k, v in extra_body.items():
                     if k in {"cache", "tags"}:
                         continue
-                    if k in request_body and isinstance(request_body[k], dict) and isinstance(v, dict):
+                    if (
+                        k in request_body
+                        and isinstance(request_body[k], dict)
+                        and isinstance(v, dict)
+                    ):
                         request_body[k].update(v)
                     else:
                         request_body[k] = v
