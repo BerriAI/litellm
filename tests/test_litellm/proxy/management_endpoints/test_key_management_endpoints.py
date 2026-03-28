@@ -6588,9 +6588,9 @@ async def test_build_key_filter_member_team_service_accounts():
     # Should have 2 conditions: user's own keys + member team service accounts
     assert len(or_conditions) == 2
 
-    # First: user's own keys
+    # First: user's own keys (substring match)
     user_cond = or_conditions[0]
-    assert user_cond["user_id"] == user_id
+    assert user_cond["user_id"] == {"contains": user_id, "mode": "insensitive"}
 
     # Second: service accounts for member teams (user_id=None AND team_id in member teams)
     service_account_cond = or_conditions[1]
