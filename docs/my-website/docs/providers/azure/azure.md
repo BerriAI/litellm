@@ -686,119 +686,134 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 
-### Azure AD Token Refresh - `DefaultAzureCredential`
+### Authentication with Microsoft Entra ID (Azure AD)
 
-Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests. `DefaultAzureCredential` automatically discovers and uses available Azure credentials from multiple sources.
+**Prerequisites**
+
+```bash
+pip install azure-identity
+```
+
+:::info Automatic Entra ID Authentication
+
+LiteLLM uses `azure-identity` to handle authentication. When no `api_key` is provided, LiteLLM automatically uses [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential) - just like how Vertex AI and Bedrock use their native SDK credentials.
+
+All credential types supported by DefaultAzureCredential work automatically:
+- Managed Identity (AKS, Azure VMs, App Service)
+- Azure CLI (`az login`)
+- Environment variables (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`)
+- Visual Studio Code, Azure PowerShell, and more
+
+:::
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
-**Option 1: Explicit DefaultAzureCredential (Recommended)**
 ```python
 from litellm import completion
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-# DefaultAzureCredential automatically discovers credentials from:
-# - Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
-# - Managed Identity (AKS, Azure VMs, etc.)
-# - Azure CLI credentials
-# - And other Azure identity sources
-token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-
+# No api_key needed - uses DefaultAzureCredential automatically
 response = completion(
-    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
-    api_base = "",                                      # azure api base
-    api_version = "",                                   # azure api version
-    azure_ad_token_provider=token_provider,
-    messages = [{"role": "user", "content": "good morning"}],
-)
-```
-
-**Option 2: LiteLLM Auto-Fallback to DefaultAzureCredential**
-```python
-import litellm
-
-# Enable automatic fallback to DefaultAzureCredential
-litellm.enable_azure_ad_token_refresh = True
-
-response = litellm.completion(
-    model = "azure/<your deployment name>",
-    api_base = "",
-    api_version = "",
-    messages = [{"role": "user", "content": "good morning"}],
+    model="azure/my-gpt4-deployment",
+    api_base="https://my-resource.openai.azure.com",
+    messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
 </TabItem>
-<TabItem value="proxy" label="PROXY config.yaml">
-
-**Scenario 1: With Environment Variables (Traditional)**
-
-1. Add relevant env vars
-
-```bash
-export AZURE_TENANT_ID=""
-export AZURE_CLIENT_ID=""
-export AZURE_CLIENT_SECRET=""
-```
-
-2. Setup config.yaml
+<TabItem value="proxy" label="PROXY">
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4
     litellm_params:
-      model: azure/your-deployment-name
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-
-litellm_settings:
-    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+      model: azure/my-gpt4-deployment
+      api_base: https://my-resource.openai.azure.com/
+      # No api_key - uses DefaultAzureCredential automatically
 ```
-
-**Scenario 2: Managed Identity (AKS, Azure VMs) - No Hard-coded Credentials Required**
-
-Perfect for AKS clusters, Azure VMs, or other managed environments where Azure automatically injects credentials.
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/your-deployment-name
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-
-litellm_settings:
-    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
-```
-
-**Scenario 3: Azure CLI Authentication**
-
-If you're authenticated via `az login`, no additional configuration needed:
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/your-deployment-name
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-
-litellm_settings:
-    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
-```
-
-3. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-**How it works**: 
-- LiteLLM first tries Service Principal authentication (if environment variables are available)
-- If that fails, it automatically falls back to `DefaultAzureCredential`
-- `DefaultAzureCredential` will use Managed Identity, Azure CLI credentials, or other available Azure identity sources
-- This eliminates the need for hard-coded credentials in managed environments like AKS
 
 </TabItem>
 </Tabs>
+
+#### Configuring DefaultAzureCredential
+
+You can customize `DefaultAzureCredential` behavior using the `azure_default_credential_options` parameter:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+# User-assigned managed identity
+response = completion(
+    model="azure/my-gpt4-deployment",
+    api_base="https://my-resource.openai.azure.com",
+    azure_default_credential_options={
+        "managed_identity_client_id": "your-user-assigned-mi-client-id",
+    },
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+
+# Exclude certain credential types for faster startup
+response = completion(
+    model="azure/my-gpt4-deployment",
+    api_base="https://my-resource.openai.azure.com",
+    azure_default_credential_options={
+        "exclude_cli_credential": True,
+        "exclude_powershell_credential": True,
+        "exclude_visual_studio_code_credential": True,
+    },
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/my-gpt4-deployment
+      api_base: https://my-resource.openai.azure.com/
+      # User-assigned managed identity
+      azure_default_credential_options:
+        managed_identity_client_id: your-user-assigned-mi-client-id
+
+  - model_name: gpt-4-fast
+    litellm_params:
+      model: azure/my-gpt4-deployment
+      api_base: https://my-resource.openai.azure.com/
+      # Exclude CLI/PowerShell/VS Code for faster startup in production
+      azure_default_credential_options:
+        exclude_cli_credential: true
+        exclude_powershell_credential: true
+        exclude_visual_studio_code_credential: true
+```
+
+</TabItem>
+</Tabs>
+
+**Supported Options:**
+
+| Option | Description |
+|--------|-------------|
+| `managed_identity_client_id` | Client ID for user-assigned managed identity |
+| `workload_identity_client_id` | Client ID for workload identity |
+| `workload_identity_tenant_id` | Tenant ID for workload identity |
+| `exclude_environment_credential` | Skip environment credential |
+| `exclude_workload_identity_credential` | Skip workload identity |
+| `exclude_managed_identity_credential` | Skip managed identity |
+| `exclude_cli_credential` | Skip Azure CLI |
+| `exclude_powershell_credential` | Skip PowerShell |
+| `exclude_visual_studio_code_credential` | Skip VS Code |
+| `exclude_developer_cli_credential` | Skip Developer CLI |
+| `exclude_shared_token_cache_credential` | Skip shared cache |
+| `exclude_interactive_browser_credential` | Skip browser |
+| `process_timeout` | Timeout in seconds for developer credentials |
+
+See [DefaultAzureCredential documentation](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential) for all options.
 
 
 ## **Azure Batches API**
