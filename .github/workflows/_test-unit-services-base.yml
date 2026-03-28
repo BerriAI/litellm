@@ -61,10 +61,11 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     # Environment is derived from the enable-* flags, not caller-controllable.
     # This prevents callers from passing arbitrary environment names to bypass secret scoping.
+    # Note: Postgres service container always starts (GHA limitation), so any Redis job
+    # also needs Postgres secrets → uses integration-redis-postgres, not integration-redis.
     environment: >-
       ${{
-        (inputs.enable-redis && inputs.enable-postgres) && 'integration-redis-postgres' ||
-        inputs.enable-redis && 'integration-redis' ||
+        inputs.enable-redis && 'integration-redis-postgres' ||
         inputs.enable-postgres && 'integration-postgres' ||
         ''
       }}
