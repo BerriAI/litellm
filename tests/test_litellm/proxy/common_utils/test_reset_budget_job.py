@@ -269,23 +269,20 @@ def test_reset_budget_for_enduser_invalidates_cache():
     mock_cache.async_delete_cache = AsyncMock()
 
     async def _run():
-        with patch(
-            "litellm.proxy.common_utils.reset_budget_job.user_api_key_cache",
-            mock_cache,
-            create=True,
+        # Patch sys.modules so the lazy import inside _reset_budget_for_enduser
+        # (`from litellm.proxy.proxy_server import user_api_key_cache`)
+        # picks up our mock cache.
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": mock_cache}
+                )()
+            },
         ):
-            # Patch the import inside the function
-            with patch.dict(
-                "sys.modules",
-                {
-                    "litellm.proxy.proxy_server": type(
-                        "module", (), {"user_api_key_cache": mock_cache}
-                    )()
-                },
-            ):
-                result = await ResetBudgetJob._reset_budget_for_enduser(
-                    enduser=test_enduser
-                )
+            result = await ResetBudgetJob._reset_budget_for_enduser(
+                enduser=test_enduser
+            )
 
         assert result is not None
         assert result.spend == 0.0
