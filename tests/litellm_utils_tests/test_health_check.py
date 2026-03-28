@@ -83,7 +83,9 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
-@pytest.mark.skip(reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)")
+@pytest.mark.skip(
+    reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)"
+)
 @pytest.mark.asyncio
 async def test_azure_img_gen_health_check():
     """
@@ -345,7 +347,9 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+    assert (
+        updated_params["model"] == "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+    )
 
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
@@ -354,7 +358,10 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert (
+        updated_params["model"]
+        == "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    )
 
     # Test with Bedrock model without region routing - should preserve bedrock/ prefix
     litellm_params = {
@@ -362,7 +369,9 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert (
+        updated_params["model"] == "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    )
 
     # Test that non-Bedrock models are not affected by Bedrock-specific logic
     litellm_params = {
@@ -383,7 +392,8 @@ def test_update_litellm_params_for_health_check():
             model_info, litellm_params
         )
         assert (
-            updated_params["model"] == f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0"
+            updated_params["model"]
+            == f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0"
         ), f"Failed to preserve CRIS prefix: {prefix}"
 
     # Test regional + CRIS combination - region should be stripped, CRIS preserved
@@ -392,7 +402,9 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0"
+    assert (
+        updated_params["model"] == "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0"
+    )
 
     # Test GovCloud regions
     litellm_params = {
@@ -470,7 +482,8 @@ def test_update_litellm_params_for_health_check():
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
-        updated_params["model"] == "bedrock/converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
+        updated_params["model"]
+        == "bedrock/converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
     )
 
 
@@ -500,7 +513,9 @@ async def test_perform_health_check_filters_by_model_id():
 
     async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
-        return [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}], []
+        return [
+            {"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}
+        ], []
 
     with patch(
         "litellm.proxy.health_check._perform_health_check",
@@ -657,7 +672,8 @@ async def test_health_check_creates_only_bounded_initial_tasks():
         return real_create_task(coro)
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check), patch(
-        "litellm.proxy.health_check.asyncio.create_task", side_effect=tracked_create_task
+        "litellm.proxy.health_check.asyncio.create_task",
+        side_effect=tracked_create_task,
     ):
         perform_task = real_create_task(
             _perform_health_check(model_list, max_concurrency=2)
