@@ -159,7 +159,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         # 2. Regex validation: validate_custom_code() blocks dangerous patterns
         # 3. AST validation: _validate_ast() blocks dangerous constructs
         # 4. Empty __builtins__: Prevents access to dangerous built-in functions
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.info(
             "Executing custom guardrail code in restricted sandbox "
             f"(guardrail='{self.guardrail_name}'). "
             "This is an admin-only operation."
