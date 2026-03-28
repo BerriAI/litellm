@@ -1,0 +1,20 @@
+name: "Unit Tests: Responses, Caching & Types"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/responses tests/test_litellm/caching tests/test_litellm/types"
+      workers: 2
+      reruns: 2

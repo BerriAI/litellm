@@ -1,0 +1,28 @@
+name: "Unit Tests: Proxy Infrastructure"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/test_litellm/proxy/db
+        tests/test_litellm/proxy/middleware
+        tests/test_litellm/proxy/spend_tracking
+        tests/test_litellm/proxy/pass_through_endpoints
+        tests/test_litellm/proxy/_experimental
+        tests/test_litellm/proxy/experimental
+        tests/test_litellm/proxy/common_utils
+        tests/test_litellm/proxy/test_*.py
+      workers: 2
+      reruns: 2
