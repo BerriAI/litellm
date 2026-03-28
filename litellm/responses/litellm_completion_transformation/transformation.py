@@ -980,9 +980,13 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            raw_role = input_item.get("role") or "user"
+            # Responses API uses "developer" as an alias for "system".
+            # Non-OpenAI providers only accept "system", so translate it here.
+            role = "system" if raw_role == "developer" else raw_role
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=role,
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
