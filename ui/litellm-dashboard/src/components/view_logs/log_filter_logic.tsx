@@ -174,7 +174,7 @@ export function useLogFilterLogic({
         data: [],
         total: 0,
         page: 1,
-        page_size: 50,
+        page_size: pageSize,
         total_pages: 0,
       };
     }
@@ -242,7 +242,7 @@ export function useLogFilterLogic({
         data: [],
         total: 0,
         page: 1,
-        page_size: 50,
+        page_size: pageSize,
         total_pages: 0,
       };
     }
@@ -294,6 +294,9 @@ export function useLogFilterLogic({
 
     // Cancel any in-flight debounced search
     debouncedSearch.cancel();
+
+    // Reset to first page so the unfiltered view starts at page 1
+    setCurrentPage(1);
   };
 
   return {
