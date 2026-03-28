@@ -1,0 +1,151 @@
+name: _Unit Test Services Base (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      test-path:
+        description: "Pytest path(s) to run"
+        required: true
+        type: string
+      workers:
+        description: "Number of pytest-xdist workers (0 = no parallelism)"
+        required: false
+        type: number
+        default: 2
+      reruns:
+        description: "Number of reruns for flaky tests"
+        required: false
+        type: number
+        default: 2
+      timeout-minutes:
+        description: "Job timeout in minutes"
+        required: false
+        type: number
+        default: 20
+      max-failures:
+        description: "Stop after this many failures"
+        required: false
+        type: number
+        default: 10
+      enable-redis:
+        description: "Pass Redis Cloud credentials to tests via REDIS_HOST/PORT/PASSWORD env vars"
+        required: false
+        type: boolean
+        default: false
+      enable-postgres:
+        description: "Start a local Postgres service container and run Prisma migrations"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      REDIS_HOST:
+        required: false
+      REDIS_PORT:
+        required: false
+      REDIS_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run tests
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Environment is derived from enable-redis, not caller-controllable.
+    # This prevents callers from passing arbitrary environment names to bypass secret scoping.
+    environment: ${{ inputs.enable-redis && 'integration-redis' || '' }}
+
+    services:
+      postgres:
+        image: postgres@sha256:705a5d5b5836f3fcba0d02c4d281e6a7dd9ed2dd4078640f08a1e1e9896e097d # postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install 'poetry==2.3.2'
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-services-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-services-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install google-genai==1.22.0 \
+            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
+
+      - name: Setup litellm-enterprise
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run Prisma migrations
+        if: ${{ inputs.enable-postgres }}
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+        run: |
+          poetry run prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+
+      - name: Run tests
+        env:
+          TEST_PATH: ${{ inputs.test-path }}
+          MAX_FAILURES: ${{ inputs.max-failures }}
+          WORKERS: ${{ inputs.workers }}
+          RERUNS: ${{ inputs.reruns }}
+          DATABASE_URL: ${{ inputs.enable-postgres && 'postgresql://postgres:postgres@localhost:5432/litellm_test' || '' }}
+          REDIS_HOST: ${{ inputs.enable-redis && secrets.REDIS_HOST || '' }}
+          REDIS_PORT: ${{ inputs.enable-redis && secrets.REDIS_PORT || '' }}
+          REDIS_PASSWORD: ${{ inputs.enable-redis && secrets.REDIS_PASSWORD || '' }}
+        run: |
+          if [ "${WORKERS}" = "0" ]; then
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --durations=20
+          else
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              -n "${WORKERS}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --dist=loadscope \
+              --durations=20
+          fi

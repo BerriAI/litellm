@@ -1,0 +1,42 @@
+name: "Unit Tests: Proxy DB Operations"
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy-db:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Key generation tests must NOT run in parallel (event loop conflicts with logging worker)
+          - test-group: key-generation
+            test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
+            workers: 0
+            timeout: 30
+          - test-group: auth-checks
+            test-path: "tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py"
+            workers: 8
+            timeout: 20
+          - test-group: remaining
+            test-path: "tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py"
+            workers: 8
+            timeout: 20
+    uses: ./.github/workflows/_test-unit-services-base.yml
+    with:
+      test-path: ${{ matrix.test-path }}
+      workers: ${{ matrix.workers }}
+      reruns: 2
+      timeout-minutes: ${{ matrix.timeout }}
+      enable-redis: false
+      enable-postgres: true
