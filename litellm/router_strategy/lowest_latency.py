@@ -1,5 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+import asyncio
 import random
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -34,6 +35,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
+        self._async_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_async_lock(self, key: str) -> asyncio.Lock:
+        """Return a per-key asyncio.Lock, creating it on first access."""
+        if key not in self._async_locks:
+            self._async_locks[key] = asyncio.Lock()
+        return self._async_locks[key]
 
     def log_success_event(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
@@ -228,29 +236,30 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     }
                     """
                     latency_key = f"{model_group}_map"
-                    request_count_dict = (
-                        await self.router_cache.async_get_cache(key=latency_key) or {}
-                    )
+                    async with self._get_async_lock(latency_key):
+                        request_count_dict = (
+                            await self.router_cache.async_get_cache(key=latency_key) or {}
+                        )
 
-                    if id not in request_count_dict:
-                        request_count_dict[id] = {}
+                        if id not in request_count_dict:
+                            request_count_dict[id] = {}
 
-                    ## Latency - give 1000s penalty for failing
-                    if (
-                        len(request_count_dict[id].get("latency", []))
-                        < self.routing_args.max_latency_list_size
-                    ):
-                        request_count_dict[id].setdefault("latency", []).append(1000.0)
-                    else:
-                        request_count_dict[id]["latency"] = request_count_dict[id][
-                            "latency"
-                        ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
+                        ## Latency - give 1000s penalty for failing
+                        if (
+                            len(request_count_dict[id].get("latency", []))
+                            < self.routing_args.max_latency_list_size
+                        ):
+                            request_count_dict[id].setdefault("latency", []).append(1000.0)
+                        else:
+                            request_count_dict[id]["latency"] = request_count_dict[id][
+                                "latency"
+                            ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
 
-                    await self.router_cache.async_set_cache(
-                        key=latency_key,
-                        value=request_count_dict,
-                        ttl=self.routing_args.ttl,
-                    )  # reset map within window
+                        await self.router_cache.async_set_cache(
+                            key=latency_key,
+                            value=request_count_dict,
+                            ttl=self.routing_args.ttl,
+                        )  # reset map within window
             else:
                 # do nothing if it's not a timeout error
                 return
@@ -350,63 +359,64 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(
-                        key=latency_key,
-                        parent_otel_span=parent_otel_span,
-                        local_only=True,
+                async with self._get_async_lock(latency_key):
+                    request_count_dict = (
+                        await self.router_cache.async_get_cache(
+                            key=latency_key,
+                            parent_otel_span=parent_otel_span,
+                            local_only=True,
+                        )
+                        or {}
                     )
-                    or {}
-                )
 
-                if id not in request_count_dict:
-                    request_count_dict[id] = {}
+                    if id not in request_count_dict:
+                        request_count_dict[id] = {}
 
-                ## Latency
-                if (
-                    len(request_count_dict[id].get("latency", []))
-                    < self.routing_args.max_latency_list_size
-                ):
-                    request_count_dict[id].setdefault("latency", []).append(final_value)
-                else:
-                    request_count_dict[id]["latency"] = request_count_dict[id][
-                        "latency"
-                    ][: self.routing_args.max_latency_list_size - 1] + [final_value]
-
-                ## Time to first token
-                if time_to_first_token is not None:
+                    ## Latency
                     if (
-                        len(request_count_dict[id].get("time_to_first_token", []))
+                        len(request_count_dict[id].get("latency", []))
                         < self.routing_args.max_latency_list_size
                     ):
-                        request_count_dict[id].setdefault(
-                            "time_to_first_token", []
-                        ).append(time_to_first_token)
+                        request_count_dict[id].setdefault("latency", []).append(final_value)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            : self.routing_args.max_latency_list_size - 1
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["latency"] = request_count_dict[id][
+                            "latency"
+                        ][: self.routing_args.max_latency_list_size - 1] + [final_value]
 
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
+                    ## Time to first token
+                    if time_to_first_token is not None:
+                        if (
+                            len(request_count_dict[id].get("time_to_first_token", []))
+                            < self.routing_args.max_latency_list_size
+                        ):
+                            request_count_dict[id].setdefault(
+                                "time_to_first_token", []
+                            ).append(time_to_first_token)
+                        else:
+                            request_count_dict[id][
+                                "time_to_first_token"
+                            ] = request_count_dict[id]["time_to_first_token"][
+                                : self.routing_args.max_latency_list_size - 1
+                            ] + [
+                                time_to_first_token
+                            ]
 
-                ## TPM
-                request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
-                )
+                    if precise_minute not in request_count_dict[id]:
+                        request_count_dict[id][precise_minute] = {}
 
-                ## RPM
-                request_count_dict[id][precise_minute]["rpm"] = (
-                    request_count_dict[id][precise_minute].get("rpm", 0) + 1
-                )
+                    ## TPM
+                    request_count_dict[id][precise_minute]["tpm"] = (
+                        request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    )
 
-                await self.router_cache.async_set_cache(
-                    key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
-                )  # reset map within window
+                    ## RPM
+                    request_count_dict[id][precise_minute]["rpm"] = (
+                        request_count_dict[id][precise_minute].get("rpm", 0) + 1
+                    )
+
+                    await self.router_cache.async_set_cache(
+                        key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
+                    )  # reset map within window
 
                 ### TESTING ###
                 if self.test_flag:
