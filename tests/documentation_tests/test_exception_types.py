@@ -32,10 +32,12 @@ error_names = {
 
 
 # Parse the documentation to extract documented keys
-# repo_base = "./"
-repo_base = "../../"
+_test_dir = os.path.dirname(os.path.abspath(__file__))
+repo_base = os.path.abspath(os.path.join(_test_dir, "..", ".."))
 print(os.listdir(repo_base))
-docs_path = f"{repo_base}/docs/my-website/docs/exception_mapping.md"  # Path to the documentation
+docs_path = os.path.join(
+    repo_base, "docs", "my-website", "docs", "exception_mapping.md"
+)
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:

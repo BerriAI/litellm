@@ -7,7 +7,9 @@ import re
 from litellm.types.utils import LlmProviders
 
 # Define paths
-readme_path = "./README.md"
+_test_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.abspath(os.path.join(_test_dir, "..", ".."))
+readme_path = os.path.join(_repo_root, "README.md")
 
 # Providers that shouldn't be required in README
 # (specialized tools, observability, database providers that aren't LLM providers)

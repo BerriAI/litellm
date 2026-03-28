@@ -2,7 +2,9 @@ import os
 import re
 
 # Define the base directory for the litellm repository and documentation path
-repo_base = "./litellm"  # Change this to your actual path
+_test_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.abspath(os.path.join(_test_dir, "..", ".."))
+repo_base = os.path.join(_repo_root, "litellm")
 
 
 # Regular expressions to capture the keys used in general_settings.get() and general_settings[]
@@ -32,10 +34,9 @@ for root, dirs, files in os.walk(repo_base):
                 general_settings_keys.update(bracket_matches)
 
 # Parse the documentation to extract documented keys
-repo_base = "./"
-print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
+print(os.listdir(_repo_root))
+docs_path = os.path.join(
+    _repo_root, "docs", "my-website", "docs", "proxy", "config_settings.md"
 )
 documented_keys = set()
 try:

@@ -1,0 +1,20 @@
+name: "Unit Tests: Documentation Validation"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/documentation_tests"
+      workers: 2
+      reruns: 1
