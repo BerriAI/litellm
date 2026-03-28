@@ -337,7 +337,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
-    # Test with Bedrock model with region routing - should strip bedrock/ and region/ prefix
+    # Test with Bedrock model with region routing - should strip region/ prefix and preserve bedrock/
     # Issue #15807: Fixes health checks sending "region/model" as model ID to AWS
     model_info = {}
     litellm_params = {
@@ -345,7 +345,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    assert updated_params["model"] == "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
 
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
@@ -354,15 +354,15 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert updated_params["model"] == "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
 
-    # Test with Bedrock model without region routing - should just strip bedrock/ prefix
+    # Test with Bedrock model without region routing - should preserve bedrock/ prefix
     litellm_params = {
         "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert updated_params["model"] == "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
 
     # Test that non-Bedrock models are not affected by Bedrock-specific logic
     litellm_params = {
@@ -383,7 +383,7 @@ def test_update_litellm_params_for_health_check():
             model_info, litellm_params
         )
         assert (
-            updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0"
+            updated_params["model"] == f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0"
         ), f"Failed to preserve CRIS prefix: {prefix}"
 
     # Test regional + CRIS combination - region should be stripped, CRIS preserved
@@ -392,7 +392,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
+    assert updated_params["model"] == "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0"
 
     # Test GovCloud regions
     litellm_params = {
@@ -400,7 +400,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-instant-v1"
+    assert updated_params["model"] == "bedrock/anthropic.claude-instant-v1"
 
     # Test imported models with handler prefixes - handlers should be preserved
     litellm_params = {
@@ -410,7 +410,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+        == "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
     )
 
     litellm_params = {
@@ -420,7 +420,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
+        == "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
     )
 
     # Test route specifications - routes should be preserved
@@ -431,7 +431,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        == "bedrock/converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
     )
 
     litellm_params = {
@@ -439,7 +439,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "invoke/anthropic.claude-instant-v1"
+    assert updated_params["model"] == "bedrock/invoke/anthropic.claude-instant-v1"
 
     # Test ARN formats - should be preserved
     litellm_params = {
@@ -449,7 +449,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
+        == "bedrock/arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
     )
 
     # Test edge case: region + handler + ARN
@@ -460,7 +460,7 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+        == "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
     )
 
     # Test edge case: route + region + CRIS
@@ -470,7 +470,7 @@ def test_update_litellm_params_for_health_check():
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
-        updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
+        updated_params["model"] == "bedrock/converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
     )
 
 
