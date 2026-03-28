@@ -66,10 +66,8 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            memberships = (
-                await self.prisma_client.db.litellm_teammembership.find_many(
-                    where={"budget_id": {"in": budget_ids}}
-                )
+            memberships = await self.prisma_client.db.litellm_teammembership.find_many(
+                where={"budget_id": {"in": budget_ids}}
             )
             for m in memberships:
                 counter_key = f"spend:team_member:{m.user_id}:{m.team_id}"
@@ -574,7 +572,11 @@ class ResetBudgetJob:
             counter_key = None
             if item_type == "key" and hasattr(item, "token") and item.token is not None:
                 counter_key = f"spend:key:{item.token}"
-            elif item_type == "team" and hasattr(item, "team_id") and item.team_id is not None:
+            elif (
+                item_type == "team"
+                and hasattr(item, "team_id")
+                and item.team_id is not None
+            ):
                 counter_key = f"spend:team:{item.team_id}"
 
             if counter_key is not None:
@@ -637,6 +639,25 @@ class ResetBudgetJob:
     ) -> Optional[LiteLLM_EndUserTable]:
         try:
             enduser.spend = 0.0
+
+            # Invalidate the cached end-user object so auth checks pick up
+            # the reset spend instead of reading a stale value until TTL
+            # expires.  Uses the same cache key format as get_end_user_object
+            # in litellm/proxy/auth/auth_checks.py.
+            if enduser.user_id is not None:
+                try:
+                    from litellm.proxy.proxy_server import user_api_key_cache
+
+                    await user_api_key_cache.async_delete_cache(
+                        key="end_user_id:{}".format(enduser.user_id)
+                    )
+                except Exception as cache_err:
+                    verbose_proxy_logger.warning(
+                        "Failed to invalidate cached end-user object for %s: %s. "
+                        "Budget may be over-enforced until cache entry expires.",
+                        enduser.user_id,
+                        cache_err,
+                    )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error resetting budget for enduser: %s. Item: %s", e, enduser

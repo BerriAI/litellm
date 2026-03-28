@@ -252,6 +252,53 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     assert updated_budget.budget_reset_at > now
 
 
+def test_reset_budget_for_enduser_invalidates_cache():
+    """
+    Test that _reset_budget_for_enduser invalidates the cached end-user object
+    so auth checks pick up the reset spend instead of a stale cached value.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 45.0,
+            "user_id": "cached-enduser-1",
+        },
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_delete_cache = AsyncMock()
+
+    async def _run():
+        with patch(
+            "litellm.proxy.common_utils.reset_budget_job.user_api_key_cache",
+            mock_cache,
+            create=True,
+        ):
+            # Patch the import inside the function
+            with patch.dict(
+                "sys.modules",
+                {
+                    "litellm.proxy.proxy_server": type(
+                        "module", (), {"user_api_key_cache": mock_cache}
+                    )()
+                },
+            ):
+                result = await ResetBudgetJob._reset_budget_for_enduser(
+                    enduser=test_enduser
+                )
+
+        assert result is not None
+        assert result.spend == 0.0
+        mock_cache.async_delete_cache.assert_called_once_with(
+            key="end_user_id:cached-enduser-1"
+        )
+
+    asyncio.run(_run())
+
+
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Setup test data with timezone-aware datetime
     now = datetime.now(timezone.utc)
@@ -434,9 +481,7 @@ def test_reset_budget_for_keys_linked_to_budgets_empty(
     """
     # Run with empty list
     asyncio.run(
-        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
-            budgets_to_reset=[]
-        )
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=[])
     )
 
     # Verify no update_many calls were made
