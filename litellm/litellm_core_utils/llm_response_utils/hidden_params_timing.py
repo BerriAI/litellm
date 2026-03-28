@@ -10,7 +10,7 @@ import datetime
 from typing import Any, Optional, Union
 
 from litellm.constants import LITELLM_DETAILED_TIMING
-from litellm.types.utils import HiddenParams
+from litellm.types.llms.base import HiddenParams
 
 
 def get_response_hidden_params(response: Any) -> Union[HiddenParams, dict]:
