@@ -15,6 +15,7 @@ All /budget management endpoints
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from prisma.errors import UniqueViolationError
 
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
@@ -90,13 +91,21 @@ async def new_budget(
 
     budget_obj_json = budget_obj.model_dump(exclude_none=True)
     budget_obj_jsonified = jsonify_object(budget_obj_json)  # json dump any dictionaries
-    response = await prisma_client.db.litellm_budgettable.create(
-        data={
-            **budget_obj_jsonified,  # type: ignore
-            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        }  # type: ignore
-    )
+    try:
+        response = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **budget_obj_jsonified,  # type: ignore
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }  # type: ignore
+        )
+    except UniqueViolationError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Budget with id '{budget_obj.budget_id}' already exists."
+            },
+        )
 
     return response
 
