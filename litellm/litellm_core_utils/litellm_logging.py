@@ -1702,7 +1702,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if logging_result is None:
             return
-        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        from litellm.litellm_core_utils.llm_response_utils.hidden_params_timing import (
             get_response_hidden_params,
             hidden_params_to_plain_dict,
         )
@@ -1734,7 +1734,7 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time,
         end_time,
     ):
-        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        from litellm.litellm_core_utils.llm_response_utils.hidden_params_timing import (
             get_response_hidden_params,
             hidden_params_to_plain_dict,
         )
@@ -5322,7 +5322,7 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
-        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        from litellm.litellm_core_utils.llm_response_utils.hidden_params_timing import (
             get_response_hidden_params,
         )
 
