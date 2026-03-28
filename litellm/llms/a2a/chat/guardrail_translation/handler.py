@@ -234,52 +234,23 @@ class A2AGuardrailHandler(BaseTranslation):
         then the combined guardrailed text is written into the first chunk that had text
         and all other text parts in other chunks are cleared (in-place).
         """
-        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
-
-        # Parse each item; keep alignment with responses_so_far (None where unparseable)
-        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
-        for i, item in enumerate(responses_so_far):
-            if isinstance(item, dict):
-                obj = item
-            elif isinstance(item, str):
-                try:
-                    obj = json.loads(item.strip())
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            else:
-                continue
-            if isinstance(obj.get("result"), dict):
-                parsed[i] = obj
-
-        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+        parsed, valid_parsed = self._parse_streaming_responses_so_far(
+            responses_so_far=responses_so_far
+        )
         if not valid_parsed:
             return responses_so_far
 
-        # Collect text from each chunk in order (by original index in responses_so_far)
-        text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []  # indices into valid_parsed
-        for idx, (orig_i, obj) in enumerate(valid_parsed):
-            t = extract_text_from_a2a_response(obj)
-            if t:
-                text_parts.append(t)
-                chunk_indices_with_text.append(orig_i)
-
-        combined_text = "".join(text_parts)
+        combined_text, chunk_indices_with_text = self._collect_streaming_text(
+            valid_parsed=valid_parsed
+        )
         if not combined_text:
             return responses_so_far
 
-        if request_data is None:
-            request_data = {"responses_so_far": responses_so_far}
-        else:
-            if "responses_so_far" not in request_data:
-                request_data["responses_so_far"] = responses_so_far
-
-        if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+        request_data = self._prepare_streaming_request_data(
+            request_data=request_data,
+            responses_so_far=responses_so_far,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         inputs = GenericGuardrailAPIInputs(texts=[combined_text])
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
@@ -293,11 +264,83 @@ class A2AGuardrailHandler(BaseTranslation):
             return responses_so_far
         guardrailed_text = guardrailed_texts[0]
 
-        # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
+        self._apply_streaming_guardrailed_text(
+            valid_parsed=valid_parsed,
+            guardrailed_text=guardrailed_text,
+            chunk_indices_with_text=chunk_indices_with_text,
+        )
+
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, str) and parsed[i] is not None:
+                responses_so_far[i] = json.dumps(parsed[i]) + "\n"
+
+        return responses_so_far
+
+    def _parse_streaming_responses_so_far(
+        self, responses_so_far: List[Any]
+    ) -> Tuple[List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]]:
+        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        for i, item in enumerate(responses_so_far):
+            obj: Optional[Dict[str, Any]] = None
+            if isinstance(item, dict):
+                obj = item
+            elif isinstance(item, str):
+                try:
+                    parsed_obj = json.loads(item.strip())
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(parsed_obj, dict):
+                    obj = parsed_obj
+            if obj is not None and isinstance(obj.get("result"), dict):
+                parsed[i] = obj
+
+        valid_parsed: List[Tuple[int, Dict[str, Any]]] = [
+            (i, obj) for i, obj in enumerate(parsed) if obj is not None
+        ]
+        return parsed, valid_parsed
+
+    def _collect_streaming_text(
+        self, valid_parsed: List[Tuple[int, Dict[str, Any]]]
+    ) -> Tuple[str, List[int]]:
+        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+        text_parts: List[str] = []
+        chunk_indices_with_text: List[int] = []
+        for orig_i, obj in valid_parsed:
+            text = extract_text_from_a2a_response(obj)
+            if text:
+                text_parts.append(text)
+                chunk_indices_with_text.append(orig_i)
+        return "".join(text_parts), chunk_indices_with_text
+
+    def _prepare_streaming_request_data(
+        self,
+        request_data: Optional[dict],
+        responses_so_far: List[Any],
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+    ) -> dict:
+        if request_data is None:
+            request_data = {"responses_so_far": responses_so_far}
+        elif "responses_so_far" not in request_data:
+            request_data["responses_so_far"] = responses_so_far
+
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+        return request_data
+
+    def _apply_streaming_guardrailed_text(
+        self,
+        valid_parsed: List[Tuple[int, Dict[str, Any]]],
+        guardrailed_text: str,
+        chunk_indices_with_text: List[int],
+    ) -> None:
         first_chunk_with_text: Optional[int] = (
             chunk_indices_with_text[0] if chunk_indices_with_text else None
         )
-
         for orig_i, obj in valid_parsed:
             result = obj.get("result", {})
             if not isinstance(result, dict):
@@ -311,8 +354,8 @@ class A2AGuardrailHandler(BaseTranslation):
             )
             if not mappings:
                 continue
+
             if orig_i == first_chunk_with_text:
-                # Put full guardrailed text in first text part; clear others
                 for task_idx, (path, part_idx) in enumerate(mappings):
                     text = guardrailed_text if task_idx == 0 else ""
                     self._apply_text_to_path(
@@ -329,13 +372,6 @@ class A2AGuardrailHandler(BaseTranslation):
                         part_idx=part_idx,
                         text="",
                     )
-
-        # Write back to responses_so_far where we had NDJSON strings
-        for i, item in enumerate(responses_so_far):
-            if isinstance(item, str) and parsed[i] is not None:
-                responses_so_far[i] = json.dumps(parsed[i]) + "\n"
-
-        return responses_so_far
 
     def _extract_texts_from_result(
         self,
