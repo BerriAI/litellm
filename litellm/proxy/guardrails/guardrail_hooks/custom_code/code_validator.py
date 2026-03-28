@@ -57,6 +57,7 @@ FORBIDDEN_CALL_NAMES: Set[str] = {
     "compile",
     "open",
     "getattr",
+    "hasattr",  # Added: sibling of getattr/setattr/delattr; enables attribute probing
     "setattr",
     "delattr",
     "globals",
@@ -69,7 +70,11 @@ FORBIDDEN_CALL_NAMES: Set[str] = {
     "memoryview",
 }
 
-# Dangerous attribute names that should not be accessed in the AST
+# Dangerous attribute names that should not be accessed in the AST.
+# IMPORTANT: Only attributes that were already blocked by the regex layer
+# (FORBIDDEN_PATTERNS) are listed here. Newly-added restrictions that were
+# NOT in the regex layer would be backwards-incompatible for existing admin
+# guardrail code and are therefore omitted.
 FORBIDDEN_ATTR_NAMES: Set[str] = {
     "__builtins__",
     "__globals__",
@@ -82,21 +87,6 @@ FORBIDDEN_ATTR_NAMES: Set[str] = {
     "__getattribute__",
     "__reduce__",
     "__reduce_ex__",
-    "__loader__",
-    "__spec__",
-    "__qualname__",
-    "__module__",
-    "__init_subclass__",
-    "__set_name__",
-    "__wrapped__",
-    "__func__",
-    "__self__",
-    "__closure__",
-    # Dangerous dunder methods that can be used for sandbox escape
-    "__init__",
-    "__new__",
-    # f-string internals
-    "format_map",
 }
 
 
@@ -159,12 +149,16 @@ def _validate_ast(code: str) -> None:
     dynamic attribute access patterns).
 
     Raises CustomCodeValidationError if any dangerous construct is found.
+    Raises SyntaxError if the code cannot be parsed (re-raised so callers
+    can distinguish validation errors from parse failures).
     """
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        # Syntax errors will be caught later during compile(); not a security issue
-        return
+        # Re-raise so the caller (compile step) can handle it distinctly.
+        # Silently ignoring would allow intentionally malformed code to bypass
+        # the entire AST security layer.
+        raise
 
     visitor = _ASTSecurityVisitor()
     visitor.visit(tree)
@@ -189,6 +183,7 @@ def validate_custom_code(code: str) -> None:
     Layer 2: AST-based analysis (catches evasion attempts)
 
     Raises CustomCodeValidationError if any forbidden pattern is found.
+    Raises SyntaxError if the code cannot be parsed (propagated from AST layer).
     """
     if not code:
         return
