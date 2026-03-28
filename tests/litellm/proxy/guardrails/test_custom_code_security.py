@@ -142,6 +142,12 @@ class TestASTValidation:
         with pytest.raises(CustomCodeValidationError, match="getattr"):
             _validate_ast(code)
 
+    def test_ast_blocks_hasattr_call(self):
+        """hasattr() is blocked to prevent attribute probing for sandbox escape."""
+        code = "def f():\n    hasattr(x, '__subclasses__')"
+        with pytest.raises(CustomCodeValidationError, match="hasattr"):
+            _validate_ast(code)
+
     def test_ast_blocks_dunder_class_attr(self):
         code = "def f():\n    x = ''.__class__"
         with pytest.raises(CustomCodeValidationError, match="__class__"):
@@ -194,38 +200,49 @@ class TestASTValidation:
         _validate_ast(code)
 
     def test_ast_allows_super_call(self):
-        """super() is a common Python construct and should not be blocked."""
+        """super() itself is not blocked; __init__/__new__ attribute access is not blocked either."""
         code = "def f():\n    super().__init__()"
-        # __init__ is blocked as attribute, but super() itself is allowed
-        # This will raise for __init__ but not for super
-        with pytest.raises(CustomCodeValidationError, match="__init__"):
-            _validate_ast(code)
+        # super() call is allowed; __init__ is also allowed (not in FORBIDDEN_ATTR_NAMES)
+        # because blocking it would break existing class-based guardrail code
+        _validate_ast(code)
 
-    def test_ast_blocks_dunder_init_attr(self):
-        """__init__ attribute access can be used for sandbox escape."""
-        code = "def f():\n    x.__init__"
-        with pytest.raises(CustomCodeValidationError, match="__init__"):
-            _validate_ast(code)
+    def test_ast_allows_class_based_guardrail(self):
+        """Class-based guardrails with __init__ and super() should be allowed."""
+        code = """
+class MyGuardrail:
+    def __init__(self):
+        super().__init__()
+        self.blocklist = ["secret", "ssn"]
 
-    def test_ast_blocks_dunder_new_attr(self):
-        """__new__ attribute access can be used for sandbox escape."""
-        code = "def f():\n    x.__new__(x)"
-        with pytest.raises(CustomCodeValidationError, match="__new__"):
-            _validate_ast(code)
+def apply_guardrail(inputs, request_data, input_type):
+    g = MyGuardrail()
+    for text in inputs["texts"]:
+        for word in g.blocklist:
+            if word in text:
+                return block("Sensitive content")
+    return allow()
+"""
+        # Should not raise — class-based guardrails are a valid use case
+        _validate_ast(code)
+
+    def test_ast_allows_qualname_usage(self):
+        """__qualname__ was not in the original regex layer; blocking it breaks existing code."""
+        code = "def f():\n    name = f.__qualname__"
+        # Should not raise — __qualname__ is not in FORBIDDEN_ATTR_NAMES
+        # (it was not blocked before this PR and has no sandbox-escape path)
+        _validate_ast(code)
 
     def test_ast_reports_all_violations(self):
         """AST validation should report all violations, not just the first."""
         code = "import os\nimport sys\ndef f():\n    eval('x')\n    exec('y')"
-        with pytest.raises(CustomCodeValidationError, match="Security violation\\(s\\)"):
+        with pytest.raises(
+            CustomCodeValidationError, match="Security violation\\(s\\)"
+        ) as exc_info:
             _validate_ast(code)
-        # Verify the message contains multiple violations
-        try:
-            _validate_ast(code)
-        except CustomCodeValidationError as e:
-            msg = str(e)
-            assert "import" in msg
-            assert "eval" in msg
-            assert "exec" in msg
+        msg = str(exc_info.value)
+        assert "import" in msg
+        assert "eval" in msg
+        assert "exec" in msg
 
     def test_ast_allows_safe_code(self):
         """Valid guardrail code should pass AST validation."""
@@ -264,11 +281,13 @@ def apply_guardrail(inputs, request_data, input_type):
         # Should not raise
         _validate_ast(code)
 
-    def test_ast_handles_syntax_error_gracefully(self):
-        """Syntax errors should not cause AST validation to fail -- they'll be caught at compile time."""
+    def test_ast_raises_on_syntax_error(self):
+        """Syntax errors cause _validate_ast to raise SyntaxError, not silently pass."""
         code = "def f(\n"
-        # Should not raise (syntax errors are caught later during compile())
-        _validate_ast(code)
+        # SyntaxError is re-raised so callers know the code is malformed.
+        # This prevents intentionally malformed code from bypassing the AST layer.
+        with pytest.raises(SyntaxError):
+            _validate_ast(code)
 
 
 class TestIntegrationRegexAndAST:
