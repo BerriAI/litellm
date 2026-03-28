@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  proxy-auth:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: "tests/test_litellm/proxy/auth tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine tests/test_litellm/proxy/client"

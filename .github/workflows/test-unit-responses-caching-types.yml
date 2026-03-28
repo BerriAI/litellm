@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  responses-caching-types:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: "tests/test_litellm/responses tests/test_litellm/caching tests/test_litellm/types"
