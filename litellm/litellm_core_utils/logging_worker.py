@@ -71,6 +71,12 @@ class LoggingWorker:
             verbose_logger.debug(
                 "LoggingWorker: Event loop changed, reinitializing queue and worker"
             )
+            # Cancel orphaned tasks bound to the old (likely closed) event
+            # loop and suppress "Task was destroyed but it is pending!"
+            # warnings.  We cannot await these tasks because their event loop
+            # is no longer running, so we mark them to skip the __del__
+            # warning instead.
+            self._discard_orphaned_tasks()
             # Clear old state - these are bound to the old loop
             self._queue = None
             self._sem = None
@@ -411,6 +417,29 @@ class LoggingWorker:
             except asyncio.QueueEmpty:
                 break
 
+    def _discard_orphaned_tasks(self) -> None:
+        """Cancel orphaned tasks and suppress their destroy warnings.
+
+        When the event loop changes or the process is exiting, pending tasks
+        bound to the old (likely closed) loop cannot be properly awaited.
+        We attempt to cancel them and, regardless of whether cancel()
+        succeeds (it may raise ``RuntimeError`` if the loop is already
+        closed), suppress the ``"Task was destroyed but it is pending!"``
+        warning by setting ``_log_destroy_pending = False``.
+        """
+        all_tasks = list(self._running_tasks)
+        if self._worker_task is not None:
+            all_tasks.append(self._worker_task)
+        for t in all_tasks:
+            if not t.done():
+                try:
+                    t.cancel()
+                except RuntimeError:
+                    pass  # Event loop is already closed
+                t._log_destroy_pending = False
+        self._worker_task = None
+        self._running_tasks.clear()
+
     def _safe_log(self, level: str, message: str) -> None:
         """
         Safely log a message during shutdown, suppressing errors if logging is closed.
@@ -466,6 +495,11 @@ class LoggingWorker:
         Note: All logging in this method is wrapped to handle cases where
         logging handlers are closed during shutdown.
         """
+        # Cancel the old worker task — its event loop is already closed.
+        # Suppress "Task was destroyed but it is pending!" warnings since
+        # the closed loop cannot process cancellation.
+        self._discard_orphaned_tasks()
+
         if self._queue is None:
             self._safe_log("debug", "[LoggingWorker] atexit: No queue initialized")
             return

@@ -360,3 +360,71 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    @pytest.mark.asyncio
+    async def test_event_loop_change_cancels_orphaned_tasks(self):
+        """Test that switching event loops cancels old tasks and suppresses warnings.
+
+        When the event loop changes (e.g. between asyncio.run() calls or in
+        test suites), _ensure_queue() must cancel the old worker task and set
+        _log_destroy_pending = False so that garbage-collecting the orphaned
+        task does not emit "Task was destroyed but it is pending!" warnings.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker — creates _worker_task on the current loop
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        old_task = worker._worker_task
+        assert old_task is not None and not old_task.done()
+
+        # Simulate an event loop change: bind worker to a different loop
+        # so that the next _ensure_queue() call detects the mismatch.
+        worker._bound_loop = asyncio.new_event_loop()
+
+        # Re-start triggers _ensure_queue() which should cancel the old task
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        # The old task should have been cancelled and marked to suppress
+        # the "Task was destroyed but it is pending!" warning.
+        assert old_task.cancelled() or old_task.done()
+        assert old_task._log_destroy_pending is False
+
+        # The worker should be running on the current loop now
+        assert worker._worker_task is not None
+        assert worker._worker_task is not old_task
+
+        await worker.stop()
+
+    def test_flush_on_exit_cancels_worker_task(self):
+        """Test that _flush_on_exit cancels the worker task to avoid warnings.
+
+        When the atexit handler fires, the original event loop is closed.
+        _flush_on_exit must cancel the orphaned worker task and suppress
+        its destroy warning before creating a new loop to drain the queue.
+        """
+        loop = asyncio.new_event_loop()
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker on a loop, then close it (simulating process exit)
+        loop.run_until_complete(self._start_worker(worker))
+        old_task = worker._worker_task
+        assert old_task is not None
+
+        # Close the loop — this is what happens before atexit fires
+        loop.close()
+
+        # Now _flush_on_exit should clean up the orphaned task without
+        # raising RuntimeError from the closed event loop.
+        worker._flush_on_exit()
+
+        assert old_task._log_destroy_pending is False
+        assert worker._worker_task is None
+        assert len(worker._running_tasks) == 0
+
+    @staticmethod
+    async def _start_worker(worker: LoggingWorker):
+        worker.start()
+        await asyncio.sleep(0.05)
