@@ -6588,7 +6588,7 @@ async def test_build_key_filter_member_team_service_accounts():
     # Should have 2 conditions: user's own keys + member team service accounts
     assert len(or_conditions) == 2
 
-    # First: user's own keys
+    # First: user's own keys (exact match — non-admin callers use exact matching)
     user_cond = or_conditions[0]
     assert user_cond["user_id"] == user_id
 
@@ -6986,6 +6986,98 @@ async def test_build_key_filter_team_id_scoped():
     assert {"team_id": "team-A"} in outer_and, (
         f"Expected {{'team_id': 'team-A'}} as a direct AND condition, got: {outer_and}"
     )
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_admin_substring_matching():
+    """
+    Admin callers get substring (contains + insensitive) matching for user_id
+    and key_alias when use_substring_matching=True.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "alice"
+    key_alias = "prod"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=key_alias,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        use_substring_matching=True,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    assert where["user_id"] == {"contains": user_id, "mode": "insensitive"}
+    assert where["key_alias"] == {"contains": key_alias, "mode": "insensitive"}
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_non_admin_exact_matching():
+    """
+    Non-admin callers get exact matching for user_id and key_alias when
+    use_substring_matching=False (the default).  This prevents a user whose
+    ID is a substring of another user's ID from seeing that user's keys.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "alice@example.com"
+    key_alias = "my-key"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=key_alias,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        use_substring_matching=False,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    # Exact match — no contains/insensitive wrapping
+    assert where["user_id"] == user_id
+    assert where["key_alias"] == key_alias
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_default_is_exact_matching():
+    """
+    The default for use_substring_matching is False, ensuring backward
+    compatibility — callers that don't pass the flag get exact matching.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    assert where["user_id"] == user_id
 
 
 @pytest.mark.asyncio
