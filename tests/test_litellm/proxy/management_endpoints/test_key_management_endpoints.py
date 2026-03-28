@@ -1265,6 +1265,31 @@ async def test_prepare_key_update_data_duration_none_never_expires():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_empty_guardrails_skips_premium_check():
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={},
+    )
+    update_request = UpdateKeyRequest(key="test-token", guardrails=[])
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+    ) as mock_premium_check:
+        result = await prepare_key_update_data(
+            data=update_request, existing_key_row=existing_key
+        )
+
+    mock_premium_check.assert_not_called()
+    assert result["metadata"]["guardrails"] == []
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException

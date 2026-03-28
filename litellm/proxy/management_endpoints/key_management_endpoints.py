@@ -1487,7 +1487,7 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                if v != [] and v != {}:
+                if v is not None and v != [] and v != {}:
                     _premium_user_check(k)
                 casted_metadata[k] = v
 

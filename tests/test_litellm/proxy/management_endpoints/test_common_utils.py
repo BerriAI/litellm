@@ -180,6 +180,36 @@ class TestUpdateMetadataFieldsEmptyCollections:
         mock_premium_check.assert_not_called()
 
 
+class TestSetObjectMetadataField:
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_set_object_metadata_field_empty_guardrails_skips_premium_check(
+        self, mock_premium_check
+    ):
+        team = LiteLLM_TeamTable(team_id="team-1", members_with_roles=[])
+        _set_object_metadata_field(
+            object_data=team,
+            field_name="guardrails",
+            value=[],
+        )
+        mock_premium_check.assert_not_called()
+        assert team.metadata is not None
+        assert team.metadata["guardrails"] == []
+
+    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    def test_set_object_metadata_field_non_empty_guardrails_calls_premium_check(
+        self, mock_premium_check
+    ):
+        team = LiteLLM_TeamTable(team_id="team-1", members_with_roles=[])
+        _set_object_metadata_field(
+            object_data=team,
+            field_name="guardrails",
+            value=["gr-1"],
+        )
+        mock_premium_check.assert_called_once_with("guardrails")
+        assert team.metadata is not None
+        assert team.metadata["guardrails"] == ["gr-1"]
+
+
 class TestUserHasAdminView:
     """Tests for _user_has_admin_view function."""
 
