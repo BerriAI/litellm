@@ -3,23 +3,56 @@ import styles from './styles.module.css';
 
 /* ────────────────────── Shared small pieces ────────────────────── */
 
-function InfraChip({ color, label }: { color: string; label: string }) {
-  const dotClass =
+function InfraBox({ icon, label, color }: { icon: string; label: string; color: 'green' | 'blue' | 'orange' }) {
+  const colorClass =
     color === 'green'
-      ? styles.infraDotGreen
+      ? styles.infraBoxGreen
       : color === 'blue'
-        ? styles.infraDotBlue
-        : styles.infraDotOrange;
+        ? styles.infraBoxBlue
+        : styles.infraBoxOrange;
 
   return (
-    <span className={styles.infraChip}>
-      <span className={`${styles.infraDot} ${dotClass}`} />
-      {label}
-    </span>
+    <div className={`${styles.infraBox} ${colorClass}`}>
+      <span className={styles.infraBoxIcon}>{icon}</span>
+      <span className={styles.infraBoxLabel}>{label}</span>
+    </div>
   );
 }
 
-/* ────────────────────── Architecture tab ────────────────────── */
+/* ────────────────────── Worker column with infra ────────────────────── */
+
+function WorkerColumn({
+  name,
+  region,
+  subtitle,
+  nodeClass,
+  badgeClass,
+}: {
+  name: string;
+  region: string;
+  subtitle: string;
+  nodeClass: string;
+  badgeClass: string;
+}) {
+  return (
+    <div className={styles.workerColumn}>
+      <div className={`${styles.node} ${styles.nodeWorker} ${nodeClass}`}>
+        <div className={styles.nodeHeader}>
+          <span className={styles.nodeTitle}>{name}</span>
+          <span className={`${styles.badge} ${badgeClass}`}>{region}</span>
+        </div>
+        <div className={styles.nodeSubtitle}>{subtitle}</div>
+        <div className={styles.nodeCaption}>Handles LLM requests</div>
+      </div>
+      <div className={styles.infraStack}>
+        <InfraBox icon="🗄" label="Own Database" color="green" />
+        <InfraBox icon="⚡" label="Own Redis" color="orange" />
+      </div>
+    </div>
+  );
+}
+
+/* ────────────────────── Architecture diagram ────────────────────── */
 
 function ArchitectureView() {
   return (
@@ -36,49 +69,41 @@ function ArchitectureView() {
       <div className={`${styles.node} ${styles.nodeControlPlane}`}>
         <div className={styles.nodeHeader}>
           <span className={styles.nodeTitle}>Control Plane</span>
-          <span className={`${styles.badge} ${styles.badgeBlue}`}>UI</span>
+          <span className={`${styles.badge} ${styles.badgeBlue}`}>ADMIN UI ONLY</span>
         </div>
         <div className={styles.nodeSubtitle}>cp.example.com</div>
-        <div className={styles.infraRow}>
-          <InfraChip color="green" label="Own DB" />
-          <InfraChip color="orange" label="Own Redis" />
-          <InfraChip color="blue" label="Own Key" />
+        <div className={styles.nodeCaption}>
+          Not a router — does not proxy LLM requests.
+          <br />
+          Lets admins switch between workers to manage them.
         </div>
       </div>
 
-      {/* Branch connector */}
-      <div className={styles.connectorBranch}>
-        <div className={`${styles.branchLeg} ${styles.branchLegLeft}`} />
-        <div className={`${styles.branchLeg} ${styles.branchLegRight}`} />
+      {/* Branch connector with label */}
+      <div className={styles.connectorBranchLabeled}>
+        <span className={styles.connectorLabel}>UI management only</span>
+        <div className={styles.connectorBranch}>
+          <div className={`${styles.branchLeg} ${styles.branchLegLeft}`} />
+          <div className={`${styles.branchLeg} ${styles.branchLegRight}`} />
+        </div>
       </div>
 
       {/* Workers */}
       <div className={styles.workersRow}>
-        <div className={`${styles.node} ${styles.nodeWorker} ${styles.nodeWorkerA}`}>
-          <div className={styles.nodeHeader}>
-            <span className={styles.nodeTitle}>Worker A</span>
-            <span className={`${styles.badge} ${styles.badgeGreen}`}>US East</span>
-          </div>
-          <div className={styles.nodeSubtitle}>worker-a.example.com</div>
-          <div className={styles.infraRow}>
-            <InfraChip color="green" label="Own DB" />
-            <InfraChip color="orange" label="Own Redis" />
-            <InfraChip color="blue" label="Own Key" />
-          </div>
-        </div>
-
-        <div className={`${styles.node} ${styles.nodeWorker} ${styles.nodeWorkerB}`}>
-          <div className={styles.nodeHeader}>
-            <span className={styles.nodeTitle}>Worker B</span>
-            <span className={`${styles.badge} ${styles.badgePurple}`}>EU West</span>
-          </div>
-          <div className={styles.nodeSubtitle}>worker-b.example.com</div>
-          <div className={styles.infraRow}>
-            <InfraChip color="green" label="Own DB" />
-            <InfraChip color="orange" label="Own Redis" />
-            <InfraChip color="blue" label="Own Key" />
-          </div>
-        </div>
+        <WorkerColumn
+          name="Worker A"
+          region="US East"
+          subtitle="worker-a.example.com"
+          nodeClass={styles.nodeWorkerA}
+          badgeClass={styles.badgeGreen}
+        />
+        <WorkerColumn
+          name="Worker B"
+          region="EU West"
+          subtitle="worker-b.example.com"
+          nodeClass={styles.nodeWorkerB}
+          badgeClass={styles.badgePurple}
+        />
       </div>
     </div>
   );
