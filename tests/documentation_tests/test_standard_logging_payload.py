@@ -38,11 +38,7 @@ def test_standard_logging_payload_documentation():
         print(_field)
 
     # Read the documentation
-    _test_dir = os.path.dirname(os.path.abspath(__file__))
-    _repo_root = os.path.abspath(os.path.join(_test_dir, "..", ".."))
-    docs_path = os.path.join(
-        _repo_root, "docs", "my-website", "docs", "proxy", "logging_spec.md"
-    )
+    docs_path = "../../docs/my-website/docs/proxy/logging_spec.md"
 
     try:
         with open(docs_path, "r", encoding="utf-8") as docs_file:
