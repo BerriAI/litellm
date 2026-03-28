@@ -137,16 +137,25 @@ async def test_list_keys_include_created_by_keys():
     where_condition = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with include_created_by_keys=True: {where_condition}")
 
-    # Verify the structure contains AND with OR conditions
+    # Verify the structure: key_alias is a global AND filter wrapping the visibility block
+    # Shape: {"AND": [{"AND": [base_where, {"OR": or_conditions}]}, {"key_alias": {...}}]}
     assert "AND" in where_condition
-    assert "OR" in where_condition["AND"][1]
 
-    or_conditions = where_condition["AND"][1]["OR"]
+    # The key_alias partial-search filter is at the outer AND level
+    assert where_condition["AND"][1] == {
+        "key_alias": {"contains": test_key_alias, "mode": "insensitive"}
+    }
+
+    # The OR visibility block is nested inside the inner AND
+    inner_where = where_condition["AND"][0]
+    assert "OR" in inner_where["AND"][1]
+
+    or_conditions = inner_where["AND"][1]["OR"]
 
     # Should have 2 OR conditions: user's own keys and created_by keys
     assert len(or_conditions) == 2
 
-    # First condition should be user's own keys with all filters applied
+    # First condition should be user's own keys with filters applied (key_alias is now global)
     user_condition = None
     created_by_condition = None
 
@@ -159,10 +168,10 @@ async def test_list_keys_include_created_by_keys():
     assert user_condition is not None, "User condition should be present"
     assert created_by_condition is not None, "Created by condition should be present"
 
-    # Verify user condition has all the filters
+    # Verify user condition has user/org/token filters (key_alias is now a global AND, not per-branch)
     assert user_condition["user_id"] == test_user_id
     assert user_condition["organization_id"] == test_org_id
-    assert user_condition["key_alias"] == test_key_alias
+    assert "key_alias" not in user_condition, "key_alias should no longer be in user_condition"
     assert user_condition["token"] == test_key_hash
 
     # Verify created_by condition only has the created_by filter (no other filters applied)
@@ -214,7 +223,7 @@ async def test_list_keys_include_created_by_keys():
     where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
 
-    or_conditions_with_exclude = where_condition_with_exclude["AND"][1]["OR"]
+    or_conditions_with_exclude = where_condition_with_exclude["AND"][0]["AND"][1]["OR"]
 
     # Find the user condition and created_by condition
     user_condition_with_exclude = None
