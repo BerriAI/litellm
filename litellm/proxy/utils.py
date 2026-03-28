@@ -2296,10 +2296,25 @@ async def _lookup_deprecated_key(
 
     # Check cache first
     cached = _deprecated_key_cache.get(hashed_token)
-    cached = _deprecated_key_cache.get(hashed_token)
     if cached is not None:
-        active_token_id, cache_expires_at_ts, revoke_at_ts = cached
-        if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
+        if len(cached) == 3:
+            active_token_id, cache_expires_at_ts, revoke_at_ts = cached
+        elif len(cached) == 2:
+            # Backward compatibility for cache entries written before
+            # revoke_at_ts was added to the in-memory tuple.
+            active_token_id, cache_expires_at_ts = cached
+            revoke_at_ts = float("inf")
+        else:
+            _deprecated_key_cache.pop(hashed_token, None)
+            active_token_id = None
+            cache_expires_at_ts = 0.0
+            revoke_at_ts = 0.0
+
+        if (
+            active_token_id is not None
+            and now_ts < cache_expires_at_ts
+            and now_ts < revoke_at_ts
+        ):
             return active_token_id
         else:
             _deprecated_key_cache.pop(hashed_token, None)
@@ -2310,12 +2325,17 @@ async def _lookup_deprecated_key(
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
             },
-            select={"active_token_id": True},
+            select={"active_token_id": True, "revoke_at": True},
         )
-        if deprecated_row and deprecated_row.active_token_id:
+        if (
+            deprecated_row
+            and deprecated_row.active_token_id
+            and deprecated_row.revoke_at is not None
+        ):
             _deprecated_key_cache[hashed_token] = (
                 deprecated_row.active_token_id,
                 now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+                deprecated_row.revoke_at.timestamp(),
             )
             return deprecated_row.active_token_id
         # Only cache positive results; negative lookups are fast on indexed columns

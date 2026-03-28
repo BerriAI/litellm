@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -540,6 +541,43 @@ def test_proxy_admin_jwt_auth_handles_no_team_object():
     assert result.team_metadata is None
     assert result.org_id is None
     assert result.end_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_deprecated_key_uses_cache_on_subsequent_requests():
+    """
+    Regression test for deprecated key auth during grace period.
+
+    The in-memory cache entry must be readable on the second lookup; otherwise
+    rotated keys intermittently fail auth with token_not_found_in_db.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy.utils import _deprecated_key_cache, _lookup_deprecated_key
+
+    hashed_old_key = "old-key-hash"
+    hashed_new_key = "new-key-hash"
+    revoke_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    _deprecated_key_cache.clear()
+
+    mock_db = MagicMock()
+    mock_db.litellm_deprecatedverificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(
+            active_token_id=hashed_new_key,
+            revoke_at=revoke_at,
+        )
+    )
+
+    try:
+        first_lookup = await _lookup_deprecated_key(mock_db, hashed_old_key)
+        second_lookup = await _lookup_deprecated_key(mock_db, hashed_old_key)
+    finally:
+        _deprecated_key_cache.clear()
+
+    assert first_lookup == hashed_new_key
+    assert second_lookup == hashed_new_key
+    mock_db.litellm_deprecatedverificationtoken.find_first.assert_awaited_once()
 
 
 class TestJWTOAuth2Coexistence:
