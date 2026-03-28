@@ -33,6 +33,7 @@ permissions:
 
 jobs:
   run:
+    name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -85,7 +86,7 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
         run: |
-          poetry run pytest ${TEST_PATH} \
+          poetry run pytest ${TEST_PATH:?} \
             --tb=short -vv \
             --maxfail="${MAX_FAILURES}" \
             -n "${WORKERS}" \
