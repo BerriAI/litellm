@@ -4280,13 +4280,11 @@ async def list_keys(
         else:
             admin_team_ids = None
 
-        use_substring_matching = True
         if not user_id and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]:
             user_id = user_api_key_dict.user_id
-            use_substring_matching = False
 
         response = await _list_key_helper(
             prisma_client=prisma_client,
@@ -4307,7 +4305,6 @@ async def list_keys(
             status=status,
             project_id=project_id,
             access_group_id=access_group_id,
-            use_substring_matching=use_substring_matching,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -4525,7 +4522,6 @@ def _build_key_filter_conditions(
     include_created_by_keys: bool = False,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
-    use_substring_matching: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -4547,21 +4543,15 @@ def _build_key_filter_conditions(
     # Base conditions for user's own keys
     user_condition: Dict[str, Any] = {}
     if user_id and isinstance(user_id, str):
-        if use_substring_matching:
-            user_condition["user_id"] = {
-                "contains": user_id,
-                "mode": "insensitive",
-            }
-        else:
-            user_condition["user_id"] = user_id
+        user_condition["user_id"] = {
+            "contains": user_id,
+            "mode": "insensitive",
+        }
     if key_alias and isinstance(key_alias, str):
-        if use_substring_matching:
-            user_condition["key_alias"] = {
-                "contains": key_alias,
-                "mode": "insensitive",
-            }
-        else:
-            user_condition["key_alias"] = key_alias
+        user_condition["key_alias"] = {
+            "contains": key_alias,
+            "mode": "insensitive",
+        }
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
@@ -4664,7 +4654,6 @@ async def _list_key_helper(
     status: Optional[str] = None,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
-    use_substring_matching: bool = False,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -4700,7 +4689,6 @@ async def _list_key_helper(
         include_created_by_keys=include_created_by_keys,
         project_id=project_id,
         access_group_id=access_group_id,
-        use_substring_matching=use_substring_matching,
     )
 
     # Calculate skip for pagination
