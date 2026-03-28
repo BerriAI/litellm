@@ -107,11 +107,21 @@ export function useLogFilterLogic({
           },
         });
 
-        if (currentTimestamp === lastSearchTimestamp.current && response.data) {
-          setBackendFilteredLogs(response);
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          setBackendFilteredLogs({
+            ...response,
+            data: response.data ?? [],
+          });
         }
       } catch (error) {
         console.error("Error searching users:", error);
+        setBackendFilteredLogs({
+          data: [],
+          total: 0,
+          page: 1,
+          page_size: pageSize,
+          total_pages: 0,
+        });
       }
     },
     [accessToken, startTime, endTime, isCustomDate, pageSize, sortBy, sortOrder],
@@ -267,6 +277,7 @@ export function useLogFilterLogic({
       // Only call debouncedSearch if filters have actually changed
       if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
         setCurrentPage(1);
+        setBackendFilteredLogs(null);
         debouncedSearch(updatedFilters, 1);
       }
 
@@ -281,8 +292,8 @@ export function useLogFilterLogic({
     // Clear backend filtered logs to ensure fresh render
     setBackendFilteredLogs(null);
 
-    // Reset selections
-    debouncedSearch(defaultFilters, 1);
+    // Cancel any in-flight debounced search
+    debouncedSearch.cancel();
   };
 
   return {
