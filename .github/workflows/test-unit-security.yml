@@ -24,3 +24,5 @@ jobs:
       enable-postgres: true
     secrets:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}

@@ -46,6 +46,10 @@ on:
         required: false
       DATABASE_URL:
         required: false
+      POSTGRES_USER:
+        required: false
+      POSTGRES_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -69,13 +73,13 @@ jobs:
       postgres:
         image: postgres@sha256:705a5d5b5836f3fcba0d02c4d281e6a7dd9ed2dd4078640f08a1e1e9896e097d # postgres:14
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: litellm_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "pg_isready"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
