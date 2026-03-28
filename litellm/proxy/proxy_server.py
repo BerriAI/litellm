@@ -5516,6 +5516,11 @@ def _restamp_streaming_chunk_model(
     if _is_azure_model_router_request(requested_model_from_client):
         return chunk, model_mismatch_logged
 
+    # For fastest_response batch completions, preserve the winning model's name
+    # instead of stamping the comma-separated list the client sent.
+    if request_data.get("fastest_response", False):
+        return chunk, model_mismatch_logged
+
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )

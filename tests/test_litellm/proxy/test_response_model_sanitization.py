@@ -273,3 +273,61 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
     # Azure Model Router: preserve actual model used, not the router model
     assert payload["model"] == actual_model_used
     assert payload["model"] != router_model
+
+
+@pytest.mark.asyncio
+async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypatch):
+    """
+    Regression test for fastest_response streaming:
+
+    When the client sends a comma-separated model list with fastest_response=True,
+    the streaming chunks should preserve the winning model's name from the
+    downstream response, NOT override to the comma-separated list.
+    """
+    comma_separated_models = "openai/gpt-4o,gemini/gemini-2.5-flash"
+    winning_model = "gemini-2.5-flash"
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def _iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        yield _make_model_response_stream_chunk(model=winning_model)
+
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    gen = proxy_server.async_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+        request_data={
+            "model": comma_separated_models,
+            "_litellm_client_requested_model": comma_separated_models,
+            "fastest_response": True,
+        },
+    )
+
+    chunks = []
+    async for item in gen:
+        chunks.append(item)
+
+    assert len(chunks) >= 2
+    first = chunks[0]
+    assert first.startswith("data: ")
+
+    payload = json.loads(first[len("data: ") :].strip())
+    assert payload["model"] == winning_model
+    assert payload["model"] != comma_separated_models
