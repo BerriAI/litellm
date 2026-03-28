@@ -1229,6 +1229,7 @@ class AmazonConverseConfig(BaseConfig):
             "_parallel_tool_use_config", None
         )
         if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+            # Merge the tool_choice config from parallel_tool_calls into additional_request_params
             for key, value in parallel_tool_use_config.items():
                 if (
                     key in additional_request_params
@@ -1376,10 +1377,16 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # Set anthropic_beta in additional_request_params if we have any beta features.
+        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field.
+        # For inference profile ARNs, get_base_model() returns the opaque profile ID — the model family
+        # cannot be determined from the ARN alone. We trust the caller's explicit anthropic-beta header:
+        # if they set it, they know what model is behind their profile. This is consistent with how
+        # get_supported_openai_params() handles ARN models (adds all params without model-family checks).
         base_model = BedrockModelInfo.get_base_model(model)
-        if anthropic_beta_list and base_model.startswith("anthropic"):
+        if anthropic_beta_list and (
+            base_model.startswith("anthropic") or "arn" in model.lower()
+        ):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
