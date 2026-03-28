@@ -132,7 +132,7 @@ check-import-safety: install-dev
 lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
+lint-dev: lint-format-changed lint-ruff-FULL-dev lint-mypy check-circular-imports check-import-safety
 
 # Testing targets
 test:
