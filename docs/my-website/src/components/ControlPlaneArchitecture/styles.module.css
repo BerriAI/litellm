@@ -557,6 +557,10 @@
     max-width: 280px;
   }
 
+  .connectorBranchLabeled {
+    display: none;
+  }
+
   .connectorBranch {
     display: none;
   }

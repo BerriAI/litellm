@@ -44,7 +44,7 @@ The **High Availability Control Plane** takes a different approach:
 
 The **control plane** is a LiteLLM instance that serves the admin UI and knows about all the workers. It is **not a router** — it does not proxy or route any LLM requests. It exists purely so admins can switch between workers and manage them from a single UI.
 
-Each **worker** is a fully independent LiteLLM proxy that handles LLM requests for its region or team. Workers have their own database, Redis, master key, users, keys, teams, and budgets. No infrastructure is shared between workers.
+Each **worker** is a fully independent LiteLLM proxy that handles LLM requests for its region or team. Workers have their own database, Redis, users, keys, teams, and budgets. No infrastructure is shared between workers.
 
 ## Setup
 
