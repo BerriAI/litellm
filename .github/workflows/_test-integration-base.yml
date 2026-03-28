@@ -148,11 +148,16 @@ jobs:
             ${{ runner.os }}-poetry-integration-
 
       - name: Install dependencies
+        env:
+          PER_TEST_TIMEOUT: ${{ inputs.per-test-timeout }}
         run: |
           poetry config virtualenvs.in-project true
           poetry install --with dev,proxy-dev --extras "proxy semantic-router"
           poetry run pip install google-genai==1.22.0 \
             google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
+          if [ "${PER_TEST_TIMEOUT}" != "0" ]; then
+            poetry run pip install pytest-timeout==2.2.0
+          fi
 
       - name: Setup litellm-enterprise
         run: |
@@ -172,7 +177,7 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
           PER_TEST_TIMEOUT: ${{ inputs.per-test-timeout }}
-          LITELLM_LOG: ${{ inputs.litellm-log-level }}
+          LITELLM_LOG: ${{ inputs.litellm-log-level || 'DEBUG' }}
           # Provider API keys — populated only if the GHA environment contains them.
           # Empty vars are harmless; tests that need a missing key will fail visibly.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
