@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -1353,6 +1354,7 @@ class JWTAuthManager:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
                     value=user_object.model_dump(),
+                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
 
         # Sync team memberships
@@ -1375,6 +1377,7 @@ class JWTAuthManager:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
                     value=user_object.model_dump(),
+                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
         return None
 
