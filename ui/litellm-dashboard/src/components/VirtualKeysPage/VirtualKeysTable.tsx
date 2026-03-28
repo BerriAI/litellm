@@ -30,7 +30,6 @@ import { Button as AntButton, Popover, Skeleton, Tooltip, Typography } from "ant
 import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
-import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
@@ -603,7 +602,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     {
       name: "Key Alias",
       label: "Key Alias",
-      customComponent: PaginatedKeyAliasSelect,
     },
     {
       name: "User ID",

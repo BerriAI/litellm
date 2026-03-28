@@ -6989,6 +6989,39 @@ async def test_build_key_filter_team_id_scoped():
 
 
 @pytest.mark.asyncio
+async def test_build_key_filter_key_alias_substring_search():
+    """
+    key_alias should be applied as a global AND filter with case-insensitive
+    contains so that substring search works across all visibility branches
+    (own keys, admin team keys, member service accounts).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="user-123",
+        team_id=None,
+        organization_id=None,
+        key_alias="my-partial",
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-A"],
+        member_team_ids=["team-A"],
+        include_created_by_keys=True,
+    )
+
+    # key_alias must be a direct child of the outermost AND so it narrows
+    # all visibility branches, not just the user's own keys.
+    assert "AND" in where, f"Expected top-level AND, got: {where}"
+    outer_and = where["AND"]
+    alias_condition = {"key_alias": {"contains": "my-partial", "mode": "insensitive"}}
+    assert alias_condition in outer_and, (
+        f"Expected {alias_condition} as a direct AND condition, got: {outer_and}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_member_team_ids():
     """
     Test that get_member_team_ids returns all teams where user is a member
