@@ -1982,7 +1982,9 @@ async def test_custom_code_guardrail(
         )
 
         try:
-            exec(compile(request.custom_code, "<guardrail>", "exec"), exec_globals)  # noqa: S102
+            exec(
+                compile(request.custom_code, "<guardrail>", "exec"), exec_globals
+            )  # noqa: S102
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,

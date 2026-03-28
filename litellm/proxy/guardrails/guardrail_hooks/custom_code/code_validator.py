@@ -92,10 +92,11 @@ FORBIDDEN_ATTR_NAMES: Set[str] = {
     "__func__",
     "__self__",
     "__closure__",
-    "__annotations__",
     # Dangerous dunder methods that can be used for sandbox escape
     "__init__",
     "__new__",
+    # f-string internals
+    "format_map",
 }
 
 
@@ -130,18 +131,14 @@ class _ASTSecurityVisitor(ast.NodeVisitor):
         # Check direct function calls: exec(...), eval(...)
         if isinstance(node.func, ast.Name):
             if node.func.id in FORBIDDEN_CALL_NAMES:
-                self.violations.append(
-                    f"{node.func.id}() is not allowed"
-                )
+                self.violations.append(f"{node.func.id}() is not allowed")
         # Note: attribute-based calls (e.g. obj.__subclasses__()) are already
         # caught by visit_Attribute, so no need for a duplicate check here.
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr in FORBIDDEN_ATTR_NAMES:
-            self.violations.append(
-                f"{node.attr} access is not allowed"
-            )
+            self.violations.append(f"{node.attr} access is not allowed")
         self.generic_visit(node)
 
     def visit_Global(self, node: ast.Global) -> None:
@@ -181,9 +178,7 @@ def _validate_ast(code: str) -> None:
                 seen.add(v)
                 unique.append(v)
         summary = "; ".join(unique)
-        raise CustomCodeValidationError(
-            f"Security violation(s): {summary}"
-        )
+        raise CustomCodeValidationError(f"Security violation(s): {summary}")
 
 
 def validate_custom_code(code: str) -> None:
@@ -206,6 +201,4 @@ def validate_custom_code(code: str) -> None:
     # Layer 2: AST-based validation (defense-in-depth)
     _validate_ast(code)
 
-    verbose_proxy_logger.debug(
-        "Custom code passed security validation (regex + AST)"
-    )
+    verbose_proxy_logger.debug("Custom code passed security validation (regex + AST)")

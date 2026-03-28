@@ -166,7 +166,9 @@ class CustomCodeGuardrail(CustomGuardrail):
         )
 
         # Execute the user code in the restricted environment
-        exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)  # noqa: S102
+        exec(
+            compile(self.custom_code, "<guardrail>", "exec"), exec_globals
+        )  # noqa: S102
 
         # Extract the apply_guardrail function
         if "apply_guardrail" not in exec_globals:
