@@ -2772,6 +2772,14 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
+            # Invalidate cached credentials on 401 so the next retry
+            # re-authenticates instead of reusing a stale/invalid token.
+            # Fixes: https://github.com/BerriAI/litellm/issues/23512
+            if error_code == 401:
+                self.invalidate_credentials(
+                    credentials=vertex_credentials,
+                    project_id=vertex_project,
+                )
             raise VertexAIError(
                 status_code=error_code,
                 message=err.response.text,
@@ -2983,6 +2991,14 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
+            # Invalidate cached credentials on 401 so the next retry
+            # re-authenticates instead of reusing a stale/invalid token.
+            # Fixes: https://github.com/BerriAI/litellm/issues/23512
+            if error_code == 401:
+                self.invalidate_credentials(
+                    credentials=vertex_credentials,
+                    project_id=vertex_project,
+                )
             raise VertexAIError(
                 status_code=error_code,
                 message=err.response.text,
