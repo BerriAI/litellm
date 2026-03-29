@@ -288,3 +288,35 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+def test_map_openai_params_image_config_snake_case():
+    """Test that image_config with snake_case keys is mapped to camelCase imageConfig."""
+    config = VertexGeminiConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "image_config": {"image_size": "2K", "aspect_ratio": "16:9"}
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+    assert "imageConfig" in result
+    assert result["imageConfig"]["imageSize"] == "2K"
+    assert result["imageConfig"]["aspectRatio"] == "16:9"
+
+
+def test_map_openai_params_image_config_camel_case():
+    """Test that image_config with camelCase keys is passed through to imageConfig."""
+    config = VertexGeminiConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "image_config": {"imageSize": "4K", "aspectRatio": "9:16"}
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+    assert "imageConfig" in result
+    assert result["imageConfig"]["imageSize"] == "4K"
+    assert result["imageConfig"]["aspectRatio"] == "9:16"

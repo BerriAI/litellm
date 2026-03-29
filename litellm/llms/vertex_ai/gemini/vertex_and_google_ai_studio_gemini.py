@@ -318,6 +318,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
+            "image_config",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -1022,6 +1023,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
                 optional_params["speechConfig"] = self._map_audio_params(value)
+            elif param == "image_config" and isinstance(value, dict):
+                image_config = {}
+                aspect_ratio = value.get("aspect_ratio") or value.get("aspectRatio")
+                image_size = value.get("image_size") or value.get("imageSize")
+                if aspect_ratio is not None:
+                    image_config["aspectRatio"] = aspect_ratio
+                if image_size is not None:
+                    image_config["imageSize"] = image_size
+                if image_config:
+                    optional_params["imageConfig"] = image_config
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
