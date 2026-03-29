@@ -93,9 +93,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -236,6 +236,10 @@ class OllamaConfig(BaseConfig):
         api_base = (
             api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         )
+        for suffix in ("/api/chat", "/api/generate"):
+            if api_base.endswith(suffix):
+                api_base = api_base[: -len(suffix)]
+                break
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 

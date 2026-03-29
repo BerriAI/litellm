@@ -101,7 +101,9 @@ class TestOllamaModelInfo:
         assert models == []
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
-        assert call_headers and call_headers[0] == {'Authorization': 'Bearer test_api_key'}
+        assert call_headers and call_headers[0] == {
+            "Authorization": "Bearer test_api_key"
+        }
 
     def test_get_models_from_list_response(self, monkeypatch):
         """
@@ -150,7 +152,10 @@ class TestOllamaGetModelInfo:
         def mock_post(url, json, headers=None):
             captured_urls.append(url)
             resp = DummyResponse(
-                {"template": "{{ .System }} tools {{ .Prompt }}", "model_info": {"context_length": 4096}},
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"context_length": 4096},
+                },
                 status_code=200,
             )
             return resp
@@ -158,7 +163,9 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        result = config.get_model_info("llama3", api_base="http://my-remote-server:11434")
+        result = config.get_model_info(
+            "llama3", api_base="http://my-remote-server:11434"
+        )
 
         assert captured_urls[0] == "http://my-remote-server:11434/api/show"
         assert result["max_tokens"] == 4096
@@ -180,6 +187,46 @@ class TestOllamaGetModelInfo:
         config.get_model_info("llama3")
 
         assert captured_urls[0] == "http://env-server:11434/api/show"
+
+    def test_get_model_info_strips_api_chat_suffix_from_api_base(self, monkeypatch):
+        """
+        When api_base already points at /api/chat,
+        get_model_info should still call /api/show.
+        """
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        config.get_model_info("llama3", api_base="http://localhost:11434/api/chat")
+
+        assert captured_urls[0] == "http://localhost:11434/api/show"
+
+    def test_get_model_info_strips_api_generate_suffix_from_api_base(self, monkeypatch):
+        """
+        When api_base already points at /api/generate,
+        get_model_info should still call /api/show.
+        """
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        config.get_model_info("llama3", api_base="http://localhost:11434/api/generate")
+
+        assert captured_urls[0] == "http://localhost:11434/api/show"
 
     def test_get_model_info_graceful_fallback_on_connection_error(self, monkeypatch):
         """When the Ollama server is unreachable, should return defaults instead of raising."""
@@ -239,8 +286,8 @@ class TestOllamaAuthHeaders:
 
         def mock_completion(*args, **kwargs):
             # Capture the headers that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -249,21 +296,25 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with ollama provider and api_key
                 litellm.completion(
                     model="ollama/llama2",
                     messages=[{"role": "user", "content": "Hello"}],
                     api_key="test-api-key-12345",
-                    api_base="http://localhost:11434"
+                    api_base="http://localhost:11434",
                 )
 
                 # Verify that Authorization header was added
-                assert "Authorization" in captured_headers, \
-                    "Authorization header should be present when api_key is provided"
-                assert captured_headers["Authorization"] == "Bearer test-api-key-12345", \
-                    f"Authorization header should be 'Bearer test-api-key-12345', got {captured_headers.get('Authorization')}"
+                assert (
+                    "Authorization" in captured_headers
+                ), "Authorization header should be present when api_key is provided"
+                assert (
+                    captured_headers["Authorization"] == "Bearer test-api-key-12345"
+                ), f"Authorization header should be 'Bearer test-api-key-12345', got {captured_headers.get('Authorization')}"
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with api_key failed: {e}")
@@ -283,8 +334,8 @@ class TestOllamaAuthHeaders:
 
         def mock_completion(*args, **kwargs):
             # Capture the headers that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -293,21 +344,25 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with ollama_chat provider and api_key
                 litellm.completion(
                     model="ollama_chat/llama2",
                     messages=[{"role": "user", "content": "Hello"}],
                     api_key="test-api-key-67890",
-                    api_base="http://localhost:11434"
+                    api_base="http://localhost:11434",
                 )
 
                 # Verify that Authorization header was added
-                assert "Authorization" in captured_headers, \
-                    "Authorization header should be present when api_key is provided"
-                assert captured_headers["Authorization"] == "Bearer test-api-key-67890", \
-                    f"Authorization header should be 'Bearer test-api-key-67890', got {captured_headers.get('Authorization')}"
+                assert (
+                    "Authorization" in captured_headers
+                ), "Authorization header should be present when api_key is provided"
+                assert (
+                    captured_headers["Authorization"] == "Bearer test-api-key-67890"
+                ), f"Authorization header should be 'Bearer test-api-key-67890', got {captured_headers.get('Authorization')}"
 
             except Exception as e:
                 pytest.fail(f"Ollama_chat completion with api_key failed: {e}")
@@ -325,8 +380,8 @@ class TestOllamaAuthHeaders:
 
         def mock_completion(*args, **kwargs):
             # Capture the headers that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -335,18 +390,21 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion without api_key
                 litellm.completion(
                     model="ollama/llama2",
                     messages=[{"role": "user", "content": "Hello"}],
-                    api_base="http://localhost:11434"
+                    api_base="http://localhost:11434",
                 )
 
                 # Verify that Authorization header was NOT added
-                assert "Authorization" not in captured_headers, \
-                    "Authorization header should not be present when api_key is not provided"
+                assert (
+                    "Authorization" not in captured_headers
+                ), "Authorization header should not be present when api_key is not provided"
 
             except Exception as e:
                 pytest.fail(f"Ollama completion without api_key failed: {e}")
@@ -366,8 +424,8 @@ class TestOllamaAuthHeaders:
 
         def mock_completion(*args, **kwargs):
             # Capture the headers that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -376,7 +434,9 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with both api_key and existing Authorization header
                 existing_auth = "Bearer existing-token"
@@ -385,14 +445,16 @@ class TestOllamaAuthHeaders:
                     messages=[{"role": "user", "content": "Hello"}],
                     api_key="test-api-key-should-not-be-used",
                     api_base="http://localhost:11434",
-                    headers={"Authorization": existing_auth}
+                    headers={"Authorization": existing_auth},
                 )
 
                 # Verify that existing Authorization header was preserved
-                assert "Authorization" in captured_headers, \
-                    "Authorization header should be present"
-                assert captured_headers["Authorization"] == existing_auth, \
-                    f"Existing Authorization header should be preserved, got {captured_headers.get('Authorization')}"
+                assert (
+                    "Authorization" in captured_headers
+                ), "Authorization header should be present"
+                assert (
+                    captured_headers["Authorization"] == existing_auth
+                ), f"Existing Authorization header should be preserved, got {captured_headers.get('Authorization')}"
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with existing auth header failed: {e}")
@@ -414,10 +476,10 @@ class TestOllamaAuthHeaders:
         def mock_completion(*args, **kwargs):
             nonlocal captured_api_base
             # Capture the headers and api_base that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
-            if 'api_base' in kwargs:
-                captured_api_base = kwargs['api_base']
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
+            if "api_base" in kwargs:
+                captured_api_base = kwargs["api_base"]
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -426,25 +488,31 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with ollama.com as api_base and api_key
                 litellm.completion(
                     model="ollama/qwen3-vl:235b-cloud",
                     messages=[{"role": "user", "content": "Hello"}],
                     api_key="test-ollama-com-api-key",
-                    api_base="https://ollama.com"
+                    api_base="https://ollama.com",
                 )
 
                 # Verify that Authorization header was added
-                assert "Authorization" in captured_headers, \
-                    "Authorization header should be present when using ollama.com with api_key"
-                assert captured_headers["Authorization"] == "Bearer test-ollama-com-api-key", \
-                    f"Authorization header should be 'Bearer test-ollama-com-api-key', got {captured_headers.get('Authorization')}"
+                assert (
+                    "Authorization" in captured_headers
+                ), "Authorization header should be present when using ollama.com with api_key"
+                assert (
+                    captured_headers["Authorization"]
+                    == "Bearer test-ollama-com-api-key"
+                ), f"Authorization header should be 'Bearer test-ollama-com-api-key', got {captured_headers.get('Authorization')}"
 
                 # Verify the api_base was passed correctly
-                assert captured_api_base == "https://ollama.com", \
-                    f"API base should be 'https://ollama.com', got {captured_api_base}"
+                assert (
+                    captured_api_base == "https://ollama.com"
+                ), f"API base should be 'https://ollama.com', got {captured_api_base}"
 
             except Exception as e:
                 pytest.fail(f"Ollama completion with ollama.com api_base failed: {e}")
@@ -466,10 +534,10 @@ class TestOllamaAuthHeaders:
         def mock_completion(*args, **kwargs):
             nonlocal captured_api_base
             # Capture the headers and api_base that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
-            if 'api_base' in kwargs:
-                captured_api_base = kwargs['api_base']
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
+            if "api_base" in kwargs:
+                captured_api_base = kwargs["api_base"]
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -478,30 +546,40 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with ollama.com as api_base and api_key
                 litellm.completion(
                     model="ollama_chat/qwen3-vl:235b-cloud",
                     messages=[{"role": "user", "content": "Hello"}],
                     api_key="test-ollama-com-chat-key",
-                    api_base="https://ollama.com"
+                    api_base="https://ollama.com",
                 )
 
                 # Verify that Authorization header was added
-                assert "Authorization" in captured_headers, \
-                    "Authorization header should be present when using ollama.com with api_key"
-                assert captured_headers["Authorization"] == "Bearer test-ollama-com-chat-key", \
-                    f"Authorization header should be 'Bearer test-ollama-com-chat-key', got {captured_headers.get('Authorization')}"
+                assert (
+                    "Authorization" in captured_headers
+                ), "Authorization header should be present when using ollama.com with api_key"
+                assert (
+                    captured_headers["Authorization"]
+                    == "Bearer test-ollama-com-chat-key"
+                ), f"Authorization header should be 'Bearer test-ollama-com-chat-key', got {captured_headers.get('Authorization')}"
 
                 # Verify the api_base was passed correctly
-                assert captured_api_base == "https://ollama.com", \
-                    f"API base should be 'https://ollama.com', got {captured_api_base}"
+                assert (
+                    captured_api_base == "https://ollama.com"
+                ), f"API base should be 'https://ollama.com', got {captured_api_base}"
 
             except Exception as e:
-                pytest.fail(f"Ollama_chat completion with ollama.com api_base failed: {e}")
+                pytest.fail(
+                    f"Ollama_chat completion with ollama.com api_base failed: {e}"
+                )
 
-    def test_ollama_completion_with_ollama_com_without_api_key_fails_gracefully(self, monkeypatch):
+    def test_ollama_completion_with_ollama_com_without_api_key_fails_gracefully(
+        self, monkeypatch
+    ):
         """
         Test that when using https://ollama.com as api_base without an api_key,
         no Authorization header is added (which would likely fail on the server side,
@@ -517,8 +595,8 @@ class TestOllamaAuthHeaders:
 
         def mock_completion(*args, **kwargs):
             # Capture the headers that were passed
-            if 'headers' in kwargs:
-                captured_headers.update(kwargs['headers'])
+            if "headers" in kwargs:
+                captured_headers.update(kwargs["headers"])
             # Return a mock response
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
@@ -527,18 +605,23 @@ class TestOllamaAuthHeaders:
             return mock_response
 
         # Mock the base_llm_http_handler.completion method at the module level
-        with patch('litellm.main.base_llm_http_handler.completion', side_effect=mock_completion):
+        with patch(
+            "litellm.main.base_llm_http_handler.completion", side_effect=mock_completion
+        ):
             try:
                 # Call completion with ollama.com but no api_key
                 litellm.completion(
                     model="ollama/llama2",
                     messages=[{"role": "user", "content": "Hello"}],
-                    api_base="https://ollama.com"
+                    api_base="https://ollama.com",
                 )
 
                 # Verify that Authorization header was NOT added
-                assert "Authorization" not in captured_headers, \
-                    "Authorization header should not be present when api_key is not provided, even with ollama.com"
+                assert (
+                    "Authorization" not in captured_headers
+                ), "Authorization header should not be present when api_key is not provided, even with ollama.com"
 
             except Exception as e:
-                pytest.fail(f"Ollama completion with ollama.com without api_key failed: {e}")
+                pytest.fail(
+                    f"Ollama completion with ollama.com without api_key failed: {e}"
+                )
