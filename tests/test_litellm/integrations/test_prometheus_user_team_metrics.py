@@ -557,8 +557,7 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
     )
 
     try:
-        # Flag ON — org labels included in metric schema and values passed through
-        litellm.prometheus_emit_org_labels = True
+        # org labels are always included in per-request metrics
         prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
         label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
         assert label_kwargs["org_id"] == "org-abc"
@@ -566,7 +565,7 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         assert label_kwargs["team"] == "team-abc"
         assert label_kwargs["user"] == "user-1"
 
-        # Metrics not in the org-emission list must NOT get org labels even when flag is on
+        # Metrics not in the org-emission list must NOT get org labels
         from litellm.types.integrations.prometheus import PrometheusMetricLabels
         for metric in ("litellm_remaining_api_key_budget_metric", "litellm_remaining_team_budget_metric"):
             labels = PrometheusMetricLabels.get_labels(metric)
@@ -577,16 +576,5 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         litellm.custom_prometheus_metadata_labels = ["org_id"]
         labels = PrometheusMetricLabels.get_labels("litellm_requests_metric")
         assert labels.count("org_id") == 1
-        litellm.custom_prometheus_metadata_labels = []
-
-        # Flag OFF — org labels not in metric schema, absent from label dict entirely
-        litellm.prometheus_emit_org_labels = False
-        prometheus_logger.litellm_requests_metric.reset_mock()
-        prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
-        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
-        assert "org_id" not in label_kwargs
-        assert "org_alias" not in label_kwargs
-        assert label_kwargs["team"] == "team-abc"
     finally:
-        litellm.prometheus_emit_org_labels = False
         litellm.custom_prometheus_metadata_labels = []

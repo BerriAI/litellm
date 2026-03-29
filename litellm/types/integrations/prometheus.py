@@ -667,7 +667,7 @@ class PrometheusMetricLabels:
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
-        if litellm.prometheus_emit_org_labels is True and label_name in PrometheusMetricLabels._org_label_metrics:
+        if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in [
                 UserAPIKeyLabelNames.ORG_ID.value,
                 UserAPIKeyLabelNames.ORG_ALIAS.value,
