@@ -36,8 +36,8 @@ class FalAIBytedanceBaseConfig(FalAIFluxProV11UltraConfig):
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     mapped_key = param_mapping.get(k, k)
                     mapped_value = non_default_params[k]

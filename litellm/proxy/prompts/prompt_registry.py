@@ -188,7 +188,7 @@ class InMemoryPromptRegistry:
 
         prompts_to_delete = [
             pid
-            for pid in self.IN_MEMORY_PROMPTS.keys()
+            for pid in self.IN_MEMORY_PROMPTS
             if get_base_prompt_id(prompt_id=pid) == base_prompt_id
         ]
 

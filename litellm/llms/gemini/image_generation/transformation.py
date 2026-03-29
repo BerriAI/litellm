@@ -49,7 +49,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         mapped_params = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Google format
                     if k == "n":

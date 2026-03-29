@@ -199,7 +199,7 @@ async def update_cost_discount_config(
 
     # Validate that all providers are valid LiteLLM providers
     invalid_providers = []
-    for provider in cost_discount_config.keys():
+    for provider in cost_discount_config:
         if provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 
@@ -343,7 +343,7 @@ async def update_cost_margin_config(
 
     # Validate that all providers are valid LiteLLM providers (except "global")
     invalid_providers = []
-    for provider in cost_margin_config.keys():
+    for provider in cost_margin_config:
         if provider != "global" and provider not in LlmProvidersSet:
             invalid_providers.append(provider)
 

@@ -305,7 +305,7 @@ def _load_conversation(
         filename += ".json"
 
     try:
-        with open(filename, "r") as f:
+        with open(filename) as f:
             messages = json.load(f)
         console.print(f"[green]Conversation loaded from {filename}[/green]")
         return messages

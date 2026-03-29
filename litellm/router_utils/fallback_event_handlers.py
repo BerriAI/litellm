@@ -244,8 +244,8 @@ def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:
     if all(isinstance(item, str) for item in fallbacks):
         return True
     elif all(isinstance(item, dict) for item in fallbacks):
-        for key in LiteLLMParamsTypedDict.__annotations__.keys():
-            if key in fallbacks[0].keys():
+        for key in LiteLLMParamsTypedDict.__annotations__:
+            if key in fallbacks[0]:
                 return True
 
     return False

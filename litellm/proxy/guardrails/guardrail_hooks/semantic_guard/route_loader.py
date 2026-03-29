@@ -35,7 +35,7 @@ class SemanticGuardRouteLoader:
                 f"SemanticGuard: unknown route template '{template_name}'. "
                 f"Available templates: {SemanticGuardRouteLoader.list_builtin_templates()}"
             )
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             return yaml.safe_load(f)
 
     @staticmethod
@@ -55,7 +55,7 @@ class SemanticGuardRouteLoader:
             raise ValueError(
                 f"SemanticGuard: custom routes file not found: {file_path}"
             )
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             data = yaml.safe_load(f)
         if isinstance(data, list):
             return data

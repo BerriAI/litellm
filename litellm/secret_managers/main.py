@@ -251,13 +251,13 @@ def get_secret(  # noqa: PLR0915
                     error_msg = f"Azure OIDC provider failed: {str(e)}"
                     verbose_logger.error(error_msg)
                     raise ValueError(error_msg)
-            with open(azure_federated_token_file, "r") as f:
+            with open(azure_federated_token_file) as f:
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "file":
             # Load token from a file within an allowed credential directory.
             safe_path = _resolve_oidc_file_path(oidc_aud)
-            with open(safe_path, "r") as f:
+            with open(safe_path) as f:
                 oidc_token = f.read()
                 return oidc_token
         elif oidc_provider == "env":
@@ -271,7 +271,7 @@ def get_secret(  # noqa: PLR0915
             token_file_path = os.getenv(oidc_aud)
             if token_file_path is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
-            with open(token_file_path, "r") as f:
+            with open(token_file_path) as f:
                 oidc_token = f.read()
                 return oidc_token
         else:

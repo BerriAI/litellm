@@ -57,7 +57,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
 
             key_value_dict = {}
             in_memory_cache_exists = False
-            for key in cache.in_memory_cache.cache_dict.keys():
+            for key in cache.in_memory_cache.cache_dict:
                 if isinstance(key, str) and key.startswith(cache_key_name):
                     in_memory_cache_exists = True
 

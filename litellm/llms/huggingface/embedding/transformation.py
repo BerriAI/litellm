@@ -161,7 +161,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "hf_text_generation_models.txt",
             )
 
-            with open(file_path, "r") as file:
+            with open(file_path) as file:
                 for line in file:
                     tgi_models.add(line.strip())
 
@@ -175,7 +175,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "hf_conversational_models.txt",
             )
             conv_models = set()
-            with open(file_path, "r") as file:
+            with open(file_path) as file:
                 for line in file:
                     conv_models.add(line.strip())
             # Cache the set for future use
