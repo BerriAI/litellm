@@ -63,6 +63,7 @@ const sidebars = {
           label: "Team Bring-Your-Own Guardrails",
         },
         ...[
+          "proxy/guardrails/aegis",
           "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
