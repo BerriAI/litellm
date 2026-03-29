@@ -213,7 +213,7 @@ def fetch_credentials(
         if cred.transform_fn:
             value = cred.transform_fn(value)
         out[cred.name] = value
-    if "cert_url" in out.keys():
+    if "cert_url" in out:
         out["auth_url"] = out.pop("cert_url")
     return out
 

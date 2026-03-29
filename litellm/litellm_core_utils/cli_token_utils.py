@@ -25,9 +25,9 @@ def load_cli_token() -> Optional[dict]:
         return None
 
     try:
-        with open(token_file, "r") as f:
+        with open(token_file) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 

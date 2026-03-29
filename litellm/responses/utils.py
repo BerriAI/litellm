@@ -46,7 +46,7 @@ class ResponsesAPIRequestUtils:
         if supported_params is None:
             return
         unsupported_params = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
@@ -138,7 +138,7 @@ class ResponsesAPIRequestUtils:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in valid_keys},
+                default_param_values=dict.fromkeys(valid_keys),
                 additional_endpoint_specific_params=["input"],
             )
         )

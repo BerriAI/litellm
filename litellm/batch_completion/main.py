@@ -170,7 +170,7 @@ def batch_completion_models(*args, **kwargs):
         futures = {}
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
-                for key in kwargs.keys():
+                for key in kwargs:
                     if (
                         key not in deployment
                     ):  # don't override deployment values e.g. model name, api base, etc.

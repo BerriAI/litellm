@@ -77,9 +77,7 @@ class InteractionsAPIRequestUtils:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={
-                    k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS
-                },
+                default_param_values=dict.fromkeys(INTERACTIONS_API_OPTIONAL_PARAMS),
                 additional_endpoint_specific_params=["input", "model", "agent"],
             )
         )

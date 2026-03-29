@@ -633,7 +633,7 @@ def _load_policy_templates_from_local_backup() -> list:
     path = os.path.abspath(backup_path)
     if not os.path.exists(path):
         return []
-    with open(path, "r") as f:
+    with open(path) as f:
         return json.load(f)
 
 

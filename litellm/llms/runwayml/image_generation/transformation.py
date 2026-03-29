@@ -466,8 +466,8 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             }
             optional_params["ratio"] = size_to_ratio_map.get(size, "1920:1080")
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:

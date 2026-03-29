@@ -55,7 +55,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         mapped_params = {}
 
         for k, v in non_default_params.items():
-            if k not in optional_params.keys():
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI parameters to Imagen format
                     if k == "n":

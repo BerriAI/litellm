@@ -3250,7 +3250,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         if supported_params is None:
             return
         unsupported_params = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
@@ -3303,7 +3303,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         if (
             model is not None
             and "text-embedding-3" not in model
-            and "dimensions" in non_default_params.keys()
+            and "dimensions" in non_default_params
             and "dimensions" not in (allowed_openai_params or [])
         ):
             raise UnsupportedParamsError(
@@ -3644,7 +3644,7 @@ def _remove_unsupported_params(
     remove_keys = []
     if supported_openai_params is None:
         return {}  # no supported params, so no optional openai params to send
-    for param in non_default_params.keys():
+    for param in non_default_params:
         if param not in supported_openai_params:
             remove_keys.append(param)
     for key in remove_keys:
@@ -3741,7 +3741,7 @@ class PreProcessNonDefaultParams:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in OPENAI_EMBEDDING_PARAMS},
+                default_param_values=dict.fromkeys(OPENAI_EMBEDDING_PARAMS),
                 additional_endpoint_specific_params=["input"],
             )
         )
@@ -3825,7 +3825,7 @@ def remove_sensitive_keys_from_dict(d: dict) -> dict:
     """
     sensitive_key_phrases = ["key", "secret", "access", "credential"]
     remove_keys = []
-    for key in d.keys():
+    for key in d:
         if any(phrase in key.lower() for phrase in sensitive_key_phrases):
             remove_keys.append(key)
     for key in remove_keys:
@@ -4015,7 +4015,7 @@ def get_optional_params(  # noqa: PLR0915
             f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}"
         )
         unsupported_params = {}
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k not in supported_params:
                 if k == "user" or k == "stream_options" or k == "stream":
                     continue
@@ -4033,7 +4033,7 @@ def get_optional_params(  # noqa: PLR0915
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
-                for k in unsupported_params.keys():
+                for k in unsupported_params:
                     non_default_params.pop(k, None)
             else:
                 raise UnsupportedParamsError(
@@ -4613,7 +4613,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
         # WatsonX-text param check
-        for param in passed_params.keys():
+        for param in passed_params:
             if litellm.IBMWatsonXAIConfig().is_watsonx_text_param(param):
                 raise ValueError(
                     f"LiteLLM now defaults to Watsonx's `/text/chat` endpoint. Please use the `watsonx_text` provider instead, to call the `/text/generation` endpoint. Param: {param}"
@@ -4769,7 +4769,7 @@ def add_provider_specific_params_to_optional_params(
             is False
         ):
             extra_body = passed_params.pop("extra_body", None) or {}
-            for k in passed_params.keys():
+            for k in passed_params:
                 if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             if not isinstance(optional_params.get("extra_body"), dict):
@@ -4795,7 +4795,7 @@ def add_provider_specific_params_to_optional_params(
                 extra_body=processed_extra_body
             )
     else:
-        for k in passed_params.keys():
+        for k in passed_params:
             if k not in openai_params and passed_params[k] is not None:
                 if _should_drop_param(
                     k=k, additional_drop_params=additional_drop_params
@@ -6976,7 +6976,7 @@ def read_config_args(config_path) -> dict:
         import os
 
         os.getcwd()
-        with open(config_path, "r") as config_file:
+        with open(config_path) as config_file:
             config = json.load(config_file)
 
         # read keys/ values from config file and return them

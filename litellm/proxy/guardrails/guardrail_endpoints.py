@@ -1307,7 +1307,7 @@ async def get_category_yaml(category_name: str):
 
     try:
         # Read and return the raw content
-        with open(category_file_path, "r") as f:
+        with open(category_file_path) as f:
             content = f.read()
 
         return {
@@ -1346,7 +1346,7 @@ async def get_major_airlines():
             detail="major_airlines.json not found",
         )
     try:
-        with open(airlines_path, "r", encoding="utf-8") as f:
+        with open(airlines_path, encoding="utf-8") as f:
             import json
 
             airlines = json.load(f)

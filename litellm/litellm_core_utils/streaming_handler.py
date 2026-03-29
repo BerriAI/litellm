@@ -1250,7 +1250,7 @@ class CustomStreamWrapper:
                                         proto.marshal.collections.repeated.RepeatedComposite,  # type: ignore
                                     ):
                                         # If so, convert to list
-                                        args_dict[key] = [v for v in val]
+                                        args_dict[key] = list(val)
                                     else:
                                         args_dict[key] = val
 

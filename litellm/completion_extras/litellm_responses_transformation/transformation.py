@@ -297,7 +297,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
                     responses_api_request["text"] = text_format  # type: ignore
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__:
                 responses_api_request[key] = value  # type: ignore
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value

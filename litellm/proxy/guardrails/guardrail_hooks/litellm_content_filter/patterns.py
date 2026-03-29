@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Pattern
 def _load_patterns_from_json() -> Dict:
     """Load pattern definitions from patterns.json file"""
     json_path = os.path.join(os.path.dirname(__file__), "patterns.json")
-    with open(json_path, "r") as f:
+    with open(json_path) as f:
         return json.load(f)
 
 
@@ -158,7 +158,7 @@ def get_available_content_categories() -> List[Dict[str, str]]:
         if filename.endswith(".yaml") or filename.endswith(".yml"):
             category_file_path = os.path.join(categories_dir, filename)
             try:
-                with open(category_file_path, "r") as f:
+                with open(category_file_path) as f:
                     category_data = yaml.safe_load(f)
 
                 if category_data and "category_name" in category_data:

@@ -42,8 +42,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Map OpenAI params to AI/ML params
                     if k == "n":

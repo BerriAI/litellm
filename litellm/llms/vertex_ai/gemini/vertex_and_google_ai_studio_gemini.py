@@ -2348,7 +2348,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
             if (
                 "finishReason" in _candidates[0]
-                and _candidates[0]["finishReason"] in content_policy_violations.keys()
+                and _candidates[0]["finishReason"] in content_policy_violations
             ):
                 return self._handle_content_policy_violation(
                     model_response=model_response,

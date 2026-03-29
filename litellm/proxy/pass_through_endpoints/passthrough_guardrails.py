@@ -60,7 +60,7 @@ class PassthroughGuardrailHandler:
 
         # List of guardrail names - convert to dict
         if isinstance(guardrails_config, list):
-            return {name: None for name in guardrails_config}
+            return dict.fromkeys(guardrails_config)
 
         verbose_proxy_logger.debug(
             "Passthrough guardrails config is not a dict or list, got: %s",
@@ -200,9 +200,7 @@ class PassthroughGuardrailHandler:
             request_data["metadata"] = {}
 
         # Set guardrails in metadata using dict format for compatibility
-        request_data["metadata"]["guardrails"] = {
-            name: True for name in guardrail_names
-        }
+        request_data["metadata"]["guardrails"] = dict.fromkeys(guardrail_names, True)
 
         # Store passthrough guardrails config in request-scoped context
         set_passthrough_guardrails_config(guardrails_config)
@@ -260,7 +258,7 @@ class PassthroughGuardrailHandler:
         guardrails_to_run: Dict[str, bool] = {}
 
         # Add passthrough-specific guardrails
-        for guardrail_name in normalized_config.keys():
+        for guardrail_name in normalized_config:
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug(
                 "Added passthrough-specific guardrail: %s", guardrail_name

@@ -546,7 +546,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         if isinstance(messages, str):
             return [messages]
         elif isinstance(messages, list):
-            return [message for message in messages]
+            return list(messages)
         elif isinstance(messages, dict):
             return [str(messages.get("content", ""))]
         return []

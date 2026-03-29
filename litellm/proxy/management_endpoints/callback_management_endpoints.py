@@ -48,7 +48,7 @@ async def get_callback_configs():
         "callback_configs.json",
     )
 
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         configs = json.load(f)
 
     return configs

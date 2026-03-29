@@ -1788,7 +1788,7 @@ class MCPServerManager:
 
         # Filter arguments to only include allowed parameters
         disallowed_params = [
-            param for param in arguments.keys() if param not in allowed_params_list
+            param for param in arguments if param not in allowed_params_list
         ]
 
         if disallowed_params:

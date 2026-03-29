@@ -142,7 +142,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ad_hoc_recognizers = presidio_ad_hoc_recognizers
         if ad_hoc_recognizers is not None:
             try:
-                with open(ad_hoc_recognizers, "r") as file:
+                with open(ad_hoc_recognizers) as file:
                     self.ad_hoc_recognizers = json.load(file)
             except FileNotFoundError:
                 raise Exception(f"File not found. file_path={ad_hoc_recognizers}")

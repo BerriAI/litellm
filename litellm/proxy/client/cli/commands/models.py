@@ -390,7 +390,7 @@ def _print_summary_table(provider_counts):
 
 def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
     """Load and validate the model list from a YAML file."""
-    with open(yaml_file, "r") as f:
+    with open(yaml_file) as f:
         data = yaml.safe_load(f)
     if not data or "model_list" not in data:
         raise click.ClickException(
