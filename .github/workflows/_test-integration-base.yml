@@ -94,6 +94,12 @@ on:
         required: false
       PERPLEXITYAI_API_KEY:
         required: false
+      EXA_API_KEY:
+        required: false
+      PARALLEL_API_KEY:
+        required: false
+      FIRECRAWL_API_KEY:
+        required: false
       DATAFORSEO_LOGIN:
         required: false
       DATAFORSEO_PASSWORD:
@@ -206,6 +212,9 @@ jobs:
           LINKUP_API_KEY: ${{ secrets.LINKUP_API_KEY }}
           SEARCHAPI_API_KEY: ${{ secrets.SEARCHAPI_API_KEY }}
           PERPLEXITYAI_API_KEY: ${{ secrets.PERPLEXITYAI_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+          PARALLEL_API_KEY: ${{ secrets.PARALLEL_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           DATAFORSEO_LOGIN: ${{ secrets.DATAFORSEO_LOGIN }}
           DATAFORSEO_PASSWORD: ${{ secrets.DATAFORSEO_PASSWORD }}
           # Guardrail keys
