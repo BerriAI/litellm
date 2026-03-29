@@ -513,7 +513,10 @@ def _get_proxy_router():
     """Return the global proxy router when available."""
     try:
         from litellm.proxy.proxy_server import llm_router
-    except Exception:
+    except Exception as exc:
+        verbose_proxy_logger.debug(
+            "Could not import llm_router, falling back to litellm: %s", exc
+        )
         return None
     return llm_router
 
