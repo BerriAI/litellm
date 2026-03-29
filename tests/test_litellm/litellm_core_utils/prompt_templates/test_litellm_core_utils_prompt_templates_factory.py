@@ -2444,9 +2444,11 @@ def test_bedrock_converse_messages_pt_document_various_formats():
         ("application/pdf", "pdf"),
         ("text/csv", "csv"),
         ("text/html", "html"),
+        ("text/plain", "txt"),
+        ("text/markdown", "md"),
         (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
         ),
     ]
 

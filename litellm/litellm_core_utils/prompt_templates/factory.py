@@ -4741,7 +4741,9 @@ class BedrockConverseMessagesProcessor:
         source = element["source"]
         media_type: str = source["media_type"]
         data: str = source["data"]
-        doc_format = media_type.split("/")[1]
+        doc_format = BedrockImageProcessor._validate_format(
+            mime_type=media_type, image_format=media_type.split("/")[1]
+        )
 
         # Deterministic name using the same hashing pattern as _create_bedrock_block
         HASH_SAMPLE_BYTES = 64 * 1024
