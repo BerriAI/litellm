@@ -185,7 +185,6 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             temporary_key = os.environ["ALEPH_ALPHA_API_KEY"]
             os.environ["ALEPH_ALPHA_API_KEY"] = "bad-key"
         elif model in litellm.nlp_cloud_models:
-            temporary_key = os.environ["NLP_CLOUD_API_KEY"]
             os.environ["NLP_CLOUD_API_KEY"] = "bad-key"
         elif (
             model
@@ -230,7 +229,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model in litellm.aleph_alpha_models:
             os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
         elif model in litellm.nlp_cloud_models:
-            os.environ["NLP_CLOUD_API_KEY"] = temporary_key
+            os.environ.pop("NLP_CLOUD_API_KEY", None)
         elif "bedrock" in model:
             os.environ["AWS_ACCESS_KEY_ID"] = temporary_aws_access_key
             os.environ["AWS_REGION_NAME"] = temporary_aws_region_name
