@@ -188,35 +188,6 @@ def test_azure_ai_services_with_api_version():
         )
 
 
-@pytest.mark.skip(reason="Skipping due to cohere ssl issues")
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_azure_deepseek_reasoning_content():
     import json
 
@@ -387,7 +358,7 @@ async def test_azure_ai_model_router():
     response = await litellm.acompletion(
         model="azure_ai/model_router/azure-model-router",
         messages=[{"role": "user", "content": "hi who is this"}],
-        api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+        api_base=os.getenv("AZURE_MODEL_ROUTER_API_BASE"),
         api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
     )
     print("response: ", response)
