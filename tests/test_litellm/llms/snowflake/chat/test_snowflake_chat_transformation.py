@@ -1,6 +1,6 @@
 """
 Unit tests for Snowflake chat transformation
-Tests tool calling request/response transformations
+Tests tool calling request/response transformations and streaming
 """
 
 import os
@@ -13,8 +13,11 @@ from unittest.mock import MagicMock
 import httpx
 
 import litellm
-from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
-from litellm.types.utils import ModelResponse
+from litellm.llms.snowflake.chat.transformation import (
+    SnowflakeConfig,
+    SnowflakeStreamingHandler,
+)
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 class TestSnowflakeToolTransformation:
@@ -438,3 +441,338 @@ class TestSnowFlakeCompletion:
 
         os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
         os.environ.pop("SNOWFLAKE_JWT", None)
+
+
+class TestSnowflakeStreamingHandler:
+    """Test suite for Snowflake streaming tool call handling"""
+
+    def test_streaming_handler_text_content_block(self):
+        """
+        Test that text content_block events are correctly parsed.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Simulate content_block_start for text
+        chunk_start = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
+        result = handler.chunk_parser(chunk_start)
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices[0].delta.content is None  # Empty text
+
+        # Simulate content_block_delta for text
+        chunk_delta = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello, world!"},
+        }
+        result = handler.chunk_parser(chunk_delta)
+        assert result.choices[0].delta.content == "Hello, world!"
+        assert result.choices[0].delta.tool_calls is None
+
+    def test_streaming_handler_tool_use_content_block(self):
+        """
+        Test that tool_use content_block events are correctly transformed to OpenAI format.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Simulate content_block_start for tool_use
+        chunk_start = {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tooluse_abc123",
+                "name": "get_weather",
+            },
+        }
+        result = handler.chunk_parser(chunk_start)
+
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices[0].delta.tool_calls is not None
+        assert len(result.choices[0].delta.tool_calls) == 1
+
+        tool_call = result.choices[0].delta.tool_calls[0]
+        assert tool_call["id"] == "tooluse_abc123"
+        assert tool_call["type"] == "function"
+        assert tool_call["function"]["name"] == "get_weather"
+        assert tool_call["function"]["arguments"] == ""
+        assert tool_call["index"] == 0
+
+    def test_streaming_handler_tool_use_delta(self):
+        """
+        Test that input_json_delta events are correctly parsed for tool arguments.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # First, start a tool_use block to set the context
+        chunk_start = {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tooluse_abc123",
+                "name": "get_weather",
+            },
+        }
+        handler.chunk_parser(chunk_start)
+
+        # Now simulate input_json_delta
+        chunk_delta = {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"location": "'},
+        }
+        result = handler.chunk_parser(chunk_delta)
+
+        assert result.choices[0].delta.tool_calls is not None
+        tool_call = result.choices[0].delta.tool_calls[0]
+        assert tool_call["function"]["arguments"] == '{"location": "'
+        assert tool_call["index"] == 0
+
+        # Another delta chunk
+        chunk_delta2 = {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": 'Paris"}'},
+        }
+        result = handler.chunk_parser(chunk_delta2)
+
+        tool_call = result.choices[0].delta.tool_calls[0]
+        assert tool_call["function"]["arguments"] == 'Paris"}'
+
+    def test_streaming_handler_message_delta_finish_reason(self):
+        """
+        Test that message_delta events correctly extract finish_reason.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Test end_turn -> stop (with usage containing only output_tokens per Snowflake spec)
+        chunk = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 20},
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0].finish_reason == "stop"
+        assert result.usage.completion_tokens == 20
+        assert result.usage.prompt_tokens == 0  # Not available in message_delta
+
+        # Test tool_use -> tool_calls
+        chunk = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0].finish_reason == "tool_calls"
+
+        # Test max_tokens -> length
+        chunk = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "max_tokens"},
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0].finish_reason == "length"
+
+    def test_streaming_handler_message_start_usage(self):
+        """
+        Test that message_start events correctly extract usage info.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        chunk = {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "usage": {"input_tokens": 50, "output_tokens": 0},
+            },
+        }
+        result = handler.chunk_parser(chunk)
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 50
+        assert result.usage.completion_tokens == 0
+
+    def test_streaming_handler_openai_format_passthrough(self):
+        """
+        Test that OpenAI-compatible format chunks pass through correctly.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # OpenAI-compatible chunk
+        chunk = {
+            "id": "chatcmpl-123",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "mistral-7b",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        result = handler.chunk_parser(chunk)
+
+        assert isinstance(result, ModelResponseStream)
+        assert result.id == "chatcmpl-123"
+        assert result.model == "mistral-7b"
+        assert result.choices[0]["delta"]["content"] == "Hello"
+        assert result.choices[0]["finish_reason"] is None
+
+    def test_streaming_handler_multiple_tool_calls(self):
+        """
+        Test that multiple tool calls get sequential indices.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # First tool
+        chunk1 = {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tooluse_first",
+                "name": "get_weather",
+            },
+        }
+        result1 = handler.chunk_parser(chunk1)
+        assert result1.choices[0].delta.tool_calls[0]["index"] == 0
+
+        # Stop first block
+        handler.chunk_parser({"type": "content_block_stop", "index": 0})
+
+        # Second tool
+        chunk2 = {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tooluse_second",
+                "name": "get_time",
+            },
+        }
+        result2 = handler.chunk_parser(chunk2)
+        assert result2.choices[0].delta.tool_calls[0]["index"] == 1
+        assert result2.choices[0].delta.tool_calls[0]["id"] == "tooluse_second"
+
+    def test_streaming_handler_content_block_stop_resets_state(self):
+        """
+        Test that content_block_stop resets the current block tracking.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Start a tool_use block
+        handler.chunk_parser(
+            {
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "tooluse_123",
+                    "name": "get_weather",
+                },
+            }
+        )
+        assert handler.current_content_block_type == "tool_use"
+
+        # Stop the block
+        handler.chunk_parser({"type": "content_block_stop"})
+        assert handler.current_content_block_type is None
+
+    def test_get_model_response_iterator_returns_streaming_handler(self):
+        """
+        Test that SnowflakeConfig.get_model_response_iterator returns SnowflakeStreamingHandler.
+        """
+        config = SnowflakeConfig()
+        iterator = config.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+        assert isinstance(iterator, SnowflakeStreamingHandler)
+
+    def test_streaming_handler_error_event_raises_exception(self):
+        """
+        Test that error events raise an APIError instead of being silently swallowed.
+        """
+        import pytest
+        from litellm.exceptions import APIError
+
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Simulate an error event from Snowflake
+        error_chunk = {
+            "type": "error",
+            "error": {
+                "type": "overloaded_error",
+                "message": "Overloaded",
+            },
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            handler.chunk_parser(error_chunk)
+
+        assert "Snowflake streaming error" in str(exc_info.value)
+        assert "overloaded_error" in str(exc_info.value)
+        assert "Overloaded" in str(exc_info.value)
+
+    def test_streaming_handler_content_block_stop_returns_minimal_chunk(self):
+        """
+        Test that content_block_stop returns a minimal sentinel chunk.
+        """
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Set up state as if we were in a tool_use block
+        handler.current_content_block_type = "tool_use"
+
+        result = handler.chunk_parser({"type": "content_block_stop"})
+
+        # Should return minimal chunk with empty delta
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices[0].delta.content is None
+        assert result.choices[0].delta.tool_calls is None
+        assert handler.current_content_block_type is None
