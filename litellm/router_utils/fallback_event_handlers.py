@@ -8,6 +8,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
 from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -123,7 +124,13 @@ async def run_async_fallback(
         if mg == original_model_group:
             continue
         try:
-            # LOGGING
+        # Deep copy kwargs to prevent mutations from one provider
+            # (e.g., Bedrock popping 'tools' from optional_params)
+            # from corrupting kwargs for subsequent fallback providers.
+            # See: https://github.com/BerriAI/litellm/issues/24764
+                kwargs = safe_deep_copy(kwargs)
+            
+        # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
             if isinstance(mg, str):
