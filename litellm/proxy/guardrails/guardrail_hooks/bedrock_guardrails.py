@@ -171,12 +171,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ) -> BedrockRequest:
         """
         Create a bedrock request for the input content - the LLM request.
+
+        When experimental_use_latest_role_message_only is True, only messages
+        with role="user" are included. This prevents tool and assistant messages
+        from being erroneously sent to the guardrail.
         """
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
         bedrock_request_content: List[BedrockContentItem] = []
         if messages is None:
             return bedrock_request
         for message in messages:
+            # Skip non-user messages when filtering is enabled
+            if self.experimental_use_latest_role_message_only:
+                if message.get("role") != "user":
+                    continue
             message_text_content: Optional[List[str]] = self.get_content_for_message(
                 message=message
             )
@@ -970,25 +978,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             input_filter = self._prepare_guardrail_messages_for_role(
                 messages=new_messages
             )
-            input_messages = input_filter.payload_messages or new_messages
+            input_messages = input_filter.payload_messages
+            if not input_messages:
+                # No user-role messages found; skip INPUT validation but still
+                # run OUTPUT validation below.
+                input_messages = None if self.experimental_use_latest_role_message_only else new_messages
 
-            # Create tasks for parallel execution of both INPUT and OUTPUT validation
-            input_task = self.make_bedrock_api_request(
-                source="INPUT",
-                messages=input_messages,
-                request_data=data,
-            )
-            output_task = self.make_bedrock_api_request(
-                source="OUTPUT", response=response, request_data=data
-            )
-
-            # Execute both requests in parallel
-            try:
-                _, output_content_bedrock = await asyncio.gather(
-                    input_task, output_task
+            if input_messages:
+                # Create tasks for parallel execution of both INPUT and OUTPUT validation
+                input_task = self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=input_messages,
+                    request_data=data,
                 )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
+                output_task = self.make_bedrock_api_request(
+                    source="OUTPUT", response=response, request_data=data
+                )
+
+                # Execute both requests in parallel
+                try:
+                    _, output_content_bedrock = await asyncio.gather(
+                        input_task, output_task
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_content_bedrock = e.message
+            else:
+                # Only run OUTPUT validation (no eligible input messages)
+                try:
+                    output_content_bedrock = await self.make_bedrock_api_request(
+                        source="OUTPUT", response=response, request_data=data
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_content_bedrock = e.message
         else:
             # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
             try:
@@ -1113,25 +1134,39 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 input_filter = self._prepare_guardrail_messages_for_role(
                     messages=request_data.get("messages")
                 )
-                input_messages = input_filter.payload_messages or request_data.get(
-                    "messages"
-                )
-                input_task = self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=input_messages,
-                    request_data=request_data,
-                )  # Only input messages
-                output_task = self.make_bedrock_api_request(
-                    source="OUTPUT", response=assembled_model_response
-                )  # Only response
-
-                # Execute both requests in parallel
-                try:
-                    _, output_guardrail_response = await asyncio.gather(
-                        input_task, output_task
+                input_messages = input_filter.payload_messages
+                if not input_messages:
+                    # No user-role messages found; skip INPUT validation but still
+                    # run OUTPUT validation below.
+                    input_messages = None if self.experimental_use_latest_role_message_only else request_data.get(
+                        "messages"
                     )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
+
+                if input_messages:
+                    input_task = self.make_bedrock_api_request(
+                        source="INPUT",
+                        messages=input_messages,
+                        request_data=request_data,
+                    )  # Only input messages
+                    output_task = self.make_bedrock_api_request(
+                        source="OUTPUT", response=assembled_model_response
+                    )  # Only response
+
+                    # Execute both requests in parallel
+                    try:
+                        _, output_guardrail_response = await asyncio.gather(
+                            input_task, output_task
+                        )
+                    except GuardrailInterventionNormalStringError as e:
+                        output_guardrail_response = e.message
+                else:
+                    # Only run OUTPUT validation (no eligible input messages)
+                    try:
+                        output_guardrail_response = await self.make_bedrock_api_request(
+                            source="OUTPUT", response=assembled_model_response
+                        )
+                    except GuardrailInterventionNormalStringError as e:
+                        output_guardrail_response = e.message
             else:
                 # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
                 try:

@@ -321,6 +321,91 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
     assert masked_messages[3]["content"] == "[MASKED]"
 
 
+def test_bedrock_guardrail_filters_excludes_tool_and_assistant_messages():
+    """
+    Regression test for issue #23476: when experimental_use_latest_role_message_only
+    is True, tool and assistant messages should not be sent to the guardrail.
+    Only the latest user-role message should be sent.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    # Scenario: conversation with tool calls where last message is a tool result
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Calculate 2+2"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "function": {"name": "calc", "arguments": "{}"}}]},
+        {"role": "tool", "content": "4", "tool_call_id": "call_1"},
+    ]
+
+    filter_result = guardrail._prepare_guardrail_messages_for_role(messages=messages)
+
+    assert filter_result.payload_messages is not None
+    assert len(filter_result.payload_messages) == 1
+    assert filter_result.payload_messages[0]["role"] == "user"
+    assert filter_result.payload_messages[0]["content"] == "Calculate 2+2"
+    assert filter_result.target_indices == [1]
+
+
+def test_bedrock_guardrail_filters_excludes_assistant_as_last_message():
+    """
+    Regression test for issue #23476: when the last message is an assistant
+    message, only the latest user message should be sent to the guardrail.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there! How can I help?"},
+    ]
+
+    filter_result = guardrail._prepare_guardrail_messages_for_role(messages=messages)
+
+    assert filter_result.payload_messages is not None
+    assert len(filter_result.payload_messages) == 1
+    assert filter_result.payload_messages[0]["role"] == "user"
+    assert filter_result.payload_messages[0]["content"] == "Hello"
+    assert filter_result.target_indices == [1]
+
+
+def test_bedrock_input_content_request_skips_non_user_messages_with_flag():
+    """
+    Regression test for issue #23476: _create_bedrock_input_content_request
+    should only include user-role message content when
+    experimental_use_latest_role_message_only is True.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    # Even if non-user messages are somehow passed, they should be filtered out
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "The answer is 4"},
+        {"role": "tool", "content": "calculator result: 4"},
+    ]
+
+    request = guardrail._create_bedrock_input_content_request(messages=messages)
+    content_items = request.get("content", [])
+
+    # Only the user message content should be included
+    assert len(content_items) == 1
+    assert content_items[0]["text"]["text"] == "What is 2+2?"
+
+
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block():
     """
