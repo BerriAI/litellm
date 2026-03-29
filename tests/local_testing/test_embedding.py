@@ -549,7 +549,7 @@ def test_bedrock_embedding_cohere():
                 "good morning from litellm, attempting to embed data",
                 "lets test a second string for good measure",
             ],
-            aws_region_name="os.environ/AWS_REGION_NAME_2",
+            aws_region_name="os.environ/AWS_REGION_NAME",
         )
         assert isinstance(
             response["data"][0]["embedding"], list
