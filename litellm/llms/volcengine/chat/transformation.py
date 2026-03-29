@@ -63,6 +63,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             "tool_choice",
             "function_call",
             "functions",
+            "response_format",
             "max_retries",
             "extra_headers",
             "thinking",
@@ -106,4 +107,5 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             else:
                 # Skip adding thinking parameter when it's not set or has invalid value
                 pass
+        optional_params.pop("response_format", None)
         return optional_params
