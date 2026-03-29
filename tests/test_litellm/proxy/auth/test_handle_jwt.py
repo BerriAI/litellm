@@ -340,6 +340,123 @@ async def test_sync_user_role_and_teams():
 
 
 @pytest.mark.asyncio
+async def test_sync_user_role_and_teams_cache_invalidation_on_role_change():
+    """Test that user cache is updated when role changes."""
+    mock_cache = AsyncMock()
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            jwt_litellm_role_map=[
+                JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
+            ],
+            roles_jwt_field="roles",
+            team_ids_jwt_field="my_id_teams",
+            sync_user_role_and_teams=True,
+        ),
+    )
+
+    token = {"roles": ["ADMIN"], "my_id_teams": ["team1"]}
+    user = LiteLLM_UserTable(
+        user_id="u1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        teams=["team1"],  # teams already match — only role differs
+    )
+
+    prisma = AsyncMock()
+    prisma.db.litellm_usertable.update = AsyncMock()
+
+    await JWTAuthManager.sync_user_role_and_teams(
+        jwt_handler, token, user, prisma, user_api_key_cache=mock_cache
+    )
+
+    mock_cache.async_set_cache.assert_called_once()
+    call_kwargs = mock_cache.async_set_cache.call_args
+    assert call_kwargs.kwargs["key"] == "u1"
+    assert call_kwargs.kwargs["value"]["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_cache_invalidation_on_team_change():
+    """Test that user cache is updated when team memberships change."""
+    mock_cache = AsyncMock()
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            jwt_litellm_role_map=[
+                JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
+            ],
+            roles_jwt_field="roles",
+            team_ids_jwt_field="my_id_teams",
+            sync_user_role_and_teams=True,
+        ),
+    )
+
+    token = {"roles": ["ADMIN"], "my_id_teams": ["team1", "team2"]}
+    user = LiteLLM_UserTable(
+        user_id="u1",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,  # role already matches
+        teams=["team2"],  # teams differ
+    )
+
+    prisma = AsyncMock()
+    prisma.db.litellm_usertable.update = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ):
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler, token, user, prisma, user_api_key_cache=mock_cache
+        )
+
+    mock_cache.async_set_cache.assert_called_once()
+    call_kwargs = mock_cache.async_set_cache.call_args
+    assert call_kwargs.kwargs["key"] == "u1"
+    assert set(call_kwargs.kwargs["value"]["teams"]) == {"team1", "team2"}
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_no_cache_write_when_nothing_changes():
+    """Test that cache is NOT written when role and teams already match."""
+    mock_cache = AsyncMock()
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            jwt_litellm_role_map=[
+                JWTLiteLLMRoleMap(jwt_role="ADMIN", litellm_role=LitellmUserRoles.PROXY_ADMIN)
+            ],
+            roles_jwt_field="roles",
+            team_ids_jwt_field="my_id_teams",
+            sync_user_role_and_teams=True,
+        ),
+    )
+
+    token = {"roles": ["ADMIN"], "my_id_teams": ["team1"]}
+    user = LiteLLM_UserTable(
+        user_id="u1",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        teams=["team1"],
+    )
+
+    prisma = AsyncMock()
+
+    await JWTAuthManager.sync_user_role_and_teams(
+        jwt_handler, token, user, prisma, user_api_key_cache=mock_cache
+    )
+
+    mock_cache.async_set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_map_jwt_role_to_litellm_role():
     """Test JWT role mapping to LiteLLM roles with various patterns"""
     from unittest.mock import MagicMock

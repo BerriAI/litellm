@@ -102,7 +102,7 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             mock_get_secret.return_value = "env_azure_key"
             result = self.router.get_credentials("azure", None)
             self.assertEqual(result, "env_azure_key")
-            mock_get_secret.assert_called_once_with("AZURE_API_KEY")
+            mock_get_secret.assert_called_once_with("AZURE_AI_API_KEY")
 
     def test_default_env_variable_method(self):
         """

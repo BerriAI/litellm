@@ -1,0 +1,35 @@
+name: "Unit Tests: Proxy API Endpoints"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy-endpoints:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/test_litellm/proxy/management_endpoints
+        tests/test_litellm/proxy/guardrails
+        tests/test_litellm/proxy/management_helpers
+        tests/test_litellm/proxy/anthropic_endpoints
+        tests/test_litellm/proxy/google_endpoints
+        tests/test_litellm/proxy/openai_files_endpoint
+        tests/test_litellm/proxy/response_api_endpoints
+        tests/test_litellm/proxy/image_endpoints
+        tests/test_litellm/proxy/vector_store_endpoints
+        tests/test_litellm/proxy/agent_endpoints
+        tests/test_litellm/proxy/discovery_endpoints
+        tests/test_litellm/proxy/health_endpoints
+        tests/test_litellm/proxy/public_endpoints
+        tests/test_litellm/proxy/prompts
+        tests/test_litellm/proxy/ui_crud_endpoints
+      workers: 2
+      reruns: 2

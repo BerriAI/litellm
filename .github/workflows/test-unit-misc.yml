@@ -1,0 +1,31 @@
+name: "Unit Tests: MCP, Secrets, Containers & Misc"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  misc:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: >-
+        tests/test_litellm/secret_managers
+        tests/test_litellm/a2a_protocol
+        tests/test_litellm/anthropic_interface
+        tests/test_litellm/completion_extras
+        tests/test_litellm/containers
+        tests/test_litellm/experimental_mcp_client
+        tests/test_litellm/images
+        tests/test_litellm/interactions
+        tests/test_litellm/passthrough
+        tests/test_litellm/vector_stores
+        tests/test_litellm/test_*.py
+      workers: 2
+      reruns: 2
