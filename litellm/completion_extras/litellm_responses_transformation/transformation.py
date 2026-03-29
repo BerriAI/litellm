@@ -246,8 +246,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                for r_item in msg.get("reasoning_items") or []:
-                    input_items.append(_reasoning_item_to_response_input(r_item))
+                reasoning_items = msg.get("reasoning_items")
+                if isinstance(reasoning_items, list):
+                    for r_item in reasoning_items:
+                        input_items.append(_reasoning_item_to_response_input(r_item))
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
@@ -264,8 +266,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    for r_item in msg.get("reasoning_items") or []:
-                        input_items.append(_reasoning_item_to_response_input(r_item))
+                    reasoning_items = msg.get("reasoning_items")
+                    if isinstance(reasoning_items, list):
+                        for r_item in reasoning_items:
+                            input_items.append(
+                                _reasoning_item_to_response_input(r_item)
+                            )
                 input_items.append(
                     {
                         "type": "message",
