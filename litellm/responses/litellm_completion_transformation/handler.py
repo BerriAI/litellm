@@ -2,7 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, List, Optional, Union
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -18,6 +18,50 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
+
+
+def _strip_empty_text_content_parts(litellm_completion_request: dict) -> dict:
+    """
+    Strip empty text content parts from messages before calling litellm.completion().
+
+    Some strict OpenAI-compatible models (e.g. Kimi-K2.5, gpt-oss-120b on Azure AI)
+    reject messages whose content array contains {"type": "text", "text": ""}.  This
+    happens when the Responses API → chat/completions transformation produces a text
+    part next to a tool-output part but the text is an empty string.
+
+    Only returns a modified copy of the dict when changes are actually needed.
+    """
+    messages: Optional[List[Any]] = litellm_completion_request.get("messages")
+    if not messages:
+        return litellm_completion_request
+
+    modified = False
+    new_messages: List[Any] = []
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, list):
+            filtered = [
+                part
+                for part in content
+                if not (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and part.get("text") == ""
+                )
+            ]
+            if len(filtered) != len(content):
+                modified = True
+                msg = dict(msg)
+                # Avoid sending an empty content list; fall back to empty string.
+                msg["content"] = filtered if filtered else ""
+        new_messages.append(msg)
+
+    if not modified:
+        return litellm_completion_request
+
+    result = dict(litellm_completion_request)
+    result["messages"] = new_messages
+    return result
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -55,6 +99,10 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 **kwargs,
             )
+
+        litellm_completion_request = _strip_empty_text_content_parts(
+            litellm_completion_request
+        )
 
         completion_args = {}
         completion_args.update(kwargs)
@@ -104,6 +152,10 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
             )
+
+        litellm_completion_request = _strip_empty_text_content_parts(
+            litellm_completion_request
+        )
 
         acompletion_args = {}
         acompletion_args.update(kwargs)

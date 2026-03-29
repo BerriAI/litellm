@@ -1272,9 +1272,9 @@ class LiteLLMCompletionResponsesConfig:
                             )
                         )
                     else:
-                        # Skip text blocks with None text to avoid downstream errors
+                        # Skip text blocks with None or empty text to avoid downstream errors
                         text_value = item.get("text")
-                        if text_value is None:
+                        if text_value is None or text_value == "":
                             continue
                         content_list.append(
                             {
