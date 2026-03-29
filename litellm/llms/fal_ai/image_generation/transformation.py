@@ -20,6 +20,91 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _normalize_model_endpoint(model: str) -> str:
+    normalized = model.strip()
+    if normalized.startswith("fal_ai/"):
+        return normalized[len("fal_ai/") :]
+    return normalized
+
+
+def _get_model_info_for_image_size_mapping(model: str) -> Optional[dict]:
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    normalized_model = _normalize_model_endpoint(model)
+    candidate_models = [normalized_model]
+
+    if normalized_model.startswith("fal-ai/"):
+        candidate_models.append(normalized_model[len("fal-ai/") :])
+
+    for candidate_model in candidate_models:
+        model_info = litellm.model_cost.get(candidate_model)
+        if (
+            model_info is not None
+            and "supports_raw_image_size_dimensions" in model_info
+        ):
+            return model_info
+
+    model_cost_map = GetModelCostMap.load_local_model_cost_map()
+    for candidate_model in candidate_models:
+        if candidate_model in model_cost_map:
+            return model_cost_map[candidate_model]
+
+    return None
+
+
+def _supports_raw_image_size_dimensions(model: str) -> bool:
+    model_info = _get_model_info_for_image_size_mapping(model)
+    if model_info is None:
+        return False
+    return bool(model_info.get("supports_raw_image_size_dimensions"))
+
+
+def _map_openai_size_to_model_image_size(model: str, size: Any) -> Any:
+    if _supports_raw_image_size_dimensions(model):
+        if isinstance(size, dict):
+            width = size.get("width")
+            height = size.get("height")
+            if isinstance(width, int) and isinstance(height, int):
+                return f"{width}x{height}"
+        return size
+
+    return _map_openai_size_to_image_size(size)
+
+
+def _map_openai_size_to_image_size(size: Any) -> Any:
+    if isinstance(size, dict):
+        return size
+
+    if not isinstance(size, str):
+        return size
+
+    openai_size_to_image_size = {
+        "1024x1024": "square_hd",
+        "512x512": "square",
+        "1792x1024": "landscape_16_9",
+        "1024x1792": "portrait_16_9",
+        "1024x768": "landscape_4_3",
+        "768x1024": "portrait_4_3",
+        "1536x1024": "landscape_4_3",
+        "1024x1536": "portrait_4_3",
+    }
+    if size in openai_size_to_image_size:
+        return openai_size_to_image_size[size]
+
+    if "x" in size:
+        try:
+            width_str, height_str = size.split("x")
+            return {
+                "width": int(width_str),
+                "height": int(height_str),
+            }
+        except (AttributeError, ValueError):
+            return size
+
+    return size
+
+
 class FalAIBaseConfig(BaseImageGenerationConfig):
     """
     Base configuration for Fal AI image generation models.
@@ -39,17 +124,19 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """
-        Get the complete url for the request
+        Get the complete url for the request.
 
-        Some providers need `model` in `api_base`
+        Newer Fal AI image generation models are addressed by their model path
+        directly under the base URL, e.g. `https://fal.run/fal-ai/flux-2`.
         """
         complete_url: str = (
             api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
-        if self.IMAGE_GENERATION_ENDPOINT:
-            complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        endpoint = self.IMAGE_GENERATION_ENDPOINT or _normalize_model_endpoint(model)
+        if endpoint:
+            complete_url = f"{complete_url}/{endpoint.lstrip('/')}"
         return complete_url
 
     def validate_environment(
@@ -144,16 +231,26 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    optional_params[k] = non_default_params[k]
-                elif drop_params:
-                    pass
-                else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
+        for key, value in non_default_params.items():
+            if key in optional_params:
+                continue
+
+            if key not in supported_params:
+                if drop_params:
+                    continue
+                raise ValueError(
+                    f"Parameter {key} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+                )
+
+            if key == "n":
+                optional_params["num_images"] = value
+            elif key == "response_format":
+                output_format = "png" if value in ["url", "b64_json"] else value
+                optional_params["output_format"] = output_format
+            elif key == "size":
+                optional_params["image_size"] = _map_openai_size_to_model_image_size(
+                    model=model, size=value
+                )
 
         return optional_params
 
