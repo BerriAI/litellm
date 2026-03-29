@@ -1042,6 +1042,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # not thinking budget_tokens. Map reasoning_effort to output_config.
                 if AnthropicConfig._is_claude_4_6_model(model):
                     effort_map = {
+                        "none": None,
                         "low": "low",
                         "minimal": "low",
                         "medium": "medium",
@@ -1049,7 +1050,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "max": "max",
                     }
                     mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    if mapped_effort is not None:
+                        optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)

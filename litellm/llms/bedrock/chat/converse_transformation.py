@@ -428,6 +428,10 @@ class AmazonConverseConfig(BaseConfig):
             >>> params
             {'thinking': {'type': 'enabled', 'budget_tokens': 10000}}
         """
+        if reasoning_effort == "none":
+            # "none" means disable reasoning/thinking — don't set any
+            # reasoning-related parameters, regardless of model family.
+            return
         if "gpt-oss" in model:
             # GPT-OSS models: keep reasoning_effort as-is
             # It will be passed through to additionalModelRequestFields
