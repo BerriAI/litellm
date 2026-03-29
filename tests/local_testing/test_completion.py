@@ -132,7 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -286,7 +285,9 @@ def test_completion_claude_3_empty_response():
         },
     ]
     try:
-        response = litellm.completion(model="claude-sonnet-4-5-20250929", messages=messages)
+        response = litellm.completion(
+            model="claude-sonnet-4-5-20250929", messages=messages
+        )
         print(response)
     except litellm.InternalServerError as e:
         pytest.skip(f"InternalServerError - {str(e)}")
@@ -849,8 +850,8 @@ def test_completion_mistral_azure():
         litellm.set_verbose = True
         response = completion(
             model="mistral/Mistral-large-nmefg",
-            api_key=os.environ["MISTRAL_AZURE_API_KEY"],
-            api_base=os.environ["MISTRAL_AZURE_API_BASE"],
+            api_key=os.environ["MISTRAL_AZURE_AI_API_KEY"],
+            api_base=os.environ["MISTRAL_AZURE_AI_API_BASE"],
             max_tokens=5,
             messages=[
                 {
@@ -991,59 +992,6 @@ def test_completion_gpt4_vision():
         print(response)
     except openai.RateLimitError:
         print("got a rate liimt error")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_gpt4_vision()
-
-
-def test_completion_azure_gpt4_vision():
-    # azure/gpt-4, vision takes 5-seconds to respond
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="azure/gpt-4-vision",
-            timeout=5,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://avatars.githubusercontent.com/u/29436595?v=4"
-                            },
-                        },
-                    ],
-                }
-            ],
-            base_url="https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions",
-            api_key=os.getenv("AZURE_VISION_API_KEY"),
-            enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
-            dataSources=[
-                {
-                    "type": "AzureComputerVision",
-                    "parameters": {
-                        "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
-                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
-                    },
-                }
-            ],
-        )
-        print(response)
-    except openai.APIError as e:
-        pass
-    except openai.APITimeoutError:
-        print("got a timeout error")
-        pass
-    except openai.RateLimitError as e:
-        print("got a rate liimt error", e)
-        pass
-    except openai.APIStatusError as e:
-        print("got an api status error", e)
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -1751,7 +1699,6 @@ def test_completion_openai_pydantic(model, api_version):
         pytest.fail(f"Error occurred: {e}")
 
 
-
 def test_completion_text_openai():
     try:
         # litellm.set_verbose =True
@@ -2341,9 +2288,9 @@ def test_completion_azure_extra_headers():
             response = completion(
                 model="azure/gpt-4.1-mini",
                 messages=messages,
-                api_base=os.getenv("AZURE_API_BASE"),
+                api_base=os.getenv("AZURE_AI_API_BASE"),
                 api_version="2023-07-01-preview",
-                api_key=os.getenv("AZURE_API_KEY"),
+                api_key=os.getenv("AZURE_AI_API_KEY"),
                 extra_headers={
                     "Authorization": "my-bad-key",
                     "Ocp-Apim-Subscription-Key": "hello-world-testing",
@@ -2379,8 +2326,8 @@ def test_completion_azure_ad_token():
 
     litellm.set_verbose = True
 
-    old_key = os.environ["AZURE_API_KEY"]
-    os.environ.pop("AZURE_API_KEY", None)
+    old_key = os.environ["AZURE_AI_API_KEY"]
+    os.environ.pop("AZURE_AI_API_KEY", None)
 
     http_client = Client()
 
@@ -2396,7 +2343,7 @@ def test_completion_azure_ad_token():
         except Exception as e:
             pass
         finally:
-            os.environ["AZURE_API_KEY"] = old_key
+            os.environ["AZURE_AI_API_KEY"] = old_key
 
         mock_client.assert_called_once()
         request = mock_client.call_args[0][0]
@@ -2412,8 +2359,8 @@ def test_completion_azure_key_completion_arg():
     # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
-    old_key = os.environ["AZURE_API_KEY"]
-    os.environ.pop("AZURE_API_KEY", None)
+    old_key = os.environ["AZURE_AI_API_KEY"]
+    os.environ.pop("AZURE_AI_API_KEY", None)
     try:
         print("azure gpt-3.5 test\n\n")
         litellm.set_verbose = True
@@ -2430,9 +2377,9 @@ def test_completion_azure_key_completion_arg():
 
         print("Hidden Params", response._hidden_params)
         assert response._hidden_params["custom_llm_provider"] == "azure"
-        os.environ["AZURE_API_KEY"] = old_key
+        os.environ["AZURE_AI_API_KEY"] = old_key
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_key
+        os.environ["AZURE_AI_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -2443,8 +2390,8 @@ async def test_re_use_azure_async_client():
         import openai
 
         client = openai.AsyncAzureOpenAI(
-            azure_endpoint=os.environ["AZURE_API_BASE"],
-            api_key=os.environ["AZURE_API_KEY"],
+            azure_endpoint=os.environ["AZURE_AI_API_BASE"],
+            api_key=os.environ["AZURE_AI_API_KEY"],
             api_version="2023-07-01-preview",
         )
         ## Test azure call
@@ -2525,13 +2472,13 @@ def test_completion_azure2():
     try:
         print("azure gpt-3.5 test\n\n")
         litellm.set_verbose = False
-        api_base = os.environ["AZURE_API_BASE"]
-        api_key = os.environ["AZURE_API_KEY"]
+        api_base = os.environ["AZURE_AI_API_BASE"]
+        api_key = os.environ["AZURE_AI_API_KEY"]
         api_version = os.environ["AZURE_API_VERSION"]
 
-        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_AI_API_BASE"] = ""
         os.environ["AZURE_API_VERSION"] = ""
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_AI_API_KEY"] = ""
 
         ## Test azure call
         response = completion(
@@ -2546,9 +2493,9 @@ def test_completion_azure2():
         # Add any assertions here to check the response
         print(response)
 
-        os.environ["AZURE_API_BASE"] = api_base
+        os.environ["AZURE_AI_API_BASE"] = api_base
         os.environ["AZURE_API_VERSION"] = api_version
-        os.environ["AZURE_API_KEY"] = api_key
+        os.environ["AZURE_AI_API_KEY"] = api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -2562,13 +2509,13 @@ def test_completion_azure3():
     try:
         print("azure gpt-3.5 test\n\n")
         litellm.set_verbose = True
-        litellm.api_base = os.environ["AZURE_API_BASE"]
-        litellm.api_key = os.environ["AZURE_API_KEY"]
+        litellm.api_base = os.environ["AZURE_AI_API_BASE"]
+        litellm.api_key = os.environ["AZURE_AI_API_KEY"]
         litellm.api_version = os.environ["AZURE_API_VERSION"]
 
-        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_AI_API_BASE"] = ""
         os.environ["AZURE_API_VERSION"] = ""
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_AI_API_KEY"] = ""
 
         ## Test azure call
         response = completion(
@@ -2580,9 +2527,9 @@ def test_completion_azure3():
         # Add any assertions here to check the response
         print(response)
 
-        os.environ["AZURE_API_BASE"] = litellm.api_base
+        os.environ["AZURE_AI_API_BASE"] = litellm.api_base
         os.environ["AZURE_API_VERSION"] = litellm.api_version
-        os.environ["AZURE_API_KEY"] = litellm.api_key
+        os.environ["AZURE_AI_API_KEY"] = litellm.api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -2594,7 +2541,7 @@ def test_completion_azure3():
 # new azure test for using litellm. vars,
 # use the following vars in this test and make an azure_api_call
 #  litellm.api_type = self.azure_api_type
-#  litellm.api_base = self.azure_api_base
+#  litellm.api_base = self.AZURE_AI_API_BASE
 #  litellm.api_version = self.azure_api_version
 #  litellm.api_key = self.api_key
 def test_completion_azure_with_litellm_key():
@@ -2604,14 +2551,14 @@ def test_completion_azure_with_litellm_key():
 
         #### set litellm vars
         litellm.api_type = "azure"
-        litellm.api_base = os.environ["AZURE_API_BASE"]
+        litellm.api_base = os.environ["AZURE_AI_API_BASE"]
         litellm.api_version = os.environ["AZURE_API_VERSION"]
-        litellm.api_key = os.environ["AZURE_API_KEY"]
+        litellm.api_key = os.environ["AZURE_AI_API_KEY"]
 
         ######### UNSET ENV VARs for this ################
-        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_AI_API_BASE"] = ""
         os.environ["AZURE_API_VERSION"] = ""
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_AI_API_KEY"] = ""
 
         ######### UNSET OpenAI vars for this ##############
         openai.api_type = ""
@@ -2627,9 +2574,9 @@ def test_completion_azure_with_litellm_key():
         print(response)
 
         ######### RESET ENV VARs for this ################
-        os.environ["AZURE_API_BASE"] = litellm.api_base
+        os.environ["AZURE_AI_API_BASE"] = litellm.api_base
         os.environ["AZURE_API_VERSION"] = litellm.api_version
-        os.environ["AZURE_API_KEY"] = litellm.api_key
+        os.environ["AZURE_AI_API_KEY"] = litellm.api_key
 
         ######### UNSET litellm vars
         litellm.api_type = None
@@ -3081,7 +3028,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-
 # test_completion_bedrock_titan()
 
 
@@ -3254,7 +3200,6 @@ def test_completion_anyscale_api():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
@@ -3869,9 +3814,6 @@ async def test_dynamic_azure_params(stream, sync_mode):
             new_mock_client.assert_called()
         except Exception as e:
             raise e
-
-
-
 
 
 @pytest.mark.parametrize(

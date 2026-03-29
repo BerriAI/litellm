@@ -72,7 +72,7 @@ async def test_enterprise_custom_auth_returns_string():
                 auth_obj = await _user_api_key_auth_builder(
                     request=request,
                     api_key="my-custom-key",
-                    azure_api_key_header="",
+                    AZURE_AI_API_KEY_header="",
                     anthropic_api_key_header=None,
                     google_ai_studio_api_key_header=None,
                     azure_apim_header=None,

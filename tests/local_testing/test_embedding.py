@@ -296,13 +296,13 @@ def test_openai_embedding_timeouts():
 
 def test_openai_azure_embedding():
     try:
-        api_key = os.environ["AZURE_API_KEY"]
-        api_base = os.environ["AZURE_API_BASE"]
+        api_key = os.environ["AZURE_AI_API_KEY"]
+        api_base = os.environ["AZURE_AI_API_BASE"]
         api_version = os.environ["AZURE_API_VERSION"]
 
         os.environ["AZURE_API_VERSION"] = ""
-        os.environ["AZURE_API_BASE"] = ""
-        os.environ["AZURE_API_KEY"] = ""
+        os.environ["AZURE_AI_API_BASE"] = ""
+        os.environ["AZURE_AI_API_KEY"] = ""
 
         response = embedding(
             model="azure/text-embedding-ada-002",
@@ -314,8 +314,8 @@ def test_openai_azure_embedding():
         print(response)
 
         os.environ["AZURE_API_VERSION"] = api_version
-        os.environ["AZURE_API_BASE"] = api_base
-        os.environ["AZURE_API_KEY"] = api_key
+        os.environ["AZURE_AI_API_BASE"] = api_base
+        os.environ["AZURE_AI_API_KEY"] = api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
