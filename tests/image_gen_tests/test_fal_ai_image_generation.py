@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -7,13 +6,13 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-import litellm
 from litellm import aimage_generation
 
 
 @pytest.mark.parametrize(
     "model,expected_endpoint",
     [
+        ("fal_ai/fal-ai/flux-2", "fal-ai/flux-2"),
         ("fal_ai/fal-ai/flux-pro/v1.1-ultra", "fal-ai/flux-pro/v1.1-ultra"),
         ("fal_ai/fal-ai/stable-diffusion-v35-medium", "fal-ai/stable-diffusion-v35-medium"),
     ],
@@ -79,16 +78,60 @@ async def test_fal_ai_image_generation_basic(model, expected_endpoint):
         assert captured_url is not None
         assert "fal.run" in captured_url
         assert expected_endpoint in captured_url
-        print(f"Validated URL: {captured_url}")
-        
         # Validate headers
         assert captured_headers is not None
         assert "Authorization" in captured_headers
         assert captured_headers["Authorization"] == f"Key {test_api_key}"
-        print(f"Validated headers: {captured_headers}")
-        
+
         # Validate request body
         assert captured_json_data is not None
         assert captured_json_data["prompt"] == test_prompt
-        print(f"Validated request body: {captured_json_data}")
 
+
+@pytest.mark.asyncio
+async def test_fal_ai_gpt_image_uses_literal_dimension_image_size():
+    """
+    GPT Image 1.5 expects literal dimension strings like `1024x1024` for
+    `image_size`, not generic Fal image-size enums like `square_hd`.
+    """
+    captured_json_data = None
+
+    def capture_post_call(*args, **kwargs):
+        nonlocal captured_json_data
+
+        captured_json_data = kwargs.get("json")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "images": [
+                {
+                    "url": "https://example.com/generated-image.png",
+                }
+            ],
+        }
+
+        return mock_response
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.side_effect = capture_post_call
+
+        response = await aimage_generation(
+            model="fal_ai/fal-ai/gpt-image-1.5",
+            prompt="A cute baby sea otter",
+            api_key="test-fal-ai-key-12345",
+            size="1024x1024",
+            n=2,
+            response_format="url",
+        )
+
+        assert response is not None
+        assert captured_json_data is not None
+        assert captured_json_data["prompt"] == "A cute baby sea otter"
+        assert captured_json_data["image_size"] == "1024x1024"
+        assert captured_json_data["num_images"] == 2
+        assert captured_json_data["output_format"] == "png"
+        assert "size" not in captured_json_data
+        assert "n" not in captured_json_data
+        assert "response_format" not in captured_json_data
