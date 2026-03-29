@@ -288,3 +288,222 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Tests for fix of issue #24399:
+#   LiteLLM Vertex AI Gemini Multimodal Data Drop and Schema Mismatch
+#
+# The Vertex AI REST API requires camelCase field names in the JSON payload
+# (e.g. ``inlineData``, ``functionResponse``, ``mimeType``), but LiteLLM's
+# internal PartType TypedDict uses snake_case (``inline_data``,
+# ``function_response``, ``mime_type``).  Without conversion the API silently
+# drops multimodal parts and returns schema-mismatch errors.
+#
+# A blanket recursive camelCase conversion (the previous workaround) broke
+# user-defined identifiers inside tool arguments and JSON-schema properties
+# (e.g. ``security_risk`` was incorrectly renamed to ``securityRisk``).
+#
+# The fix introduces ``_convert_part_to_vertex_httpx_format`` which converts
+# only the known structural Gemini field names and leaves user content alone.
+# ---------------------------------------------------------------------------
+
+from litellm.llms.vertex_ai.gemini.transformation import (
+    _convert_part_to_vertex_httpx_format,
+    _convert_contents_to_vertex_format,
+)
+
+
+class TestConvertPartToVertexHttpxFormat:
+    """Unit-level coverage for the part-level field-name converter."""
+
+    def test_inline_data_renamed(self):
+        """inline_data key becomes inlineData and mime_type becomes mimeType."""
+        part = {
+            "inline_data": {
+                "mime_type": "image/png",
+                "data": "base64encodeddata",
+            }
+        }
+        result = _convert_part_to_vertex_httpx_format(part)
+
+        assert "inlineData" in result, "inline_data must be renamed to inlineData"
+        assert "inline_data" not in result, "old snake_case key must be absent"
+        assert result["inlineData"]["mimeType"] == "image/png", (
+            "mime_type inside blob must become mimeType"
+        )
+        assert result["inlineData"]["data"] == "base64encodeddata"
+        assert "mime_type" not in result["inlineData"]
+
+    def test_file_data_renamed(self):
+        """file_data key becomes fileData with mimeType and fileUri."""
+        part = {
+            "file_data": {
+                "mime_type": "application/pdf",
+                "file_uri": "gs://bucket/doc.pdf",
+            }
+        }
+        result = _convert_part_to_vertex_httpx_format(part)
+
+        assert "fileData" in result
+        assert "file_data" not in result
+        assert result["fileData"]["mimeType"] == "application/pdf"
+        assert result["fileData"]["fileUri"] == "gs://bucket/doc.pdf"
+        assert "mime_type" not in result["fileData"]
+        assert "file_uri" not in result["fileData"]
+
+    def test_function_call_renamed(self):
+        """function_call key becomes functionCall; args payload is untouched."""
+        user_args = {"security_risk": "high", "count": 3}
+        part = {"function_call": {"name": "assess_risk", "args": user_args}}
+        result = _convert_part_to_vertex_httpx_format(part)
+
+        assert "functionCall" in result
+        assert "function_call" not in result
+        # User-defined arg names must NOT be camelCased
+        assert result["functionCall"]["args"]["security_risk"] == "high", (
+            "user-defined arg key security_risk must not be renamed to securityRisk"
+        )
+
+    def test_function_response_renamed(self):
+        """function_response key becomes functionResponse; response payload is untouched."""
+        user_response = {"security_risk": "low", "details": "all clear"}
+        part = {
+            "function_response": {
+                "name": "assess_risk",
+                "response": user_response,
+            }
+        }
+        result = _convert_part_to_vertex_httpx_format(part)
+
+        assert "functionResponse" in result
+        assert "function_response" not in result
+        assert result["functionResponse"]["response"]["security_risk"] == "low", (
+            "user-defined response key security_risk must not be renamed"
+        )
+
+    def test_media_resolution_renamed(self):
+        """media_resolution becomes mediaResolution."""
+        part = {"text": "describe this", "media_resolution": "high"}
+        result = _convert_part_to_vertex_httpx_format(part)
+
+        assert "mediaResolution" in result
+        assert "media_resolution" not in result
+        assert result["mediaResolution"] == "high"
+
+    def test_text_part_passthrough(self):
+        """Text-only parts are passed through unchanged."""
+        part = {"text": "Hello, world!"}
+        result = _convert_part_to_vertex_httpx_format(part)
+        assert result == {"text": "Hello, world!"}
+
+    def test_thought_and_thought_signature_passthrough(self):
+        """Thinking / thought fields that are already camelCase pass through."""
+        part = {"thought": True, "thoughtSignature": "abc123", "text": "thinking..."}
+        result = _convert_part_to_vertex_httpx_format(part)
+        assert result["thought"] is True
+        assert result["thoughtSignature"] == "abc123"
+        assert result["text"] == "thinking..."
+
+    def test_schema_properties_not_renamed(self):
+        """
+        User-defined JSON schema field names (like security_risk) must NOT be
+        camelCased.  This guards against the regression described in issue #24399
+        where a blanket camelCase conversion broke schema validation because the
+        ``required`` list (plain strings) no longer matched the renamed
+        ``properties`` keys.
+        """
+        schema_payload = {
+            "properties": {
+                "security_risk": {"type": "string"},
+                "user_id": {"type": "integer"},
+            },
+            "required": ["security_risk", "user_id"],
+        }
+        part = {
+            "function_response": {
+                "name": "validate_schema",
+                "response": schema_payload,
+            }
+        }
+        result = _convert_part_to_vertex_httpx_format(part)
+        resp = result["functionResponse"]["response"]
+        assert "security_risk" in resp["properties"], (
+            "user-defined schema property security_risk must not become securityRisk"
+        )
+        assert "user_id" in resp["properties"]
+        assert resp["required"] == ["security_risk", "user_id"]
+
+
+class TestConvertContentsToVertexFormat:
+    def test_multimodal_user_message(self):
+        """
+        A user message containing both text and an image inline_data part
+        should produce a contents list with camelCase structural keys.
+        """
+        contents = [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "What is in this image?"},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": "base64data",
+                        }
+                    },
+                ],
+            }
+        ]
+        result = _convert_contents_to_vertex_format(contents)
+
+        assert len(result) == 1
+        parts = result[0]["parts"]
+        assert len(parts) == 2
+
+        assert parts[0] == {"text": "What is in this image?"}
+
+        image_part = parts[1]
+        assert "inlineData" in image_part, "inline_data must become inlineData"
+        assert image_part["inlineData"]["mimeType"] == "image/png"
+        assert image_part["inlineData"]["data"] == "base64data"
+
+    def test_tool_result_with_image(self):
+        """
+        A tool result message with a function_response and a separate
+        inline_data image part must have both parts correctly renamed.
+        """
+        contents = [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "name": "take_screenshot",
+                            "response": {"url": "https://example.com"},
+                        }
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": "screenshotbase64",
+                        }
+                    },
+                ],
+            }
+        ]
+        result = _convert_contents_to_vertex_format(contents)
+
+        parts = result[0]["parts"]
+        assert "functionResponse" in parts[0]
+        assert "function_response" not in parts[0]
+        assert "inlineData" in parts[1]
+        assert parts[1]["inlineData"]["mimeType"] == "image/png"
+
+    def test_role_preserved(self):
+        """The role field on each content block must be preserved."""
+        contents = [
+            {"role": "model", "parts": [{"text": "Sure!"}]},
+        ]
+        result = _convert_contents_to_vertex_format(contents)
+        assert result[0]["role"] == "model"
