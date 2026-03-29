@@ -280,47 +280,19 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Track (content_index, None) for each text
 
         # Handle both dict and object responses
-        response_content: List[Any] = []
-        if isinstance(response, dict):
-            response_content = response.get("content", []) or []
-        elif hasattr(response, "content"):
-            content = getattr(response, "content", None)
-            response_content = content or []
-        else:
-            response_content = []
+        response_content = self._get_response_content(response)
 
         if not response_content:
             return response
 
         # Step 1: Extract all text content and tool calls from response
-        for content_idx, content_block in enumerate(response_content):
-            # Handle both dict and Pydantic object content blocks
-            block_dict: Dict[str, Any] = {}
-            if isinstance(content_block, dict):
-                block_type = content_block.get("type")
-                block_dict = cast(Dict[str, Any], content_block)
-            elif hasattr(content_block, "type"):
-                block_type = getattr(content_block, "type", None)
-                # Convert Pydantic object to dict for processing
-                if hasattr(content_block, "model_dump"):
-                    block_dict = content_block.model_dump()
-                else:
-                    block_dict = {
-                        "type": block_type,
-                        "text": getattr(content_block, "text", None),
-                    }
-            else:
-                continue
-
-            if block_type in ["text", "tool_use"]:
-                self._extract_output_text_and_images(
-                    content_block=block_dict,
-                    content_idx=content_idx,
-                    texts_to_check=texts_to_check,
-                    images_to_check=images_to_check,
-                    task_mappings=task_mappings,
-                    tool_calls_to_check=tool_calls_to_check,
-                )
+        self._extract_content_blocks_for_guardrail(
+            response_content=response_content,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
@@ -375,6 +347,54 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return response
+
+    @staticmethod
+    def _get_response_content(response: Any) -> List[Any]:
+        """Extract content list from a response (dict or object)."""
+        if isinstance(response, dict):
+            return response.get("content", []) or []
+        elif hasattr(response, "content"):
+            content = getattr(response, "content", None)
+            return content or []
+        return []
+
+    def _extract_content_blocks_for_guardrail(
+        self,
+        response_content: List[Any],
+        texts_to_check: List[str],
+        images_to_check: List[str],
+        task_mappings: List[Tuple[int, Optional[int]]],
+        tool_calls_to_check: List["ChatCompletionToolCallChunk"],
+    ) -> None:
+        """Parse content blocks and extract text/images/tool_calls for guardrailing."""
+        for content_idx, content_block in enumerate(response_content):
+            # Handle both dict and Pydantic object content blocks
+            block_dict: Dict[str, Any] = {}
+            if isinstance(content_block, dict):
+                block_type = content_block.get("type")
+                block_dict = cast(Dict[str, Any], content_block)
+            elif hasattr(content_block, "type"):
+                block_type = getattr(content_block, "type", None)
+                # Convert Pydantic object to dict for processing
+                if hasattr(content_block, "model_dump"):
+                    block_dict = content_block.model_dump()
+                else:
+                    block_dict = {
+                        "type": block_type,
+                        "text": getattr(content_block, "text", None),
+                    }
+            else:
+                continue
+
+            if block_type in ["text", "tool_use"]:
+                self._extract_output_text_and_images(
+                    content_block=block_dict,
+                    content_idx=content_idx,
+                    texts_to_check=texts_to_check,
+                    images_to_check=images_to_check,
+                    task_mappings=task_mappings,
+                    tool_calls_to_check=tool_calls_to_check,
+                )
 
     async def process_output_streaming_response(
         self,

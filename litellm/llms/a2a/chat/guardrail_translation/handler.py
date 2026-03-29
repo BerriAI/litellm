@@ -234,38 +234,13 @@ class A2AGuardrailHandler(BaseTranslation):
         then the combined guardrailed text is written into the first chunk that had text
         and all other text parts in other chunks are cleared (in-place).
         """
-        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
-
-        # Parse each item; keep alignment with responses_so_far (None where unparseable)
-        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
-        for i, item in enumerate(responses_so_far):
-            if isinstance(item, dict):
-                obj = item
-            elif isinstance(item, str):
-                try:
-                    obj = json.loads(item.strip())
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            else:
-                continue
-            if isinstance(obj.get("result"), dict):
-                parsed[i] = obj
-
-        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
-        if not valid_parsed:
-            return responses_so_far
-
-        # Collect text from each chunk in order (by original index in responses_so_far)
-        text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []  # indices into valid_parsed
-        for idx, (orig_i, obj) in enumerate(valid_parsed):
-            t = extract_text_from_a2a_response(obj)
-            if t:
-                text_parts.append(t)
-                chunk_indices_with_text.append(orig_i)
-
-        combined_text = "".join(text_parts)
-        if not combined_text:
+        (
+            parsed,
+            valid_parsed,
+            combined_text,
+            chunk_indices_with_text,
+        ) = self._parse_and_collect_streaming_text(responses_so_far)
+        if not valid_parsed or not combined_text:
             return responses_so_far
 
         if request_data is None:
@@ -336,6 +311,50 @@ class A2AGuardrailHandler(BaseTranslation):
                 responses_so_far[i] = json.dumps(parsed[i]) + "\n"
 
         return responses_so_far
+
+    @staticmethod
+    def _parse_and_collect_streaming_text(
+        responses_so_far: List[Any],
+    ) -> Tuple[
+        List[Optional[Dict[str, Any]]],
+        List[Tuple[int, Dict[str, Any]]],
+        str,
+        List[int],
+    ]:
+        """
+        Parse streaming responses and collect text from all chunks.
+
+        Returns:
+            Tuple of (parsed, valid_parsed, combined_text, chunk_indices_with_text)
+        """
+        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, dict):
+                obj = item
+            elif isinstance(item, str):
+                try:
+                    obj = json.loads(item.strip())
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            else:
+                continue
+            if isinstance(obj.get("result"), dict):
+                parsed[i] = obj
+
+        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+
+        text_parts: List[str] = []
+        chunk_indices_with_text: List[int] = []
+        for idx, (orig_i, obj) in enumerate(valid_parsed):
+            t = extract_text_from_a2a_response(obj)
+            if t:
+                text_parts.append(t)
+                chunk_indices_with_text.append(orig_i)
+
+        combined_text = "".join(text_parts)
+        return parsed, valid_parsed, combined_text, chunk_indices_with_text
 
     def _extract_texts_from_result(
         self,

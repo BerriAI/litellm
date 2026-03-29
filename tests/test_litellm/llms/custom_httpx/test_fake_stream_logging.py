@@ -5,12 +5,10 @@ when websearch_interception converts stream=True to stream=False.
 Fixes: https://github.com/BerriAI/litellm/issues/23150
 """
 
-import asyncio
 import inspect
 import os
 import sys
-from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -87,6 +85,9 @@ async def test_fake_stream_logging_handler_called():
     """
     Verify that _handle_streaming_logging is actually called after the
     fake stream is fully consumed.
+
+    The patch must be applied *before* the generator is created so that
+    the mock is bound when async_sse_wrapper captures the method reference.
     """
     handler = BaseLLMHTTPHandler()
 
@@ -107,7 +108,13 @@ async def test_fake_stream_logging_handler_called():
     }
     mock_logging_obj.dynamic_success_callbacks = []
 
-    with patch("litellm.callbacks", []):
+    # Patch _handle_streaming_logging BEFORE creating the generator so the
+    # mock is captured by async_sse_wrapper's closure.
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator"
+        ".BaseAnthropicMessagesStreamingIterator._handle_streaming_logging",
+        new_callable=AsyncMock,
+    ) as mock_logging, patch("litellm.callbacks", []):
         result = await handler._call_agentic_completion_hooks(
             response=mock_response,
             model="claude-sonnet-4-20250514",
@@ -120,13 +127,7 @@ async def test_fake_stream_logging_handler_called():
             kwargs={},
         )
 
-    # Patch the _handle_streaming_logging to track if it's called
-    with patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator"
-        ".BaseAnthropicMessagesStreamingIterator._handle_streaming_logging",
-        new_callable=AsyncMock,
-    ) as mock_logging:
-        # Consume the stream
+        # Consume the stream fully so _handle_streaming_logging fires
         async for _ in result:
             pass
 
