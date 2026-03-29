@@ -41,9 +41,9 @@
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "timeout": 0.01,
 #                     "stream_timeout": 0.000_001,
 #                     "max_retries": 7,
@@ -97,9 +97,9 @@
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                 },
 #             },
 #         ]
@@ -135,7 +135,7 @@
 #                 "model_name": "azure-cloudflare",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": "https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1",
 #                 },
@@ -202,9 +202,9 @@
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "timeout": 0.000001,
 #                     "stream_timeout": 0.000_001,
 #                 },
@@ -255,9 +255,9 @@
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "timeout": 200,  # regular calls will not timeout, stream calls will
 #                     "stream_timeout": 10,
 #                 },
@@ -349,7 +349,7 @@
 #                 "model_name": "gpt-4-vision-enhancements",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4-vision",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "base_url": "https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions/",
 #                     "dataSources": [
 #                         {
@@ -616,9 +616,9 @@
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "timeout": 0.01,
 #                     "stream_timeout": 0.000_001,
 #                     "max_retries": 7,
@@ -661,9 +661,9 @@
 #             "model_name": "gpt-3.5-turbo",
 #             "litellm_params": {
 #                 "model": "azure/gpt-4.1-mini",
-#                 "api_key": os.getenv("AZURE_API_KEY"),
+#                 "api_key": os.getenv("AZURE_AI_API_KEY"),
 #                 "api_version": os.getenv("AZURE_API_VERSION"),
-#                 "api_base": os.getenv("AZURE_API_BASE"),
+#                 "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                 "timeout": 0.01,
 #                 "stream_timeout": 0.000_001,
 #                 "max_retries": 7,
