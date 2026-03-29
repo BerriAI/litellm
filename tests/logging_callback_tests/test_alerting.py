@@ -789,40 +789,6 @@ async def test_region_outage_alerting_called(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="test only needs to run locally ")
-async def test_alerting():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "bad_key",
-                },
-            }
-        ],
-        debug_level="DEBUG",
-        set_verbose=True,
-        alerting_config=AlertingConfig(
-            alerting_threshold=10,  # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
-            webhook_url=os.getenv(
-                "SLACK_WEBHOOK_URL"
-            ),  # webhook you want to send alerts to
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-
-    except Exception:
-        pass
-    finally:
-        await asyncio.sleep(3)
-
-
-@pytest.mark.asyncio
 async def test_langfuse_trace_id():
     """
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
