@@ -5180,6 +5180,8 @@ class StandardLoggingPayloadSetup:
         user_agent_tags: Optional[List[str]] = None
         headers = proxy_server_request.get("headers", {})
         if headers is not None and isinstance(headers, dict):
+            # Normalize header names to lowercase for case-insensitive lookup
+            headers = {k.lower(): v for k, v in headers.items()}
             if "user-agent" in headers:
                 user_agent = headers["user-agent"]
                 if user_agent is not None:
