@@ -287,8 +287,8 @@ def test_audio_speech_cost_calc():
     from litellm.integrations.custom_logger import CustomLogger
 
     model = "azure/azure-tts"
-    api_base = os.getenv("AZURE_SWEDEN_API_BASE")
-    api_key = os.getenv("AZURE_SWEDEN_API_KEY")
+    api_base = os.getenv("AZURE_TTS_API_BASE")
+    api_key = os.getenv("AZURE_TTS_API_KEY")
 
     custom_logger = CustomLogger()
     litellm.set_verbose = True
@@ -301,7 +301,7 @@ def test_audio_speech_cost_calc():
             input="the quick brown fox jumped over the lazy dogs",
             api_base=api_base,
             api_key=api_key,
-            base_model="azure/tts-1",
+            base_model="azure/tts",
         )
 
         time.sleep(1)
