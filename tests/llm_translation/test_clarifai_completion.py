@@ -59,7 +59,7 @@ def test_completion_clarifai_claude_2_1():
         pass
 
     except Exception as e:
-        pytest.fail(f"Error occured: {e}")
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="Account rate limited")
