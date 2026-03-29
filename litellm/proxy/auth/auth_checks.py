@@ -8,7 +8,6 @@ Run checks for:
 2. If user is in budget
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
-
 import asyncio
 import re
 import time
@@ -415,9 +414,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=(
-                    valid_token.team_model_aliases if valid_token else None
-                ),
+                team_model_aliases=valid_token.team_model_aliases
+                if valid_token
+                else None,
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
