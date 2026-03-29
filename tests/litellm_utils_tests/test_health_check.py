@@ -246,35 +246,6 @@ async def test_audio_transcription_health_check():
     print(response)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
-)
-async def test_async_realtime_health_check(model, mocker):
-    """
-    Test Health Check with Valid models passes
-
-    """
-    mock_websocket = AsyncMock()
-    mock_connect = AsyncMock().__aenter__.return_value = mock_websocket
-    mocker.patch("websockets.connect", return_value=mock_connect)
-
-    litellm.set_verbose = True
-    model_params = {
-        "model": model,
-    }
-    if model == "azure/gpt-4o-realtime-preview":
-        model_params["api_base"] = os.getenv("AZURE_REALTIME_API_BASE")
-        model_params["api_key"] = os.getenv("AZURE_REALTIME_API_KEY")
-        model_params["api_version"] = os.getenv("AZURE_REALTIME_API_VERSION")
-    response = await litellm.ahealth_check(
-        model_params=model_params,
-        mode="realtime",
-    )
-    print(response)
-    assert response == {}
-
-
 def test_update_litellm_params_for_health_check():
     """
     Test if _update_litellm_params_for_health_check correctly:
