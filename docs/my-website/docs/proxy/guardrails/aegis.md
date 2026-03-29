@@ -113,17 +113,7 @@ print(report)  # "Patched: litellm"
 
 ### Using with LiteLLM Proxy
 
-If you run the [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy), you can add Aegis instrumentation in a custom entrypoint:
-
-```python showLineNumbers title="start_proxy.py"
-import aegis
-aegis.auto_instrument()
-
-# Then start litellm proxy as usual
-# litellm --config config.yaml
-```
-
-Or use the environment variable approach:
+If you run the [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy), use the environment variable to instrument it. This ensures Aegis patches `litellm.completion` inside the same process that serves the proxy:
 
 ```bash
 AEGIS_INSTRUMENT=1 litellm --config config.yaml
