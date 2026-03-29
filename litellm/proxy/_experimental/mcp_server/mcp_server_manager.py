@@ -1068,6 +1068,28 @@ class MCPServerManager:
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
                 _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
+
+                # Lazy registration: if the registry has no tools for this
+                # server yet (e.g. _register_openapi_tools was never called at
+                # startup), register them now so that both tools/list and
+                # tools/call work correctly.  Fixes #23528.
+                if not _tools:
+                    verbose_logger.info(
+                        "OpenAPI tool registry empty for server %s — "
+                        "registering tools lazily from spec_path %s",
+                        server.name,
+                        server.spec_path,
+                    )
+                    await self._register_openapi_tools(
+                        spec_path=server.spec_path,
+                        server=server,
+                        base_url=server.url or "",
+                    )
+                    self.initialize_tool_name_to_mcp_server_name_mapping()
+                    _tools = global_mcp_tool_registry.list_tools(
+                        tool_prefix=server.name
+                    )
+
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
