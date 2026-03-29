@@ -4739,6 +4739,12 @@ class BedrockConverseMessagesProcessor:
         {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}}
         """
         source = element["source"]
+        source_type = source.get("type")
+        if source_type != "base64":
+            raise ValueError(
+                f"Bedrock Converse only supports base64-encoded document sources, got '{source_type}'. "
+                "Please convert the document to base64 before sending to Bedrock."
+            )
         media_type: str = source["media_type"]
         data: str = source["data"]
         doc_format = BedrockImageProcessor._validate_format(

@@ -2508,3 +2508,26 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
     name1 = result1[0]["content"][0]["document"]["name"]
     name2 = result2[0]["content"][0]["document"]["name"]
     assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_document_rejects_url_source():
+    """Test that a URL-type document source raises a clear error instead of KeyError."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/doc.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="only supports base64-encoded"):
+        _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
