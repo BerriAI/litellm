@@ -176,34 +176,6 @@ def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     return mock_response
 
 
-# @pytest.mark.skip(reason="local-only test")
-@pytest.mark.asyncio
-async def test_completion_predibase():
-    try:
-        litellm.set_verbose = True
-
-        # with patch("requests.post", side_effect=predibase_mock_post):
-        response = await litellm.acompletion(
-            model="predibase/llama-3-8b-instruct",
-            tenant_id="c4768f95",
-            api_key=os.getenv("PREDIBASE_API_KEY"),
-            messages=[{"role": "user", "content": "who are u?"}],
-            max_tokens=10,
-            timeout=5,
-        )
-
-        print(response)
-    except litellm.Timeout as e:
-        print("got a timeout error from predibase")
-        pass
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except litellm.InternalServerError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_predibase()
 
 
@@ -3236,23 +3208,6 @@ def test_mistral_anyscale_stream():
     for chunk in response:
         # print(chunk)
         print(chunk["choices"][0]["delta"].get("content", ""), end="")
-
-
-# test_completion_anyscale_2()
-# def test_completion_with_fallbacks_multiple_keys():
-#     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
-#     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
-#     backup_keys = [{"api_key": os.getenv("BACKUP_OPENAI_API_KEY_1")}, {"api_key": os.getenv("BACKUP_OPENAI_API_KEY_2")}]
-#     try:
-#         api_key = "bad-key"
-#         response = completion(
-#             model="gpt-3.5-turbo", messages=messages, force_timeout=120, fallbacks=backup_keys, api_key=api_key
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         error_str = traceback.format_exc()
-#         pytest.fail(f"Error occurred: {error_str}")
 
 
 # test_completion_with_fallbacks_multiple_keys()
