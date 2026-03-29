@@ -980,11 +980,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             full_model_name = model
             if "custom_llm_provider" in kwargs:
                 custom_llm_provider = kwargs["custom_llm_provider"]
-                # Reconstruct full model name with provider prefix if needed
-                if not model.startswith(custom_llm_provider):
-                    # Check if model already has a provider prefix
-                    if "/" not in model:
-                        full_model_name = f"{custom_llm_provider}/{model}"
+                provider_prefix = f"{custom_llm_provider}/"
+                if not model.startswith(provider_prefix):
+                    full_model_name = f"{custom_llm_provider}/{model}"
 
             verbose_logger.debug(
                 f"WebSearchInterception: Using model name: {full_model_name}"
