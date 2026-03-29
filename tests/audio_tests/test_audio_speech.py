@@ -286,7 +286,7 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
 def test_audio_speech_cost_calc():
     from litellm.integrations.custom_logger import CustomLogger
 
-    model = "azure/azure-tts"
+    model = "azure/tts"
     api_base = os.getenv("AZURE_TTS_API_BASE")
     api_key = os.getenv("AZURE_TTS_API_KEY")
 
