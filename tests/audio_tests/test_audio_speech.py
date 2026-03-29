@@ -35,8 +35,8 @@ import litellm
     [
         (
             "azure/tts",
-            os.getenv("AZURE_SWEDEN_API_KEY"),
-            os.getenv("AZURE_SWEDEN_API_BASE"),
+            os.getenv("AZURE_TTS_API_KEY"),
+            os.getenv("AZURE_TTS_API_BASE"),
         ),
         ("openai/tts-1", os.getenv("OPENAI_API_KEY"), None),
     ],
@@ -337,10 +337,9 @@ async def test_azure_ava_tts_async():
     litellm._turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
     api_base = os.getenv("AZURE_TTS_API_BASE")
-    
 
     speech_file_path = Path(__file__).parent / "azure_speech.mp3"
-    
+
     try:
         response = await litellm.aspeech(
             model="azure/speech/azure-tts",
@@ -354,30 +353,34 @@ async def test_azure_ava_tts_async():
 
         # Assert the response is HttpxBinaryResponseContent
         from litellm.types.llms.openai import HttpxBinaryResponseContent
-        
+
         assert isinstance(response, HttpxBinaryResponseContent)
-        
+
         # Get the binary content
         binary_content = response.content
         assert len(binary_content) > 0
-        
+
         # MP3 files start with these magic bytes
         # ID3 tag or MPEG sync word
-        assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
-        
+        assert (
+            binary_content[:3] == b"ID3"
+            or binary_content[:2] == b"\xff\xfb"
+            or binary_content[:2] == b"\xff\xf3"
+        )
+
         # Write to file
         response.stream_to_file(speech_file_path)
-        
+
         # Verify file was created and has content
         assert speech_file_path.exists()
         assert speech_file_path.stat().st_size > 0
-        
+
         print(f"Azure TTS audio saved to: {speech_file_path}")
 
         # assert response cost is greater than 0
         print("Response cost: ", response._hidden_params["response_cost"])
         assert response._hidden_params["response_cost"] > 0
-    
+
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
 
@@ -392,10 +395,9 @@ async def test_runwayml_tts_async():
     litellm._turn_on_debug()
     api_key = os.getenv("RUNWAYML_API_KEY")
     api_base = os.getenv("RUNWAYML_API_BASE")
-    
 
     speech_file_path = Path(__file__).parent / "runwayml_speech.mp3"
-    
+
     try:
         response = await litellm.aspeech(
             model="runwayml/eleven_multilingual_v2",
@@ -409,30 +411,34 @@ async def test_runwayml_tts_async():
 
         # Assert the response is HttpxBinaryResponseContent
         from litellm.types.llms.openai import HttpxBinaryResponseContent
-        
+
         assert isinstance(response, HttpxBinaryResponseContent)
-        
+
         # Get the binary content
         binary_content = response.content
         assert len(binary_content) > 0
-        
+
         # MP3 files start with these magic bytes
         # ID3 tag or MPEG sync word
-        assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
-        
+        assert (
+            binary_content[:3] == b"ID3"
+            or binary_content[:2] == b"\xff\xfb"
+            or binary_content[:2] == b"\xff\xf3"
+        )
+
         # Write to file
         response.stream_to_file(speech_file_path)
-        
+
         # Verify file was created and has content
         assert speech_file_path.exists()
         assert speech_file_path.stat().st_size > 0
-        
+
         print(f"RunwayML TTS audio saved to: {speech_file_path}")
 
         # assert response cost is greater than 0
         print("Response cost: ", response._hidden_params["response_cost"])
         assert response._hidden_params["response_cost"] > 0
-    
+
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
 
@@ -445,17 +451,19 @@ async def test_azure_ava_tts_with_custom_voice():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
     import httpx
-    
+
     # Mock response
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = mock_response_content
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
-    
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
-        
+
         response = await litellm.aspeech(
             model="azure/speech/azure-tts",
             voice="en-US-AndrewNeural",
@@ -464,14 +472,14 @@ async def test_azure_ava_tts_with_custom_voice():
             api_key="fake-key",
             response_format="mp3",
         )
-        
+
         # Verify the mock was called
         assert mock_post.called
-        
+
         # Get the call arguments
         call_args = mock_post.call_args
         ssml_body = call_args.kwargs.get("data")
-        
+
         # Verify the SSML contains the custom voice
         assert ssml_body is not None
         assert "en-US-AndrewNeural" in ssml_body
@@ -488,17 +496,19 @@ async def test_azure_ava_tts_fable_voice_mapping():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
     import httpx
-    
+
     # Mock response
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = mock_response_content
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
-    
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
-        
+
         response = await litellm.aspeech(
             model="azure/speech/azure-tts",
             voice="fable",
@@ -507,14 +517,14 @@ async def test_azure_ava_tts_fable_voice_mapping():
             api_key="fake-key",
             response_format="mp3",
         )
-        
+
         # Verify the mock was called
         assert mock_post.called
-        
+
         # Get the call arguments
         call_args = mock_post.call_args
         ssml_body = call_args.kwargs.get("data")
-        
+
         # Verify the SSML contains the mapped voice (en-GB-RyanNeural, not 'fable')
         assert ssml_body is not None
         assert "en-GB-RyanNeural" in ssml_body
@@ -541,7 +551,9 @@ async def test_aws_polly_tts_with_native_voice():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -586,7 +598,9 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -628,7 +642,9 @@ async def test_aws_polly_tts_with_ssml():
 
     ssml_input = '<speak>Hello, <break time="500ms"/> this is SSML.</speak>'
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -676,7 +692,11 @@ async def test_aws_polly_tts_real_api():
     assert len(binary_content) > 0
 
     # MP3 files start with ID3 tag or MPEG sync word
-    assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
+    assert (
+        binary_content[:3] == b"ID3"
+        or binary_content[:2] == b"\xff\xfb"
+        or binary_content[:2] == b"\xff\xf3"
+    )
 
     response.stream_to_file(speech_file_path)
 
