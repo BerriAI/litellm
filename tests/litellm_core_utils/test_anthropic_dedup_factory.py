@@ -81,3 +81,127 @@ def test_anthropic_deduplication_logic():
     assert "tool_call_unique_2" in ids
     assert ids.count("tool_call_unique_1") == 1
     assert ids.count("tool_call_unique_2") == 1
+
+
+def test_anthropic_dedup_content_list_tool_use_vs_tool_calls():
+    """
+    Verify that when an assistant message has both an Anthropic-style content
+    list containing tool_use blocks AND an OpenAI-style tool_calls field with
+    the same IDs, tool_use IDs are not duplicated in the output.
+
+    This can happen when a multi-hop proxy chain (e.g. Claude Code -> LiteLLM
+    -> LiteLLM -> OpenRouter -> Anthropic) round-trips assistant messages
+    through different format conversions.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/23510
+    """
+    messages = [
+        {"role": "user", "content": "List the files in the directory"},
+        {
+            "role": "assistant",
+            # Anthropic-style content list with tool_use blocks
+            "content": [
+                {"type": "text", "text": "I'll list the files for you."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC",
+                    "name": "list_files",
+                    "input": {"path": "."},
+                },
+            ],
+            # OpenAI-style tool_calls with the SAME tool ID
+            "tool_calls": [
+                {
+                    "id": "toolu_01ABC",
+                    "type": "function",
+                    "function": {
+                        "name": "list_files",
+                        "arguments": '{"path": "."}',
+                    },
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-3-opus-20240229",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+
+    assistant_content = result[1]["content"]
+
+    # Filter for tool_use blocks
+    tool_uses = [
+        b
+        for b in assistant_content
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+
+    # The tool_use ID should appear exactly once, not twice
+    assert len(tool_uses) == 1
+    assert tool_uses[0]["id"] == "toolu_01ABC"
+
+
+def test_anthropic_dedup_content_list_multiple_tool_use_blocks():
+    """
+    Verify deduplication when content list has multiple tool_use blocks
+    and tool_calls has overlapping + new IDs.
+    """
+    messages = [
+        {"role": "user", "content": "Do two things"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll do both."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01AAA",
+                    "name": "action_a",
+                    "input": {},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01BBB",
+                    "name": "action_b",
+                    "input": {},
+                },
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_01AAA",  # duplicate of content list
+                    "type": "function",
+                    "function": {"name": "action_a", "arguments": "{}"},
+                },
+                {
+                    "id": "toolu_01CCC",  # new, should be added
+                    "type": "function",
+                    "function": {"name": "action_c", "arguments": "{}"},
+                },
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-3-opus-20240229",
+        llm_provider="anthropic",
+    )
+
+    assistant_content = result[1]["content"]
+    tool_uses = [
+        b
+        for b in assistant_content
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+
+    ids = [t["id"] for t in tool_uses]
+    # Should have exactly 3 unique tool_use blocks
+    assert len(ids) == 3
+    assert ids.count("toolu_01AAA") == 1
+    assert ids.count("toolu_01BBB") == 1
+    assert ids.count("toolu_01CCC") == 1
