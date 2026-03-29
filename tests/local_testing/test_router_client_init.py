@@ -174,9 +174,9 @@ async def test_audio_speech_router():
         {
             "model_name": "tts",
             "litellm_params": {
-                "model": "azure/azure-tts",
-                "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+                "model": "azure/tts",
+                "api_base": os.getenv("AZURE_TTS_API_BASE"),
+                "api_key": os.getenv("AZURE_TTS_API_KEY"),
             },
         },
     ]
