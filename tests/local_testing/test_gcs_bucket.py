@@ -22,6 +22,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import (
 )
 from litellm.types.utils import StandardCallbackDynamicParams
 from unittest.mock import patch
+
 verbose_logger.setLevel(logging.DEBUG)
 
 
@@ -52,8 +53,8 @@ def load_vertex_ai_credentials():
         service_account_key_data = {}
 
     # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("GCS_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("GCS_PRIVATE_KEY", "")
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
     private_key = private_key.replace("\\n", "\n")
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
@@ -686,6 +687,7 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
     if old_bucket_name is not None:
         os.environ["GCS_BUCKET_NAME"] = old_bucket_name
 
+
 @pytest.mark.skip(reason="This test is flaky on ci/cd")
 def test_create_file_e2e():
     """
@@ -696,6 +698,7 @@ def test_create_file_e2e():
     test_file = ("test.wav", test_file_content, "audio/wav")
 
     from litellm import create_file
+
     response = create_file(
         file=test_file,
         purpose="user_data",
@@ -703,6 +706,7 @@ def test_create_file_e2e():
     )
     print("response", response)
     assert response is not None
+
 
 @pytest.mark.skip(reason="This test is flaky on ci/cd")
 def test_create_file_e2e_jsonl():
@@ -714,14 +718,41 @@ def test_create_file_e2e_jsonl():
 
     client = HTTPHandler()
 
-    example_jsonl = [{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}},{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}]
-    
+    example_jsonl = [
+        {
+            "custom_id": "request-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gemini-1.5-flash-001",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "Hello world!"},
+                ],
+                "max_tokens": 10,
+            },
+        },
+        {
+            "custom_id": "request-2",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gemini-1.5-flash-001",
+                "messages": [
+                    {"role": "system", "content": "You are an unhelpful assistant."},
+                    {"role": "user", "content": "Hello world!"},
+                ],
+                "max_tokens": 10,
+            },
+        },
+    ]
+
     # Create and write to the file
     file_path = "example.jsonl"
     with open(file_path, "w") as f:
         for item in example_jsonl:
             f.write(json.dumps(item) + "\n")
-    
+
     # Verify file content
     with open(file_path, "r") as f:
         content = f.read()
@@ -729,10 +760,11 @@ def test_create_file_e2e_jsonl():
         assert len(content) > 0, "File is empty"
 
     from litellm import create_file
+
     with patch.object(client, "post") as mock_create_file:
-        try: 
+        try:
             response = create_file(
-                file=open(file_path, "rb"), 
+                file=open(file_path, "rb"),
                 purpose="user_data",
                 custom_llm_provider="vertex_ai",
                 client=client,
@@ -744,4 +776,7 @@ def test_create_file_e2e_jsonl():
 
         print(f"kwargs: {mock_create_file.call_args.kwargs}")
 
-        assert mock_create_file.call_args.kwargs["data"] is not None and len(mock_create_file.call_args.kwargs["data"]) > 0
+        assert (
+            mock_create_file.call_args.kwargs["data"] is not None
+            and len(mock_create_file.call_args.kwargs["data"]) > 0
+        )

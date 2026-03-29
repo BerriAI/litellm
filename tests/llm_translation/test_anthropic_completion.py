@@ -1350,6 +1350,9 @@ def test_anthropic_text_editor():
 
 
 @pytest.mark.parametrize("spec", ["anthropic", "openai"])
+@pytest.mark.skipif(
+    os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
+)
 def test_anthropic_mcp_server_tool_use(spec: str):
     litellm._turn_on_debug()
 
@@ -1390,6 +1393,9 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
 @pytest.mark.parametrize(
     "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"]
+)
+@pytest.mark.skipif(
+    os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
 )
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
