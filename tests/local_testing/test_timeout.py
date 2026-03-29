@@ -111,8 +111,8 @@ def test_hanging_request_azure():
                     "model_name": "azure-gpt",
                     "litellm_params": {
                         "model": "azure/gpt-4.1-mini",
-                        "api_base": os.environ["AZURE_API_BASE"],
-                        "api_key": os.environ["AZURE_API_KEY"],
+                        "api_base": os.environ["AZURE_AI_API_BASE"],
+                        "api_key": os.environ["AZURE_AI_API_KEY"],
                     },
                 },
                 {
@@ -175,8 +175,8 @@ def test_hanging_request_openai():
                     "model_name": "azure-gpt",
                     "litellm_params": {
                         "model": "azure/gpt-4.1-mini",
-                        "api_base": os.environ["AZURE_API_BASE"],
-                        "api_key": os.environ["AZURE_API_KEY"],
+                        "api_base": os.environ["AZURE_AI_API_BASE"],
+                        "api_key": os.environ["AZURE_AI_API_KEY"],
                     },
                 },
                 {

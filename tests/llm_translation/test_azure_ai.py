@@ -188,35 +188,6 @@ def test_azure_ai_services_with_api_version():
         )
 
 
-@pytest.mark.skip(reason="Skipping due to cohere ssl issues")
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_azure_deepseek_reasoning_content():
     import json
 
@@ -283,8 +254,8 @@ async def test_azure_ai_request_format():
     litellm._turn_on_debug()
 
     # Set up the test parameters
-    api_key = os.getenv("AZURE_API_KEY")
-    api_base = os.getenv("AZURE_API_BASE")
+    api_key = os.getenv("AZURE_AI_API_KEY")
+    api_base = os.getenv("AZURE_AI_API_BASE")
     model = "azure_ai/gpt-4.1-mini"
     messages = [
         {"role": "user", "content": "hi"},
@@ -310,17 +281,17 @@ async def test_azure_gpt5_reasoning(model):
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         reasoning_effort="minimal",
         max_tokens=10,
-        api_base=os.getenv("AZURE_API_BASE"),
-        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
 
 
-
 def test_completion_azure():
     try:
         from litellm import completion_cost
+
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
@@ -331,7 +302,7 @@ def test_completion_azure():
                     "content": "Hello, how are you?",
                 }
             ],
-            api_key="os.environ/AZURE_API_KEY",
+            api_key="os.environ/AZURE_AI_API_KEY",
         )
         print(f"response: {response}")
         print(f"response hidden params: {response._hidden_params}")
@@ -358,7 +329,7 @@ def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
         response = completion(
             model="azure_ai/gpt-4.1-mini",
             api_base=api_base,
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
         )
 
@@ -374,18 +345,20 @@ async def test_azure_ai_model_router():
     """
     Test Azure AI model router non-streaming response cost tracking.
     Verifies that the flat cost of $0.14 per M input tokens is applied.
-    
+
     Tests the pattern: azure_ai/model_router/<deployment-name>
     Where deployment-name is the Azure deployment (e.g., "azure-model-router").
     The model_router prefix is stripped before sending to Azure API.
     """
-    from litellm.llms.azure_ai.cost_calculator import calculate_azure_model_router_flat_cost
-    
+    from litellm.llms.azure_ai.cost_calculator import (
+        calculate_azure_model_router_flat_cost,
+    )
+
     litellm._turn_on_debug()
     response = await litellm.acompletion(
         model="azure_ai/model_router/azure-model-router",
         messages=[{"role": "user", "content": "hi who is this"}],
-        api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+        api_base=os.getenv("AZURE_MODEL_ROUTER_API_BASE"),
         api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
     )
     print("response: ", response)
@@ -394,23 +367,22 @@ async def test_azure_ai_model_router():
     tracked_cost = response._hidden_params["response_cost"]
     assert tracked_cost > 0
     print("Tracked cost: ", tracked_cost)
-    
+
     # Verify flat cost is included using the helper function
     usage = response.usage
     if usage and usage.prompt_tokens:
         expected_flat_cost = calculate_azure_model_router_flat_cost(
-            model="model_router/azure-model-router",
-            prompt_tokens=usage.prompt_tokens
+            model="model_router/azure-model-router", prompt_tokens=usage.prompt_tokens
         )
         print(f"Prompt tokens: {usage.prompt_tokens}")
         print(f"Expected flat cost: ${expected_flat_cost:.9f}")
         print(f"Total tracked cost: ${tracked_cost:.9f}")
-        
+
         # Total cost should be at least the flat cost
-        assert tracked_cost >= expected_flat_cost, (
-            f"Cost ${tracked_cost:.9f} should be >= flat cost ${expected_flat_cost:.9f}"
-        )
-        
+        assert (
+            tracked_cost >= expected_flat_cost
+        ), f"Cost ${tracked_cost:.9f} should be >= flat cost ${expected_flat_cost:.9f}"
+
         # Verify the flat cost is non-zero
         assert expected_flat_cost > 0, "Flat cost should be greater than 0"
 
@@ -445,15 +417,20 @@ async def test_azure_ai_model_router_streaming_model_in_chunk():
     # The model should NOT be azure-model-router (the request model)
     # It should be the actual model from the response (e.g., gpt-4.1-nano, gpt-5-nano, etc.)
     for model in chunks_with_model:
-        assert model != "azure-model-router", f"Chunk model should be actual model, not request model. Got: {model}"
+        assert (
+            model != "azure-model-router"
+        ), f"Chunk model should be actual model, not request model. Got: {model}"
         # The actual model should be a real model name like gpt-4.1-nano, gpt-5-nano, etc.
         print(f"Verified chunk has actual model: {model}")
 
 
-class AzureModelRouterStreamingCallback(litellm.integrations.custom_logger.CustomLogger):
+class AzureModelRouterStreamingCallback(
+    litellm.integrations.custom_logger.CustomLogger
+):
     """
     Custom callback to capture streaming cost tracking for Azure Model Router.
     """
+
     def __init__(self):
         self.standard_logging_payload = None
         self.response_cost = None
@@ -466,17 +443,21 @@ class AzureModelRouterStreamingCallback(litellm.integrations.custom_logger.Custo
         self.async_success_called = True
         self.standard_logging_payload = kwargs.get("standard_logging_object")
         self.complete_streaming_response = kwargs.get("complete_streaming_response")
-        
+
         if self.standard_logging_payload:
             self.response_cost = self.standard_logging_payload.get("response_cost")
-            print(f"standard_logging_payload model: {self.standard_logging_payload.get('model')}")
+            print(
+                f"standard_logging_payload model: {self.standard_logging_payload.get('model')}"
+            )
             print(f"standard_logging_payload response_cost: {self.response_cost}")
-        
+
         if self.complete_streaming_response:
-            print(f"complete_streaming_response model: {self.complete_streaming_response.model}")
-            print(f"complete_streaming_response usage: {self.complete_streaming_response.usage}")
-
-
+            print(
+                f"complete_streaming_response model: {self.complete_streaming_response.model}"
+            )
+            print(
+                f"complete_streaming_response usage: {self.complete_streaming_response.usage}"
+            )
 
 
 @pytest.mark.asyncio
@@ -504,10 +485,16 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
         full_response = ""
         chunks_with_model = []
         async for chunk in response:
-            print(f"Chunk: model={chunk.model}, choices={len(chunk.choices) if chunk.choices else 0}")
+            print(
+                f"Chunk: model={chunk.model}, choices={len(chunk.choices) if chunk.choices else 0}"
+            )
             if chunk.model:
                 chunks_with_model.append(chunk.model)
-            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+            if (
+                chunk.choices
+                and chunk.choices[0].delta
+                and chunk.choices[0].delta.content
+            ):
                 full_response += chunk.choices[0].delta.content
 
         print(f"Full streamed response: {full_response}")
@@ -515,26 +502,41 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
 
         # Give async logging time to complete
         import asyncio
+
         await asyncio.sleep(1)
 
         # Verify callback was called
-        assert test_callback.async_success_called is True, "async_log_success_event was not called"
-        assert test_callback.standard_logging_payload is not None, "standard_logging_payload is None"
+        assert (
+            test_callback.async_success_called is True
+        ), "async_log_success_event was not called"
+        assert (
+            test_callback.standard_logging_payload is not None
+        ), "standard_logging_payload is None"
 
         # Check response cost
         print(f"Final response_cost: {test_callback.response_cost}")
-        
+
         # The first chunk may have the request model (azure-model-router) because it's created
         # before the API response is received. Subsequent chunks should have the actual model.
         # At least some chunks should have the actual model (not azure-model-router)
-        actual_model_chunks = [m for m in chunks_with_model if m != "azure-model-router"]
-        assert len(actual_model_chunks) > 0, "No chunks had the actual model from the API response"
+        actual_model_chunks = [
+            m for m in chunks_with_model if m != "azure-model-router"
+        ]
+        assert (
+            len(actual_model_chunks) > 0
+        ), "No chunks had the actual model from the API response"
         print(f"Chunks with actual model: {actual_model_chunks}")
 
         # Verify response cost is tracked - this is the main goal of this test
-        assert test_callback.response_cost is not None, "response_cost is None with stream_options"
-        assert test_callback.response_cost > 0, f"response_cost should be > 0, got {test_callback.response_cost}"
-        print(f"Streaming cost tracking with stream_options passed. Cost: {test_callback.response_cost}")
+        assert (
+            test_callback.response_cost is not None
+        ), "response_cost is None with stream_options"
+        assert (
+            test_callback.response_cost > 0
+        ), f"response_cost should be > 0, got {test_callback.response_cost}"
+        print(
+            f"Streaming cost tracking with stream_options passed. Cost: {test_callback.response_cost}"
+        )
 
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()

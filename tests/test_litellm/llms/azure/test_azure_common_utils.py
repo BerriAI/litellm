@@ -460,7 +460,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
                     "api_key": "test-api-key",
                     "api_version": os.getenv("AZURE_API_VERSION", "2023-05-15"),
                     "api_base": os.getenv(
-                        "AZURE_API_BASE", "https://test.openai.azure.com"
+                        "AZURE_AI_API_BASE", "https://test.openai.azure.com"
                     ),
                 },
             }
@@ -670,7 +670,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_ty
                     "api_key": "test-api-key",
                     "api_version": os.getenv("AZURE_API_VERSION", "2023-05-15"),
                     "api_base": os.getenv(
-                        "AZURE_API_BASE", "https://test.openai.azure.com"
+                        "AZURE_AI_API_BASE", "https://test.openai.azure.com"
                     ),
                 },
             }
