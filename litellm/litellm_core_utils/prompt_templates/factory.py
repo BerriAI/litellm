@@ -1727,8 +1727,8 @@ def convert_to_anthropic_tool_result(
                     text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "document":
-                doc_content = {k: v for k, v in content.items() if k != "type"}
-                anthropic_content_list.append(doc_content)
+                # Do NOT strip type for Anthropic; it is Required
+                anthropic_content_list.append(content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -3974,7 +3974,9 @@ def _convert_to_bedrock_tool_call_result(
                 )
             elif content["type"] == "document":
                 doc_content = {k: v for k, v in content.items() if k != "type"}
-                anthropic_content_list.append(doc_content)
+                tool_result_content_blocks.append(
+                    BedrockToolResultContentBlock(document=doc_content)
+                )
             elif content["type"] == "image_url":
                 format: Optional[str] = None
                 if isinstance(content["image_url"], dict):
