@@ -198,8 +198,8 @@ def _azure_ai_image_mock_response(*args, **kwargs):
     [
         (
             "azure_ai/Cohere-embed-v3-multilingual-2",
-            os.getenv("AZURE_AI_COHERE_API_BASE"),
-            os.getenv("AZURE_AI_COHERE_API_KEY"),
+            os.getenv("AZURE_AI_API_BASE"),
+            os.getenv("AZURE_AI_API_KEY"),
         )
     ],
 )
