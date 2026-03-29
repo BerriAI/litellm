@@ -509,15 +509,56 @@ async def _process_tool_call(
     )
 
 
+def _get_proxy_router():
+    """Return the global proxy router when available."""
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return None
+    return llm_router
+
+
+async def _usage_ai_acompletion(
+    *,
+    model: str,
+    messages: List[Dict[str, Any]],
+    team_id: Optional[str] = None,
+    **kwargs: Any,
+):
+    """
+    Route Usage AI requests through the proxy router when available so proxy
+    aliases and model groups resolve consistently with normal proxy traffic.
+    """
+    router = _get_proxy_router()
+    request_kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        **kwargs,
+    }
+
+    if team_id:
+        metadata = dict(cast(Dict[str, Any], request_kwargs.get("metadata") or {}))
+        metadata["user_api_key_team_id"] = team_id
+        request_kwargs["metadata"] = metadata
+
+    if router is not None:
+        return await router.acompletion(**request_kwargs)
+
+    return await litellm.acompletion(**request_kwargs)
+
+
 async def _stream_final_response(
-    model: str, chat_messages: List[Dict[str, Any]]
+    model: str,
+    chat_messages: List[Dict[str, Any]],
+    team_id: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response = await litellm.acompletion(
+    response = await _usage_ai_acompletion(
         model=model,
         messages=chat_messages,
+        team_id=team_id,
         stream=True,
         temperature=USAGE_AI_TEMPERATURE,
     )
@@ -532,6 +573,7 @@ async def stream_usage_ai_chat(
     model: Optional[str] = None,
     user_id: Optional[str] = None,
     is_admin: bool = False,
+    team_id: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
@@ -546,9 +588,10 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
+        response = await _usage_ai_acompletion(
             model=resolved_model,
             messages=chat_messages,
+            team_id=team_id,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
@@ -564,7 +607,9 @@ async def stream_usage_ai_chat(
         for tc in choice.message.tool_calls:
             async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
+        async for event in _stream_final_response(
+            resolved_model, chat_messages, team_id
+        ):
             yield event
         yield _sse({"type": "done"})
 

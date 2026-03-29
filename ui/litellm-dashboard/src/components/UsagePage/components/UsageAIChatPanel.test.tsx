@@ -1,6 +1,7 @@
-import { screen } from "@testing-library/react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
+import { modelHubCall, usageAiChatStream } from "../../networking";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 
 beforeAll(() => {
@@ -20,7 +21,7 @@ vi.mock("../../networking", () => ({
       { model_group: "claude-3-opus" },
     ],
   }),
-  usageAiChatStream: vi.fn(),
+  usageAiChatStream: vi.fn().mockResolvedValue(undefined),
 }));
 
 const defaultProps = {
@@ -30,6 +31,10 @@ const defaultProps = {
 };
 
 describe("UsageAIChatPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("should render the panel when open", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
@@ -81,5 +86,54 @@ describe("UsageAIChatPanel", () => {
 
     expect(screen.getByTestId("usage-ai-chat-panel")).not.toHaveClass("translate-x-full");
     expect(screen.getByTestId("usage-ai-chat-panel")).toHaveClass("translate-x-0");
+  });
+
+  it("should submit the selected model value unchanged", async () => {
+    renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(modelHubCall).toHaveBeenCalledWith("test-token");
+    });
+
+    const modelSelect = screen.getByRole("combobox");
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "claude-3-opus" })
+      ).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: "claude-3-opus" }));
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Ask about your usage..."), {
+        target: { value: "hello" },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    await waitFor(() => {
+      expect(usageAiChatStream).toHaveBeenCalled();
+    });
+
+    expect(usageAiChatStream).toHaveBeenCalledWith(
+      "test-token",
+      [{ role: "user", content: "hello" }],
+      "claude-3-opus",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
   });
 });
