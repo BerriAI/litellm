@@ -1,23 +1,19 @@
-import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
-import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -84,6 +80,17 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    def test_transform_responses_api_request_strips_responses_prefix(self):
+        result = self.config.transform_responses_api_request(
+            model="responses/gpt-4.1",
+            input="Hello world",
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["model"] == "gpt-4.1"
 
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
@@ -724,6 +731,22 @@ class TestTransformListInputItemsRequest:
         )
 
         # Assert
+        assert url == "https://api.openai.com/v1/responses/compact"
+        assert data["model"] == "gpt-4o"
+        assert data["input"] == "hello"
+
+    def test_openai_transform_compact_response_api_request_strips_responses_prefix(
+        self,
+    ):
+        url, data = self.openai_config.transform_compact_response_api_request(
+            model="responses/gpt-4o",
+            input="hello",
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=self.litellm_params,
+            headers=self.headers,
+        )
+
         assert url == "https://api.openai.com/v1/responses/compact"
         assert data["model"] == "gpt-4o"
         assert data["input"] == "hello"
