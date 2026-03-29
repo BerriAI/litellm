@@ -9275,7 +9275,7 @@ async def _add_access_group_models_to_team_models(
         # Skip teams with empty models list — they already have access to everything
         # (handled by _add_team_models_to_all_models)
         if (
-            len(team_object.models) == 0
+            not team_object.models
             or SpecialModelNames.all_proxy_models.value in team_object.models
         ):
             continue
@@ -9869,7 +9869,7 @@ async def _filter_models_by_team_id(
     team_accessible_model_ids: Set[str] = set()
 
     if (
-        len(team_object.models) == 0  # empty list = all model access
+        not team_object.models  # empty list = all model access
         or SpecialModelNames.all_proxy_models.value in team_object.models
     ):
         # Team has access to all models
