@@ -24,7 +24,7 @@ from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailab
     embedding,
 )
 
-litellm.vertex_project = "pathrise-convert-1606954137718"
+litellm.vertex_project = "litellm-ci-cd"
 litellm.vertex_location = "us-central1"
 litellm.num_retries = 0
 

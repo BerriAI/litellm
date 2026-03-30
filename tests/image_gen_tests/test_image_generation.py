@@ -113,7 +113,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -129,7 +129,7 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/gemini-2.5-flash-image",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
             "size": "1024x1024",
