@@ -1031,3 +1031,72 @@ def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
     assert "logprobs" not in params
     assert "top_p" not in params
     assert params["reasoning_effort"] == "high"
+
+
+class TestGPT5ChatModelExclusion:
+    """Test that all gpt-5*-chat variants are excluded from GPT-5 reasoning routing.
+
+    gpt-5-chat, gpt-5.1-chat, gpt-5.2-chat, gpt-5.3-chat etc. are regular
+    chat models that support temperature, response_format, and other standard
+    parameters. They must NOT be routed through GPT-5 reasoning-specific
+    parameter restrictions (which drop temperature, remap max_tokens, etc.).
+    """
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5-chat",
+            "gpt-5.1-chat",
+            "gpt-5.2-chat",
+            "gpt-5.3-chat",
+            "gpt-5.4-chat",
+        ],
+    )
+    def test_chat_variants_excluded(
+        self, gpt5_config: OpenAIGPT5Config, model_name: str
+    ):
+        """All gpt-5*-chat models should NOT be classified as GPT-5 reasoning models."""
+        assert not gpt5_config.is_model_gpt_5_model(model_name)
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-5.1",
+            "gpt-5.2",
+            "gpt-5.3-codex",
+            "gpt-5.4",
+            "gpt-5-codex",
+        ],
+    )
+    def test_reasoning_variants_included(
+        self, gpt5_config: OpenAIGPT5Config, model_name: str
+    ):
+        """Non-chat GPT-5 models should be classified as GPT-5 reasoning models."""
+        assert gpt5_config.is_model_gpt_5_model(model_name)
+
+    def test_non_gpt5_excluded(self, gpt5_config: OpenAIGPT5Config):
+        """Non-GPT-5 models should not be classified as GPT-5."""
+        assert not gpt5_config.is_model_gpt_5_model("gpt-4o")
+        assert not gpt5_config.is_model_gpt_5_model("gpt-4o-mini")
+        assert not gpt5_config.is_model_gpt_5_model("o3-mini")
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5-chat",
+            "gpt-5.1-chat",
+            "gpt-5.3-chat",
+        ],
+    )
+    def test_chat_models_support_temperature(self, config: OpenAIConfig, model_name: str):
+        """gpt-5*-chat models should accept arbitrary temperature values."""
+        params = config.map_openai_params(
+            non_default_params={"temperature": 0.7},
+            optional_params={},
+            model=model_name,
+            drop_params=False,
+        )
+        assert params["temperature"] == 0.7
