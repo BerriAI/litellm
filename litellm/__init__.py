@@ -216,7 +216,8 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 # When True, unknown Bedrock image-edit model ids use the Stability adapter (legacy).
-# Default False raises ValueError so misconfigured model IDs fail fast.
+# Default True preserves backwards compatibility with pre-Nova behavior.
+# Set LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK=0 to fail fast on unknown IDs.
 # Value from constants (re-exported on this module for tests and ``import litellm``).
 bedrock_image_edit_unknown_model_fallback: bool = (
     BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK

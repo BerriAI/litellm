@@ -131,6 +131,11 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
     if image is None:
         raise ValueError("Nova Canvas image edit requires an image input")
     if hasattr(image, "read") and callable(getattr(image, "read", None)):
+        if hasattr(image, "seek") and callable(getattr(image, "seek", None)):
+            try:
+                image.seek(0)  # type: ignore[union-attr]
+            except Exception:
+                pass
         image_bytes = image.read()  # type: ignore[union-attr]
         return base64.b64encode(image_bytes).decode("utf-8")
     if isinstance(image, bytes):
@@ -143,6 +148,33 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
             "Pass a file-like object, bytes, or a base64-encoded string."
         )
     return base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore[arg-type]
+
+
+def _validate_nova_canvas_prompt_requirements(
+    *,
+    prompt: Optional[str],
+    task_type: Any,
+    mask_b64: Optional[str],
+    mask_prompt: Optional[str],
+) -> None:
+    normalized_task_type = str(task_type).strip() if task_type is not None else None
+    inferred_inpainting = normalized_task_type in (None, "") and (
+        mask_b64 is not None or mask_prompt is not None
+    )
+
+    if (prompt is None or prompt == "") and normalized_task_type in (
+        "INPAINTING",
+        "OUTPAINTING",
+    ):
+        raise ValueError(
+            f"Amazon Nova Canvas {normalized_task_type} requires a text prompt. "
+            "Pass a non-empty `prompt` in your request."
+        )
+    if (prompt is None or prompt == "") and inferred_inpainting:
+        raise ValueError(
+            "Amazon Nova Canvas INPAINTING requires a text prompt. "
+            "Pass a non-empty `prompt` in your request."
+        )
 
 
 def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
@@ -336,6 +368,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             image_generation_config["cfgScale"] = cfg_scale
         if seed is not None:
             image_generation_config["seed"] = seed
+
+        _validate_nova_canvas_prompt_requirements(
+            prompt=prompt,
+            task_type=op.get("taskType"),
+            mask_b64=mask_b64,
+            mask_prompt=op.get("maskPrompt"),
+        )
 
         text = prompt if prompt is not None and prompt != "" else " "
         negative_text = op.pop("negativeText", None)

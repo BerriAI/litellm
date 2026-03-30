@@ -69,9 +69,10 @@ LITELLM_DETAILED_TIMING = (
 )
 
 # Bedrock image edit: when True, unknown model ids use the legacy Stability adapter.
-# Default False raises ValueError. Re-exported on the ``litellm`` module for tests/runtime.
+# Default True preserves pre-Nova behavior for backwards compatibility.
+# Set LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK=0 to fail fast with ValueError.
 BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK = get_env_bool(
-    "LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK", False
+    "LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK", True
 )
 
 # Model cost map validation constants

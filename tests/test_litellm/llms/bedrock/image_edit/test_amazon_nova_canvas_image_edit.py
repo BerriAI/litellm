@@ -1,5 +1,6 @@
 """Unit tests for Bedrock Amazon Nova Canvas image edit (issue #24267)."""
 
+import base64
 import io
 from typing import cast
 
@@ -86,7 +87,7 @@ def test_provider_config_router_returns_stability_for_sd():
 
 
 def test_get_bedrock_image_edit_config_unknown_model_falls_back_to_stability(monkeypatch):
-    """Opt-in: LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK enables legacy Stability adapter."""
+    """Fallback enabled: unknown model ids use the legacy Stability adapter."""
     monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", True)
     cfg = get_bedrock_image_edit_config_for_model("amazon.titan-image-generator-v1")
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
@@ -388,6 +389,66 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
         )
 
 
+def test_transform_request_inpainting_requires_non_empty_prompt():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"img")
+    mask = io.BytesIO(b"mask")
+    with pytest.raises(
+        ValueError,
+        match="Amazon Nova Canvas INPAINTING requires a text prompt",
+    ):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="",
+            image=img,
+            image_edit_optional_request_params={
+                "taskType": "INPAINTING",
+                "mask": mask,
+            },
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
+def test_transform_request_outpainting_requires_non_empty_prompt():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"img")
+    mask = io.BytesIO(b"mask")
+    with pytest.raises(
+        ValueError,
+        match="Amazon Nova Canvas OUTPAINTING requires a text prompt",
+    ):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt=None,
+            image=img,
+            image_edit_optional_request_params={
+                "taskType": "OUTPAINTING",
+                "mask": mask,
+            },
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
+def test_transform_request_auto_inpainting_requires_non_empty_prompt():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"img")
+    mask = io.BytesIO(b"mask")
+    with pytest.raises(
+        ValueError,
+        match="Amazon Nova Canvas INPAINTING requires a text prompt",
+    ):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="",
+            image=img,
+            image_edit_optional_request_params={"mask": mask},
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
 def test_transform_request_unknown_task_type_raises():
     """Unknown taskType must not silently map to IMAGE_VARIATION or INPAINTING."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
@@ -419,6 +480,23 @@ def test_transform_request_background_removal():
     assert "image" in body["backgroundRemovalParams"]
 
 
+def test_transform_request_background_removal_rewinds_image_file_object():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"abc")
+    _ = img.read()
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="ignored",
+        image=img,
+        image_edit_optional_request_params={"taskType": "BACKGROUND_REMOVAL"},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["backgroundRemovalParams"]["image"] == base64.b64encode(b"abc").decode(
+        "utf-8"
+    )
+
+
 def test_transform_request_background_removal_omits_image_generation_config():
     """AWS Nova Canvas does not allow imageGenerationConfig on BACKGROUND_REMOVAL."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
@@ -440,6 +518,24 @@ def test_transform_request_background_removal_omits_image_generation_config():
     )
     assert body["taskType"] == "BACKGROUND_REMOVAL"
     assert "imageGenerationConfig" not in body
+
+
+def test_transform_request_inpainting_rewinds_mask_file_object():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"main")
+    mask = io.BytesIO(b"mask")
+    _ = mask.read()
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="fill area",
+        image=img,
+        image_edit_optional_request_params={"taskType": "INPAINTING", "mask": mask},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["inPaintingParams"]["maskImage"] == base64.b64encode(b"mask").decode(
+        "utf-8"
+    )
 
 
 def test_transform_request_image_variation_includes_image_generation_config():
