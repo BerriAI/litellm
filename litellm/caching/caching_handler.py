@@ -449,9 +449,7 @@ class LLMCachingHandler:
             ## USAGE
             prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
             if aggregated_details:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    **aggregated_details
-                )
+                prompt_tokens_details = PromptTokensDetailsWrapper(**aggregated_details)
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,

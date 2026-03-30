@@ -701,10 +701,7 @@ class Cache:
         For multi-item responses, distributes integer fields evenly across items
         so that summing all per-item details reconstructs the original totals.
         """
-        if (
-            result.usage is None
-            or result.usage.prompt_tokens_details is None
-        ):
+        if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
         details = result.usage.prompt_tokens_details
@@ -754,7 +751,9 @@ class Cache:
         # Always convert to properly typed CachedEmbedding
         model_name = result.model
         embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
-            embedding_response, model_name, prompt_tokens_details=prompt_tokens_details,
+            embedding_response,
+            model_name,
+            prompt_tokens_details=prompt_tokens_details,
         )
 
         cache_key, cached_data, kwargs = self._add_cache_logic(
