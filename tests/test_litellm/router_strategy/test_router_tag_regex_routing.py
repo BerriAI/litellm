@@ -189,6 +189,25 @@ async def test_tag_filtering_disabled_returns_all_deployments():
 
 
 @pytest.mark.asyncio
+async def test_empty_healthy_deployments_with_request_tags_skips_misleading_tag_error():
+    """
+    Deterministic repro: cooldown (or any filter) can leave zero candidates before tag routing.
+    Request metadata tags must not trigger RouterErrors.no_deployments_with_tag_routing —
+    that implied misconfigured tags; return [] so the router can surface no-deployment / cooldown.
+    """
+    router = _make_router_mock()
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-5.2",
+        healthy_deployments=[],
+        request_kwargs={
+            "metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
+        },
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_tag_match_takes_precedence_over_regex():
     """A deployment with both tags and tag_regex: exact tag match fires first."""
     deployment_with_both = {

@@ -147,6 +147,13 @@ async def get_deployments_for_tag(
         )
         return healthy_deployments
 
+    # No candidates (e.g. all in cooldown) must not be treated as tag mismatch below.
+    if isinstance(healthy_deployments, list) and len(healthy_deployments) == 0:
+        verbose_logger.debug(
+            "get_deployments_for_tag: empty candidate set; skipping tag filter"
+        )
+        return healthy_deployments
+
     verbose_logger.debug(
         "request metadata: %s", request_kwargs.get(metadata_variable_name)
     )
