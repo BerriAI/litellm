@@ -131,8 +131,7 @@ class LoggingWorker:
                             # No usable running loop (typical when the loop is torn down).
                             loop_gone = True
                         msg_match = bool(
-                            e.args
-                            and "Event loop is closed" in str(e.args[0])
+                            e.args and "Event loop is closed" in str(e.args[0])
                         )
                         if loop_gone or msg_match:
                             self._sem.release()
