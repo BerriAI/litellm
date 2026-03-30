@@ -147,11 +147,7 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
 
 def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
     """
-    True when model_cost marks the model for Nova Canvas image edit.
-
-    Prefer supports_nova_canvas_image_edit (config-driven). If that key is absent on
-    older installs, accept a registered Bedrock image_generation model whose catalog
-    key is the known Nova Canvas id family (amazon.nova-canvas...).
+    True when model_cost has supports_nova_canvas_image_edit for a resolved catalog key.
 
     get_model_info / ModelInfoBase omit arbitrary JSON keys, so we read model_cost
     directly (same idea as supports_* bare_entry fallback).
@@ -207,12 +203,6 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
             continue
         entry = _litellm.model_cost.get(key) or {}
         if entry.get("supports_nova_canvas_image_edit") is True:
-            return True
-        if (
-            entry.get("litellm_provider") == "bedrock"
-            and entry.get("mode") == "image_generation"
-            and "amazon.nova-canvas" in key.lower()
-        ):
             return True
     return False
 
@@ -479,9 +469,11 @@ def get_bedrock_image_edit_config_for_model(
     Return the correct Bedrock image-edit config for the model id.
 
     Same routing as ``BedrockImageEdit.get_config_class``: Stability edit models,
-    Nova Canvas when marked in model_cost, otherwise **Stability config** (legacy
-    compatibility; a warning is logged — prefer explicit model map entries).
+    Nova Canvas when marked in model_cost; otherwise raises ``ValueError`` unless
+    ``litellm.bedrock_image_edit_unknown_model_fallback`` is True (legacy Stability adapter).
     """
+    import litellm as _litellm
+
     from litellm._logging import verbose_logger
     from litellm.llms.bedrock.image_edit.stability_transformation import (
         BedrockStabilityImageEditConfig,
@@ -491,11 +483,18 @@ def get_bedrock_image_edit_config_for_model(
         return BedrockStabilityImageEditConfig()
     if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
         return BedrockAmazonNovaCanvasImageEditConfig()
-    verbose_logger.warning(
-        "Bedrock image edit: model %r is not a known Stability edit model and is not "
-        "marked for Nova Canvas; using Stability image-edit config for compatibility. "
-        "Add supports_nova_canvas_image_edit or use a stability.* edit model id if this "
-        "is incorrect.",
-        model,
+    if _litellm.bedrock_image_edit_unknown_model_fallback:
+        verbose_logger.warning(
+            "Bedrock image edit: model %r is not a known Stability edit model and is not "
+            "marked for Nova Canvas; using Stability image-edit config for compatibility. "
+            "Add supports_nova_canvas_image_edit or use a stability.* edit model id if this "
+            "is incorrect.",
+            model,
+        )
+        return BedrockStabilityImageEditConfig()
+    raise ValueError(
+        f"Unsupported Bedrock image-edit model: {model!r}. "
+        "Use a stability.* image-edit model id, add supports_nova_canvas_image_edit in "
+        "model_prices for this id, or set LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK=1 "
+        "for legacy Stability adapter fallback."
     )
-    return BedrockStabilityImageEditConfig()

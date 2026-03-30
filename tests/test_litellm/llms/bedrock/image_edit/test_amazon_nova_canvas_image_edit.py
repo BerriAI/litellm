@@ -52,8 +52,9 @@ def test_provider_config_router_returns_stability_for_sd():
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
-def test_get_bedrock_image_edit_config_unknown_model_falls_back_to_stability():
-    """Unknown Bedrock image-edit models keep legacy Stability adapter (with warning)."""
+def test_get_bedrock_image_edit_config_unknown_model_falls_back_to_stability(monkeypatch):
+    """Opt-in: LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK enables legacy Stability adapter."""
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", True)
     cfg = get_bedrock_image_edit_config_for_model("amazon.titan-image-generator-v1")
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
@@ -69,14 +70,27 @@ def test_get_bedrock_helper_matches_handler_get_config_class():
         assert isinstance(helper_cfg, handler_cls)
 
 
-def test_handler_and_helper_agree_for_unknown_bedrock_image_model():
-    """Handler and helper both fall back to Stability for unrecognized Bedrock models."""
+def test_handler_and_helper_agree_for_unknown_bedrock_image_model(monkeypatch):
+    """With fallback enabled, handler and helper both use Stability for unrecognized models."""
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", True)
     model = "amazon.titan-image-generator-v1"
     assert BedrockImageEdit.get_config_class(model) is BedrockStabilityImageEditConfig
     assert isinstance(
         get_bedrock_image_edit_config_for_model(model),
         BedrockStabilityImageEditConfig,
     )
+
+
+def test_get_config_class_unknown_bedrock_image_model_raises_without_fallback(monkeypatch):
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", False)
+    with pytest.raises(ValueError, match="Unsupported Bedrock image-edit model"):
+        BedrockImageEdit.get_config_class("amazon.titan-image-generator-v1")
+
+
+def test_get_bedrock_image_edit_config_unknown_raises_without_fallback(monkeypatch):
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", False)
+    with pytest.raises(ValueError, match="Unsupported Bedrock image-edit model"):
+        get_bedrock_image_edit_config_for_model("amazon.titan-image-generator-v1")
 
 
 def test_provider_config_manager_bedrock_nova_canvas():
@@ -101,8 +115,9 @@ def test_provider_config_manager_bedrock_stability_inpaint():
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
 
 
-def test_provider_config_manager_bedrock_unknown_falls_back_to_stability():
-    """Provider path keeps legacy Stability adapter for unrecognized Bedrock models."""
+def test_provider_config_manager_bedrock_unknown_falls_back_to_stability(monkeypatch):
+    """With opt-in fallback, provider path uses legacy Stability adapter for unknown models."""
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", True)
     from litellm.utils import ProviderConfigManager
 
     cfg = ProviderConfigManager.get_provider_image_edit_config(
@@ -110,6 +125,17 @@ def test_provider_config_manager_bedrock_unknown_falls_back_to_stability():
         litellm.LlmProviders.BEDROCK,
     )
     assert isinstance(cfg, BedrockStabilityImageEditConfig)
+
+
+def test_provider_config_manager_bedrock_unknown_raises_without_fallback(monkeypatch):
+    monkeypatch.setattr(litellm, "bedrock_image_edit_unknown_model_fallback", False)
+    from litellm.utils import ProviderConfigManager
+
+    with pytest.raises(ValueError, match="Unsupported Bedrock image-edit model"):
+        ProviderConfigManager.get_provider_image_edit_config(
+            "amazon.titan-image-generator-v1",
+            litellm.LlmProviders.BEDROCK,
+        )
 
 
 def test_provider_config_manager_bedrock_dispatches_to_nova_transform_outpainting():
@@ -461,6 +487,22 @@ def test_is_nova_canvas_image_edit_model_uses_model_cost_flag(monkeypatch):
     assert (
         BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
             "amazon.not-nova-canvas-v1:0"
+        )
+        is False
+    )
+
+    # Name-shaped ids do not route without supports_nova_canvas_image_edit (no substring heuristic).
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "amazon.nova-canvas-v2:0",
+        {
+            "litellm_provider": "bedrock",
+            "mode": "image_generation",
+        },
+    )
+    assert (
+        BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
+            "amazon.nova-canvas-v2:0"
         )
         is False
     )
