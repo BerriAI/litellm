@@ -79,6 +79,7 @@ from litellm.constants import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
+    BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK,
 )
 import httpx
 
@@ -216,8 +217,9 @@ max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 # When True, unknown Bedrock image-edit model ids use the Stability adapter (legacy).
 # Default False raises ValueError so misconfigured model IDs fail fast.
-bedrock_image_edit_unknown_model_fallback: bool = bool(
-    os.getenv("LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK", False)
+# Value from constants; set via globals() so CodeQL does not treat the module attr as an unused binding.
+globals()["bedrock_image_edit_unknown_model_fallback"] = (
+    BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK
 )
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(

@@ -18,6 +18,39 @@ from litellm.llms.bedrock.image_edit.stability_transformation import (
 from litellm.types.images.main import ImageEditOptionalRequestParams
 
 
+@pytest.fixture(autouse=True)
+def ensure_nova_canvas_image_edit_model_cost_flags(monkeypatch):
+    """Routing uses ``supports_nova_canvas_image_edit`` on ``litellm.model_cost``.
+
+    Full ``model_prices_and_context_window.json`` includes these flags, but CI or
+    alternate cost maps may omit them—merge minimal entries so tests match production.
+    """
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    for key in (
+        "amazon.nova-canvas-v1:0",
+        "us.amazon.nova-canvas-v1:0",
+    ):
+        entry = litellm.model_cost.get(key) or {}
+        if entry.get("supports_nova_canvas_image_edit") is True:
+            continue
+        monkeypatch.setitem(
+            litellm.model_cost,
+            key,
+            {
+                **entry,
+                "litellm_provider": entry.get("litellm_provider", "bedrock"),
+                "mode": entry.get("mode", "image_generation"),
+                "supports_nova_canvas_image_edit": True,
+            },
+        )
+        _invalidate_model_cost_lowercase_map()
+
+    yield
+
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_get_config_class_nova_canvas():
     """Nova Canvas model resolves to BedrockAmazonNovaCanvasImageEditConfig."""
     cls = BedrockImageEdit.get_config_class("amazon.nova-canvas-v1:0")
@@ -598,6 +631,18 @@ def test_transform_response_content_filtered_via_error_field():
         json={"images": [], "error": "CONTENT_FILTERED"},
     )
     with pytest.raises(Exception, match="Nova Canvas image edit error"):
+        config.transform_image_edit_response(
+            model="amazon.nova-canvas-v1:0",
+            raw_response=resp,
+            logging_obj=None,  # type: ignore[arg-type]
+        )
+
+
+def test_transform_response_empty_images_without_error_raises():
+    """200 with empty ``images`` and no error fields must not return silent empty ImageResponse."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    resp = httpx.Response(200, json={"images": []})
+    with pytest.raises(Exception, match="returned no images"):
         config.transform_image_edit_response(
             model="amazon.nova-canvas-v1:0",
             raw_response=resp,

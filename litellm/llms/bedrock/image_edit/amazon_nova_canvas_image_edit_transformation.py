@@ -417,6 +417,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                     )
                 )
 
+        if not model_response.data:
+            raise self.get_error_class(
+                error_message="Nova Canvas image edit returned no images",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
         if not hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = {}
         if "additional_headers" not in model_response._hidden_params:
