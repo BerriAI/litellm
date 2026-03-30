@@ -11,7 +11,7 @@ import litellm
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
-from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIRequestWrapper, version
+from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIRequestWrapper, version, _split_sse_text
 
 TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
@@ -741,3 +741,73 @@ class TestOCISignerSupport:
         )
 
         assert wrapper.path_url == "/api/v1/chat"
+
+
+class TestSplitSseText:
+    """Tests for the _split_sse_text helper used by both sync and async streaming."""
+
+    def test_single_event(self):
+        result = list(_split_sse_text("data: {\"id\": \"1\"}"))
+        assert result == ["data: {\"id\": \"1\"}"]
+
+    def test_multiple_events(self):
+        text = "data: {\"id\": \"1\"}\n\ndata: {\"id\": \"2\"}"
+        result = list(_split_sse_text(text))
+        assert result == ["data: {\"id\": \"1\"}", "data: {\"id\": \"2\"}"]
+
+    def test_empty_string(self):
+        assert list(_split_sse_text("")) == []
+
+    def test_only_separators(self):
+        assert list(_split_sse_text("\n\n\n\n")) == []
+
+    def test_strips_whitespace(self):
+        text = "  data: {\"id\": \"1\"}  \n\n  data: {\"id\": \"2\"}  "
+        result = list(_split_sse_text(text))
+        assert result == ["data: {\"id\": \"1\"}", "data: {\"id\": \"2\"}"]
+
+    def test_three_events(self):
+        text = "data: {\"a\":1}\n\ndata: {\"b\":2}\n\ndata: {\"c\":3}"
+        result = list(_split_sse_text(text))
+        assert len(result) == 3
+
+
+class TestSyncStreamSplitChunks:
+    """Tests that the sync streaming path correctly splits batched SSE chunks."""
+
+    def test_sync_stream_wrapper_splits_batched_chunks(self):
+        """Verify get_sync_custom_stream_wrapper splits multi-event HTTP chunks."""
+        from unittest.mock import MagicMock, patch
+
+        config = OCIChatConfig()
+
+        # Simulate an HTTP response whose iter_text() yields a batched chunk
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([
+            "data: {\"id\":\"1\"}\n\ndata: {\"id\":\"2\"}",
+            "data: {\"id\":\"3\"}",
+        ])
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+
+        with patch("litellm.llms.oci.chat.transformation.track_llm_api_timing", lambda: lambda f: f):
+            result = config.get_sync_custom_stream_wrapper(
+                model=TEST_MODEL_NAME,
+                custom_llm_provider="oci",
+                logging_obj=MagicMock(),
+                api_base="https://example.com/chat",
+                headers={},
+                data={"test": "data"},
+                messages=[],
+                client=mock_client,
+            )
+
+        # Consume the stream wrapper's completion_stream to verify splitting
+        chunks = list(result.completion_stream)
+        assert chunks == [
+            "data: {\"id\":\"1\"}",
+            "data: {\"id\":\"2\"}",
+            "data: {\"id\":\"3\"}",
+        ]
