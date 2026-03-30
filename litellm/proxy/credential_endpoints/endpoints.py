@@ -113,6 +113,29 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
+def _fetch_github_login(api_key: str) -> Optional[str]:
+    """
+    Call GET https://api.github.com/user with the given GitHub access token
+    and return the login name, or None if the call fails.
+    """
+    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+    try:
+        sync_client = _get_httpx_client()
+        resp = sync_client.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {api_key}",
+                "Accept": "application/json",
+            },
+        )
+        if resp.status_code == 200:
+            return resp.json().get("login")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Could not fetch GitHub user info: {e}")
+    return None
+
+
 @router.get(
     "/credentials",
     dependencies=[Depends(user_api_key_auth)],
@@ -127,14 +150,25 @@ async def get_credentials(
     [BETA] endpoint. This might change unexpectedly.
     """
     try:
-        masked_credentials = [
-            {
-                "credential_name": credential.credential_name,
-                "credential_values": _get_masked_values(credential.credential_values),
-                "credential_info": credential.credential_info,
-            }
-            for credential in litellm.credential_list
-        ]
+        masked_credentials = []
+        for credential in litellm.credential_list:
+            credential_info = dict(credential.credential_info or {})
+            # For GitHub Copilot credentials, inject runtime github_login from the API.
+            # The login is NOT stored in the DB — it's fetched live and added to the
+            # response only so the UI can display it.
+            if credential_info.get("custom_llm_provider") == "github_copilot":
+                api_key = (credential.credential_values or {}).get("api_key")
+                if api_key:
+                    github_login = _fetch_github_login(api_key)
+                    if github_login:
+                        credential_info = {**credential_info, "github_login": github_login}
+            masked_credentials.append(
+                {
+                    "credential_name": credential.credential_name,
+                    "credential_values": _get_masked_values(credential.credential_values),
+                    "credential_info": credential_info,
+                }
+            )
         return {"success": True, "credentials": masked_credentials}
     except Exception as e:
         return handle_exception_on_proxy(e)

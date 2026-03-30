@@ -56,14 +56,14 @@ class GetAPIKeyError(GithubCopilotError):
     pass
 
 
-def get_copilot_default_headers(api_key: str) -> dict:
+def get_copilot_static_headers() -> dict:
     """
-    Get default headers for GitHub Copilot Responses API.
+    Get static headers required by the GitHub Copilot API.
 
-    Based on copilot-api's header configuration.
+    These headers (editor-version, user-agent, etc.) must be present on every
+    request regardless of whether the API key has been resolved yet.
     """
     return {
-        "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
         "copilot-integration-id": "vscode-chat",
         "editor-version": "vscode/1.95.0",  # Fixed version for stability
@@ -73,4 +73,16 @@ def get_copilot_default_headers(api_key: str) -> dict:
         "x-github-api-version": API_VERSION,
         "x-request-id": str(uuid4()),
         "x-vscode-user-agent-library-version": "electron-fetch",
+    }
+
+
+def get_copilot_default_headers(api_key: str) -> dict:
+    """
+    Get default headers for GitHub Copilot Responses API.
+
+    Based on copilot-api's header configuration.
+    """
+    return {
+        **get_copilot_static_headers(),
+        "Authorization": f"Bearer {api_key}",
     }

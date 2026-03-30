@@ -319,6 +319,9 @@ from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.credential_endpoints.github_copilot_sso import (
+    router as github_copilot_sso_router,
+)
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
@@ -13447,6 +13450,7 @@ app.include_router(vector_store_router)
 app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
+app.include_router(github_copilot_sso_router)
 app.include_router(llm_passthrough_router)
 app.include_router(webrtc_router)
 app.include_router(mcp_management_router)

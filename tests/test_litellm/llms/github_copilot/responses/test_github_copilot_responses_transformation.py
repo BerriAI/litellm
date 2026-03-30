@@ -44,7 +44,6 @@ class TestGithubCopilotResponsesAPITransformation:
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_github_copilot_responses_endpoint_url(self, mock_authenticator_class):
         """Test that get_complete_url returns correct GitHub Copilot endpoint"""
-        # Mock authenticator to return default base
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_base.return_value = (
             "https://api.individual.githubcopilot.com"
@@ -53,13 +52,21 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
 
-        # Test with default GitHub Copilot API base (from authenticator)
+        # No api_key in litellm_params → default base
         url = config.get_complete_url(api_base=None, litellm_params={})
-        assert url == "https://api.individual.githubcopilot.com/responses", (
-            f"Expected GitHub Copilot responses endpoint, got {url}"
+        assert url == "https://api.githubcopilot.com/responses", (
+            f"Expected default endpoint when no api_key, got {url}"
         )
 
-        # Test with custom api_base (overrides authenticator)
+        # api_key present → authenticator resolves custom base
+        url = config.get_complete_url(
+            api_base=None, litellm_params={"api_key": "gh-access-token"}
+        )
+        assert url == "https://api.individual.githubcopilot.com/responses", (
+            f"Expected authenticator-resolved endpoint, got {url}"
+        )
+
+        # Explicit api_base always wins regardless of api_key
         custom_url = config.get_complete_url(
             api_base="https://custom.githubcopilot.com", litellm_params={}
         )
@@ -67,7 +74,7 @@ class TestGithubCopilotResponsesAPITransformation:
             f"Expected custom endpoint, got {custom_url}"
         )
 
-        # Test with trailing slash
+        # Trailing slash stripped
         url_with_slash = config.get_complete_url(
             api_base="https://api.githubcopilot.com/", litellm_params={}
         )
@@ -86,7 +93,7 @@ class TestGithubCopilotResponsesAPITransformation:
         config = GithubCopilotResponsesAPIConfig()
 
         headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params={}
+            headers={}, model="gpt-5.1-codex", litellm_params={"api_key": "gh-access-token"}
         )
 
         # Check required headers
@@ -115,7 +122,7 @@ class TestGithubCopilotResponsesAPITransformation:
         }
 
         headers = config.validate_environment(
-            headers=custom_headers, model="gpt-5.1-codex", litellm_params={}
+            headers=custom_headers, model="gpt-5.1-codex", litellm_params={"api_key": "gh-access-token"}
         )
 
         # User header should override default

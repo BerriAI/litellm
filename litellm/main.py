@@ -2609,12 +2609,21 @@ def completion(  # type: ignore # noqa: PLR0915
             if custom_llm_provider == "github_copilot":
                 from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
+                    GetAccessTokenError,
+                    GetAPIKeyError,
                     get_copilot_default_headers,
+                    get_copilot_static_headers,
                 )
 
-                copilot_auth = Authenticator()
-                copilot_api_key = copilot_auth.get_api_key()
-                copilot_headers = get_copilot_default_headers(copilot_api_key)
+                # Always add static headers (editor-version, user-agent, etc.)
+                # — the Copilot API requires these on every request.
+                copilot_headers = get_copilot_static_headers()
+                if api_key:
+                    try:
+                        copilot_api_key = Authenticator(access_token=api_key).get_api_key()
+                        copilot_headers = get_copilot_default_headers(copilot_api_key)
+                    except (GetAPIKeyError, GetAccessTokenError):
+                        pass  # auth failure handled downstream
                 if extra_headers:
                     copilot_headers.update(extra_headers)
                 extra_headers = copilot_headers
