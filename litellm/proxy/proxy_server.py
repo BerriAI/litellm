@@ -480,11 +480,11 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
-from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -1530,6 +1530,9 @@ shared_aiohttp_session: Optional[
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+spend_counter_cache = DualCache(
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
@@ -1692,6 +1695,134 @@ def cost_tracking():
         litellm.logging_callback_manager.add_litellm_async_success_callback(
             _ProxyDBLogger()
         )
+
+
+async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
+    """
+    Read current spend from the cross-pod spend counter.
+
+    Reads Redis FIRST (authoritative cross-pod value), not DualCache's
+    async_get_cache which returns in-memory first. This is critical:
+    DualCache.async_get_cache returns stale per-pod values because each
+    pod's in-memory cache is only updated by that pod's own increments.
+
+    Fallback chain:
+    1. Redis counter (cross-pod, authoritative)
+    2. In-memory counter (single-instance or Redis failure)
+    3. Cached object's .spend from DB (cold start, no counter yet)
+    """
+    # 1. Try Redis first (cross-pod authoritative)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            val = await spend_counter_cache.redis_cache.async_get_cache(
+                key=counter_key
+            )
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
+                counter_key,
+                e,
+            )
+
+    # 2. Fall back to in-memory counter (single-instance or Redis failure)
+    val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    if val is not None:
+        return float(val)
+
+    # 3. Final fallback: cached object's spend from DB
+    return fallback_spend
+
+
+async def increment_spend_counters(
+    token: Optional[str],
+    team_id: Optional[str],
+    user_id: Optional[str],
+    response_cost: Optional[float],
+):
+    """
+    Atomically increment spend counters for budget enforcement.
+
+    Uses spend_counter_cache (DualCache with Redis backend when available)
+    so counters are shared across all pods. Budget check functions read
+    from these counters via get_current_spend() (Redis-first).
+
+    Awaited (not create_task) in the cost callback, so the counter is
+    updated before the next request's auth check runs.
+    """
+    if response_cost is None or response_cost == 0:
+        return
+
+    if token is not None:
+        # token arrives pre-hashed from metadata["user_api_key"] (auth flow
+        # hashes raw "sk-..." keys before they reach the callback). The
+        # startswith("sk-") check is a safety net matching update_cache —
+        # if a raw key somehow arrives, hash it; otherwise use as-is to
+        # avoid double-hashing (budget checks read valid_token.token which
+        # is single-hashed).
+        hashed_token = (
+            hash_token(token=token)
+            if isinstance(token, str) and token.startswith("sk-")
+            else token
+        )
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:key:{hashed_token}",
+            source_cache_key=hashed_token,
+            increment=response_cost,
+        )
+
+    if team_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team:{team_id}",
+            source_cache_key=f"team_id:{team_id}",
+            increment=response_cost,
+        )
+
+    if user_id is not None and team_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:team_member:{user_id}:{team_id}",
+            source_cache_key=f"team_membership:{user_id}:{team_id}",
+            increment=response_cost,
+        )
+
+
+async def _init_and_increment_spend_counter(
+    counter_key: str,
+    source_cache_key: str,
+    increment: float,
+):
+    """
+    Initialize counter from cached object's DB-loaded spend if not yet set,
+    then atomically increment in both in-memory and Redis.
+
+    On first access per pod:
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
+    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
+       check-then-set race: if two pods cold-start simultaneously, both may see
+       the counter as absent and seed it. Using increment instead of set means
+       the worst case is over-counting (conservative — blocks slightly early)
+       rather than under-counting (would allow overspend).
+    4. Increment atomically (both in-memory + Redis)
+    """
+    current = await spend_counter_cache.async_get_cache(key=counter_key)
+    if current is None:
+        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+        base_spend = 0.0
+        if source is not None:
+            if isinstance(source, dict):
+                base_spend = source.get("spend", 0.0) or 0.0
+            else:
+                base_spend = getattr(source, "spend", 0.0) or 0.0
+        if base_spend > 0:
+            await spend_counter_cache.async_increment_cache(
+                key=counter_key, value=base_spend
+            )
+
+    await spend_counter_cache.async_increment_cache(
+        key=counter_key, value=increment
+    )
 
 
 async def update_cache(  # noqa: PLR0915
@@ -2112,6 +2243,37 @@ def _schedule_background_health_check_db_save(
     )
 
 
+def _write_health_state_to_router_cache(
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+) -> None:
+    """
+    Write deployment health states to the router's health state cache
+    for health-check-driven routing. No-op if the feature is disabled.
+    """
+    from litellm.proxy.health_check import build_deployment_health_states
+
+    try:
+        if llm_router is None or not llm_router.enable_health_check_routing:
+            return
+
+        states = build_deployment_health_states(
+            healthy_endpoints=healthy_endpoints,
+            unhealthy_endpoints=unhealthy_endpoints,
+        )
+        if states:
+            llm_router.health_state_cache.set_deployment_health_states(states)
+            verbose_proxy_logger.debug(
+                "health_check_routing_state_updated healthy=%d unhealthy=%d",
+                sum(1 for s in states.values() if s.get("is_healthy")),
+                sum(1 for s in states.values() if not s.get("is_healthy")),
+            )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to write health state to router cache: %s", str(e)
+        )
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -2280,6 +2442,9 @@ async def _run_background_health_check():
             healthy_endpoints,
             unhealthy_endpoints,
         )
+
+        # Write health state to router cache for health-check-driven routing
+        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints)
 
         await asyncio.sleep(health_check_interval)
 
@@ -2528,6 +2693,7 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+            spend_counter_cache.redis_cache = redis_usage_cache
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
 
@@ -2695,12 +2861,36 @@ class ProxyConfig:
 
         return search_tools_parsed if search_tools_parsed else None
 
+    # Environment variable keys that must not be overridden via config because
+    # they can alter process execution, library loading, or network routing.
+    _BLOCKED_ENV_KEYS: Set[str] = {
+        "PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "HOME",
+        "USER",
+        "SHELL",
+        "LOGNAME",
+        "NO_PROXY",
+        "no_proxy",
+    }
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         global premium_user
         environment_variables = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
+                if key in self._BLOCKED_ENV_KEYS:
+                    verbose_proxy_logger.warning(
+                        "Skipping blocked environment variable key: %s", key
+                    )
+                    continue
                 #########################################################
                 # handles this scenario:
                 # ```yaml
@@ -3048,6 +3238,8 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        _enable_hc_routing = False
+        _hc_staleness = None
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3227,13 +3419,21 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            # Health-check-driven routing (opt-in, passes through to Router later)
+            _enable_hc_routing = general_settings.get(
+                "enable_health_check_routing", False
+            )
+            _hc_staleness = general_settings.get(
+                "health_check_staleness_threshold", None
+            )
             verbose_proxy_logger.info(
-                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s",
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
                 use_background_health_checks,
                 use_shared_health_check,
                 health_check_interval,
                 health_check_concurrency,
                 health_check_details,
+                _enable_hc_routing,
             )
 
             ### RBAC ###
@@ -3263,6 +3463,11 @@ class ProxyConfig:
             "cache_responses": litellm.cache
             is not None,  # cache if user passed in cache values
         }
+        # Health-check-driven routing params (from general_settings)
+        if _enable_hc_routing:
+            router_params["enable_health_check_routing"] = True
+        if _hc_staleness is not None:
+            router_params["health_check_staleness_threshold"] = _hc_staleness
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:

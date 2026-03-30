@@ -324,17 +324,58 @@ model_list:
     litellm_params:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      order: 2  # 👈 Used when order=1 is unavailable
-
-router_settings:
-  enable_pre_call_checks: true  # 👈 Required for 'order' to work
+      order: 2  # 👈 Used when order=1 fails
 ```
 
-:::important
-The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
-:::
+### How order-based fallback works
 
-If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
+When a request to an `order=1` deployment fails (connection error, 404, 429, etc.), the router automatically tries `order=2` deployments, then `order=3`, and so on. Each order level gets its own set of retries before escalating to the next.
+
+If all order levels are exhausted, the router falls through to any configured [model-level fallbacks](#fallbacks).
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-secondary
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2
+
+  - model_name: gpt-4-fallback
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  fallbacks:
+    - gpt-4:
+        - gpt-4-fallback  # tried after all order levels fail
+```
+
+The fallback chain for the above config: `order=1` → `order=2` → `gpt-4-fallback`.
+
+For 429 (rate limit) errors specifically, the failed deployment is immediately placed on cooldown. If all `order=1` deployments are on cooldown, the router picks `order=2` deployments directly during retries without waiting for the fallback path.
+
+### Team-scoped models and legacy `model_aliases` {#team-scoped-models-and-legacy-model_aliases}
+
+Team-scoped deployments are identified by `model_info.team_id` and `model_info.team_public_model_name`. Requests should use the **public** model name; the router resolves all sibling deployments (same public name, different `api_base` / `order`, etc.) for routing, failover, and deployment `order`.
+
+For router internals: when a `team_id` is in scope, optimized lookups key off `(team_id, team_public_model_name)`. If code passes an internal deployment id (e.g. `model_name_<team_id>_<uuid>`) instead of the public name, routing still works via the usual deployment-name paths, but the team-specific fast path applies only to the public name.
+
+**Legacy teams:** Older proxy versions could persist `model_aliases` on the team row mapping a public name to a single internal deployment id (`model_name_<team_id>_<uuid>`). On each request, pre-call logic may still rewrite `model` to that internal name **before** routing, which collapses to one deployment and can make newer sibling deployments unreachable.
+
+**Migration options:**
+
+1. **Recommended for upgrades:** Set environment variable `LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true` so that when sibling team deployments exist for the public name, the stale alias rewrite is skipped and team-scoped routing (including `order` and failover) applies. See the [Environment variables](./config_settings) table in the proxy settings doc.
+2. **Data cleanup:** Remove obsolete `model_aliases` entries for team public names from the team record in the database so only `team_public_model_name` + team model list drive access.
+
+If a stale alias is detected and the bypass is **not** enabled, the proxy may emit a **one-time** warning in logs explaining that sibling deployments may be unreachable until the flag is set or aliases are cleaned up.
 
 ### When You'll See Load Balancing in Action
 

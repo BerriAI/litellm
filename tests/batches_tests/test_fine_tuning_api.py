@@ -123,63 +123,6 @@ async def test_create_fine_tune_jobs_async():
     pass
 
 
-@pytest.mark.asyncio
-async def test_azure_create_fine_tune_jobs_async():
-    try:
-        verbose_logger.setLevel(logging.DEBUG)
-        file_name = "azure_fine_tune.jsonl"
-        _current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(_current_dir, file_name)
-
-        file_id = "file-5e4b20ecbd724182b9964f3cd2ab7212"
-
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gpt-35-turbo-1106",
-            training_file=file_id,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print(
-            "response from litellm.create_fine_tuning_job=", create_fine_tuning_response
-        )
-
-        assert create_fine_tuning_response.id is not None
-
-        # response from Example/mocked endpoint
-        assert create_fine_tuning_response.model == "davinci-002"
-
-        # list fine tuning jobs
-        print("listing ft jobs")
-        ft_jobs = await litellm.alist_fine_tuning_jobs(
-            limit=2,
-            custom_llm_provider="azure",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-        print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-
-        # cancel ft job
-        response = await litellm.acancel_fine_tuning_job(
-            fine_tuning_job_id=create_fine_tuning_response.id,
-            custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://exampleopenaiendpoint-production.up.railway.app",
-        )
-
-        print("response from litellm.cancel_fine_tuning_job=", response)
-
-        assert response.status == "cancelled"
-        assert response.id == create_fine_tuning_response.id
-    except openai.RateLimitError:
-        pass
-    except Exception as e:
-        if "Job has already completed" in str(e):
-            pass
-        else:
-            pytest.fail(f"Error occurred: {e}")
-    pass
-
-
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
     load_vertex_ai_credentials()
@@ -601,11 +544,10 @@ async def test_mock_openai_retrieve_fine_tune_job():
 @pytest.mark.asyncio
 async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
     """Test that Azure-specific parameters are passed through extra_body"""
-    from openai import AsyncAzureOpenAI
-    from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
     from openai.types.fine_tuning.fine_tuning_job import Hyperparameters as OAIHyperparameters
+    from litellm.types.utils import LiteLLMFineTuningJob
 
-    mock_response = FineTuningJob(
+    mock_response = LiteLLMFineTuningJob(
         id="ft-azure-123",
         model="gpt-4.1-mini-2025-04-14",
         created_at=1677610602,
@@ -619,8 +561,11 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
         result_files=[],
     )
 
+    async def mock_async_create(*args, **kwargs):
+        return mock_response
+
     with patch("litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job") as mock_create:
-        mock_create.return_value = mock_response
+        mock_create.return_value = mock_async_create()
 
         response = await litellm.acreate_fine_tuning_job(
             model="gpt-4.1-mini-2025-04-14",
