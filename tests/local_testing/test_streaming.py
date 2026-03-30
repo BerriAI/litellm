@@ -945,7 +945,6 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = ["gemini-2.5-flash-lite"]
