@@ -552,7 +552,6 @@ async def test_completion_predibase_streaming(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-
 def test_completion_azure_function_calling_stream():
     try:
         litellm.set_verbose = False
@@ -1655,78 +1654,7 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
-@pytest.mark.skip(reason="Move to being a mock endpoint")
-@pytest.mark.asyncio
-async def test_sagemaker_streaming_async():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-            idx += 1
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-
-
 # asyncio.run(test_sagemaker_streaming_async())
-
-
-@pytest.mark.skip(reason="costly sagemaker deployment. Move to mock implementation")
-def test_completion_sagemaker_stream():
-    try:
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            stream=True,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="Account deleted by IBM.")
@@ -2725,8 +2653,8 @@ def test_azure_streaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
         )
         # Add any assertions here to check the response
@@ -2796,8 +2724,8 @@ async def test_azure_astreaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2827,8 +2755,8 @@ async def test_azure_astreaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -3109,7 +3037,9 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises((litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)):
+        with pytest.raises(
+            (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
+        ):
             for chunk in response:
                 continue
     else:

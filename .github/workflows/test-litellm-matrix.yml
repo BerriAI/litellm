@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same PR
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -12,7 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # Increased from 15 to 20
+    timeout-minutes: 20 # Increased from 15 to 20
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +46,7 @@ jobs:
           - name: "integrations"
             path: "tests/test_litellm/integrations"
             workers: 2
-            reruns: 3  # Integration tests tend to be flakier
+            reruns: 3 # Integration tests tend to be flakier
           - name: "core-utils"
             path: "tests/test_litellm/litellm_core_utils"
             workers: 2
@@ -117,18 +120,20 @@ jobs:
     name: test (${{ matrix.test-group.name }})
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Install Poetry
-        uses: snok/install-poetry@v1
+        run: pip install 'poetry==2.3.2'
 
       - name: Cache Poetry dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.0.0
         with:
           path: |
             ~/.cache/pypoetry
@@ -144,14 +149,17 @@ jobs:
           poetry install --with dev,proxy-dev --extras "proxy semantic-router"
           # pytest-rerunfailures and pytest-xdist are in pyproject.toml dev dependencies
           poetry run pip install google-genai==1.22.0 \
-            google-cloud-aiplatform>=1.38 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core
+            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
 
       - name: Setup litellm-enterprise
         run: |
           poetry run pip install --force-reinstall --no-deps -e enterprise/
 
       - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
           poetry run prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests - ${{ matrix.test-group.name }}

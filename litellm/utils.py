@@ -2735,6 +2735,19 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_native_structured_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports native structured outputs and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_native_structured_output",
+    )
+
+
 def get_supported_regions(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Optional[List[str]]:
@@ -4866,7 +4879,21 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
+def _get_order_filtered_deployments(
+    healthy_deployments: List[Dict], target_order: Optional[int] = None
+) -> List:
+    if target_order is not None:
+        filtered = [
+            d
+            for d in healthy_deployments
+            if d["litellm_params"].get("order") == target_order
+        ]
+        if filtered:
+            return filtered
+        # target_order doesn't match any deployment (e.g., external fallback model) — return all
+        return healthy_deployments
+
+    # Default: pick min order group
     min_order = min(
         (
             deployment["litellm_params"]["order"]
@@ -5830,6 +5857,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
+                ),
+                supports_native_structured_output=_model_info.get(
+                    "supports_native_structured_output", None
                 ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),

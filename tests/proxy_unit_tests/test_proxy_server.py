@@ -119,7 +119,7 @@ def fake_env_vars(monkeypatch):
     # Set some fake environment variables
     monkeypatch.setenv("OPENAI_API_KEY", "fake_openai_api_key")
     monkeypatch.setenv("OPENAI_API_BASE", "http://fake-openai-api-base")
-    monkeypatch.setenv("AZURE_API_BASE", "http://fake-azure-api-base")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "http://fake-azure-api-base")
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "fake_azure_openai_api_key")
     monkeypatch.setenv("AZURE_SWEDEN_API_BASE", "http://fake-azure-sweden-api-base")
     monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -178,7 +178,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
 def test_chat_completion_malformed_messages_returns_400(client_no_auth):
     """
     Test that malformed messages (strings instead of dicts) return 400 instead of 500.
-    
+
     This test verifies that when a client sends messages as raw strings instead of
     {role, content} objects, LiteLLM returns a 400 invalid_request_error instead
     of a 500 Internal Server Error.
@@ -188,33 +188,41 @@ def test_chat_completion_malformed_messages_returns_400(client_no_auth):
         # Test data with malformed messages (string instead of dict)
         test_data = {
             "model": "gpt-3.5-turbo",
-            "messages": ["hi how are you"],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
+            "messages": [
+                "hi how are you"
+            ],  # Invalid: should be [{"role": "user", "content": "hi how are you"}]
         }
 
         print("testing proxy server with malformed messages")
-        response = client_no_auth.post("/v1/chat/completions", json=test_data, headers=headers)
-        
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=headers
+        )
+
         print(f"response status: {response.status_code}")
         print(f"response text: {response.text}")
-        
+
         # Should return 400, not 500
-        assert response.status_code == 400, f"Expected 400, got {response.status_code}. Response: {response.text}"
-        
+        assert (
+            response.status_code == 400
+        ), f"Expected 400, got {response.status_code}. Response: {response.text}"
+
         # Verify error format
         result = response.json()
         assert "error" in result, "Response should contain 'error' key"
         error = result["error"]
-        
+
         # Verify error type and message
-        assert error.get("type") == "invalid_request_error" or error.get("type") is None, \
-            f"Expected invalid_request_error or None, got {error.get('type')}"
-        assert error.get("code") == "400" or error.get("code") == 400, \
-            f"Expected code 400, got {error.get('code')}"
-        
+        assert (
+            error.get("type") == "invalid_request_error" or error.get("type") is None
+        ), f"Expected invalid_request_error or None, got {error.get('type')}"
+        assert (
+            error.get("code") == "400" or error.get("code") == 400
+        ), f"Expected code 400, got {error.get('code')}"
+
         # Error message should indicate invalid request format
         error_message = error.get("message", "")
         assert len(error_message) > 0, "Error message should not be empty"
-        
+
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -342,7 +350,7 @@ def test_chat_completion_forward_llm_provider_auth_headers(
     """
     Test that LLM provider auth headers (x-api-key, x-goog-api-key) are forwarded
     when forward_llm_provider_auth_headers=True.
-    
+
     This allows clients to send their own LLM provider API keys through the proxy.
     """
     try:
@@ -351,7 +359,7 @@ def test_chat_completion_forward_llm_provider_auth_headers(
         gs["forward_client_headers_to_llm_api"] = True
         gs["forward_llm_provider_auth_headers"] = forward_llm_auth_headers
         setattr(litellm.proxy.proxy_server, "general_settings", gs)
-        
+
         # Test data
         test_data = {
             "model": "gpt-3.5-turbo",
@@ -360,7 +368,7 @@ def test_chat_completion_forward_llm_provider_auth_headers(
             ],
             "max_tokens": 10,
         }
-        
+
         # Headers including LLM provider auth
         request_headers = {
             "Authorization": "Bearer sk-proxy-auth-123",  # Proxy auth (should be stripped)
@@ -368,17 +376,17 @@ def test_chat_completion_forward_llm_provider_auth_headers(
             "x-goog-api-key": "google-api-key-123",  # Google API key
             "X-Custom-Header": "custom-value",  # Custom header (should be forwarded)
         }
-        
+
         # Make request
         response = client_no_auth.post(
             "/v1/chat/completions", json=test_data, headers=request_headers
         )
-        
+
         assert response.status_code == 200
-        
+
         # Check forwarded headers
         forwarded_headers = mock_acompletion.call_args.kwargs.get("headers", {})
-        
+
         if forward_llm_auth_headers:
             # LLM provider auth headers should be forwarded
             assert "x-api-key" in forwarded_headers
@@ -389,19 +397,23 @@ def test_chat_completion_forward_llm_provider_auth_headers(
             # LLM provider auth headers should be stripped
             assert "x-api-key" not in forwarded_headers
             assert "x-goog-api-key" not in forwarded_headers
-        
+
         # Custom headers should always be forwarded (when forward_client_headers_to_llm_api=True)
         assert "x-custom-header" in forwarded_headers
         assert forwarded_headers["x-custom-header"] == "custom-value"
-        
+
         # Proxy Authorization should never be forwarded
         assert "authorization" not in forwarded_headers
-        
-        print(f"✓ Test passed with forward_llm_provider_auth_headers={forward_llm_auth_headers}")
+
+        print(
+            f"✓ Test passed with forward_llm_provider_auth_headers={forward_llm_auth_headers}"
+        )
         print(f"  Forwarded headers: {list(forwarded_headers.keys())}")
-        
+
     except Exception as e:
-        pytest.fail(f"Test failed with forward_llm_auth_headers={forward_llm_auth_headers}: {str(e)}")
+        pytest.fail(
+            f"Test failed with forward_llm_auth_headers={forward_llm_auth_headers}: {str(e)}"
+        )
     finally:
         # Clean up
         gs = getattr(litellm.proxy.proxy_server, "general_settings")
@@ -2406,9 +2418,7 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     test_model_list_2 = [{"model_name": "model-b"}]
     called_model_lists = []
 
-    async def fake_perform_health_check(
-        model_list, details, max_concurrency=None
-    ):
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], ["unhealthy"])
 
@@ -2452,13 +2462,14 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
     test_model_list = [
         {"model_name": "model-a"},
-        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+        {
+            "model_name": "model-b",
+            "model_info": {"disable_background_health_check": True},
+        },
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(
-        model_list, details, max_concurrency=None
-    ):
+    async def fake_perform_health_check(model_list, details, max_concurrency=None):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], [])
 
@@ -2500,15 +2511,15 @@ def test_get_timeout_from_request():
 @pytest.mark.parametrize(
     "ui_exists, ui_has_content",
     [
-        (True, True),   # UI path exists and has content
+        (True, True),  # UI path exists and has content
         (True, False),  # UI path exists but is empty
-        (False, False), # UI path doesn't exist
+        (False, False),  # UI path doesn't exist
     ],
 )
 def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content):
     """
     Test the non-root Docker UI path detection logic.
-    
+
     Tests that when LITELLM_NON_ROOT is set to "true":
     - If UI path exists and has content, it should be used
     - If UI path doesn't exist or is empty, proper error logging occurs
@@ -2516,44 +2527,54 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
     import tempfile
     import shutil
     from unittest.mock import MagicMock
-    
+
     # Create a temporary directory to act as /tmp/litellm_ui
     test_ui_path = tmp_path / "litellm_ui"
-    
+
     if ui_exists:
         test_ui_path.mkdir(parents=True, exist_ok=True)
         if ui_has_content:
             # Create some dummy files to simulate built UI
             (test_ui_path / "index.html").write_text("<html></html>")
             (test_ui_path / "app.js").write_text("console.log('test');")
-    
+
     # Mock the environment variable and os.path operations
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    
+
     # Create a mock logger to capture log messages
     mock_logger = MagicMock()
-    
+
     # We need to reimport or reload the relevant code section
     # Since this is module-level code, we'll test the logic directly
     ui_path = None
     non_root_ui_path = str(test_ui_path)
-    
+
     # Simulate the logic from proxy_server.py lines 909-920
     if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
         if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
-            mock_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
-            mock_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            mock_logger.info(
+                f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+            )
+            mock_logger.info(
+                f"UI files found: {len(os.listdir(non_root_ui_path))} items"
+            )
             ui_path = non_root_ui_path
         else:
-            mock_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
-            mock_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
-    
+            mock_logger.error(
+                f"UI not found at {non_root_ui_path}. UI will not be available."
+            )
+            mock_logger.error(
+                f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}"
+            )
+
     # Verify behavior based on test parameters
     if ui_exists and ui_has_content:
         # UI should be found and used
         assert ui_path == non_root_ui_path
         assert mock_logger.info.call_count == 2
-        mock_logger.info.assert_any_call(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+        mock_logger.info.assert_any_call(
+            f"Using pre-built UI for non-root Docker: {non_root_ui_path}"
+        )
         # Verify the second info call mentions the number of items
         info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
         assert any("UI files found:" in call and "items" in call for call in info_calls)
@@ -2562,7 +2583,9 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         # UI should not be found, error should be logged
         assert ui_path is None
         assert mock_logger.error.call_count == 2
-        mock_logger.error.assert_any_call(f"UI not found at {non_root_ui_path}. UI will not be available.")
+        mock_logger.error.assert_any_call(
+            f"UI not found at {non_root_ui_path}. UI will not be available."
+        )
         # Verify the second error call has path existence info
         error_calls = [call[0][0] for call in mock_logger.error.call_args_list]
         assert any("Path exists:" in call for call in error_calls)
@@ -2574,17 +2597,17 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     """
     Test that /get/config/callbacks returns all three callback types:
     - success_callback with type="success"
-    - failure_callback with type="failure"  
+    - failure_callback with type="failure"
     - callbacks (success_and_failure) with type="success_and_failure"
     """
     from litellm.proxy.proxy_server import ProxyConfig
-    
+
     # Create a mock config with all three callback types
     mock_config_data = {
         "litellm_settings": {
             "success_callback": ["langfuse", "braintrust"],
             "failure_callback": ["sentry"],
-            "callbacks": ["otel", "langsmith"]
+            "callbacks": ["otel", "langsmith"],
         },
         "environment_variables": {
             "LANGFUSE_PUBLIC_KEY": "test-public-key",
@@ -2595,51 +2618,53 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
             "OTEL_ENDPOINT": "http://localhost:4317",
             "LANGSMITH_API_KEY": "test-langsmith-key",
         },
-        "general_settings": {}
+        "general_settings": {},
     }
-    
+
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
-    
+
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ):
         response = client_no_auth.get("/get/config/callbacks")
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Verify response structure
         assert "status" in result
         assert result["status"] == "success"
         assert "callbacks" in result
-        
+
         callbacks = result["callbacks"]
-        
+
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5
-        
+
         # Group callbacks by type
         success_callbacks = [cb for cb in callbacks if cb.get("type") == "success"]
         failure_callbacks = [cb for cb in callbacks if cb.get("type") == "failure"]
-        success_and_failure_callbacks = [cb for cb in callbacks if cb.get("type") == "success_and_failure"]
-        
+        success_and_failure_callbacks = [
+            cb for cb in callbacks if cb.get("type") == "success_and_failure"
+        ]
+
         # Verify all callbacks have required fields
         for callback in callbacks:
             assert "name" in callback
             assert "variables" in callback
             assert "type" in callback
             assert callback["type"] in ["success", "failure", "success_and_failure"]
-        
+
         # Verify success callbacks
         assert len(success_callbacks) == 2
         success_names = [cb["name"] for cb in success_callbacks]
         assert "langfuse" in success_names
         assert "braintrust" in success_names
-        
+
         # Verify failure callbacks
         assert len(failure_callbacks) == 1
         assert failure_callbacks[0]["name"] == "sentry"
-        
+
         # Verify success_and_failure callbacks
         assert len(success_and_failure_callbacks) == 2
         success_and_failure_names = [cb["name"] for cb in success_and_failure_callbacks]
@@ -2654,13 +2679,13 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
     for each callback type. Values are returned as-is from the config (no decryption).
     """
     from litellm.proxy.proxy_server import ProxyConfig
-    
+
     # Create a mock config with callbacks and their env vars
     mock_config_data = {
         "litellm_settings": {
             "success_callback": ["langfuse"],
             "failure_callback": [],
-            "callbacks": ["otel"]
+            "callbacks": ["otel"],
         },
         "environment_variables": {
             "LANGFUSE_PUBLIC_KEY": "test-public-key",
@@ -2670,21 +2695,21 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
             "OTEL_ENDPOINT": "http://localhost:4317",
             "OTEL_HEADERS": "key=value",
         },
-        "general_settings": {}
+        "general_settings": {},
     }
-    
+
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
-    
+
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
     ):
         response = client_no_auth.get("/get/config/callbacks")
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         callbacks = result["callbacks"]
-        
+
         # Find langfuse callback (success type)
         langfuse_callback = next(
             (cb for cb in callbacks if cb["name"] == "langfuse"), None
@@ -2692,7 +2717,7 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback is not None
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
-        
+
         # Verify langfuse env vars are present (values returned as-is, no decryption)
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
@@ -2701,15 +2726,13 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
-        
+
         # Find otel callback (success_and_failure type)
-        otel_callback = next(
-            (cb for cb in callbacks if cb["name"] == "otel"), None
-        )
+        otel_callback = next((cb for cb in callbacks if cb["name"] == "otel"), None)
         assert otel_callback is not None
         assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
-        
+
         # Verify otel env vars are present
         otel_vars = otel_callback["variables"]
         assert "OTEL_EXPORTER" in otel_vars

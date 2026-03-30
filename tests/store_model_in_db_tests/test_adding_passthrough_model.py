@@ -1,12 +1,12 @@
 """
 Test adding a pass through assemblyai model + api key + api base to the db
-wait 20 seconds 
-make request 
+wait 20 seconds
+make request
 
-Cases to cover 
-1. user points api base to <proxy-base>/assemblyai 
+Cases to cover
+1. user points api base to <proxy-base>/assemblyai
 2. user points api base to <proxy-base>/asssemblyai/us
-3. user points api base to <proxy-base>/assemblyai/eu 
+3. user points api base to <proxy-base>/assemblyai/eu
 4. Bad API Key / credential - 401
 """
 
@@ -21,7 +21,7 @@ TEST_MASTER_KEY = "sk-1234"
 PROXY_BASE_URL = "http://0.0.0.0:4000"
 US_BASE_URL = f"{PROXY_BASE_URL}/assemblyai"
 EU_BASE_URL = f"{PROXY_BASE_URL}/eu.assemblyai"
-ASSEMBLYAI_API_KEY_ENV_VAR = "TEST_SPECIAL_ASSEMBLYAI_API_KEY"
+ASSEMBLYAI_API_KEY_ENV_VAR = "ASSEMBLYAI_API_KEY"
 
 
 def _delete_all_assemblyai_models_from_db():

@@ -158,12 +158,15 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
-        # Native OpenRouter models have IDs like "openrouter/free" where the
-        # "openrouter/" prefix is part of the actual model name on the API.
-        # When called from a bridge (e.g. anthropic_messages adapter),
-        # custom_llm_provider is already resolved, so return early to prevent
-        # the provider-list stripping below from removing the prefix.
+        # OpenRouter: when the router/proxy already set custom_llm_provider,
+        # the model may still carry LiteLLM's "openrouter/" routing prefix.
+        # Native IDs like "openrouter/auto" must stay intact for the API; IDs
+        # like "openrouter/anthropic/claude-3.5-sonnet" must become
+        # "anthropic/claude-3.5-sonnet" (OpenRouter expects provider/model).
         if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+            remainder = model[len("openrouter/") :]
+            if "/" in remainder:
+                return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         if api_key and api_key.startswith("os.environ/"):
