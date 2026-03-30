@@ -195,7 +195,7 @@ def _supports_nova_canvas_image_edit_from_model_cost(model: str) -> bool:
             "stripped_model_name",
             "split_model",
         ):
-            _add(potential[field])
+            _add(potential.get(field))
     except Exception:
         pass
 
