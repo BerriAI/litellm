@@ -3,10 +3,13 @@ Tests for Fireworks AI cost calculator — cache token pricing.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
 
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper
-from litellm.llms.fireworks_ai.cost_calculator import cost_per_token, get_base_model_for_pricing
+from litellm.types.utils import Usage
+from litellm.llms.fireworks_ai.cost_calculator import (
+    cost_per_token,
+    get_base_model_for_pricing,
+)
+from litellm.utils import get_model_info
 
 
 def test_cost_per_token_with_cache_tokens():
@@ -15,6 +18,14 @@ def test_cost_per_token_with_cache_tokens():
     instead of the full input_cost_per_token.
 
     Regression test for https://github.com/BerriAI/litellm/issues/24774
+
+    For kimi-k2p5:
+        input_cost_per_token = 6e-7
+        cache_read_input_token_cost = 1e-7
+
+    With 100 prompt tokens (60 cache read, 40 non-cached):
+        Correct cost  = 40 * 6e-7 + 60 * 1e-7 = 3e-5
+        Buggy cost    = 100 * 6e-7             = 6e-5
     """
     usage = Usage(
         prompt_tokens=100,
@@ -28,13 +39,22 @@ def test_cost_per_token_with_cache_tokens():
         model="accounts/fireworks/models/kimi-k2p5", usage=usage
     )
 
-    # With cache tokens, prompt_cost should be less than
-    # 100 * input_cost_per_token (since 60 tokens are cheaper cache reads)
-    assert prompt_cost >= 0
+    # Verify the cache discount is applied
+    model_info = get_model_info(
+        model="accounts/fireworks/models/kimi-k2p5",
+        custom_llm_provider="fireworks_ai",
+    )
+    input_cost = model_info["input_cost_per_token"]
+    cache_read_cost = model_info.get("cache_read_input_token_cost", input_cost)
+
+    non_cached_tokens = 100 - 60  # prompt_tokens - cache_read_input_tokens
+    expected_prompt_cost = non_cached_tokens * input_cost + 60 * cache_read_cost
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost), (
+        f"Cache discount not applied: got {prompt_cost}, "
+        f"expected {expected_prompt_cost}"
+    )
     assert completion_cost >= 0
-    # The total should be a valid float, not NaN or inf
-    assert prompt_cost == prompt_cost  # not NaN
-    assert completion_cost == completion_cost  # not NaN
 
 
 def test_cost_per_token_without_cache_tokens():

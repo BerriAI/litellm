@@ -10,7 +10,6 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -71,14 +70,17 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        generic_cost_per_token,
+    )
+
     ## check if model is mapped in model_prices_and_context_window.json
     try:
-        return generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider="fireworks_ai"
-        )
+        get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
         ## model not mapped — fall back to parameter-based pricing category
-        base_model = get_base_model_for_pricing(model_name=model)
-        return generic_cost_per_token(
-            model=base_model, usage=usage, custom_llm_provider="fireworks_ai"
-        )
+        model = get_base_model_for_pricing(model_name=model)
+
+    return generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="fireworks_ai"
+    )
