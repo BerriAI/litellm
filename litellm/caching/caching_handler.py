@@ -52,7 +52,6 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
-    PromptTokensDetailsWrapper,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -60,6 +59,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import PromptTokensDetailsWrapper
 else:
     LiteLLMLoggingObj = Any
 
@@ -447,9 +447,16 @@ class LLMCachingHandler:
                                 aggregated_details[key] = value
 
             ## USAGE
-            prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+            prompt_tokens_details: Optional["PromptTokensDetailsWrapper"] = None
             if aggregated_details:
-                prompt_tokens_details = PromptTokensDetailsWrapper(**aggregated_details)
+                from litellm.types.utils import PromptTokensDetailsWrapper
+
+                try:
+                    prompt_tokens_details = PromptTokensDetailsWrapper(
+                        **aggregated_details
+                    )
+                except Exception:
+                    prompt_tokens_details = None
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
@@ -505,9 +512,9 @@ class LLMCachingHandler:
 
     def _merge_prompt_tokens_details(
         self,
-        details1: Optional[PromptTokensDetailsWrapper],
-        details2: Optional[PromptTokensDetailsWrapper],
-    ) -> Optional[PromptTokensDetailsWrapper]:
+        details1: Optional["PromptTokensDetailsWrapper"],
+        details2: Optional["PromptTokensDetailsWrapper"],
+    ) -> Optional["PromptTokensDetailsWrapper"]:
         """Merge two PromptTokensDetailsWrapper objects by summing numeric fields."""
         if details1 is None and details2 is None:
             return None
@@ -533,6 +540,19 @@ class LLMCachingHandler:
             v2 = dict2.get(key, 0)
             if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
                 merged[key] = v1 + v2
+            elif isinstance(v1, dict) and isinstance(v2, dict):
+                # Recursively merge nested dicts (e.g. cache_creation_token_details)
+                nested: dict = {}
+                for nk in set(v1.keys()) | set(v2.keys()):
+                    nv1 = v1.get(nk, 0)
+                    nv2 = v2.get(nk, 0)
+                    if isinstance(nv1, (int, float)) and isinstance(nv2, (int, float)):
+                        nested[nk] = nv1 + nv2
+                    elif nv1:
+                        nested[nk] = nv1
+                    else:
+                        nested[nk] = nv2
+                merged[key] = nested
             elif v1:
                 merged[key] = v1
             else:
@@ -540,7 +560,13 @@ class LLMCachingHandler:
 
         if not merged:
             return None
-        return PromptTokensDetailsWrapper(**merged)
+
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
+        try:
+            return PromptTokensDetailsWrapper(**merged)
+        except Exception:
+            return None
 
     def _combine_cached_embedding_response_with_api_result(
         self,
