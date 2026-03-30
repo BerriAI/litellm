@@ -188,8 +188,8 @@ class TestOCIEmbeddingConfig:
         assert result["compartmentId"] == TEST_COMPARTMENT_ID
         assert result["servingMode"]["servingType"] == "ON_DEMAND"
         assert result["servingMode"]["modelId"] == TEST_MODEL_NAME
-        assert "embedTextDetails" in result
-        assert result["embedTextDetails"]["inputs"] == ["Hello world", "Goodbye world"]
+        assert result["inputs"] == ["Hello world", "Goodbye world"]
+        assert result["truncate"] == "END"
 
     def test_transform_embedding_request_dedicated(self):
         """test transform_embedding_request builds DEDICATED servingMode with endpointId."""
@@ -212,7 +212,7 @@ class TestOCIEmbeddingConfig:
         assert result["servingMode"]["endpointId"] == test_endpoint_id
 
     def test_transform_embedding_request_input_type(self):
-        """test input_type=search_query is mapped to SEARCH_QUERY in embedTextDetails."""
+        """test input_type=search_query is mapped to SEARCH_QUERY in request data."""
         config = OCIEmbeddingConfig()
         optional_params = {
             "oci_compartment_id": TEST_COMPARTMENT_ID,
@@ -226,7 +226,7 @@ class TestOCIEmbeddingConfig:
                 headers={},
             )
 
-        assert result["embedTextDetails"]["inputType"] == "SEARCH_QUERY"
+        assert result["inputType"] == "SEARCH_QUERY"
 
     def test_transform_embedding_request_string_input(self):
         """test single string input is wrapped in a list."""
@@ -242,8 +242,8 @@ class TestOCIEmbeddingConfig:
                 headers={},
             )
 
-        assert isinstance(result["embedTextDetails"]["inputs"], list)
-        assert result["embedTextDetails"]["inputs"] == ["Hello world"]
+        assert isinstance(result["inputs"], list)
+        assert result["inputs"] == ["Hello world"]
 
     def test_transform_embedding_response(self):
         """test OCI embedding response is correctly transformed into EmbeddingResponse."""

@@ -193,11 +193,9 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         {
             "compartmentId": "...",
             "servingMode": {"servingType": "ON_DEMAND", "modelId": "..."},
-            "embedTextDetails": {
-                "inputs": ["text1", "text2"],
-                "truncate": "END",
-                "inputType": "SEARCH_DOCUMENT"
-            }
+            "inputs": ["text1", "text2"],
+            "truncate": "END",
+            "inputType": "SEARCH_DOCUMENT"
         }
         """
         oci_compartment_id = optional_params.get("oci_compartment_id")
@@ -236,8 +234,11 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         else:
             inputs = [str(input)]
 
-        # Build embed text details
-        embed_text_details: Dict[str, Any] = {
+        # Build request data — OCI embedText API expects inputs, truncate,
+        # and inputType at the top level alongside compartmentId and servingMode
+        request_data: Dict[str, Any] = {
+            "compartmentId": oci_compartment_id,
+            "servingMode": serving_mode,
             "inputs": inputs,
             "truncate": optional_params.get("truncate", "END"),
         }
@@ -246,13 +247,7 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         input_type = optional_params.get("input_type")
         if input_type:
             mapped_type = _INPUT_TYPE_MAP.get(input_type.lower(), input_type.upper())
-            embed_text_details["inputType"] = mapped_type
-
-        request_data = {
-            "compartmentId": oci_compartment_id,
-            "servingMode": serving_mode,
-            "embedTextDetails": embed_text_details,
-        }
+            request_data["inputType"] = mapped_type
 
         # Sign the request
         api_base = self.get_complete_url(
