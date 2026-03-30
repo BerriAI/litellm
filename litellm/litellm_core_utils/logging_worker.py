@@ -118,7 +118,17 @@ class LoggingWorker:
                 # unbounded growth of waiting tasks
                 await self._sem.acquire()
                 try:
-                    task = await self._queue.get()
+                    try:
+                        task = await self._queue.get()
+                    except RuntimeError as e:
+                        # Pytest / process shutdown can close the loop while we are
+                        # blocked on Queue.get(); asyncio may raise when cancelling
+                        # the internal waiter on an already-closed loop (Py 3.12+).
+                        if "Event loop is closed" in str(e):
+                            self._sem.release()
+                            return
+                        self._sem.release()
+                        raise
                     # Track each spawned coroutine so we can cancel on shutdown.
                     processing_task = asyncio.create_task(
                         self._process_log_task(task, self._sem)
