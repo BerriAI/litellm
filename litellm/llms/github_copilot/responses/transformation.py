@@ -106,7 +106,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if isinstance(litellm_params, dict):
                 _api_key = litellm_params.get("api_key")
             else:
-                _api_key = getattr(litellm_params, "api_key", None) if litellm_params else None
+                _api_key = (
+                    getattr(litellm_params, "api_key", None) if litellm_params else None
+                )
             if not _api_key:
                 raise AuthenticationError(
                     model=model,
@@ -114,10 +116,11 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
                 )
 
-            # api_key at this point is already the resolved copilot inference
-            # token (exchanged by _get_openai_compatible_provider_info or
-            # main.py). Just use it directly — no re-authentication needed.
-            default_headers = get_copilot_default_headers(_api_key)
+            # _api_key is the GitHub access token (ghu_xxx). Exchange it for
+            # a short-lived Copilot inference token (cached at module level).
+            authenticator = Authenticator(access_token=_api_key)
+            inference_token = authenticator.get_api_key()
+            default_headers = get_copilot_default_headers(inference_token)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
@@ -168,9 +171,15 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         added in the future by detecting account type.
         """
         # Use provided api_base or fall back to credential-resolved base or default
-        _api_key = litellm_params.get("api_key") if isinstance(litellm_params, dict) else None
+        _api_key = (
+            litellm_params.get("api_key") if isinstance(litellm_params, dict) else None
+        )
         if _api_key:
-            api_base = api_base or Authenticator(access_token=_api_key).get_api_base() or GITHUB_COPILOT_API_BASE
+            api_base = (
+                api_base
+                or Authenticator(access_token=_api_key).get_api_base()
+                or GITHUB_COPILOT_API_BASE
+            )
         else:
             api_base = api_base or GITHUB_COPILOT_API_BASE
 

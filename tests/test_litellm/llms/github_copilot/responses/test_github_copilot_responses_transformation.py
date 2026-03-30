@@ -82,16 +82,22 @@ class TestGithubCopilotResponsesAPITransformation:
             "Should handle trailing slash"
         )
 
-    def test_validate_environment_default_headers(self):
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_validate_environment_default_headers(self, mock_authenticator_class):
         """Test that validate_environment generates correct default headers"""
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "copilot-inference-token"
+        mock_authenticator_class.return_value = mock_auth_instance
+
         config = GithubCopilotResponsesAPIConfig()
 
         headers = config.validate_environment(
             headers={}, model="gpt-5.1-codex", litellm_params={"api_key": "gh-access-token"}
         )
 
-        # api_key is used directly — no re-exchange in validate_environment
-        assert headers["Authorization"] == "Bearer gh-access-token"
+        # Access token is exchanged for inference token
+        mock_authenticator_class.assert_called_with(access_token="gh-access-token")
+        assert headers["Authorization"] == "Bearer copilot-inference-token"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
         assert headers["editor-version"] == "vscode/1.95.0"
@@ -101,8 +107,13 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["x-github-api-version"] == "2025-04-01"
         assert "x-request-id" in headers
 
-    def test_validate_environment_user_headers_override(self):
+    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
+    def test_validate_environment_user_headers_override(self, mock_authenticator_class):
         """Test that user-provided headers override default headers"""
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "copilot-inference-token"
+        mock_authenticator_class.return_value = mock_auth_instance
+
         config = GithubCopilotResponsesAPIConfig()
 
         custom_headers = {
@@ -118,8 +129,8 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["editor-version"] == "custom/2.0.0"
         # Custom header should be preserved
         assert headers["custom-header"] == "custom-value"
-        # api_key used directly
-        assert headers["Authorization"] == "Bearer gh-access-token"
+        # Access token exchanged for inference token
+        assert headers["Authorization"] == "Bearer copilot-inference-token"
 
     def test_get_initiator_with_assistant_role(self):
         """Test _get_initiator returns 'agent' for assistant role"""

@@ -60,13 +60,16 @@ class Authenticator:
 
     def get_access_token(self) -> str:
         """
-        Login to Copilot with retry 3 times.
+        Return the GitHub access token.
+
+        In credential mode, returns the injected token directly.
+        In file-based mode (SDK), reads from the access-token file on disk.
 
         Returns:
             str: The GitHub access token.
 
         Raises:
-            GetAccessTokenError: If unable to obtain an access token after retries.
+            GetAccessTokenError: If no access token is available.
         """
         if self._injected_access_token is not None:
             return self._injected_access_token
@@ -82,7 +85,8 @@ class Authenticator:
         raise GetAccessTokenError(
             message=(
                 "No GitHub Copilot access token configured. "
-                "Use a named credential via the LiteLLM proxy or UI before making requests. "
+                "Run `litellm --login github_copilot` (SDK) or create a named credential "
+                "via the LiteLLM proxy UI. "
                 "See: https://docs.litellm.ai/docs/providers/github_copilot"
             ),
             status_code=401,
