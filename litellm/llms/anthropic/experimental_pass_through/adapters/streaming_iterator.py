@@ -143,13 +143,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
                     self.sent_content_block_finish = False
-                    # Also forward the triggering delta if it has content.
-                    # When Bedrock omits contentBlockStart events (e.g. for marketplace
-                    # models), the first delta for a new block arrives without a prior
-                    # start event. Dropping it causes the first characters of each block
-                    # to be silently lost.
-                    if processed_chunk.get("type") == "content_block_delta":
-                        self.chunk_queue.append(processed_chunk)
+                    # Forward the triggering delta. When Bedrock omits contentBlockStart
+                    # events (e.g. for marketplace models), the first delta for a new
+                    # block arrives without a prior start event. Dropping it causes the
+                    # first characters of each block to be silently lost.
+                    # Invariant: _should_start_new_content_block returns False for
+                    # finish-reason chunks, and translate_streaming_openai_response_to_anthropic
+                    # only emits MessageBlockDelta for finish-reason chunks — so
+                    # processed_chunk is always a ContentBlockDelta here.
+                    assert processed_chunk.get("type") == "content_block_delta", (
+                        f"Expected content_block_delta, got {processed_chunk.get('type')}"
+                    )
+                    self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
 
                 if (
@@ -331,13 +336,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         # Reset state for new block
                         self.sent_content_block_finish = False
 
-                        # Also forward the triggering delta if it has content.
-                        # When Bedrock omits contentBlockStart events (e.g. for marketplace
-                        # models), the first delta for a new block arrives without a prior
-                        # start event. Dropping it causes the first characters of each block
-                        # to be silently lost.
-                        if processed_chunk.get("type") == "content_block_delta":
-                            self.chunk_queue.append(processed_chunk)
+                        # Forward the triggering delta. When Bedrock omits contentBlockStart
+                        # events (e.g. for marketplace models), the first delta for a new
+                        # block arrives without a prior start event. Dropping it causes the
+                        # first characters of each block to be silently lost.
+                        # Invariant: _should_start_new_content_block returns False for
+                        # finish-reason chunks, and translate_streaming_openai_response_to_anthropic
+                        # only emits MessageBlockDelta for finish-reason chunks — so
+                        # processed_chunk is always a ContentBlockDelta here.
+                        assert processed_chunk.get("type") == "content_block_delta", (
+                            f"Expected content_block_delta, got {processed_chunk.get('type')}"
+                        )
+                        self.chunk_queue.append(processed_chunk)
 
                         # Return the first queued item
                         return self.chunk_queue.popleft()
