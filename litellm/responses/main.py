@@ -754,6 +754,7 @@ def responses(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
+        use_responses_api_bridge = kwargs.pop("use_responses_api_bridge", None)
 
         # Convert text_format to text parameter if provided
         text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
@@ -871,6 +872,7 @@ def responses(
 
         if _has_file_search_tool(tools) and (
             responses_api_provider_config is None
+            or use_responses_api_bridge is True
             or not responses_api_provider_config.supports_native_file_search()
         ):
             from litellm.responses.file_search.emulated_handler import (
@@ -919,7 +921,7 @@ def responses(
                 **emulated_kwargs,
             )
 
-        if responses_api_provider_config is None:
+        if responses_api_provider_config is None or use_responses_api_bridge is True:
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
