@@ -367,12 +367,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Map OpenAI service_tier (string) to Gemini serviceTier.
         'auto' maps to 'priority'.
-        Other values are passed blindly.
+        Other values are passed lowercased.
         """
         if value == "auto":
             optional_params["service_tier"] = "priority"
         else:
-            optional_params["service_tier"] = value
+            optional_params["service_tier"] = value.lower()
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
