@@ -1505,6 +1505,64 @@ curl http://localhost:4000/v1/responses \
 
 
 
+### Opt-in bridge for `openai/` models with custom `api_base`
+
+If you're using an **OpenAI-compatible third-party provider** (e.g. llama.cpp, vLLM, LM Studio) via `openai/` prefix with a custom `api_base`, LiteLLM will normally forward `/responses` requests directly to that endpoint. If the provider only supports `/chat/completions`, the request will fail.
+
+Set `use_responses_api_bridge: true` to force the `/responses` → `/chat/completions` bridge for these models.
+
+#### Python SDK Usage
+
+```python showLineNumbers title="Force bridge for custom openai/ endpoint"
+import litellm
+
+response = litellm.responses(
+    model="openai/my-custom-model",
+    input="Hello!",
+    api_base="http://localhost:8080",
+    api_key="fake-key",
+    use_responses_api_bridge=True,
+)
+
+print(response)
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="config.yaml — bridge for custom openai/ endpoint"
+model_list:
+- model_name: my-local-model
+  litellm_params:
+    model: openai/my-custom-model
+    api_base: http://localhost:8080/v1
+    api_key: fake-key
+    use_responses_api_bridge: true
+```
+
+**Start Proxy:**
+
+```bash showLineNumbers title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="Request via bridge"
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "my-local-model",
+    "input": "Hello!"
+  }'
+```
+
+This is particularly useful when connecting clients that hardcode the `/responses` endpoint (e.g. OpenAI Codex CLI with `wire_api = "responses"`) to local or third-party OpenAI-compatible providers that only expose `/chat/completions`.
+
 ## Server-side compaction
 
 For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
