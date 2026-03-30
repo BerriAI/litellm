@@ -124,13 +124,13 @@ async def run_async_fallback(
         if mg == original_model_group:
             continue
         try:
-        # Deep copy kwargs to prevent mutations from one provider
+            # Deep copy kwargs to prevent mutations from one provider
             # (e.g., Bedrock popping 'tools' from optional_params)
             # from corrupting kwargs for subsequent fallback providers.
             # See: https://github.com/BerriAI/litellm/issues/24764
-                kwargs = safe_deep_copy(kwargs)
-            
-        # LOGGING
+            kwargs = safe_deep_copy(kwargs)
+
+            # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
             if isinstance(mg, str):
@@ -262,3 +262,4 @@ def run_non_standard_fallback_format(
     fallbacks: Union[List[str], List[Dict[str, Any]]], model_group: str
 ):
     pass
+
