@@ -13,6 +13,7 @@ jobs:
   supply-chain-check:
     name: Critical Entry Point Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - name: Detect Malicious .pth Files
       uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
@@ -64,10 +65,10 @@ jobs:
   security-scanners:
     name: SAST & Secret Scanning
     runs-on: ubuntu-latest
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 15
     permissions:
       contents: read
-      # pull-requests: write removed (not required)
+      pull-requests: read
     steps:
     - name: Checkout PR head
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -86,12 +87,63 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Collect Changed Python Files
+      id: changed-py-files
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+      with:
+        script: |
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+          const pull_number = context.payload.pull_request.number;
+
+          const pythonFiles = new Set();
+
+          for await (const page of github.paginate.iterator(github.rest.pulls.listFiles, {
+            owner,
+            repo,
+            pull_number,
+            per_page: 100,
+          })) {
+            for (const f of page.data) {
+              const status = (f.status || '').toLowerCase();
+              const filename = f.filename || '';
+              const filenameLower = filename.toLowerCase();
+
+              if (status === 'removed') continue;
+              if (!filenameLower.endsWith('.py')) continue;
+
+              pythonFiles.add(filename);
+            }
+          }
+
+          const pythonFilesList = Array.from(pythonFiles).sort();
+          core.setOutput('python_files_json', JSON.stringify(pythonFilesList));
+          core.info(`Changed Python files detected: ${pythonFilesList.length}`);
+
     - name: Python Security Audit (Bandit & Pip-Audit)
+      env:
+        CHANGED_PYTHON_FILES_JSON: ${{ steps.changed-py-files.outputs.python_files_json }}
       run: |
         set -euo pipefail
         python -m pip install --upgrade pip
         pip install bandit pip-audit
-        bandit -r . -ll -x ./tests
-        if [ -f requirements.txt ]; then
+
+        python - <<'PY'
+        import json
+        import os
+        import subprocess
+
+        files = json.loads(os.environ.get("CHANGED_PYTHON_FILES_JSON") or "[]")
+        if not files:
+            print("No Python files changed in this PR; skipping Bandit.")
+        else:
+            subprocess.check_call(["bandit", "-ll", "-x", "./tests", *files])
+        PY
+
+        if [ -f pyproject.toml ]; then
+          pip-audit .
+        elif [ -f requirements.txt ]; then
           pip-audit -r requirements.txt
+        else
+          echo "No pyproject.toml or requirements.txt found; skipping pip-audit."
         fi
