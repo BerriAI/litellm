@@ -31,6 +31,8 @@ def ensure_nova_canvas_image_edit_model_cost_flags(monkeypatch):
     for key in (
         "amazon.nova-canvas-v1:0",
         "us.amazon.nova-canvas-v1:0",
+        "eu.amazon.nova-canvas-v1:0",
+        "ap.amazon.nova-canvas-v1:0",
     ):
         entry = litellm.model_cost.get(key) or {}
         if entry.get("supports_nova_canvas_image_edit") is True:
@@ -42,6 +44,7 @@ def ensure_nova_canvas_image_edit_model_cost_flags(monkeypatch):
                 **entry,
                 "litellm_provider": entry.get("litellm_provider", "bedrock"),
                 "mode": entry.get("mode", "image_generation"),
+                "output_cost_per_image": entry.get("output_cost_per_image", 0.06),
                 "supports_nova_canvas_image_edit": True,
             },
         )
@@ -62,6 +65,20 @@ def test_get_config_class_us_cross_region_nova_canvas():
     """Cross-region inference id us.amazon.nova-canvas-v1:0 maps via model_prices."""
     cls = BedrockImageEdit.get_config_class("us.amazon.nova-canvas-v1:0")
     assert cls is BedrockAmazonNovaCanvasImageEditConfig
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "eu.amazon.nova-canvas-v1:0",
+        "ap.amazon.nova-canvas-v1:0",
+    ],
+)
+def test_cross_region_nova_canvas_variants_have_image_pricing(model: str):
+    info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    assert info.get("output_cost_per_image") == 0.06
+    assert litellm.model_cost.get(model, {}).get("supports_nova_canvas_image_edit") is True
+    assert BedrockImageEdit.get_config_class(model) is BedrockAmazonNovaCanvasImageEditConfig
 
 
 def test_get_config_class_stability_unchanged():
