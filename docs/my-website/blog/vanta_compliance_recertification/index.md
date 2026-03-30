@@ -15,4 +15,4 @@ We are partnering with [Vanta](https://www.vanta.com/) to recertify LiteLLM's co
 
 As part of this process, we are also identifying independent auditors to validate and verify our compliance posture.
 
-Our goal is to be the most secure and transparent AI Gateway possible.
+This is part of our commitment to being the most secure and transparent AI Gateway possible.
