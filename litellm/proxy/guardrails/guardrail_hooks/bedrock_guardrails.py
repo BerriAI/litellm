@@ -982,7 +982,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if not input_messages:
                 # No user-role messages found; skip INPUT validation but still
                 # run OUTPUT validation below.
-                input_messages = None if self.experimental_use_latest_role_message_only else new_messages
+                input_messages = (
+                    None
+                    if self.experimental_use_latest_role_message_only
+                    else new_messages
+                )
 
             if input_messages:
                 # Create tasks for parallel execution of both INPUT and OUTPUT validation
@@ -1138,8 +1142,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 if not input_messages:
                     # No user-role messages found; skip INPUT validation but still
                     # run OUTPUT validation below.
-                    input_messages = None if self.experimental_use_latest_role_message_only else request_data.get(
-                        "messages"
+                    input_messages = (
+                        None
+                        if self.experimental_use_latest_role_message_only
+                        else request_data.get("messages")
                     )
 
                 if input_messages:

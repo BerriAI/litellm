@@ -71,7 +71,9 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             result: List[Any] = []
             for item in input:
                 if isinstance(item, dict) and "type" not in item:
-                    new_item = dict(item)  # convert to plain dict to avoid TypedDict checking
+                    new_item = dict(
+                        item
+                    )  # convert to plain dict to avoid TypedDict checking
                     new_item["type"] = "message"
                     result.append(new_item)
                 else:
