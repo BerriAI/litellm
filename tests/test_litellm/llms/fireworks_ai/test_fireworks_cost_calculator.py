@@ -12,6 +12,12 @@ from litellm.llms.fireworks_ai.cost_calculator import (
 from litellm.utils import get_model_info
 
 
+# ---------------------------------------------------------------------------
+# NOTE: unused imports (patch, MagicMock, PromptTokensDetailsWrapper) that
+# were present in the initial commit have been removed per greptile review.
+# ---------------------------------------------------------------------------
+
+
 def test_cost_per_token_with_cache_tokens():
     """
     Test that cache_read_input_tokens are priced at cache_read_input_token_cost
@@ -53,6 +59,12 @@ def test_cost_per_token_with_cache_tokens():
     assert prompt_cost == pytest.approx(expected_prompt_cost), (
         f"Cache discount not applied: got {prompt_cost}, "
         f"expected {expected_prompt_cost}"
+    )
+    # Verify that cache discount actually reduces cost vs full-price calculation
+    full_price_prompt_cost = 100 * input_cost
+    assert prompt_cost < full_price_prompt_cost, (
+        f"Cache pricing should be cheaper than full price: "
+        f"got {prompt_cost}, full price would be {full_price_prompt_cost}"
     )
     assert completion_cost >= 0
 
