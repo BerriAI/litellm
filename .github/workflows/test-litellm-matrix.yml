@@ -171,4 +171,16 @@ jobs:
             --reruns ${{ matrix.test-group.reruns }} \
             --reruns-delay 1 \
             --dist=loadscope \
-            --durations=20
+            --durations=20 \
+            --cov=litellm \
+            --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
+            --cov-append
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-${{ matrix.test-group.name }}.xml
+          flags: ${{ matrix.test-group.name }}
+          fail_ci_if_error: false
