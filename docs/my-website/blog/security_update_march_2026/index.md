@@ -19,7 +19,7 @@ import VersionVerificationTable from '@site/src/components/VersionVerificationTa
 
 > **Update (March 27):** Added [Verified safe versions](#verified-safe-versions) section with SHA-256 checksums for all audited PyPI and Docker releases.
 
-> **Update (March 26):** Added `checkmarx[.]zone` to [Indicators of compromise](#indicators-of-compromise-iocs).
+> **Update (March 26):** Added `checkmarx[.]zone` to [Indicators of compromise](#indicators-of-compromise-iocs)
 
 > **Update (March 25):** Added community-contributed scripts for scanning GitHub Actions and GitLab CI pipelines for the compromised versions. See [How to check if you are affected](#how-to-check-if-you-are-affected). s/o [@Zach Fury](https://www.linkedin.com/in/fryware/) for these scripts.
 
