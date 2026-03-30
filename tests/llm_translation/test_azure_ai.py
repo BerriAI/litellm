@@ -34,6 +34,7 @@ from litellm import completion
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
+AZURE_AI_API_BASE = os.getenv("AZURE_AI_API_BASE")
 
 @pytest.mark.parametrize(
     "model_group_header, expected_model",
@@ -318,8 +319,8 @@ def test_completion_azure():
 @pytest.mark.parametrize(
     "api_base",
     [
-        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/",
-        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+        AZURE_AI_API_BASE,
+        f"{AZURE_AI_API_BASE}/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
     ],
 )
 def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
