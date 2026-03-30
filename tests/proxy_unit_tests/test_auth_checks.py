@@ -1102,3 +1102,63 @@ async def test_can_key_call_model_via_access_group_ids():
             valid_token=user_api_key_object,
             llm_router=router,
         )
+
+
+# ── IP allowlist tests ────────────────────────────────────────────────────────
+
+from unittest.mock import MagicMock
+from litellm.proxy.auth.auth_checks import _check_key_or_team_allowed_ips
+from litellm.proxy._types import ProxyException
+
+
+def _make_request(client_ip: str) -> MagicMock:
+    req = MagicMock()
+    req.client.host = client_ip
+    req.headers = {}
+    return req
+
+
+def test_allowed_ip_key_metadata_passes():
+    token = UserAPIKeyAuth(token="test", metadata={"allowed_ips": ["1.2.3.4"]})
+    _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("1.2.3.4"))
+
+
+def test_blocked_ip_key_metadata_raises():
+    token = UserAPIKeyAuth(token="test", metadata={"allowed_ips": ["1.2.3.4"]})
+    with pytest.raises(ProxyException) as exc_info:
+        _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("9.9.9.9"))
+    assert str(exc_info.value.code) == "403"
+
+
+def test_allowed_ip_team_metadata_passes():
+    token = UserAPIKeyAuth(token="test", team_metadata={"allowed_ips": ["10.0.0.1"]})
+    _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("10.0.0.1"))
+
+
+def test_blocked_ip_team_metadata_raises():
+    token = UserAPIKeyAuth(token="test", team_metadata={"allowed_ips": ["10.0.0.1"]})
+    with pytest.raises(ProxyException):
+        _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("5.5.5.5"))
+
+
+def test_key_metadata_takes_priority_over_team():
+    """Key-level allowed_ips overrides team-level."""
+    token = UserAPIKeyAuth(
+        token="test",
+        metadata={"allowed_ips": ["1.1.1.1"]},
+        team_metadata={"allowed_ips": ["2.2.2.2"]},
+    )
+    # IP allowed by key list → passes
+    _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("1.1.1.1"))
+    # IP only in team list → blocked (key list wins)
+    with pytest.raises(ProxyException):
+        _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("2.2.2.2"))
+
+
+def test_no_allowed_ips_passes_all():
+    token = UserAPIKeyAuth(token="test")
+    _check_key_or_team_allowed_ips(valid_token=token, request=_make_request("1.2.3.4"))
+
+
+def test_none_token_passes():
+    _check_key_or_team_allowed_ips(valid_token=None, request=_make_request("1.2.3.4"))

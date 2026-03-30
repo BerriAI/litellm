@@ -68,7 +68,7 @@ from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
-from .auth_utils import get_model_from_request
+from .auth_utils import _check_valid_ip, get_model_from_request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -359,6 +359,44 @@ async def check_tools_allowlist(
         )
 
 
+def _check_key_or_team_allowed_ips(
+    valid_token: Optional[UserAPIKeyAuth],
+    request: Request,
+) -> None:
+    """
+    Check IP allowlist stored in key/team metadata.
+    Key-level `metadata.allowed_ips` takes priority over team-level.
+    No-op when neither is set.
+    """
+    if valid_token is None:
+        return
+    key_meta = (
+        valid_token.metadata if isinstance(valid_token.metadata, dict) else {}
+    ) or {}
+    team_meta = (
+        valid_token.team_metadata
+        if isinstance(valid_token.team_metadata, dict)
+        else {}
+    ) or {}
+
+    allowed_ips = key_meta.get("allowed_ips") or team_meta.get("allowed_ips")
+    if not allowed_ips:
+        return
+
+    is_valid, client_ip = _check_valid_ip(
+        allowed_ips=allowed_ips,
+        request=request,
+        use_x_forwarded_for=False,
+    )
+    if not is_valid:
+        raise ProxyException(
+            message=f"Access forbidden: IP address {client_ip} not allowed.",
+            type=ProxyErrorTypes.auth_error,
+            param="allowed_ips",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -377,6 +415,7 @@ async def common_checks(  # noqa: PLR0915
     """
     Common checks across jwt + key-based auth.
 
+    0. [OPTIONAL] IP allowlist - key/team metadata.allowed_ips (no DB in hot path)
     1. If team is blocked
     1.1. If project is blocked
     2. If team can call model
@@ -394,6 +433,9 @@ async def common_checks(  # noqa: PLR0915
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    # 0. [OPTIONAL] IP allowlist - key/team metadata.allowed_ips (no DB in hot path)
+    _check_key_or_team_allowed_ips(valid_token=valid_token, request=request)
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
         request_body, route
