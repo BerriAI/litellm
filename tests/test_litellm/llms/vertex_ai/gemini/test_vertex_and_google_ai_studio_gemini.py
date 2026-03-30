@@ -3522,7 +3522,7 @@ def test_vertex_ai_service_tier_streaming():
     )
     result = iterator.chunk_parser(chunk)
 
-    assert result.service_tier == "FLEX"
+    assert result.service_tier == "flex"
 
 
 def test_vertex_ai_service_tier_non_streaming():
@@ -3561,7 +3561,7 @@ def test_vertex_ai_service_tier_non_streaming():
         encoding=None,
     )
 
-    assert result.service_tier == "FLEX"
+    assert result.service_tier == "flex"
 
 
 def test_vertex_ai_traffic_type_surfaced_in_responses_api():
