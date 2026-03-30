@@ -3,6 +3,7 @@ Tests for health-check-driven routing filter in the Router.
 """
 
 import time
+from typing import Any, Optional
 
 import pytest
 
@@ -20,7 +21,7 @@ def _make_deployment(model_id: str, model_name: str = "gpt-4") -> dict:
 
 
 def _make_health_cache(
-    unhealthy_ids: set = None, staleness_threshold: float = 60.0
+    unhealthy_ids: Optional[set] = None, staleness_threshold: float = 60.0
 ) -> DeploymentHealthCache:
     """Create a health cache pre-populated with unhealthy deployment IDs."""
     cache = DualCache()
@@ -43,26 +44,28 @@ def _make_health_cache(
 class TestFilterHealthCheckUnhealthyDeployments:
     """Test the sync filter method."""
 
-    def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
+    def _make_router_like(
+        self, enable: bool, health_cache: DeploymentHealthCache
+    ) -> Any:
         """Create a minimal object that behaves like Router for filter testing."""
-
-        class FakeRouter:
-            def __init__(self):
-                self.enable_health_check_routing = enable
-                self.health_state_cache = health_cache
-
-        # Import the actual method and bind it
         from litellm.router import Router
 
-        fake = FakeRouter()
-        # Use the unbound method
-        fake._filter_health_check_unhealthy_deployments = (
-            Router._filter_health_check_unhealthy_deployments.__get__(fake, FakeRouter)
-        )
-        return fake
+        class FakeRouter:
+            def __init__(self) -> None:
+                self.enable_health_check_routing = enable
+                self.health_state_cache = health_cache
+                setattr(
+                    self,
+                    "_filter_health_check_unhealthy_deployments",
+                    Router._filter_health_check_unhealthy_deployments.__get__(
+                        self, FakeRouter
+                    ),
+                )
 
-    def test_filter_removes_unhealthy_deployments(self):
-        """Unhealthy deployments should be removed from candidates."""
+        return FakeRouter()
+
+    def test_filter_is_visibility_only_when_enabled(self):
+        """V2: unhealthy deployments are logged but NOT filtered from candidates."""
         health_cache = _make_health_cache(unhealthy_ids={"deploy-2"})
         router = self._make_router_like(enable=True, health_cache=health_cache)
 
@@ -72,8 +75,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
             _make_deployment("deploy-3"),
         ]
         result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 2
-        assert all(d["model_info"]["id"] != "deploy-2" for d in result)
+        assert len(result) == 3  # all returned, visibility only
 
     def test_filter_noop_when_disabled(self):
         """When enable_health_check_routing=False, filter should be a no-op."""
@@ -88,7 +90,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
         assert len(result) == 2  # no filtering
 
     def test_filter_returns_all_when_all_unhealthy(self):
-        """Safety net: if ALL deployments are unhealthy, return all (don't cause outage)."""
+        """V2: all deployments returned even when all unhealthy (visibility only)."""
         health_cache = _make_health_cache(
             unhealthy_ids={"deploy-1", "deploy-2", "deploy-3"}
         )
@@ -100,7 +102,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
             _make_deployment("deploy-3"),
         ]
         result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 3  # all returned, safety net
+        assert len(result) == 3  # all returned, visibility only
 
     def test_filter_returns_all_when_cache_empty(self):
         """When cache is empty, all deployments should pass through."""
@@ -118,25 +120,28 @@ class TestFilterHealthCheckUnhealthyDeployments:
 class TestAsyncFilterHealthCheckUnhealthyDeployments:
     """Test the async filter method."""
 
-    def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
+    def _make_router_like(
+        self, enable: bool, health_cache: DeploymentHealthCache
+    ) -> Any:
         from litellm.router import Router
 
         class FakeRouter:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.enable_health_check_routing = enable
                 self.health_state_cache = health_cache
+                setattr(
+                    self,
+                    "_async_filter_health_check_unhealthy_deployments",
+                    Router._async_filter_health_check_unhealthy_deployments.__get__(
+                        self, FakeRouter
+                    ),
+                )
 
-        fake = FakeRouter()
-        fake._async_filter_health_check_unhealthy_deployments = (
-            Router._async_filter_health_check_unhealthy_deployments.__get__(
-                fake, FakeRouter
-            )
-        )
-        return fake
+        return FakeRouter()
 
     @pytest.mark.asyncio
-    async def test_async_filter_removes_unhealthy(self):
-        """Async version: unhealthy deployments removed."""
+    async def test_async_filter_is_visibility_only(self):
+        """V2: async filter logs but does not remove unhealthy deployments."""
         health_cache = _make_health_cache(unhealthy_ids={"deploy-2"})
         router = self._make_router_like(enable=True, health_cache=health_cache)
 
@@ -148,12 +153,11 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
         result = await router._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=deployments
         )
-        assert len(result) == 2
-        assert all(d["model_info"]["id"] != "deploy-2" for d in result)
+        assert len(result) == 3  # all returned, visibility only
 
     @pytest.mark.asyncio
-    async def test_async_filter_safety_net(self):
-        """Async version: safety net when all unhealthy."""
+    async def test_async_filter_all_unhealthy_returns_all(self):
+        """V2: all deployments returned even when all unhealthy."""
         health_cache = _make_health_cache(unhealthy_ids={"deploy-1", "deploy-2"})
         router = self._make_router_like(enable=True, health_cache=health_cache)
 
@@ -164,7 +168,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
         result = await router._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=deployments
         )
-        assert len(result) == 2  # safety net
+        assert len(result) == 2  # all returned, visibility only
 
 
 class TestBuildDeploymentHealthStates:

@@ -37,6 +37,33 @@ else:
     Span = Any
 
 
+def _is_qualifying_failure_for_v2(
+    exception_status: Union[str, int],
+    exception_str: Optional[str] = None,
+) -> bool:
+    """
+    V2 failure qualification: only hard failures qualify for cooldown.
+
+    Qualifying: 5xx (server errors), 401 (auth/credential failure), 404 (deleted deployment).
+    Not qualifying: 429 (rate limit) and 408 (timeout) — these are transient.
+
+    Used when enable_health_check_routing=True.
+    """
+    try:
+        if isinstance(exception_status, str):
+            if len(exception_status) == 0:
+                return False
+            exception_status = int(exception_status)
+
+        if exception_status >= 500:
+            return True
+        if exception_status in (401, 404):
+            return True
+        return False
+    except Exception:
+        return True
+
+
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,
     model_id: str,
@@ -54,6 +81,12 @@ def _is_cooldown_required(
         bool: True if a cooldown is required, False otherwise.
     """
     try:
+        # V2: stricter failure qualification — only 5xx + hard 4xx (401, 404)
+        if getattr(litellm_router_instance, "enable_health_check_routing", False):
+            return _is_qualifying_failure_for_v2(
+                exception_status=exception_status,
+                exception_str=exception_str,
+            )
         ignored_strings = ["APIConnectionError"]
         if (
             exception_str is not None

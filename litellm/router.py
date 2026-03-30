@@ -9914,10 +9914,13 @@ class Router:
         parent_otel_span: Optional[Span] = None,
     ) -> List[Dict]:
         """
-        Filter out deployments marked unhealthy by background health checks.
+        Background health check integration for routing.
+
+        V2 (enable_health_check_routing=True): visibility only — logs unhealthy
+        deployments for operators but does NOT filter routing candidates.
+        The cooldown filter handles routing exclusion based on request-path failures.
+
         No-op when enable_health_check_routing is False.
-        Returns all deployments if health state is unavailable, stale, or would
-        exclude every candidate (safety net).
         """
         if not self.enable_health_check_routing:
             return healthy_deployments
@@ -9927,20 +9930,12 @@ class Router:
                 parent_otel_span=parent_otel_span
             )
         )
-        if not unhealthy_ids:
-            return healthy_deployments
-
-        filtered = [
-            d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids
-        ]
-
-        if not filtered:
-            verbose_router_logger.warning(
-                "All deployments marked unhealthy by health checks, bypassing health filter"
+        if unhealthy_ids:
+            verbose_router_logger.info(
+                "health_check_visibility unhealthy_deployment_ids=%s",
+                unhealthy_ids,
             )
-            return healthy_deployments
-
-        return filtered
+        return healthy_deployments
 
     def _filter_health_check_unhealthy_deployments(
         self,
@@ -9954,20 +9949,12 @@ class Router:
         unhealthy_ids = self.health_state_cache.get_unhealthy_deployment_ids(
             parent_otel_span=parent_otel_span
         )
-        if not unhealthy_ids:
-            return healthy_deployments
-
-        filtered = [
-            d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids
-        ]
-
-        if not filtered:
-            verbose_router_logger.warning(
-                "All deployments marked unhealthy by health checks, bypassing health filter"
+        if unhealthy_ids:
+            verbose_router_logger.info(
+                "health_check_visibility unhealthy_deployment_ids=%s",
+                unhealthy_ids,
             )
-            return healthy_deployments
-
-        return filtered
+        return healthy_deployments
 
     def _filter_pass_through_deployments(
         self, healthy_deployments: List[Dict]
