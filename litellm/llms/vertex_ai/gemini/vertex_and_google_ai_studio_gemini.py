@@ -2432,7 +2432,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
                 if service_tier := raw_response.headers.get("x-gemini-service-tier"):
-                    setattr(model_response, "service_tier", service_tier)
+                    if isinstance(service_tier, str):
+                        if service_tier.lower() == "standard":
+                            setattr(model_response, "service_tier", "default")
+                        else:
+                            setattr(model_response, "service_tier", service_tier.lower())
+                    else:
+                        setattr(model_response, "service_tier", service_tier)
 
         except Exception as e:
             raise VertexAIError(
@@ -3167,7 +3173,13 @@ class ModelResponseIterator:
 
             service_tier = self.response_headers.get("x-gemini-service-tier")
             if service_tier:
-                setattr(model_response, "service_tier", service_tier)
+                if isinstance(service_tier, str):
+                    if service_tier.lower() == "standard":
+                        setattr(model_response, "service_tier", "default")
+                    else:
+                        setattr(model_response, "service_tier", service_tier.lower())
+                else:
+                    setattr(model_response, "service_tier", service_tier)
 
             setattr(model_response, "usage", usage)  # type: ignore
 

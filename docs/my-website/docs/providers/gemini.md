@@ -306,7 +306,10 @@ LiteLLM propagates OpenAI's `service_tier` parameter to Gemini, and also extract
 | `"auto"`              | `"priority"`          | LiteLLM maps OpenAI's `"auto"` to Gemini's `"priority"` tier, as `priority` will fall back on Gemini. |
 | `"flex"`              | `"flex"`              | Direct mapping. |
 | `"priority"`          | `"priority"`          | Direct mapping. |
-| Any other value       | Passed as-is          | Unrecognized values are sent blindly so that the provider can reject the request directly if invalid. |
+| `"default"`           | `"standard"`          | LiteLLM maps `"default"` to `"standard"`. |
+| Any other value       | Passed as-is (lowercased) | Values are case-insensitive and normalized to lowercase. |
+
+On the response, LiteLLM maps `"standard"` back to `"default"` for the Gemini API.
 
 
 ## Text-to-Speech (TTS) Audio Output
