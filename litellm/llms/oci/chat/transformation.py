@@ -671,15 +671,25 @@ class OCIChatConfig(BaseConfig):
         Uses litellm's model cost map for a dynamic lookup, falling back to
         DEFAULT_MAX_TOKENS (configurable via the DEFAULT_MAX_TOKENS env var)
         when the model is not found.
+
+        The model cost map stores OCI entries under ``oci/`` prefixed keys
+        (e.g. ``oci/cohere.command-a-03-2025``), but litellm strips the
+        provider prefix before calling ``transform_request``.  We therefore
+        try the bare name first and, if that misses, retry with the
+        ``oci/`` prefix.
         """
         if model is None:
             return DEFAULT_MAX_TOKENS
-        try:
-            max_tokens = get_max_tokens(model)
-            if max_tokens is not None:
-                return max_tokens
-        except Exception:
-            pass
+        # Try the bare model name first, then with the oci/ provider prefix
+        # since the cost map keys are prefixed but transform_request receives
+        # the name without the prefix.
+        for candidate in (model, f"oci/{model}"):
+            try:
+                max_tokens = get_max_tokens(candidate)
+                if max_tokens is not None:
+                    return max_tokens
+            except Exception:
+                continue
         return DEFAULT_MAX_TOKENS
 
     def _get_optional_params(
@@ -907,8 +917,15 @@ class OCIChatConfig(BaseConfig):
         # Build request based on vendor type
         if vendor == OCIVendors.COHERE:
             # For Cohere, we need to use the specific Cohere format
-            # Extract the last user message as the main message
-            user_messages = [msg for msg in messages if msg.get("role") == "user"]
+            # Extract the last user message as the main message.
+            # Filter out user messages with empty content — the Cohere API
+            # requires the main message field to be non-empty.
+            user_messages = [
+                msg
+                for msg in messages
+                if msg.get("role") == "user"
+                and self._extract_text_content(msg.get("content", "")).strip()
+            ]
             if not user_messages:
                 raise Exception("No user message found for Cohere model")
 

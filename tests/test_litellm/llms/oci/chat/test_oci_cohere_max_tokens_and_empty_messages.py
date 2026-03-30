@@ -74,9 +74,18 @@ class TestOCICohereMaxTokens:
 
         assert params["maxTokens"] == 1024
 
-    def test_get_max_tokens_for_model_known_model(self):
-        """_get_max_tokens_for_model should return the correct value for a known model."""
+    def test_get_max_tokens_for_model_with_oci_prefix(self):
+        """_get_max_tokens_for_model should work with the oci/ prefix."""
         result = OCIChatConfig._get_max_tokens_for_model("oci/cohere.command-a-03-2025")
+        assert result == 4000
+
+    def test_get_max_tokens_for_model_without_oci_prefix(self):
+        """_get_max_tokens_for_model should also work without the oci/ prefix.
+
+        litellm strips the provider prefix before calling transform_request,
+        so the method must retry with the oci/ prefix to find the cost map entry.
+        """
+        result = OCIChatConfig._get_max_tokens_for_model("cohere.command-a-03-2025")
         assert result == 4000
 
     def test_get_max_tokens_for_model_unknown_model(self):
