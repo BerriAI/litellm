@@ -936,49 +936,6 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
 # test_completion_mistral_api_stream()
 
 
-def test_completion_deep_infra_stream():
-    # deep infra,currently includes role in the 2nd chunk
-    # waiting for them to make a fix on this
-    litellm.set_verbose = True
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        print("testing deep infra streaming")
-        response = completion(
-            model="deepinfra/meta-llama/Llama-2-70b-chat-hf",
-            messages=messages,
-            stream=True,
-            max_tokens=80,
-        )
-
-        complete_response = ""
-        # Add any assertions here to check the response
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                has_finish_reason = True
-                break
-            complete_response += chunk
-        if has_finish_reason == False:
-            raise Exception("finish reason not set")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception as e:
-        if "Model busy, retry later" in str(e):
-            pass
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_deep_infra_stream()
-
-
 @pytest.mark.skip()
 def test_completion_nlp_cloud_stream():
     try:
