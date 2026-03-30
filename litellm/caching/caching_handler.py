@@ -52,6 +52,7 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
+    PromptTokensDetailsWrapper,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -415,6 +416,7 @@ class LLMCachingHandler:
             final_embedding_cached_response._hidden_params["cache_hit"] = True
 
             prompt_tokens = 0
+            aggregated_details: Optional[dict] = None
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
                 if cr is not None:
@@ -431,11 +433,30 @@ class LLMCachingHandler:
                         prompt_tokens += token_counter(
                             text=kwargs_input_as_list[idx], count_response_tokens=True
                         )
+                    # Aggregate prompt_tokens_details from cached items
+                    item_details = cr.get("prompt_tokens_details")
+                    if item_details:
+                        if aggregated_details is None:
+                            aggregated_details = {}
+                        for key, value in item_details.items():
+                            if isinstance(value, (int, float)):
+                                aggregated_details[key] = (
+                                    aggregated_details.get(key, 0) + value
+                                )
+                            else:
+                                aggregated_details[key] = value
+
             ## USAGE
+            prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+            if aggregated_details:
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **aggregated_details
+                )
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
                 total_tokens=prompt_tokens,
+                prompt_tokens_details=prompt_tokens_details,
             )
             final_embedding_cached_response.usage = usage
         if len(remaining_list) == 0:
@@ -478,7 +499,50 @@ class LLMCachingHandler:
             prompt_tokens=usage1.prompt_tokens + usage2.prompt_tokens,
             completion_tokens=usage1.completion_tokens + usage2.completion_tokens,
             total_tokens=usage1.total_tokens + usage2.total_tokens,
+            prompt_tokens_details=self._merge_prompt_tokens_details(
+                usage1.prompt_tokens_details,
+                usage2.prompt_tokens_details,
+            ),
         )
+
+    def _merge_prompt_tokens_details(
+        self,
+        details1: Optional[PromptTokensDetailsWrapper],
+        details2: Optional[PromptTokensDetailsWrapper],
+    ) -> Optional[PromptTokensDetailsWrapper]:
+        """Merge two PromptTokensDetailsWrapper objects by summing numeric fields."""
+        if details1 is None and details2 is None:
+            return None
+        if details1 is None:
+            return details2
+        if details2 is None:
+            return details1
+
+        dict1 = (
+            details1.model_dump(exclude_none=True)
+            if hasattr(details1, "model_dump")
+            else {}
+        )
+        dict2 = (
+            details2.model_dump(exclude_none=True)
+            if hasattr(details2, "model_dump")
+            else {}
+        )
+
+        merged: dict = {}
+        for key in set(dict1.keys()) | set(dict2.keys()):
+            v1 = dict1.get(key, 0)
+            v2 = dict2.get(key, 0)
+            if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+                merged[key] = v1 + v2
+            elif v1:
+                merged[key] = v1
+            else:
+                merged[key] = v2
+
+        if not merged:
+            return None
+        return PromptTokensDetailsWrapper(**merged)
 
     def _combine_cached_embedding_response_with_api_result(
         self,
