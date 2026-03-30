@@ -189,11 +189,12 @@ async def test_tag_filtering_disabled_returns_all_deployments():
 
 
 @pytest.mark.asyncio
-async def test_empty_healthy_deployments_with_request_tags_skips_misleading_tag_error():
+async def test_empty_healthy_deployments_with_request_tags_returns_empty_list():
     """
-    Deterministic repro: cooldown (or any filter) can leave zero candidates before tag routing.
-    Request metadata tags must not trigger RouterErrors.no_deployments_with_tag_routing —
-    that implied misconfigured tags; return [] so the router can surface no-deployment / cooldown.
+    With an empty candidate list, return [] even when the request includes metadata tags.
+
+    Tag-based filtering runs only against non-empty healthy_deployments; an empty list is
+    returned unchanged for the router's standard handling.
     """
     router = _make_router_mock()
     result = await get_deployments_for_tag(
