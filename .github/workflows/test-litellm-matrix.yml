@@ -176,11 +176,33 @@ jobs:
             --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
             --cov-append
 
-      - name: Upload coverage to Codecov
+      - name: Save coverage report
         if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: coverage-${{ matrix.test-group.name }}
+          path: coverage-${{ matrix.test-group.name }}.xml
+          retention-days: 1
+
+  upload-coverage:
+    name: Upload coverage to Codecov
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    # Isolated job — CODECOV_TOKEN is never in scope during test execution
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download all coverage reports
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Upload to Codecov
         uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-${{ matrix.test-group.name }}.xml
-          flags: ${{ matrix.test-group.name }}
+          files: "*.xml"
           fail_ci_if_error: false
