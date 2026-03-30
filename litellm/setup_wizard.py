@@ -558,9 +558,15 @@ class SetupWizard:
                     )
                 elif p.get("needs_api_base"):
                     azure_base_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
-                    if azure_base_key in env_copy:
+                    azure_base_value = env_copy.pop(azure_base_key, None)
+                    if azure_base_value is None and p["id"] == "azure":
+                        for key in list(env_copy.keys()):
+                            if key.startswith("_LITELLM_AZURE_API_BASE_"):
+                                azure_base_value = env_copy.pop(key)
+                                break
+                    if azure_base_value:
                         lines.append(
-                            f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'
+                            f'      api_base: "{_yaml_escape(azure_base_value)}"'
                         )
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")

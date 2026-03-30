@@ -145,6 +145,17 @@ def test_build_config_azure_uses_deployment_name():
     assert 'api_base: "https://my.azure.com"' in config
 
 
+def test_build_config_azure_accepts_alternate_api_base_sentinel_key():
+    env_vars = {
+        "AZURE_AI_API_KEY": "az-key",
+        "_LITELLM_AZURE_API_BASE_AZURE_OPENAI": "https://my.azure.com",
+        "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
+    }
+    config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
+    assert "model: azure/my-gpt4o" in config
+    assert 'api_base: "https://my.azure.com"' in config
+
+
 def test_build_config_azure_no_deployment_skipped():
     """Azure without a deployment name should emit nothing (not fallback to gpt-4o)."""
     env_vars = {"AZURE_AI_API_KEY": "az-key"}  # no deployment sentinel
