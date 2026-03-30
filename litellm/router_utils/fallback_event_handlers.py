@@ -8,7 +8,6 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -120,15 +119,21 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
 
+    # Snapshot original kwargs before the fallback loop so that each
+    # iteration starts from a clean, unmutated copy.
+    from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+    base_kwargs = safe_deep_copy(kwargs)
+
     for mg in fallback_model_group:
         if mg == original_model_group:
             continue
         try:
-            # Deep copy kwargs to prevent mutations from one provider
-            # (e.g., Bedrock popping 'tools' from optional_params)
-            # from corrupting kwargs for subsequent fallback providers.
-            # See: https://github.com/BerriAI/litellm/issues/24764
-            kwargs = safe_deep_copy(kwargs)
+            # Each iteration gets a fresh copy from the clean original
+            # to prevent provider-specific mutations (e.g., Bedrock
+            # popping 'tools' from optional_params) from corrupting
+            # subsequent fallback calls. See: #24764
+            kwargs = safe_deep_copy(base_kwargs)
 
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
