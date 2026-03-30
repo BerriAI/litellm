@@ -66,10 +66,8 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            memberships = (
-                await self.prisma_client.db.litellm_teammembership.find_many(
-                    where={"budget_id": {"in": budget_ids}}
-                )
+            memberships = await self.prisma_client.db.litellm_teammembership.find_many(
+                where={"budget_id": {"in": budget_ids}}
             )
             for m in memberships:
                 counter_key = f"spend:team_member:{m.user_id}:{m.team_id}"
@@ -574,7 +572,11 @@ class ResetBudgetJob:
             counter_key = None
             if item_type == "key" and hasattr(item, "token") and item.token is not None:
                 counter_key = f"spend:key:{item.token}"
-            elif item_type == "team" and hasattr(item, "team_id") and item.team_id is not None:
+            elif (
+                item_type == "team"
+                and hasattr(item, "team_id")
+                and item.team_id is not None
+            ):
                 counter_key = f"spend:team:{item.team_id}"
 
             if counter_key is not None:
