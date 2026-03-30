@@ -4664,8 +4664,6 @@ class ProxyUpdateSpend:
                     # Randomized backoff to reduce repeated collisions across pods
                     await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
                 except Exception as e:
-                    if i is None:
-                        i = 0
                     if _is_deadlock_error(e) and i < n_retry_times:
                         verbose_proxy_logger.warning(
                             "Spend tracking - deadlock writing spend logs, "
