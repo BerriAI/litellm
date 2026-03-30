@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
-import prisma.errors
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -3579,6 +3578,10 @@ PRISMA_DEADLOCK_CODE = "P2034"
 
 def _is_deadlock_error(e: Exception) -> bool:
     """Check if a Prisma error is a PostgreSQL deadlock / write conflict (P2034)."""
+    try:
+        import prisma.errors
+    except ImportError:
+        return False
     return (
         isinstance(e, prisma.errors.DataError)
         and getattr(e, "code", None) == PRISMA_DEADLOCK_CODE
