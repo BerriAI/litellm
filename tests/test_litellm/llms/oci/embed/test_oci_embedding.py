@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
-from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse
 
 # Test constants
 TEST_MODEL_NAME = "cohere.embed-english-v3.0"
@@ -322,9 +322,9 @@ class TestOCIEmbeddingConfig:
 
         for model_key in expected_embedding_models:
             assert model_key in model_prices, f"Missing model: {model_key}"
-            assert model_prices[model_key].get("mode") == "embedding", (
-                f"Model {model_key} does not have mode='embedding'"
-            )
+            assert (
+                model_prices[model_key].get("mode") == "embedding"
+            ), f"Model {model_key} does not have mode='embedding'"
 
     def test_model_prices_new_chat_models(self):
         """test the 16 new OCI chat models exist in model_prices_and_context_window.json with mode=chat."""
@@ -361,6 +361,6 @@ class TestOCIEmbeddingConfig:
 
         for model_key in expected_chat_models:
             assert model_key in model_prices, f"Missing model: {model_key}"
-            assert model_prices[model_key].get("mode") == "chat", (
-                f"Model {model_key} does not have mode='chat'"
-            )
+            assert (
+                model_prices[model_key].get("mode") == "chat"
+            ), f"Model {model_key} does not have mode='chat'"

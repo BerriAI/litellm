@@ -29,7 +29,6 @@ from litellm.llms.oci.common_utils import OCIError
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
-
 # Input type mapping from OpenAI conventions to OCI/Cohere conventions
 _INPUT_TYPE_MAP = {
     "search_document": "SEARCH_DOCUMENT",
@@ -203,7 +202,9 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         """
         oci_compartment_id = optional_params.get("oci_compartment_id")
         if not oci_compartment_id:
-            raise Exception("kwarg `oci_compartment_id` is required for OCI embedding requests")
+            raise Exception(
+                "kwarg `oci_compartment_id` is required for OCI embedding requests"
+            )
 
         # Build serving mode
         oci_serving_mode = optional_params.get("oci_serving_mode", "ON_DEMAND")
