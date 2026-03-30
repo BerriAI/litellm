@@ -190,7 +190,9 @@ async def test_async_gcs_pub_sub():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
+    gcs_pub_sub_logger = GcsPubSubLogger(
+        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
+    )
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
@@ -245,7 +247,9 @@ async def test_async_gcs_pub_sub_v1():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
+    gcs_pub_sub_logger = GcsPubSubLogger(
+        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
+    )
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
