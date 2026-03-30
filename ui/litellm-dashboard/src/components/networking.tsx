@@ -259,6 +259,7 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    github_login?: string;
   };
 }
 
@@ -278,6 +279,7 @@ export interface ProviderCreateInfo {
   provider_display_name: string;
   litellm_provider: string;
   default_model_placeholder?: string | null;
+  auth_flow?: string | null;
   credential_fields: ProviderCredentialFieldMetadata[];
 }
 
@@ -3565,6 +3567,99 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
     console.error("Failed to delete key:", error);
     throw error;
   }
+};
+
+export const githubCopilotInitiateAuth = async (
+  accessToken: string,
+): Promise<{ device_code: string; user_code: string; verification_uri: string; poll_interval_ms: number; expires_in: number }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/credentials/github_copilot/initiate`
+    : `/credentials/github_copilot/initiate`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const githubCopilotCheckStatus = async (
+  accessToken: string,
+  deviceCode: string,
+): Promise<{ status: string; access_token?: string; retry_after_ms?: number; error?: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/credentials/github_copilot/status`
+    : `/credentials/github_copilot/status`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const chatgptInitiateAuth = async (
+  accessToken: string,
+): Promise<{ device_auth_id: string; user_code: string; verification_uri: string; poll_interval_ms: number }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/credentials/chatgpt/initiate`
+    : `/credentials/chatgpt/initiate`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const chatgptCheckStatus = async (
+  accessToken: string,
+  deviceAuthId: string,
+  userCode: string,
+): Promise<{ status: string; refresh_token?: string; account_id?: string; error?: string }> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/credentials/chatgpt/status`
+    : `/credentials/chatgpt/status`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
 };
 
 export const credentialUpdateCall = async (

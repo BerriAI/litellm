@@ -2605,28 +2605,29 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            # Add GitHub Copilot headers (same as /responses endpoint does)
+            # Add static headers for OAuth providers. Token exchange is
+            # already done by _get_openai_compatible_provider_info; auth
+            # headers are set by validate_environment. These blocks only
+            # ensure the provider-required non-auth headers are present.
             if custom_llm_provider == "github_copilot":
-                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
-                    GetAccessTokenError,
-                    GetAPIKeyError,
-                    get_copilot_default_headers,
                     get_copilot_static_headers,
                 )
 
-                # Always add static headers (editor-version, user-agent, etc.)
-                # — the Copilot API requires these on every request.
                 copilot_headers = get_copilot_static_headers()
-                if api_key:
-                    try:
-                        copilot_api_key = Authenticator(access_token=api_key).get_api_key()
-                        copilot_headers = get_copilot_default_headers(copilot_api_key)
-                    except (GetAPIKeyError, GetAccessTokenError):
-                        pass  # auth failure handled downstream
                 if extra_headers:
                     copilot_headers.update(extra_headers)
                 extra_headers = copilot_headers
+
+            if custom_llm_provider == "chatgpt":
+                from litellm.llms.chatgpt.common_utils import (
+                    get_chatgpt_static_headers,
+                )
+
+                chatgpt_headers = get_chatgpt_static_headers()
+                if extra_headers:
+                    chatgpt_headers.update(extra_headers)
+                extra_headers = chatgpt_headers
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers

@@ -64,10 +64,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                     message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
                 )
 
-            # Get GitHub Copilot API key via OAuth
-            api_key = Authenticator(access_token=api_key).get_api_key()
-
-            # Get default headers
+            # api_key at this point is already the resolved copilot inference
+            # token (exchanged by the provider info step or main.py).
+            # Just use it directly — no re-authentication needed.
             default_headers = get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)

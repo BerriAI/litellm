@@ -94,15 +94,12 @@ class GithubCopilotConfig(OpenAIConfig):
         # These are required by the GitHub Copilot API on every request.
         validated_headers = {**get_copilot_static_headers(), **validated_headers}
 
-        # If we have an api_key (GitHub access token), exchange it for a
-        # copilot inference token and set the Authorization header.
+        # api_key at this point is already the resolved copilot inference
+        # token (exchanged by _get_openai_compatible_provider_info or
+        # main.py). Just use it directly — no re-authentication needed.
         if api_key:
-            try:
-                copilot_api_key = Authenticator(access_token=api_key).get_api_key()
-                copilot_headers = get_copilot_default_headers(copilot_api_key)
-                validated_headers = {**copilot_headers, **validated_headers}
-            except (GetAPIKeyError, GetAccessTokenError):
-                pass  # Will be handled later in the request flow
+            copilot_headers = get_copilot_default_headers(api_key)
+            validated_headers = {**copilot_headers, **validated_headers}
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)

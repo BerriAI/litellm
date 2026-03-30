@@ -1171,6 +1171,14 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CHATGPT",
+    "provider_display_name": "ChatGPT",
+    "litellm_provider": "chatgpt",
+    "auth_flow": "device_code",
+    "credential_fields": [],
+    "default_model_placeholder": "codex-mini"
+  },
+  {
     "provider": "GITHUB_COPILOT",
     "provider_display_name": "Github Copilot",
     "litellm_provider": "github_copilot",

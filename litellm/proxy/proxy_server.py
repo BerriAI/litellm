@@ -319,6 +319,9 @@ from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.credential_endpoints.chatgpt_sso import (
+    router as chatgpt_sso_router,
+)
 from litellm.proxy.credential_endpoints.github_copilot_sso import (
     router as github_copilot_sso_router,
 )
@@ -13450,6 +13453,7 @@ app.include_router(vector_store_router)
 app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
+app.include_router(chatgpt_sso_router)
 app.include_router(github_copilot_sso_router)
 app.include_router(llm_passthrough_router)
 app.include_router(webrtc_router)

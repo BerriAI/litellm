@@ -10,14 +10,8 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 
-@patch("litellm.llms.github_copilot.embedding.transformation.Authenticator")
-def test_github_copilot_embedding_config_validate_environment(mock_authenticator_class):
+def test_github_copilot_embedding_config_validate_environment():
     """Test the GitHub Copilot embedding configuration environment validation."""
-    mock_api_key = "gh.test-key-123456789"
-    mock_auth_instance = MagicMock()
-    mock_auth_instance.get_api_key.return_value = mock_api_key
-    mock_authenticator_class.return_value = mock_auth_instance
-
     config = GithubCopilotEmbeddingConfig()
     model = "github_copilot/text-embedding-3-small"
 
@@ -30,7 +24,8 @@ def test_github_copilot_embedding_config_validate_environment(mock_authenticator
         api_key="gh-access-token",
     )
 
-    assert validated_headers["Authorization"] == f"Bearer {mock_api_key}"
+    # api_key is used directly — no re-exchange in validate_environment
+    assert validated_headers["Authorization"] == "Bearer gh-access-token"
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
     assert validated_headers["editor-version"] == "vscode/1.95.0"
     assert "x-request-id" in validated_headers
@@ -47,21 +42,8 @@ def test_github_copilot_embedding_config_validate_environment(mock_authenticator
         )
     assert "required" in str(excinfo.value).lower()
 
-    # Test with authentication failure from GitHub
-    mock_auth_instance.get_api_key.side_effect = GetAPIKeyError(
-        message="Failed to get API key",
-        status_code=401,
-    )
-    with pytest.raises(AuthenticationError) as excinfo:
-        config.validate_environment(
-            headers={},
-            model=model,
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key="gh-access-token",
-        )
-    assert "Failed to get API key" in str(excinfo.value)
+    # Auth failures now happen upstream (in _get_openai_compatible_provider_info
+    # or main.py), not in validate_environment. No re-exchange test needed.
 
 @patch("litellm.llms.github_copilot.embedding.transformation.Authenticator")
 def test_github_copilot_embedding_config_get_complete_url(mock_authenticator_class):

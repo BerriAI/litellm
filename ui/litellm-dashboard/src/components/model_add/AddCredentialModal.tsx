@@ -6,6 +6,8 @@ import {
   credentialCreateCall,
   githubCopilotInitiateAuth,
   githubCopilotCheckStatus,
+  chatgptInitiateAuth,
+  chatgptCheckStatus,
 } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
@@ -41,16 +43,18 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
   const accessTokenRef = useRef<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Determine if the selected provider uses device_code auth flow
-  const isDeviceCodeProvider = React.useMemo(() => {
-    if (!providerMetadata) return false;
+  // Determine if the selected provider uses device_code auth flow and get its litellm_provider
+  const deviceCodeProviderInfo = React.useMemo(() => {
+    if (!providerMetadata) return null;
     const info = providerMetadata.find(
       (p) =>
         p.provider === selectedProvider ||
         p.provider_display_name === Providers[selectedProvider as keyof typeof Providers],
     );
-    return info?.auth_flow === "device_code";
+    if (info?.auth_flow === "device_code") return info;
+    return null;
   }, [selectedProvider, providerMetadata]);
+  const isDeviceCodeProvider = deviceCodeProviderInfo != null;
 
   // Cleanup polling on unmount or modal close
   const stopPolling = useCallback(() => {
@@ -89,59 +93,106 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
       form.validateFields(["credential_name"]);
       return;
     }
-    if (!accessToken) return;
+    if (!accessToken || !deviceCodeProviderInfo) return;
+
+    const litellmProvider = deviceCodeProviderInfo.litellm_provider;
+    const providerLabel = deviceCodeProviderInfo.provider_display_name || litellmProvider;
 
     try {
-      const result = await githubCopilotInitiateAuth(accessToken);
+      // Initiate — dispatch to the right provider
+      let deviceId: string;
+      let userCode: string;
+      let verificationUri: string;
+      let pollIntervalMs: number;
+
+      if (litellmProvider === "chatgpt") {
+        const result = await chatgptInitiateAuth(accessToken);
+        deviceId = result.device_auth_id;
+        userCode = result.user_code;
+        verificationUri = result.verification_uri;
+        pollIntervalMs = result.poll_interval_ms;
+      } else {
+        // Default: GitHub Copilot
+        const result = await githubCopilotInitiateAuth(accessToken);
+        deviceId = result.device_code;
+        userCode = result.user_code;
+        verificationUri = result.verification_uri;
+        pollIntervalMs = result.poll_interval_ms;
+      }
+
       setDeviceCodeState({
         phase: "polling",
-        deviceCode: result.device_code,
-        userCode: result.user_code,
-        verificationUri: result.verification_uri,
+        deviceCode: deviceId,
+        userCode,
+        verificationUri,
       });
 
-      if (!result.poll_interval_ms) throw new Error("GitHub initiate response missing poll_interval_ms");
-      // Mutable baseline — ratchets up when GitHub sends slow_down so that
-      // subsequent normal "pending" responses keep using the increased interval.
-      let currentPollInterval = result.poll_interval_ms;
+      if (!pollIntervalMs) throw new Error(`${providerLabel} initiate response missing poll_interval_ms`);
+      // Mutable baseline — ratchets up on slow_down so that subsequent
+      // normal "pending" responses keep using the increased interval.
+      let currentPollInterval = pollIntervalMs;
 
       // setTimeout-based loop so each poll fires only after the previous one
-      // completes, and slow_down's retry_after_ms is respected exactly.
+      // completes, and slow_down / rate-limit intervals are respected exactly.
       const schedulePoll = (delayMs: number) => {
         pollingRef.current = setTimeout(async () => {
           try {
-            const status = await githubCopilotCheckStatus(accessToken, result.device_code);
-            console.log("[GH Copilot AddCredential] poll response:", status);
-            if (status.status === "complete" && status.access_token) {
+            let apiKey: string | undefined;
+            let failed = false;
+            let errorMsg: string | undefined;
+            let retryAfterMs: number | undefined;
+
+            if (litellmProvider === "chatgpt") {
+              const status = await chatgptCheckStatus(accessToken, deviceId, userCode);
+              console.log(`[${providerLabel} AddCredential] poll response:`, status);
+              if (status.status === "complete" && status.refresh_token) {
+                apiKey = status.refresh_token;
+              } else if (status.status === "failed") {
+                failed = true;
+                errorMsg = status.error;
+              }
+            } else {
+              const status = await githubCopilotCheckStatus(accessToken, deviceId);
+              console.log(`[${providerLabel} AddCredential] poll response:`, status);
+              if (status.status === "complete" && status.access_token) {
+                apiKey = status.access_token;
+              } else if (status.status === "failed") {
+                failed = true;
+                errorMsg = status.error;
+              } else {
+                retryAfterMs = status.retry_after_ms ?? undefined;
+              }
+            }
+
+            if (apiKey) {
               stopPolling();
-              accessTokenRef.current = status.access_token;
-              // Store as named credential
+              accessTokenRef.current = apiKey;
               try {
                 await credentialCreateCall(accessToken, {
                   credential_name: credentialName,
-                  credential_values: { api_key: status.access_token },
-                  credential_info: { custom_llm_provider: "github_copilot" },
+                  credential_values: { api_key: apiKey },
+                  credential_info: { custom_llm_provider: litellmProvider },
                 });
                 setDeviceCodeState({ phase: "success", credentialName });
               } catch (e) {
-                console.error("[GH Copilot AddCredential] credentialCreateCall failed:", e);
+                console.error(`[${providerLabel} AddCredential] credentialCreateCall failed:`, e);
                 NotificationsManager.error(
                   `Failed to save credential: ${e instanceof Error ? e.message : "Unknown error"}`,
                 );
                 setDeviceCodeState({ phase: "error", message: "Failed to save credential" });
               }
-            } else if (status.status === "failed") {
+            } else if (failed) {
               stopPolling();
-              setDeviceCodeState({ phase: "error", message: status.error || "Authorization failed" });
+              setDeviceCodeState({ phase: "error", message: errorMsg || "Authorization failed" });
             } else {
-              // pending — ratchet up the baseline if GitHub requested slower
-              if (status.retry_after_ms != null) {
-                currentPollInterval = status.retry_after_ms;
+              // pending — ratchet up the baseline if provider requested slower
+              if (retryAfterMs != null) {
+                currentPollInterval = retryAfterMs;
               }
               schedulePoll(currentPollInterval);
             }
           } catch (e) {
-            console.error("[GH Copilot AddCredential] poll error:", e);
+            console.error(`[${providerLabel} AddCredential] poll error:`, e);
             stopPolling();
             setDeviceCodeState({ phase: "error", message: "Failed to check authorization status" });
           }
@@ -149,7 +200,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
       };
       schedulePoll(currentPollInterval);
     } catch {
-      setDeviceCodeState({ phase: "error", message: "Failed to start GitHub authorization" });
+      setDeviceCodeState({ phase: "error", message: `Failed to start ${providerLabel} authorization` });
     }
   };
 
@@ -161,16 +212,18 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
     form.resetFields();
   };
 
+  const providerDisplayName = deviceCodeProviderInfo?.provider_display_name || "Provider";
+
   const renderDeviceCodeFlow = () => {
     switch (deviceCodeState.phase) {
       case "idle":
         return (
           <div className="text-center py-4">
             <Text className="block mb-4">
-              GitHub Copilot uses OAuth Device Code authorization. Click below to start.
+              {providerDisplayName} uses OAuth Device Code authorization. Click below to start.
             </Text>
             <Button type="primary" onClick={handleStartDeviceCode}>
-              Start GitHub Authorization
+              Start {providerDisplayName} Authorization
             </Button>
           </div>
         );
@@ -178,7 +231,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
         return (
           <div className="text-center py-4">
             <Text className="block mb-2">
-              Enter this code on GitHub:
+              Enter this code to authorize:
             </Text>
             <div
               style={{
@@ -206,7 +259,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
             </div>
             <Spin />
             <Text className="block mt-2 mb-4" type="secondary">
-              Waiting for GitHub authorization...
+              Waiting for {providerDisplayName} authorization...
             </Text>
             <Button onClick={handleCancel}>Cancel</Button>
           </div>
@@ -215,7 +268,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
         return (
           <div className="text-center py-4">
             <Text className="block mb-4" type="success" style={{ fontSize: "1.1rem" }}>
-              GitHub Copilot credential &quot;{deviceCodeState.credentialName}&quot; created successfully!
+              {providerDisplayName} credential &quot;{deviceCodeState.credentialName}&quot; created successfully!
             </Text>
             <Button type="primary" onClick={handleSuccessClose}>
               Done

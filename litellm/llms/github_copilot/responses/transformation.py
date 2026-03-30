@@ -114,11 +114,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
                 )
 
-            # Get GitHub Copilot API key via OAuth
-            api_key = Authenticator(access_token=_api_key).get_api_key()
-
-            # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            # api_key at this point is already the resolved copilot inference
+            # token (exchanged by _get_openai_compatible_provider_info or
+            # main.py). Just use it directly — no re-authentication needed.
+            default_headers = get_copilot_default_headers(_api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
