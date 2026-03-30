@@ -60,7 +60,9 @@ class StatusRequest(BaseModel):
 class StatusResponse(BaseModel):
     status: Literal["pending", "complete", "failed"]
     access_token: Optional[str] = None  # complete only
-    retry_after_ms: Optional[int] = None  # pending + slow_down only; client must wait this long before retrying
+    retry_after_ms: Optional[
+        int
+    ] = None  # pending + slow_down only; client must wait this long before retrying
     error: Optional[str] = None  # failed only
 
 
@@ -167,7 +169,9 @@ async def github_copilot_status(
     verbose_proxy_logger.debug(f"GitHub token poll response: {resp_json}")
 
     if "access_token" in resp_json:
-        verbose_proxy_logger.info("GitHub Copilot device code flow completed successfully")
+        verbose_proxy_logger.info(
+            "GitHub Copilot device code flow completed successfully"
+        )
         return StatusResponse(status="complete", access_token=resp_json["access_token"])
 
     error_code = resp_json.get("error", "")
@@ -175,8 +179,12 @@ async def github_copilot_status(
     if error_code == "slow_down":
         interval = resp_json.get("interval")
         if interval is None:
-            verbose_proxy_logger.warning("GitHub slow_down with no interval — treating as failed")
-            return StatusResponse(status="failed", error="GitHub slow_down with no interval reported")
+            verbose_proxy_logger.warning(
+                "GitHub slow_down with no interval — treating as failed"
+            )
+            return StatusResponse(
+                status="failed", error="GitHub slow_down with no interval reported"
+            )
         interval_ms = int(interval) * 1000
         verbose_proxy_logger.warning(
             f"GitHub slow_down — telling client to wait {interval_ms}ms before retrying"

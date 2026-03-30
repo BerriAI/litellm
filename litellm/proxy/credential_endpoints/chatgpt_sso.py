@@ -177,16 +177,22 @@ async def chatgpt_status(
 
     if resp.status_code != 200:
         error_text = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-        verbose_proxy_logger.warning(f"ChatGPT device code poll unexpected response: {error_text}")
+        verbose_proxy_logger.warning(
+            f"ChatGPT device code poll unexpected response: {error_text}"
+        )
         return StatusResponse(status="failed", error=error_text)
 
     resp_json = resp.json()
-    verbose_proxy_logger.debug(f"ChatGPT token poll response keys: {list(resp_json.keys())}")
+    verbose_proxy_logger.debug(
+        f"ChatGPT token poll response keys: {list(resp_json.keys())}"
+    )
 
     authorization_code = resp_json.get("authorization_code")
     code_verifier = resp_json.get("code_verifier")
     if not authorization_code or not code_verifier:
-        verbose_proxy_logger.debug("ChatGPT: response 200 but missing authorization_code/code_verifier")
+        verbose_proxy_logger.debug(
+            "ChatGPT: response 200 but missing authorization_code/code_verifier"
+        )
         return StatusResponse(status="pending")
 
     # Use a plain httpx client for the exchange — the litellm wrapper adds
@@ -211,7 +217,10 @@ async def chatgpt_status(
             verbose_proxy_logger.error(
                 f"ChatGPT token exchange returned {token_resp.status_code}: {token_resp.text[:500]}"
             )
-            return StatusResponse(status="failed", error=f"Token exchange failed: HTTP {token_resp.status_code}")
+            return StatusResponse(
+                status="failed",
+                error=f"Token exchange failed: HTTP {token_resp.status_code}",
+            )
         token_data = token_resp.json()
     except Exception as e:
         verbose_proxy_logger.error(f"ChatGPT token exchange failed: {e}")

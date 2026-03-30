@@ -276,6 +276,10 @@ model_list:
       litellm_credential_name: my-copilot
 ```
 
+### Re-authorization
+
+GitHub access tokens can expire or be revoked. If a credential stops working, use the **Re-authorize** button (key icon) on the LLM Credentials page to redo the device code flow and update the stored token.
+
 ### Multiple Accounts
 
 Create multiple credentials with different names to support different GitHub accounts:

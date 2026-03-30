@@ -93,10 +93,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     onSuccess: handleDeviceCodeSuccess,
   });
 
-  // Reset device code state when provider changes away from a device_code provider
+  // Reset device code state whenever the selected provider changes
   useEffect(() => {
-    if (!isDeviceCodeProvider) resetDeviceCode();
-  }, [isDeviceCodeProvider, resetDeviceCode]);
+    resetDeviceCode();
+  }, [selectedProvider, resetDeviceCode]);
 
   const { data: guardrailsList, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
@@ -306,7 +306,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <div className="flex-grow border-t border-gray-200"></div>
                           </div>
                           {isDeviceCodeProvider ? (
-                            renderDeviceCodeFlow()
+                            <>
+                              <Form.Item name="api_key" hidden><input /></Form.Item>
+                              {renderDeviceCodeFlow()}
+                            </>
                           ) : (
                             <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
                           )}
