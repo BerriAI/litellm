@@ -147,7 +147,12 @@ def test_caching_dynamic_args():  # test in memory cache
             port=_redis_port_env,
             password=_redis_password_env,
         )
-        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
+        response1 = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            mock_response="Hello world from cache test",
+        )
         response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         print(f"response1: {response1}")
         print(f"response2: {response2}")
@@ -173,7 +178,12 @@ def test_caching_v2():  # test in memory cache
     try:
         litellm.set_verbose = True
         litellm.cache = Cache()
-        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
+        response1 = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            mock_response="Hello world from cache test",
+        )
         response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         print(f"response1: {response1}")
         print(f"response2: {response2}")
@@ -200,9 +210,18 @@ def test_caching_with_ttl():
         litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
-            model="gpt-3.5-turbo", messages=messages, caching=True, ttl=0, mock_response="Hello world from cache test 1"
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            ttl=0,
+            mock_response="Hello world from cache test 1",
         )
-        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test 2")
+        response2 = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            mock_response="Hello world from cache test 2",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None  # disable cache
@@ -221,8 +240,18 @@ def test_caching_with_default_ttl():
     try:
         litellm.set_verbose = True
         litellm.cache = Cache(ttl=0)
-        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
-        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
+        response1 = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            mock_response="Hello world from cache test",
+        )
+        response2 = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            mock_response="Hello world from cache test",
+        )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None  # disable cache
@@ -247,10 +276,16 @@ async def test_caching_with_cache_controls(sync_flag):
         if sync_flag:
             ## TTL = 0
             response1 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}, mock_response="Hello world"
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 0},
+                mock_response="Hello world",
             )
             response2 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}, mock_response="Hello world"
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 10},
+                mock_response="Hello world",
             )
 
             assert response2["id"] != response1["id"]
@@ -322,9 +357,19 @@ def test_caching_with_models_v2():
     litellm.cache = Cache()
     print("test2 for caching")
     litellm.set_verbose = True
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, mock_response="Hello world from cache test")
+    response1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        mock_response="Hello world from cache test",
+    )
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="gpt-4.1-nano", messages=messages, caching=True, mock_response="Different model response")
+    response3 = completion(
+        model="gpt-4.1-nano",
+        messages=messages,
+        caching=True,
+        mock_response="Different model response",
+    )
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -423,7 +468,10 @@ def test_embedding_caching():
     text_to_embed = [embedding_large_text]
     start_time = time.time()
     embedding1 = embedding(
-        model="text-embedding-ada-002", input=text_to_embed, caching=True, mock_response="0.1,0.2,0.3,0.4,0.5"
+        model="text-embedding-ada-002",
+        input=text_to_embed,
+        caching=True,
+        mock_response="0.1,0.2,0.3,0.4,0.5",
     )
     end_time = time.time()
     print(f"Embedding 1 response time: {end_time - start_time} seconds")
@@ -459,12 +507,18 @@ async def test_embedding_caching_individual_items_and_then_list():
         "world",
     ]
     embedding1 = await aembedding(
-        model="text-embedding-ada-002", input=text_to_embed[0], caching=True, mock_response="0.1,0.2,0.3,0.4,0.5"
+        model="text-embedding-ada-002",
+        input=text_to_embed[0],
+        caching=True,
+        mock_response="0.1,0.2,0.3,0.4,0.5",
     )
     initial_prompt_tokens = embedding1.usage.prompt_tokens
     await asyncio.sleep(1)
     embedding2 = await aembedding(
-        model="text-embedding-ada-002", input=text_to_embed[1], caching=True, mock_response="0.6,0.7,0.8,0.9,1.0"
+        model="text-embedding-ada-002",
+        input=text_to_embed[1],
+        caching=True,
+        mock_response="0.6,0.7,0.8,0.9,1.0",
     )
     await asyncio.sleep(1)
     embedding3 = await aembedding(
@@ -480,7 +534,10 @@ async def test_embedding_caching_individual_items_and_then_list():
     additional_text = "this is a new text"
     text_to_embed.append(additional_text)
     embedding4 = await aembedding(
-        model="text-embedding-ada-002", input=text_to_embed, caching=True, mock_response="0.1,0.2,0.3,0.4,0.5"
+        model="text-embedding-ada-002",
+        input=text_to_embed,
+        caching=True,
+        mock_response="0.1,0.2,0.3,0.4,0.5",
     )
     assert embedding4.usage.prompt_tokens > embedding3.usage.prompt_tokens
 
@@ -490,7 +547,10 @@ async def test_embedding_caching_individual_items():
     litellm.cache = Cache()
     text_to_embed = "hello"
     embedding1 = await aembedding(
-        model="text-embedding-ada-002", input=text_to_embed, caching=True, mock_response="0.1,0.2,0.3,0.4,0.5"
+        model="text-embedding-ada-002",
+        input=text_to_embed,
+        caching=True,
+        mock_response="0.1,0.2,0.3,0.4,0.5",
     )
 
     await asyncio.sleep(1)
@@ -512,13 +572,13 @@ def test_embedding_caching_azure():
     litellm.cache = Cache()
     text_to_embed = [embedding_large_text]
 
-    api_key = os.environ["AZURE_API_KEY"]
-    api_base = os.environ["AZURE_API_BASE"]
+    api_key = os.environ["AZURE_AI_API_KEY"]
+    api_base = os.environ["AZURE_AI_API_BASE"]
     api_version = os.environ["AZURE_API_VERSION"]
 
     os.environ["AZURE_API_VERSION"] = ""
-    os.environ["AZURE_API_BASE"] = ""
-    os.environ["AZURE_API_KEY"] = ""
+    os.environ["AZURE_AI_API_BASE"] = ""
+    os.environ["AZURE_AI_API_KEY"] = ""
 
     start_time = time.time()
     print("AZURE CONFIGS")
@@ -560,8 +620,8 @@ def test_embedding_caching_azure():
         pytest.fail("Error occurred: Embedding caching failed")
 
     os.environ["AZURE_API_VERSION"] = api_version
-    os.environ["AZURE_API_BASE"] = api_base
-    os.environ["AZURE_API_KEY"] = api_key
+    os.environ["AZURE_AI_API_BASE"] = api_base
+    os.environ["AZURE_AI_API_KEY"] = api_key
 
 
 # test_embedding_caching_azure()
@@ -851,9 +911,18 @@ def test_redis_cache_completion():
         model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20
     )
     response3 = completion(
-        model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5, mock_response="Different params response"
+        model="gpt-3.5-turbo",
+        messages=messages,
+        caching=True,
+        temperature=0.5,
+        mock_response="Different params response",
     )
-    response4 = completion(model="gpt-4o-mini", messages=messages, caching=True, mock_response="Different model response")
+    response4 = completion(
+        model="gpt-4o-mini",
+        messages=messages,
+        caching=True,
+        mock_response="Different model response",
+    )
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -1127,7 +1196,11 @@ async def test_redis_cache_atext_completion():
         print("test for caching, atext_completion")
 
         response1 = await litellm.atext_completion(
-            model="gpt-3.5-turbo-instruct", prompt=prompt, max_tokens=40, temperature=1, mock_response="Hello world from cache test"
+            model="gpt-3.5-turbo-instruct",
+            prompt=prompt,
+            max_tokens=40,
+            temperature=1,
+            mock_response="Hello world from cache test",
         )
 
         await asyncio.sleep(0.5)
@@ -1458,11 +1531,17 @@ def test_cache_override():
 
     # test embedding
     response1 = embedding(
-        model="text-embedding-ada-002", input=["hello who are you"], caching=False, mock_response="0.1,0.2,0.3,0.4,0.5"
+        model="text-embedding-ada-002",
+        input=["hello who are you"],
+        caching=False,
+        mock_response="0.1,0.2,0.3,0.4,0.5",
     )
 
     response2 = embedding(
-        model="text-embedding-ada-002", input=["hello who are you"], caching=False, mock_response="0.6,0.7,0.8,0.9,1.0"
+        model="text-embedding-ada-002",
+        input=["hello who are you"],
+        caching=False,
+        mock_response="0.6,0.7,0.8,0.9,1.0",
     )
 
     # When caching=False, responses should have different IDs
@@ -2787,7 +2866,7 @@ def test_caching_thinking_args_hit():  # test in memory cache
 async def test_cache_key_in_hidden_params_acompletion():
     """
     Test that cache_key is present in _hidden_params on cache hits for acompletion.
-    
+
     Validates fix for missing x-litellm-cache-key header on proxy cache hits.
     """
     litellm.cache = Cache(
@@ -2796,10 +2875,10 @@ async def test_cache_key_in_hidden_params_acompletion():
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
     )
-    
+
     unique_content = f"test cache key hidden params {uuid.uuid4()}"
     messages = [{"role": "user", "content": unique_content}]
-    
+
     # First call - cache miss
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -2807,12 +2886,12 @@ async def test_cache_key_in_hidden_params_acompletion():
         mock_response="test response",
         caching=True,
     )
-    
+
     print(f"Response 1 _hidden_params: {response1._hidden_params}")
     assert response1._hidden_params.get("cache_hit") is not True
-    
+
     await asyncio.sleep(0.5)
-    
+
     # Second call - cache hit
     response2 = await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -2820,17 +2899,17 @@ async def test_cache_key_in_hidden_params_acompletion():
         mock_response="test response",
         caching=True,
     )
-    
+
     print(f"Response 2 _hidden_params: {response2._hidden_params}")
-    
+
     # Verify cache hit occurred
     assert response2._hidden_params.get("cache_hit") is True
-    
+
     # Verify cache_key is present in _hidden_params
     assert "cache_key" in response2._hidden_params
     assert response2._hidden_params["cache_key"] is not None
-    
+
     # Verify both responses have same ID (cache hit)
     assert response1.id == response2.id
-    
+
     litellm.cache = None
