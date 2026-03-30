@@ -685,8 +685,10 @@ def generic_cost_per_token(  # noqa: PLR0915
     )
 
     if (
-        text_tokens == 0 and prompt_tokens_details["image_count"] == 0
-    ) or has_double_counting or has_under_counting:
+        (text_tokens == 0 and prompt_tokens_details["image_count"] == 0)
+        or has_double_counting
+        or has_under_counting
+    ):
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
