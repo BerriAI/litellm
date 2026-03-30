@@ -8,7 +8,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -114,6 +114,55 @@ async def _execute_pre_request_hooks(
     return request_kwargs
 
 
+async def _try_websearch_short_circuit(
+    model: str,
+    messages: List[Dict],
+    tools: Optional[List[Dict]],
+    custom_llm_provider: Optional[str],
+    stream: Optional[bool],
+) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
+    """
+    Attempt to short-circuit a web-search-only request.
+
+    Claude Code sends web search as a separate, standalone /v1/messages
+    request. For providers that don't natively support web search (e.g.
+    github_copilot), we detect this pattern, execute the search via
+    Tavily/Perplexity, and return a synthetic Anthropic response — bypassing
+    the backend LLM entirely.
+
+    Returns the synthetic response if short-circuited, or None to continue
+    normal processing.
+    """
+    if not litellm.callbacks:
+        return None
+
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    for callback in litellm.callbacks:
+        if not isinstance(callback, WebSearchInterceptionLogger):
+            continue
+
+        response = await callback.try_short_circuit_search(
+            model=model,
+            messages=messages,
+            tools=tools,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if response is not None:
+            anthropic_response = cast(AnthropicMessagesResponse, response)
+            if stream:
+                from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                    FakeAnthropicMessagesStreamIterator,
+                )
+
+                return FakeAnthropicMessagesStreamIterator(anthropic_response)
+            return anthropic_response
+
+    return None
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -138,6 +187,12 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
+    # Save original stream flag before pre-request hooks can convert it.
+    # The websearch interception hook converts stream=True → stream=False
+    # for the agentic loop, but the short-circuit path needs to know
+    # whether the caller originally requested streaming.
+    original_stream = stream
+
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
@@ -151,10 +206,37 @@ async def anthropic_messages(
     # Extract modified parameters
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
+    # Propagate the provider derived inside pre-request hooks, if not already set.
+    # The litellm_params dict may have been overwritten by **kwargs in
+    # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
+    if not custom_llm_provider:
+        custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
+            "custom_llm_provider"
+        )
+        if not custom_llm_provider:
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:
+                pass
     # Remove litellm_params from kwargs (only needed for hooks)
     request_kwargs.pop("litellm_params", None)
     # Merge back any other modifications
     kwargs.update(request_kwargs)
+
+    # Short-circuit web-search-only requests: detect the pattern, execute
+    # search directly via Tavily/Perplexity, and return a synthetic response
+    # without ever touching the backend LLM or the adapter path.
+    # Use original_stream (not the hook-converted stream) so streaming
+    # callers get SSE events instead of a plain dict.
+    short_circuit_response = await _try_websearch_short_circuit(
+        model=model,
+        messages=messages,
+        tools=tools,
+        custom_llm_provider=custom_llm_provider,
+        stream=original_stream,
+    )
+    if short_circuit_response is not None:
+        return short_circuit_response
 
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True

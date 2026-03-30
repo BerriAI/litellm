@@ -525,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         # user
         "/user/new",
         "/user/update",
+        "/user/bulk_update",
         "/user/delete",
         "/user/info",
         "/user/list",
@@ -2416,6 +2417,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_metadata: Optional[dict] = None
 
     # Project Params
+    project_alias: Optional[str] = None
     project_metadata: Optional[dict] = None
 
     # Time stamps
@@ -3228,6 +3230,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]

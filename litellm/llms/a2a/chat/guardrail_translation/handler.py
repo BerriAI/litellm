@@ -111,6 +111,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process A2A output response by applying guardrails to text content.
@@ -166,13 +167,21 @@ class A2AGuardrailHandler(BaseTranslation):
             return response
 
         # Step 2: Apply guardrail to all texts in batch
-        # Create a request_data dict with response info and user API key metadata
-        request_data: dict = {"response": response_dict}
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = {"response": response_dict}
+        else:
+            if "response" not in request_data:
+                request_data["response"] = response_dict
 
         # Add user API key metadata with prefixed keys
-        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            request_data["litellm_metadata"] = user_metadata
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
         inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
 
@@ -213,6 +222,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> List[Any]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
@@ -258,10 +268,18 @@ class A2AGuardrailHandler(BaseTranslation):
         if not combined_text:
             return responses_so_far
 
-        request_data: dict = {"responses_so_far": responses_so_far}
-        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            request_data["litellm_metadata"] = user_metadata
+        if request_data is None:
+            request_data = {"responses_so_far": responses_so_far}
+        else:
+            if "responses_so_far" not in request_data:
+                request_data["responses_so_far"] = responses_so_far
+
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
         inputs = GenericGuardrailAPIInputs(texts=[combined_text])
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(

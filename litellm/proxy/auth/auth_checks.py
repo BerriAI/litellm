@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_JWTAuth,
+    LiteLLM_ManagedVectorStoresTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -2295,6 +2296,71 @@ async def get_object_permission(
 
 
 @log_db_metrics
+async def get_managed_vector_store_rows_by_uuids(
+    uuids: List[str],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[LiteLLM_ManagedVectorStoresTable]:
+    """
+    Fetch managed vector store rows by their internal UUIDs.
+
+    Follows the get_team_object / get_key_object / get_object_permission pattern:
+    cache-first lookup (in-memory / Redis), DB fallback only on cache miss.
+    Critical-path DB access must go through this helper to avoid raw Prisma
+    calls on the hot request path.
+    """
+    if not uuids or prisma_client is None:
+        return []
+
+    result: List[LiteLLM_ManagedVectorStoresTable] = []
+    cache_misses: List[str] = []
+
+    for uuid in uuids:
+        key = "managed_vector_store_id:{}".format(uuid)
+        cached = await user_api_key_cache.async_get_cache(key=key)
+        if cached is not None:
+            if isinstance(cached, dict):
+                result.append(LiteLLM_ManagedVectorStoresTable(**cached))
+            elif isinstance(cached, LiteLLM_ManagedVectorStoresTable):
+                result.append(cached)
+            else:
+                cache_misses.append(uuid)
+        else:
+            cache_misses.append(uuid)
+
+    if not cache_misses:
+        return result
+
+    rows = await prisma_client.db.litellm_managedvectorstorestable.find_many(
+        where={"vector_store_id": {"in": cache_misses}},
+        take=len(cache_misses),
+    )
+
+    for row in rows:
+        row_dict = (
+            row.model_dump()
+            if hasattr(row, "model_dump")
+            else (row.dict() if hasattr(row, "dict") else None)
+        )
+        if not isinstance(row_dict, dict) or not row_dict:
+            row_dict = dict(row) if hasattr(row, "__dict__") else {}
+        if not row_dict:
+            continue
+        cached_obj = LiteLLM_ManagedVectorStoresTable(**row_dict)
+        key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
+        await user_api_key_cache.async_set_cache(
+            key=key,
+            value=row_dict,
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+        result.append(cached_obj)
+
+    return result
+
+
+@log_db_metrics
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
@@ -2810,7 +2876,15 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
-    if valid_token.spend is not None and valid_token.max_budget is not None:
+    if valid_token.max_budget is not None:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:key:{valid_token.token}",
+            fallback_spend=valid_token.spend or 0.0,
+        )
+
         ####################################
         # collect information for alerting #
         ####################################
@@ -2822,7 +2896,7 @@ async def _virtual_key_max_budget_check(
 
         call_info = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
@@ -2843,9 +2917,9 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if valid_token.spend >= valid_token.max_budget:
+        if spend >= valid_token.max_budget:
             raise litellm.BudgetExceededError(
-                current_cost=valid_token.spend,
+                current_cost=spend,
                 max_budget=valid_token.max_budget,
             )
 
@@ -2976,6 +3050,14 @@ async def _check_team_member_budget(
             team_member_budget = team_membership.litellm_budget_table.max_budget
             team_member_spend = team_membership.spend or 0.0
 
+            # Read from cross-pod counter (Redis-first) if available
+            from litellm.proxy.proxy_server import get_current_spend
+
+            team_member_spend = await get_current_spend(
+                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                fallback_spend=team_member_spend,
+            )
+
             if team_member_spend >= team_member_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
@@ -2999,32 +3081,39 @@ async def _team_max_budget_check(
     if (
         team_object is not None
         and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
     ):
-        if valid_token:
-            call_info = CallInfo(
-                token=valid_token.token,
-                spend=team_object.spend,
-                max_budget=team_object.max_budget,
-                user_id=valid_token.user_id,
-                team_id=valid_token.team_id,
-                team_alias=valid_token.team_alias,
-                organization_id=valid_token.org_id,
-                event_group=Litellm_EntityType.TEAM,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="team_budget",
-                    user_info=call_info,
-                )
-            )
+        from litellm.proxy.proxy_server import get_current_spend
 
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:team:{team_object.team_id}",
+            fallback_spend=team_object.spend or 0.0,
         )
+
+        if spend > team_object.max_budget:
+            if valid_token:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=spend,
+                    max_budget=team_object.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    event_group=Litellm_EntityType.TEAM,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="team_budget",
+                        user_info=call_info,
+                    )
+                )
+
+            raise litellm.BudgetExceededError(
+                current_cost=spend,
+                max_budget=team_object.max_budget,
+                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
+            )
 
 
 async def _team_soft_budget_check(
