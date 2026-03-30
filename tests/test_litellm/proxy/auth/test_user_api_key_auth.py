@@ -28,7 +28,7 @@ def test_get_api_key():
     assert get_api_key(
         custom_litellm_key_header=None,
         api_key=bearer_token,
-        AZURE_AI_API_KEY_header=None,
+        azure_api_key_header=None,
         anthropic_api_key_header=None,
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
@@ -59,7 +59,7 @@ def test_get_api_key_with_custom_litellm_key_header(
     assert get_api_key(
         custom_litellm_key_header=custom_litellm_key_header,
         api_key=None,
-        AZURE_AI_API_KEY_header=None,
+        azure_api_key_header=None,
         anthropic_api_key_header=None,
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
@@ -371,7 +371,7 @@ async def test_proxy_admin_expired_key_from_cache():
                 await _user_api_key_auth_builder(
                     request=request,
                     api_key=f"Bearer {api_key}",  # Add Bearer prefix
-                    AZURE_AI_API_KEY_header="",
+                    azure_api_key_header="",
                     anthropic_api_key_header=None,
                     google_ai_studio_api_key_header=None,
                     azure_apim_header=None,
@@ -842,7 +842,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
             await _user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
-                AZURE_AI_API_KEY_header="",
+                azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
                 azure_apim_header=None,
