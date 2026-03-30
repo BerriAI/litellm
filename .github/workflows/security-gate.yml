@@ -74,7 +74,7 @@ jobs:
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       with:
         ref: ${{ github.event.pull_request.head.sha }}
-        fetch-depth: 1
+        fetch-depth: 0
         persist-credentials: false
 
     - name: Set up Python
@@ -87,12 +87,12 @@ jobs:
         set -euo pipefail
 
         GITLEAKS_VERSION="8.18.4"
-        curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
         tar -xzf gitleaks.tar.gz gitleaks
-        sudo mv gitleaks /usr/local/bin/gitleaks
-        gitleaks version
+        chmod +x gitleaks
+        ./gitleaks version
 
-        gitleaks detect --source . --no-git --redact
+        ./gitleaks detect --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" --redact
 
     - name: Collect Changed Python Files
       id: changed-py-files
