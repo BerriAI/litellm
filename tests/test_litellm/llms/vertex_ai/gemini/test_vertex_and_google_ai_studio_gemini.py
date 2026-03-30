@@ -3688,7 +3688,7 @@ def test_vertex_ai_service_tier_in_map_openai_params():
         drop_params=True,
     )
 
-    assert result["service_tier"] == "FLEX"
+    assert result["service_tier"] == "flex"
 
     # Test auto -> priority
     optional_params_auto = {}
