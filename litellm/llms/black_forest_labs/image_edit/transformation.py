@@ -201,7 +201,9 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return image
         elif isinstance(image, list):
             # If it's a list, take the first image
-            return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
+            return self._read_image_bytes(
+                image[0], depth=depth + 1, max_depth=max_depth
+            )
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
                 # Download image from URL
