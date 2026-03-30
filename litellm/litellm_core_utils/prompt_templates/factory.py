@@ -2680,7 +2680,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _content_is_list = "content" in assistant_content_block and isinstance(
                     assistant_content_block["content"], list
                 )
-                _content_list = assistant_content_block.get("content") if _content_is_list else None
+                _content_list = (
+                    assistant_content_block.get("content") if _content_is_list else None
+                )
                 _list_has_thinking = False
                 if _content_is_list and _content_list is not None:
                     for _item in _content_list:
