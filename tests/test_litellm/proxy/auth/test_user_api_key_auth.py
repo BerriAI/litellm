@@ -24,7 +24,7 @@ def test_get_api_key():
     assert get_api_key(
         custom_litellm_key_header=None,
         api_key=bearer_token,
-        azure_api_key_header=None,
+        AZURE_AI_API_KEY_header=None,
         anthropic_api_key_header=None,
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
@@ -55,7 +55,7 @@ def test_get_api_key_with_custom_litellm_key_header(
     assert get_api_key(
         custom_litellm_key_header=custom_litellm_key_header,
         api_key=None,
-        azure_api_key_header=None,
+        AZURE_AI_API_KEY_header=None,
         anthropic_api_key_header=None,
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
@@ -367,7 +367,7 @@ async def test_proxy_admin_expired_key_from_cache():
                 await _user_api_key_auth_builder(
                     request=request,
                     api_key=f"Bearer {api_key}",  # Add Bearer prefix
-                    azure_api_key_header="",
+                    AZURE_AI_API_KEY_header="",
                     anthropic_api_key_header=None,
                     google_ai_studio_api_key_header=None,
                     azure_apim_header=None,
@@ -598,6 +598,10 @@ class TestJWTOAuth2Coexistence:
         assert JWTHandler.is_jwt("sk-12345678") is False
         assert JWTHandler.is_jwt("Bearer token") is False
         assert JWTHandler.is_jwt("two.parts") is False
+
+    def test_is_jwt_returns_false_for_none(self):
+        """None token (missing Authorization header) should not be treated as JWT."""
+        assert JWTHandler.is_jwt(None) is False
 
     @pytest.mark.asyncio
     async def test_both_enabled_opaque_token_uses_oauth2(self):
@@ -871,7 +875,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
             await _user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
-                azure_api_key_header="",
+                AZURE_AI_API_KEY_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
                 azure_apim_header=None,
