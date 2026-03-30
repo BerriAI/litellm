@@ -79,7 +79,9 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    embedding_all_elements_cache_hit: bool = (
+        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    )
 
 
 in_memory_cache_obj = InMemoryCache()
@@ -447,9 +449,7 @@ class LLMCachingHandler:
             ## USAGE
             prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
             if aggregated_details:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    **aggregated_details
-                )
+                prompt_tokens_details = PromptTokensDetailsWrapper(**aggregated_details)
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
@@ -1078,9 +1078,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params[
-                "preset_cache_key"
-            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            litellm_params["preset_cache_key"] = (
+                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            )
         else:
             litellm_params["preset_cache_key"] = None
 
