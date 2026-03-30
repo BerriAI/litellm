@@ -226,7 +226,7 @@ def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
     """
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
@@ -252,7 +252,7 @@ def test_google_secret_manager_read_in_memory():
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
     load_vertex_ai_credentials()
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
     secret_manager = GoogleSecretManager()
     secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
     secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
@@ -336,6 +336,7 @@ def test_get_secret_with_access_mode():
     litellm.secret_manager_client = None
     litellm._key_management_settings = KeyManagementSettings()
     del os.environ[test_secret_name]
+
 
 def test_key_management_settings_defaults():
     """
