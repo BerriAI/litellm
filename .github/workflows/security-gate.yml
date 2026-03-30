@@ -147,10 +147,18 @@ jobs:
             subprocess.check_call(["bandit", "-ll", "-x", "./tests", *files])
         PY
 
-        if [ -f pyproject.toml ]; then
-          pip-audit .
-        elif [ -f requirements.txt ]; then
-          pip-audit -r requirements.txt
+        if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+          if [ -f requirements.txt ]; then
+            pip-audit --no-deps -r requirements.txt
+          else
+            echo "Fork PR detected; skipping pyproject audit to avoid untrusted PEP 517 build hooks. requirements.txt not found."
+          fi
         else
-          echo "No pyproject.toml or requirements.txt found; skipping pip-audit."
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            pip-audit .
+          else
+            echo "No pyproject.toml or requirements.txt found; skipping pip-audit."
+          fi
         fi
