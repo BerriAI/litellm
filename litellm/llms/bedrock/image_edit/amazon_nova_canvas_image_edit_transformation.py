@@ -384,8 +384,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-
-        if "errors" in response_data:
+        if "errors" in response_data and not response_data.get("images"):
             raise self.get_error_class(
                 error_message=f"Nova Canvas image edit error: {response_data['errors']}",
                 status_code=raw_response.status_code,
