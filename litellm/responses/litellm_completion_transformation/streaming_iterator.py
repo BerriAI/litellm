@@ -845,6 +845,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         event.__dict__["sequence_number"] = self._sequence_number
         self._pending_response_events.append(event)
+
+        # Emit content_part.added immediately after output_item.added so
+        # clients receive the full setup sequence before any text deltas.
+        # Fixes #20975 — content_part.added was never emitted.
+        if self.sent_content_part_added_event is False:
+            self.sent_content_part_added_event = True
+            self._pending_response_events.append(
+                self.create_content_part_added_event()
+            )
         return
 
     async def __anext__(
@@ -1021,7 +1030,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         )
                     )
                     if response_api_chunk:
-                        return response_api_chunk
+                        self._pending_response_events.append(response_api_chunk)
+                    # Emit the first queued event (output_item.added,
+                    # content_part.added, or the delta itself)
+                    if self._pending_response_events:
+                        return self._pending_response_events.pop(0)
                     # Otherwise, loop to next chunk
                 except StopIteration:
                     return self.common_done_event_logic(sync_mode=True)
