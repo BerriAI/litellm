@@ -868,63 +868,6 @@ def test_completion_mistral_api_modified_input():
             pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_oobabooga():
-#     try:
-#         response = completion(
-#             model="oobabooga/vicuna-1.3b", messages=messages, api_base="http://127.0.0.1:5000"
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_oobabooga()
-# aleph alpha
-# def test_completion_aleph_alpha():
-#     try:
-#         response = completion(
-#             model="luminous-base", messages=messages, logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_aleph_alpha()
-
-
-# def test_completion_aleph_alpha_control_models():
-#     try:
-#         response = completion(
-#             model="luminous-base-control", messages=messages, logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_aleph_alpha_control_models()
-
-import openai
-
-
-def test_completion_gpt4_turbo():
-    litellm.set_verbose = True
-    try:
-        response = completion(
-            model="gpt-4-1106-preview",
-            messages=messages,
-            max_completion_tokens=10,
-        )
-        print(response)
-    except openai.RateLimitError:
-        print("got a rate liimt error")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_gpt4_turbo()
-
-
 def test_completion_gpt4_turbo_0125():
     try:
         response = completion(
