@@ -26,7 +26,7 @@ from typing import Literal, Optional
 from urllib.parse import quote
 
 import httpx as _httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -78,13 +78,10 @@ class StatusResponse(BaseModel):
 
 @router.post(
     "/credentials/chatgpt/initiate",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=InitiateResponse,
 )
 async def chatgpt_initiate(
-    request: Request,
-    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -129,13 +126,10 @@ async def chatgpt_initiate(
 
 @router.post(
     "/credentials/chatgpt/status",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=StatusResponse,
 )
 async def chatgpt_status(
-    request: Request,
-    fastapi_response: Response,
     body: StatusRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -156,7 +150,6 @@ async def chatgpt_status(
     """
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SSO_HANDLER)
 
-    # Step 1: Poll for authorization code
     # OpenAI returns 403/404 while the user hasn't authorized yet.
     # The litellm httpx wrapper calls raise_for_status() automatically,
     # so we catch HTTPStatusError and check the status code ourselves.
@@ -196,12 +189,9 @@ async def chatgpt_status(
         verbose_proxy_logger.debug("ChatGPT: response 200 but missing authorization_code/code_verifier")
         return StatusResponse(status="pending")
 
-    # Step 2: Exchange authorization code for tokens
     # Use a plain httpx client for the exchange — the litellm wrapper adds
     # raise_for_status hooks that swallow the error body we need for debugging,
     # and may add headers that interfere with the OAuth token endpoint.
-    import httpx as _raw_httpx
-
     try:
         redirect_uri = f"{CHATGPT_AUTH_BASE}/deviceauth/callback"
         exchange_body = (
@@ -211,7 +201,7 @@ async def chatgpt_status(
             f"&client_id={quote(CHATGPT_CLIENT_ID, safe='')}"
             f"&code_verifier={quote(code_verifier, safe='')}"
         )
-        async with _raw_httpx.AsyncClient() as raw_client:
+        async with _httpx.AsyncClient() as raw_client:
             token_resp = await raw_client.post(
                 CHATGPT_OAUTH_TOKEN_URL,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -228,9 +218,9 @@ async def chatgpt_status(
         return StatusResponse(status="failed", error=f"Token exchange failed: {e}")
 
     refresh_token = token_data.get("refresh_token")
-    verbose_proxy_logger.info(
+    verbose_proxy_logger.debug(
         f"ChatGPT token exchange result: keys={list(token_data.keys())}, "
-        f"has_refresh={bool(refresh_token)}, refresh_len={len(refresh_token or '')}, "
+        f"has_refresh={bool(refresh_token)}, "
         f"has_access={bool(token_data.get('access_token'))}"
     )
     if not refresh_token:

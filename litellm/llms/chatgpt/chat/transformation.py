@@ -56,24 +56,27 @@ class ChatGPTConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        # Always add static ChatGPT headers (originator, user-agent, etc.)
-        validated_headers = {**get_chatgpt_static_headers(), **validated_headers}
-
-        # api_key is the refresh token. Exchange for access token (JWT)
-        # via OpenAI OAuth — same flow as openai/codex. Cached at module
-        # level by the authenticator.
         if api_key:
+            # api_key is the refresh token. Exchange for access token (JWT)
+            # via OpenAI OAuth. Cached at module level by the authenticator.
             try:
                 authenticator = Authenticator(refresh_token=api_key)
                 access_token = authenticator.get_access_token()
                 account_id = authenticator.get_account_id()
                 session_id = ensure_chatgpt_session_id(litellm_params)
+                # get_chatgpt_default_headers already includes static headers.
                 default_headers = get_chatgpt_default_headers(
                     access_token, account_id, session_id
                 )
                 validated_headers = {**default_headers, **validated_headers}
-            except (GetAccessTokenError, RefreshAccessTokenError):
-                pass
+            except (GetAccessTokenError, RefreshAccessTokenError) as e:
+                raise AuthenticationError(
+                    message=f"ChatGPT token exchange failed: {e}",
+                    llm_provider="chatgpt",
+                    model=model,
+                )
+        else:
+            validated_headers = {**get_chatgpt_static_headers(), **validated_headers}
 
         return validated_headers
 

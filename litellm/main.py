@@ -93,6 +93,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
+from litellm.llms.chatgpt.common_utils import (
+    get_chatgpt_static_headers,
+)
+from litellm.llms.github_copilot.common_utils import (
+    get_copilot_static_headers,
+)
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
@@ -2605,25 +2611,12 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            # Add static headers for OAuth providers. Token exchange is
-            # already done by _get_openai_compatible_provider_info; auth
-            # headers are set by validate_environment. These blocks only
-            # ensure the provider-required non-auth headers are present.
-            _static_header_getters = {
-                "github_copilot": "litellm.llms.github_copilot.common_utils.get_copilot_static_headers",
-                "chatgpt": "litellm.llms.chatgpt.common_utils.get_chatgpt_static_headers",
-            }
-            if custom_llm_provider in _static_header_getters:
-                import importlib
-
-                _mod_path, _func_name = _static_header_getters[
-                    custom_llm_provider
-                ].rsplit(".", 1)
-                _get_static = getattr(importlib.import_module(_mod_path), _func_name)
-                provider_headers = _get_static()
-                if extra_headers:
-                    provider_headers.update(extra_headers)
-                extra_headers = provider_headers
+            if custom_llm_provider == "github_copilot":
+                provider_headers = get_copilot_static_headers()
+                extra_headers = {**provider_headers, **(extra_headers or {})}
+            elif custom_llm_provider == "chatgpt":
+                provider_headers = get_chatgpt_static_headers()
+                extra_headers = {**provider_headers, **(extra_headers or {})}
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers

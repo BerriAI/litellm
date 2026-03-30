@@ -194,5 +194,5 @@ export function useDeviceCodeFlow({ accessToken, providerInfo, onSuccess }: UseD
     }
   }, [state, start, reset, providerLabel]);
 
-  return { state, start, reset, tokenRef, renderUI };
+  return { state, start, reset, renderUI };
 }

@@ -90,16 +90,12 @@ class GithubCopilotConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        # Always add static Copilot headers (editor-version, user-agent, etc.)
-        # These are required by the GitHub Copilot API on every request.
-        validated_headers = {**get_copilot_static_headers(), **validated_headers}
-
-        # api_key at this point is already the resolved copilot inference
-        # token (exchanged by _get_openai_compatible_provider_info or
-        # main.py). Just use it directly — no re-authentication needed.
         if api_key:
+            # get_copilot_default_headers already includes static headers.
             copilot_headers = get_copilot_default_headers(api_key)
             validated_headers = {**copilot_headers, **validated_headers}
+        else:
+            validated_headers = {**get_copilot_static_headers(), **validated_headers}
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)

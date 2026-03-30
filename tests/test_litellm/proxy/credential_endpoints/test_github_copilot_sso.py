@@ -44,7 +44,7 @@ class TestGithubCopilotInitiate:
                 github_copilot_initiate,
             )
 
-            result = await github_copilot_initiate(MagicMock(), MagicMock(), MagicMock())
+            result = await github_copilot_initiate(MagicMock())
             assert result.device_code == "test-device-code-123"
             assert result.user_code == "ABCD-1234"
             assert result.verification_uri == "https://github.com/login/device"
@@ -65,7 +65,7 @@ class TestGithubCopilotInitiate:
             )
 
             with pytest.raises(HTTPException) as exc_info:
-                await github_copilot_initiate(MagicMock(), MagicMock(), MagicMock())
+                await github_copilot_initiate(MagicMock())
             assert exc_info.value.status_code == 502
 
 
@@ -87,7 +87,7 @@ class TestGithubCopilotStatus:
             )
 
             result = await github_copilot_status(
-                MagicMock(), MagicMock(), StatusRequest(device_code="test-dc"), MagicMock()
+                StatusRequest(device_code="test-dc"), MagicMock()
             )
             assert result.status == "pending"
             assert result.access_token is None
@@ -105,7 +105,7 @@ class TestGithubCopilotStatus:
             )
 
             result = await github_copilot_status(
-                MagicMock(), MagicMock(), StatusRequest(device_code="test-dc"), MagicMock()
+                StatusRequest(device_code="test-dc"), MagicMock()
             )
             assert result.status == "pending"
             assert result.retry_after_ms == 10_000
@@ -122,7 +122,7 @@ class TestGithubCopilotStatus:
             )
 
             result = await github_copilot_status(
-                MagicMock(), MagicMock(), StatusRequest(device_code="test-dc"), MagicMock()
+                StatusRequest(device_code="test-dc"), MagicMock()
             )
             assert result.status == "complete"
             assert result.access_token == "ghu_abc123"
@@ -140,7 +140,7 @@ class TestGithubCopilotStatus:
             )
 
             result = await github_copilot_status(
-                MagicMock(), MagicMock(), StatusRequest(device_code="test-dc"), MagicMock()
+                StatusRequest(device_code="test-dc"), MagicMock()
             )
             assert result.status == "failed"
             assert result.error is not None
@@ -160,7 +160,7 @@ class TestGithubCopilotStatus:
             )
 
             result = await github_copilot_status(
-                MagicMock(), MagicMock(), StatusRequest(device_code="test-dc"), MagicMock()
+                StatusRequest(device_code="test-dc"), MagicMock()
             )
             assert result.status == "failed"
             assert "expired" in (result.error or "").lower()

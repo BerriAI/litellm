@@ -22,7 +22,7 @@ Multi-worker safe: device_code is validated by GitHub, not by LiteLLM.
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -71,13 +71,10 @@ class StatusResponse(BaseModel):
 
 @router.post(
     "/credentials/github_copilot/initiate",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=InitiateResponse,
 )
 async def github_copilot_initiate(
-    request: Request,
-    fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -127,13 +124,10 @@ async def github_copilot_initiate(
 
 @router.post(
     "/credentials/github_copilot/status",
-    dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
     response_model=StatusResponse,
 )
 async def github_copilot_status(
-    request: Request,
-    fastapi_response: Response,
     body: StatusRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
