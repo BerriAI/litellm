@@ -92,20 +92,8 @@ class TestOCIEmbeddingConfig:
         """test_get_supported_openai_params returns expected params list."""
         config = OCIEmbeddingConfig()
         params = config.get_supported_openai_params(model=TEST_MODEL_NAME)
-        assert "encoding_format" in params
         assert "dimensions" in params
-
-    def test_map_openai_params_encoding_format(self):
-        """test encoding_format is mapped correctly."""
-        config = OCIEmbeddingConfig()
-        optional_params = {}
-        result = config.map_openai_params(
-            non_default_params={"encoding_format": "float"},
-            optional_params=optional_params,
-            model=TEST_MODEL_NAME,
-            drop_params=False,
-        )
-        assert result["encoding_format"] == "float"
+        assert "encoding_format" not in params
 
     def test_map_openai_params_dimensions(self):
         """test dimensions is mapped correctly."""
@@ -244,6 +232,21 @@ class TestOCIEmbeddingConfig:
 
         assert isinstance(result["inputs"], list)
         assert result["inputs"] == ["Hello world"]
+
+    def test_transform_embedding_request_token_list_raises(self):
+        """test token-array inputs raise ValueError instead of silent conversion."""
+        config = OCIEmbeddingConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+        }
+        with patch.object(config, "sign_request", return_value=({}, "{}")):
+            with pytest.raises(ValueError, match="does not support token-array"):
+                config.transform_embedding_request(
+                    model=TEST_MODEL_NAME,
+                    input=[[1234, 5678]],
+                    optional_params=optional_params,
+                    headers={},
+                )
 
     def test_transform_embedding_response(self):
         """test OCI embedding response is correctly transformed into EmbeddingResponse."""

@@ -83,7 +83,6 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
-            "encoding_format",
             "dimensions",
         ]
 
@@ -94,8 +93,6 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        if "encoding_format" in non_default_params:
-            optional_params["encoding_format"] = non_default_params["encoding_format"]
         # Note: OCI Cohere embed does not support custom dimensions natively,
         # but we pass it through in case future models support it
         if "dimensions" in non_default_params:
@@ -185,6 +182,7 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Transform the embedding request to OCI format.
@@ -227,8 +225,10 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
                 if isinstance(item, str):
                     inputs.append(item)
                 elif isinstance(item, list):
-                    # Token lists - convert to string representation
-                    inputs.append(str(item))
+                    raise ValueError(
+                        "OCI embedding does not support token-array inputs. "
+                        "Please convert token lists to strings before calling embedding()."
+                    )
                 else:
                     inputs.append(str(item))
         else:
@@ -249,9 +249,9 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
             mapped_type = _INPUT_TYPE_MAP.get(input_type.lower(), input_type.upper())
             request_data["inputType"] = mapped_type
 
-        # Sign the request
-        api_base = self.get_complete_url(
-            api_base=optional_params.get("api_base"),
+        # Sign the request using the same URL the HTTP handler will POST to
+        signing_url = self.get_complete_url(
+            api_base=api_base,
             api_key=None,
             model=model,
             optional_params=optional_params,
@@ -262,7 +262,7 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
             headers=headers,
             optional_params=optional_params,
             request_data=request_data,
-            api_base=api_base,
+            api_base=signing_url,
         )
         headers.update(signed_headers)
 
