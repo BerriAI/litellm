@@ -83,9 +83,16 @@ jobs:
         python-version: '3.10'
 
     - name: Secret Scanning (Gitleaks)
-      uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+
+        GITLEAKS_VERSION="8.18.4"
+        curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+        tar -xzf gitleaks.tar.gz gitleaks
+        sudo mv gitleaks /usr/local/bin/gitleaks
+        gitleaks version
+
+        gitleaks detect --source . --no-git --redact
 
     - name: Collect Changed Python Files
       id: changed-py-files
