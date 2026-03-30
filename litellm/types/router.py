@@ -199,6 +199,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
+    use_responses_api_bridge: Optional[bool] = None
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -318,6 +319,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
+    ## RESPONSES API BRIDGE ##
+    use_responses_api_bridge: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
