@@ -3569,18 +3569,19 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
   }
 };
 
-export const githubCopilotInitiateAuth = async (
+async function authenticatedPost<T>(
+  endpoint: string,
   accessToken: string,
-): Promise<{ device_code: string; user_code: string; verification_uri: string; poll_interval_ms: number; expires_in: number }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/credentials/github_copilot/initiate`
-    : `/credentials/github_copilot/initiate`;
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}${endpoint}` : endpoint;
   const response = await fetch(url, {
     method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
+    ...(body && { body: JSON.stringify(body) }),
   });
   if (!response.ok) {
     const errorData = await response.json();
@@ -3589,78 +3590,27 @@ export const githubCopilotInitiateAuth = async (
     throw new Error(errorMessage);
   }
   return response.json();
-};
+}
 
-export const githubCopilotCheckStatus = async (
-  accessToken: string,
-  deviceCode: string,
-): Promise<{ status: string; access_token?: string; retry_after_ms?: number; error?: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/credentials/github_copilot/status`
-    : `/credentials/github_copilot/status`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ device_code: deviceCode }),
-  });
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
-};
+export const githubCopilotInitiateAuth = (accessToken: string) =>
+  authenticatedPost<{ device_code: string; user_code: string; verification_uri: string; poll_interval_ms: number; expires_in: number }>(
+    "/credentials/github_copilot/initiate", accessToken,
+  );
 
-export const chatgptInitiateAuth = async (
-  accessToken: string,
-): Promise<{ device_auth_id: string; user_code: string; verification_uri: string; poll_interval_ms: number }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/credentials/chatgpt/initiate`
-    : `/credentials/chatgpt/initiate`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
-};
+export const githubCopilotCheckStatus = (accessToken: string, deviceCode: string) =>
+  authenticatedPost<{ status: string; access_token?: string; retry_after_ms?: number; error?: string }>(
+    "/credentials/github_copilot/status", accessToken, { device_code: deviceCode },
+  );
 
-export const chatgptCheckStatus = async (
-  accessToken: string,
-  deviceAuthId: string,
-  userCode: string,
-): Promise<{ status: string; refresh_token?: string; account_id?: string; error?: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/credentials/chatgpt/status`
-    : `/credentials/chatgpt/status`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
-  });
-  if (!response.ok) {
-    const errorData = await response.json();
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
-};
+export const chatgptInitiateAuth = (accessToken: string) =>
+  authenticatedPost<{ device_auth_id: string; user_code: string; verification_uri: string; poll_interval_ms: number }>(
+    "/credentials/chatgpt/initiate", accessToken,
+  );
+
+export const chatgptCheckStatus = (accessToken: string, deviceAuthId: string, userCode: string) =>
+  authenticatedPost<{ status: string; refresh_token?: string; account_id?: string; error?: string }>(
+    "/credentials/chatgpt/status", accessToken, { device_auth_id: deviceAuthId, user_code: userCode },
+  );
 
 export const credentialUpdateCall = async (
   accessToken: string,

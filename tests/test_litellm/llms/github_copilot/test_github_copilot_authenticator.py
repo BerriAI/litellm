@@ -50,13 +50,13 @@ class TestGitHubCopilotAuthenticator:
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
-        headers = authenticator._get_github_headers()
+        headers = Authenticator.get_github_headers()
         assert "accept" in headers
         assert "editor-version" in headers
         assert "user-agent" in headers
         assert "content-type" in headers
-        
-        headers_with_token = authenticator._get_github_headers("test-token")
+
+        headers_with_token = Authenticator.get_github_headers("test-token")
         assert headers_with_token["authorization"] == "token test-token"
 
     def test_get_access_token_from_file(self, authenticator):

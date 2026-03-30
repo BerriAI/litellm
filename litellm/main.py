@@ -2609,25 +2609,21 @@ def completion(  # type: ignore # noqa: PLR0915
             # already done by _get_openai_compatible_provider_info; auth
             # headers are set by validate_environment. These blocks only
             # ensure the provider-required non-auth headers are present.
-            if custom_llm_provider == "github_copilot":
-                from litellm.llms.github_copilot.common_utils import (
-                    get_copilot_static_headers,
-                )
+            _static_header_getters = {
+                "github_copilot": "litellm.llms.github_copilot.common_utils.get_copilot_static_headers",
+                "chatgpt": "litellm.llms.chatgpt.common_utils.get_chatgpt_static_headers",
+            }
+            if custom_llm_provider in _static_header_getters:
+                import importlib
 
-                copilot_headers = get_copilot_static_headers()
+                _mod_path, _func_name = _static_header_getters[
+                    custom_llm_provider
+                ].rsplit(".", 1)
+                _get_static = getattr(importlib.import_module(_mod_path), _func_name)
+                provider_headers = _get_static()
                 if extra_headers:
-                    copilot_headers.update(extra_headers)
-                extra_headers = copilot_headers
-
-            if custom_llm_provider == "chatgpt":
-                from litellm.llms.chatgpt.common_utils import (
-                    get_chatgpt_static_headers,
-                )
-
-                chatgpt_headers = get_chatgpt_static_headers()
-                if extra_headers:
-                    chatgpt_headers.update(extra_headers)
-                extra_headers = chatgpt_headers
+                    provider_headers.update(extra_headers)
+                extra_headers = provider_headers
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers

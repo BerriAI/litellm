@@ -207,7 +207,7 @@ class Authenticator:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
         access_token = self.get_access_token()
-        headers = self._get_github_headers(access_token)
+        headers = Authenticator.get_github_headers(access_token)
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -271,10 +271,6 @@ class Authenticator:
 
         return headers
 
-    # Backward-compatible instance alias
-    def _get_github_headers(self, access_token: Optional[str] = None) -> Dict[str, str]:
-        return Authenticator.get_github_headers(access_token)
-
     def _get_device_code(self) -> Dict[str, str]:
         """
         Get a device code for GitHub authentication.
@@ -289,7 +285,7 @@ class Authenticator:
             sync_client = _get_httpx_client()
             resp = sync_client.post(
                 GITHUB_DEVICE_CODE_URL,
-                headers=self._get_github_headers(),
+                headers=Authenticator.get_github_headers(),
                 json={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
             )
             resp.raise_for_status()
@@ -343,7 +339,7 @@ class Authenticator:
             try:
                 resp = sync_client.post(
                     GITHUB_ACCESS_TOKEN_URL,
-                    headers=self._get_github_headers(),
+                    headers=Authenticator.get_github_headers(),
                     json={
                         "client_id": GITHUB_CLIENT_ID,
                         "device_code": device_code,

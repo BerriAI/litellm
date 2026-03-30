@@ -4,23 +4,19 @@ import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
-import { Select as AntdSelect, Button, Card, Col, Form, Input, Modal, Row, Spin, Tooltip, Typography, Alert } from "antd";
+import { Select as AntdSelect, Button, Card, Col, Form, Input, Modal, Row, Tooltip, Typography, Alert } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import TeamDropdown from "../common_components/team_dropdown";
-import NotificationsManager from "../molecules/notifications_manager";
 import type { Team } from "../key_team_helpers/key_list";
 import {
   type CredentialItem,
   type ProviderCreateInfo,
-  githubCopilotInitiateAuth,
-  githubCopilotCheckStatus,
-  chatgptInitiateAuth,
-  chatgptCheckStatus,
   modelAvailableCall,
 } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
+import { useDeviceCodeFlow } from "@/hooks/useDeviceCodeFlow";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import LiteLLMModelNameField from "./litellm_model_name";
@@ -42,7 +38,6 @@ interface AddModelFormProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
-  refetchCredentials?: () => void;
 }
 
 const { Title, Link } = Typography;
@@ -60,7 +55,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
-  refetchCredentials,
 }) => {
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
@@ -75,28 +69,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     error: providerMetadataError,
   } = useProviderFields();
 
-  // Inline device code flow (GitHub Copilot, ChatGPT, etc.)
-  const [ghDeviceCodeState, setGhDeviceCodeState] = useState<
-    | { phase: "idle" }
-    | { phase: "polling"; deviceCode: string; userCode: string; verificationUri: string }
-    | { phase: "success" }
-    | { phase: "error"; message: string }
-  >({ phase: "idle" });
-  // Hold the access_token in a ref — never rendered, injected at submit time
-  const ghAccessTokenRef = useRef<string | null>(null);
-  const ghPollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const stopGhPolling = useCallback(() => {
-    if (ghPollingRef.current) {
-      clearTimeout(ghPollingRef.current);
-      ghPollingRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => () => stopGhPolling(), [stopGhPolling]);
-
-  // Determine if the selected provider uses device_code auth flow and get its metadata
-  const deviceCodeProviderInfo = React.useMemo(() => {
+  // Determine if the selected provider uses device_code auth flow
+  const deviceCodeProviderInfo = useMemo(() => {
     if (!providerMetadata) return null;
     const info = providerMetadata.find(
       (p) =>
@@ -108,180 +82,22 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   }, [selectedProvider, providerMetadata]);
   const isDeviceCodeProvider = deviceCodeProviderInfo != null;
 
+  const handleDeviceCodeSuccess = useCallback(
+    (apiKey: string) => { form.setFieldValue("api_key", apiKey); },
+    [form],
+  );
+
+  const { reset: resetDeviceCode, renderUI: renderDeviceCodeFlow } = useDeviceCodeFlow({
+    accessToken,
+    providerInfo: deviceCodeProviderInfo,
+    onSuccess: handleDeviceCodeSuccess,
+  });
+
   // Reset device code state when provider changes away from a device_code provider
   useEffect(() => {
-    if (!isDeviceCodeProvider) {
-      stopGhPolling();
-      setGhDeviceCodeState({ phase: "idle" });
-      ghAccessTokenRef.current = null;
-    }
-  }, [isDeviceCodeProvider, stopGhPolling]);
+    if (!isDeviceCodeProvider) resetDeviceCode();
+  }, [isDeviceCodeProvider, resetDeviceCode]);
 
-  const handleGhStartDeviceCode = async () => {
-    if (!accessToken || !deviceCodeProviderInfo) return;
-    const litellmProvider = deviceCodeProviderInfo.litellm_provider;
-    const providerLabel = deviceCodeProviderInfo.provider_display_name || litellmProvider;
-
-    try {
-      let deviceId: string;
-      let userCode: string;
-      let verificationUri: string;
-      let pollIntervalMs: number;
-
-      if (litellmProvider === "chatgpt") {
-        const result = await chatgptInitiateAuth(accessToken);
-        deviceId = result.device_auth_id;
-        userCode = result.user_code;
-        verificationUri = result.verification_uri;
-        pollIntervalMs = result.poll_interval_ms;
-      } else {
-        const result = await githubCopilotInitiateAuth(accessToken);
-        deviceId = result.device_code;
-        userCode = result.user_code;
-        verificationUri = result.verification_uri;
-        pollIntervalMs = result.poll_interval_ms;
-      }
-
-      setGhDeviceCodeState({
-        phase: "polling",
-        deviceCode: deviceId,
-        userCode,
-        verificationUri,
-      });
-      let currentPollInterval = pollIntervalMs || 5000;
-
-      const schedulePoll = (delayMs: number) => {
-        ghPollingRef.current = setTimeout(async () => {
-          try {
-            let apiKey: string | undefined;
-            let failed = false;
-            let errorMsg: string | undefined;
-            let retryAfterMs: number | undefined;
-
-            if (litellmProvider === "chatgpt") {
-              const status = await chatgptCheckStatus(accessToken, deviceId, userCode);
-              console.log(`[${providerLabel} AddModel] poll response:`, status);
-              if (status.status === "complete" && status.refresh_token) {
-                apiKey = status.refresh_token;
-              } else if (status.status === "failed") {
-                failed = true;
-                errorMsg = status.error;
-              }
-            } else {
-              const status = await githubCopilotCheckStatus(accessToken, deviceId);
-              console.log(`[${providerLabel} AddModel] poll response:`, status);
-              if (status.status === "complete" && status.access_token) {
-                apiKey = status.access_token;
-              } else if (status.status === "failed") {
-                failed = true;
-                errorMsg = status.error;
-              } else {
-                retryAfterMs = status.retry_after_ms ?? undefined;
-              }
-            }
-
-            if (apiKey) {
-              stopGhPolling();
-              ghAccessTokenRef.current = apiKey;
-              form.setFieldValue("api_key", apiKey);
-              setGhDeviceCodeState({ phase: "success" });
-            } else if (failed) {
-              stopGhPolling();
-              setGhDeviceCodeState({ phase: "error", message: errorMsg || "Authorization failed" });
-            } else {
-              if (retryAfterMs != null) {
-                currentPollInterval = retryAfterMs;
-              }
-              schedulePoll(currentPollInterval);
-            }
-          } catch (e) {
-            console.error(`[${providerLabel} AddModel] poll error:`, e);
-            stopGhPolling();
-            setGhDeviceCodeState({ phase: "error", message: "Failed to check authorization status" });
-          }
-        }, delayMs);
-      };
-      schedulePoll(currentPollInterval);
-    } catch {
-      NotificationsManager.error(`Failed to start ${providerLabel} authorization`);
-      setGhDeviceCodeState({ phase: "error", message: `Failed to start ${providerLabel} authorization` });
-    }
-  };
-
-  const handleGhCancel = () => {
-    stopGhPolling();
-    setGhDeviceCodeState({ phase: "idle" });
-    ghAccessTokenRef.current = null;
-  };
-
-  const dcProviderLabel = deviceCodeProviderInfo?.provider_display_name || "Provider";
-
-  const renderGhDeviceCodeFlow = () => {
-    switch (ghDeviceCodeState.phase) {
-      case "idle":
-        return (
-          <div className="mt-2 text-center">
-            <Button
-              type="primary"
-              onClick={handleGhStartDeviceCode}
-            >
-              Authorize with {dcProviderLabel}
-            </Button>
-          </div>
-        );
-      case "polling":
-        return (
-          <div className="text-center py-2">
-            <Typography.Text className="block mb-2">Enter this code to authorize:</Typography.Text>
-            <div
-              style={{
-                fontSize: "1.8rem",
-                fontWeight: "bold",
-                fontFamily: "monospace",
-                letterSpacing: "0.3em",
-                margin: "12px 0",
-                padding: "10px 20px",
-                background: "#f5f5f5",
-                borderRadius: 8,
-                display: "inline-block",
-                userSelect: "all",
-              }}
-            >
-              {ghDeviceCodeState.userCode}
-            </div>
-            <div className="mb-3">
-              <Button type="link" onClick={() => window.open(ghDeviceCodeState.verificationUri, "_blank")}>
-                Open {ghDeviceCodeState.verificationUri}
-              </Button>
-            </div>
-            <Spin />
-            <Typography.Text className="block mt-2 mb-3" type="secondary">Waiting for {dcProviderLabel} authorization...</Typography.Text>
-            <Button onClick={handleGhCancel}>Cancel</Button>
-          </div>
-        );
-      case "success":
-        return (
-          <div className="text-center py-2">
-            <Typography.Text type="success" className="block mb-2">
-              ✓ Authorization complete! Submit the form to add the model.
-            </Typography.Text>
-          </div>
-        );
-      case "error":
-        return (
-          <div className="text-center py-2">
-            <Typography.Text type="danger" className="block mb-3">{ghDeviceCodeState.message}</Typography.Text>
-            <Button
-              style={{ marginRight: 8 }}
-              onClick={() => setGhDeviceCodeState({ phase: "idle" })}
-            >
-              Retry
-            </Button>
-            <Button onClick={handleGhCancel}>Cancel</Button>
-          </div>
-        );
-    }
-  };
   const { data: guardrailsList, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
 
@@ -490,7 +306,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <div className="flex-grow border-t border-gray-200"></div>
                           </div>
                           {isDeviceCodeProvider ? (
-                            renderGhDeviceCodeFlow()
+                            renderDeviceCodeFlow()
                           ) : (
                             <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
                           )}

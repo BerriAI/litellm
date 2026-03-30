@@ -113,16 +113,19 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
-def _fetch_github_login(api_key: str) -> Optional[str]:
+async def _fetch_github_login(api_key: str) -> Optional[str]:
     """
     Call GET https://api.github.com/user with the given GitHub access token
     and return the login name, or None if the call fails.
     """
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
 
     try:
-        sync_client = _get_httpx_client()
-        resp = sync_client.get(
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SSO_HANDLER
+        )
+        resp = await async_client.get(
             "https://api.github.com/user",
             headers={
                 "Authorization": f"token {api_key}",
@@ -159,13 +162,18 @@ async def get_credentials(
             if credential_info.get("custom_llm_provider") == "github_copilot":
                 api_key = (credential.credential_values or {}).get("api_key")
                 if api_key:
-                    github_login = _fetch_github_login(api_key)
+                    github_login = await _fetch_github_login(api_key)
                     if github_login:
-                        credential_info = {**credential_info, "github_login": github_login}
+                        credential_info = {
+                            **credential_info,
+                            "github_login": github_login,
+                        }
             masked_credentials.append(
                 {
                     "credential_name": credential.credential_name,
-                    "credential_values": _get_masked_values(credential.credential_values),
+                    "credential_values": _get_masked_values(
+                        credential.credential_values
+                    ),
                     "credential_info": credential_info,
                 }
             )

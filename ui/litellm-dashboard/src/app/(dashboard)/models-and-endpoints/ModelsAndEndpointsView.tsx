@@ -72,7 +72,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { data: credentialsResponse, isLoading: isLoadingCredentials, refetch: refetchCredentials } = useCredentials();
+  const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
   const { data: uiSettings, isLoading: isLoadingUISettings } = useUISettings();
 
@@ -421,7 +421,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                       setShowAdvancedSettings={setShowAdvancedSettings}
                       teams={teams}
                       credentials={credentialsList}
-                      refetchCredentials={refetchCredentials}
                       accessToken={accessToken}
                       userRole={userRole}
                     />

@@ -158,24 +158,20 @@ class Authenticator:
             )
 
     def _refresh_tokens_credential_mode(self, refresh_token: str) -> Dict[str, str]:
-        """Refresh tokens without writing to disk (credential mode).
-
-        Uses a raw httpx.Client to avoid litellm's wrapper which can add
-        extra headers or interfere with OAuth token exchange calls.
-        """
+        """Refresh tokens without writing to disk (credential mode)."""
         try:
-            with httpx.Client() as client:
-                resp = client.post(
-                    CHATGPT_OAUTH_TOKEN_URL,
-                    json={
-                        "client_id": CHATGPT_CLIENT_ID,
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh_token,
-                        "scope": "openid profile email",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            client = _get_httpx_client()
+            resp = client.post(
+                CHATGPT_OAUTH_TOKEN_URL,
+                json={
+                    "client_id": CHATGPT_CLIENT_ID,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "scope": "openid profile email",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             raise RefreshAccessTokenError(
                 message=f"Refresh token failed: {exc}",

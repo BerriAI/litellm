@@ -328,7 +328,7 @@ class ProxyInitializationHelpers:
             import uvloop  # noqa: F401
 
             return "uvloop"
-        except (ImportError, Exception):
+        except ImportError:
             return "asyncio"
 
     @staticmethod

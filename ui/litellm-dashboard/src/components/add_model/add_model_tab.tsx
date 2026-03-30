@@ -23,7 +23,6 @@ interface AddModelTabProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
   credentials: CredentialItem[];
-  refetchCredentials?: () => void;
   accessToken: string;
   userRole: string;
 }
@@ -41,7 +40,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   setShowAdvancedSettings,
   teams,
   credentials,
-  refetchCredentials,
   accessToken,
   userRole,
 }) => {
@@ -81,7 +79,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
               credentials={credentials}
-              refetchCredentials={refetchCredentials}
             />
           </TabPanel>
           <TabPanel>
