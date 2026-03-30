@@ -1965,7 +1965,7 @@
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": false,
+        "responses": true,
         "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": true,
