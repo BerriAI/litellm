@@ -15,7 +15,18 @@ import inspect
 import os
 import secrets
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlencode, urlparse
 
 if TYPE_CHECKING:
@@ -193,7 +204,7 @@ def process_sso_jwt_access_token(
     sso_jwt_handler: Optional[JWTHandler],
     result: Union[OpenID, dict, None],
     role_mappings: Optional["RoleMappings"] = None,
-) -> None:
+) -> Optional[dict]:
     """
     Process SSO JWT access token and extract team IDs and user role if available.
 
@@ -207,6 +218,12 @@ def process_sso_jwt_access_token(
         sso_jwt_handler: SSO-specific JWT handler for team ID extraction
         result: The SSO result object to update with team IDs and role
         role_mappings: Optional role mappings configuration for group-based role determination
+
+    Returns:
+        The decoded access token payload dict, or None if decoding failed or
+        inputs were missing. Callers can pass this to _sync_user_role_from_jwt_role_map
+        so it has access to custom role claims (e.g. custom_roles) that are
+        encoded inside the JWT but stripped from received_response.
     """
     if access_token_str and result:
         import jwt
@@ -219,7 +236,7 @@ def process_sso_jwt_access_token(
             verbose_proxy_logger.debug(
                 "Access token is not a valid JWT (possibly an opaque token), skipping JWT-based extraction"
             )
-            return
+            return None
 
         # Extract team IDs from access token if sso_jwt_handler is available
         if sso_jwt_handler:
@@ -295,6 +312,10 @@ def process_sso_jwt_access_token(
                     f"Set user_role='{user_role}' from JWT access token"
                 )
 
+        return access_token_payload
+
+    return None
+
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
@@ -338,7 +359,7 @@ async def google_login(
                 total_users = await prisma_client.db.litellm_usertable.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -404,14 +425,14 @@ async def google_login(
             state=cli_state,
         )
         if return_to is not None and sso_redirect is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-            sso_redirect.set_cookie(
-                key="litellm_cp_return_to",
-                value=return_to,
-                max_age=600,
-                httponly=True,
-                samesite="lax",
-            )
+            if SSOAuthenticationHandler._validate_return_to(return_to):
+                sso_redirect.set_cookie(
+                    key="litellm_cp_return_to",
+                    value=return_to,
+                    max_age=600,
+                    httponly=True,
+                    samesite="lax",
+                )
         return sso_redirect
     elif ui_username is not None:
         # No Google, Microsoft SSO
@@ -745,7 +766,7 @@ def _handle_generic_sso_error(
     generic_authorization_endpoint: Optional[str],
     generic_token_endpoint: Optional[str],
     additional_headers: dict,
-) -> None:
+) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message = str(e)
 
@@ -806,7 +827,7 @@ async def get_generic_sso_response(
     ],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
-) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
+) -> Tuple[Union[OpenID, dict], Optional[dict], Optional[dict]]:  # (result, received_response, access_token_payload)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
     from fastapi_sso.sso.generic import create_provider
@@ -861,6 +882,7 @@ async def get_generic_sso_response(
     code_verifier: Optional[
         str
     ] = None  # assigned inside try; initialized for type tracking
+    access_token_payload: Optional[dict] = None  # decoded JWT access token claims
 
     try:
         token_exchange_params = (
@@ -947,7 +969,7 @@ async def get_generic_sso_response(
             )
             access_token_str = generic_sso.access_token
 
-        process_sso_jwt_access_token(
+        access_token_payload = process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
         )
         # Delete the single-use PKCE verifier only after all downstream processing
@@ -965,7 +987,7 @@ async def get_generic_sso_response(
             additional_generic_sso_headers_dict,
         )
     verbose_proxy_logger.debug("generic result: %s", result)
-    return result or {}, received_response
+    return result or {}, received_response, access_token_payload
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -1165,6 +1187,56 @@ def _build_sso_user_update_data(
     return update_data
 
 
+async def _sync_user_role_from_jwt_role_map(
+    jwt_handler: Optional[JWTHandler],
+    received_response: Optional[dict],
+    user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    user_defined_values: Optional[SSOUserDefinedValues],
+) -> None:
+    """
+    Apply jwt_litellm_role_map during SSO login.
+
+    When jwt_litellm_role_map is configured with sync_user_role_and_teams=True,
+    this ensures SSO users get the same role mapping as API/JWT users. Without
+    this, the SSO path falls back to INTERNAL_USER_VIEW_ONLY for roles that
+    don't directly match LitellmUserRoles enum values.
+    """
+    if jwt_handler is None or received_response is None:
+        return
+    if not jwt_handler.litellm_jwtauth.sync_user_role_and_teams:
+        return
+    if not jwt_handler.litellm_jwtauth.jwt_litellm_role_map:
+        return
+
+    mapped_role = jwt_handler.map_jwt_role_to_litellm_role(received_response)
+    if mapped_role is None:
+        return
+
+    verbose_proxy_logger.info(
+        f"SSO jwt_litellm_role_map matched role: {mapped_role.value}"
+    )
+
+    # Update user_defined_values so downstream code uses the mapped role
+    if user_defined_values is not None:
+        user_defined_values["user_role"] = mapped_role.value
+
+    # Update existing DB record if role differs
+    if user_info is not None and user_info.user_role != mapped_role.value:
+        await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user_info.user_id},
+            data={"user_role": mapped_role.value},
+        )
+        user_info.user_role = mapped_role.value
+        await user_api_key_cache.async_set_cache(
+            key=user_info.user_id,
+            value=user_info.model_dump()
+            if hasattr(user_info, "model_dump")
+            else dict(user_info),
+        )
+
+
 def apply_user_info_values_to_sso_user_defined_values(
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
     user_defined_values: Optional[SSOUserDefinedValues],
@@ -1268,6 +1340,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
     received_response: Optional[dict] = None
+    access_token_payload: Optional[dict] = None
     # get url from request
     if master_key is None:
         raise ProxyException(
@@ -1296,7 +1369,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     elif generic_client_id is not None:
-        result, received_response = await get_generic_sso_response(
+        result, received_response, access_token_payload = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,
@@ -1334,6 +1407,8 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         received_response=received_response,
         generic_client_id=generic_client_id,
         ui_access_mode=ui_access_mode,
+        access_token_payload=access_token_payload,
+        jwt_handler=jwt_handler,
         return_to=cp_return_to,
     )
 
@@ -1778,22 +1853,19 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
-    def _validate_return_to(return_to: str) -> None:
+    def _validate_return_to(return_to: str) -> bool:
         """
         Validate that return_to matches the configured control_plane_url origin.
 
-        Raises HTTPException(400) if:
-        - control_plane_url is not configured in general_settings
-        - return_to origin does not match control_plane_url origin
+        Returns True if return_to is valid and should be used.
+        Returns False if control_plane_url is not configured (return_to is ignored).
+        Raises HTTPException(400) if return_to origin does not match control_plane_url origin.
         """
         from litellm.proxy.proxy_server import general_settings
 
         control_plane_url = general_settings.get("control_plane_url")
         if control_plane_url is None:
-            raise HTTPException(
-                status_code=400,
-                detail="return_to is not allowed: control_plane_url is not configured",
-            )
+            return False
 
         def _origin(url: str) -> tuple:
             parsed = urlparse(url)
@@ -1808,6 +1880,8 @@ class SSOAuthenticationHandler:
                 status_code=400,
                 detail="return_to does not match the configured control_plane_url",
             )
+
+        return True
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -2407,6 +2481,8 @@ class SSOAuthenticationHandler:
         received_response: Optional[dict] = None,
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
+        access_token_payload: Optional[dict] = None,
+        jwt_handler: Optional[JWTHandler] = None,
         return_to: Optional[str] = None,
     ) -> RedirectResponse:
         import jwt
@@ -2486,6 +2562,20 @@ class SSOAuthenticationHandler:
             user_email=user_email,
             user_defined_values=user_defined_values,
             alternate_user_id=user_id,
+        )
+
+        # Sync user role from JWT claims via jwt_litellm_role_map (if configured).
+        # This ensures SSO users get the same role mapping as API/JWT users.
+        # Use the decoded access_token_payload (not received_response) because
+        # custom role claims (e.g. custom_roles) are encoded inside the JWT
+        # access token, which is stripped from received_response.
+        await _sync_user_role_from_jwt_role_map(
+            jwt_handler=jwt_handler,
+            received_response=access_token_payload or received_response,
+            user_info=user_info,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_defined_values=user_defined_values,
         )
 
         user_defined_values = apply_user_info_values_to_sso_user_defined_values(
@@ -2589,9 +2679,9 @@ class SSOAuthenticationHandler:
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.
         # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None:
-            SSOAuthenticationHandler._validate_return_to(return_to)
-
+        if return_to is not None and SSOAuthenticationHandler._validate_return_to(
+            return_to
+        ):
             code = secrets.token_urlsafe(32)
             cache_key = f"login_code:{code}"
             cache_value = {"token": jwt_token, "redirect_url": return_to}
@@ -3604,7 +3694,7 @@ async def debug_sso_login(request: Request):
     ):
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
@@ -3693,7 +3783,7 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result, _ = await get_generic_sso_response(
+        result, _, _ = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,

@@ -6,6 +6,7 @@ These are members of a Team on LiteLLM
 
 /user/new
 /user/update
+/user/bulk_update
 /user/delete
 /user/info
 /user/list
@@ -24,13 +25,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
@@ -557,6 +558,18 @@ def get_team_from_list(
     return None
 
 
+def _is_valid_user_id(user_id: str) -> bool:
+    """Validate that a decoded user_id is safe to use downstream."""
+    MAX_USER_ID_LENGTH = 512
+    if len(user_id) > MAX_USER_ID_LENGTH:
+        return False
+    # Reject ASCII control characters (U+0000–U+001F)
+    for ch in user_id:
+        if ord(ch) < 0x20:
+            return False
+    return True
+
+
 def get_user_id_from_request(request: Request) -> Optional[str]:
     """
     Get the user id from the request
@@ -573,7 +586,8 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
         if match:
             # Use unquote instead of unquote_plus to preserve + characters
             raw_user_id = unquote(match.group(1))
-            user_id = raw_user_id
+            if _is_valid_user_id(raw_user_id):
+                user_id = raw_user_id
     return user_id
 
 
