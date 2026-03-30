@@ -23,7 +23,6 @@ from ...common_utils import (
     optionally_handle_anthropic_oauth,
 )
 
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
 
@@ -118,31 +117,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
-    @staticmethod
-    def _strip_schema_from_tools(tools: List[Dict]) -> List[Dict]:
-        """
-        Remove the ``$schema`` key from each tool's ``input_schema``.
-
-        Anthropic's API does not accept ``$schema`` inside
-        ``input_schema`` and will reject the request with a validation
-        error.  Callers such as Claude Code routinely include this field,
-        so we strip it before forwarding the request.
-        """
-        sanitized_tools: List[Dict] = []
-        for tool in tools:
-            if isinstance(tool, dict) and isinstance(
-                tool.get("input_schema"), dict
-            ):
-                if "$schema" in tool["input_schema"]:
-                    tool = {**tool}  # shallow copy to avoid mutating caller data
-                    tool["input_schema"] = {
-                        k: v
-                        for k, v in tool["input_schema"].items()
-                        if k != "$schema"
-                    }
-            sanitized_tools.append(tool)
-        return sanitized_tools
-
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -152,7 +126,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = api_base or DEFAULT_ANTHROPIC_API_BASE
+        api_base = (
+            AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
+        )
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base}/v1/messages"
         return api_base
@@ -167,17 +143,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Tuple[dict, Optional[str]]:
-        import os
-
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(
             headers=headers, api_key=api_key
         )
-        if api_key is None:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
 
-        if "x-api-key" not in headers and "authorization" not in headers and api_key:
-            headers["x-api-key"] = api_key
+        if "x-api-key" not in headers and "authorization" not in headers:
+            auth_header = AnthropicModelInfo.get_auth_header(api_key)
+            if auth_header is not None:
+                headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
@@ -237,16 +211,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 anthropic_messages_optional_request_params[
                     "context_management"
                 ] = transformed_context_management
-
-        # Strip unsupported $schema field from tool input_schema objects.
-        # Clients like Claude Code include $schema in tool definitions, but
-        # Anthropic's API rejects unknown fields.  PR #23103 fixed this for
-        # the /v1/chat/completions path; apply the same sanitisation here.
-        tools = anthropic_messages_optional_request_params.get("tools")
-        if tools:
-            anthropic_messages_optional_request_params["tools"] = (
-                self._strip_schema_from_tools(tools)
-            )
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
