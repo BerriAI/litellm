@@ -151,9 +151,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # finish-reason chunks, and translate_streaming_openai_response_to_anthropic
                     # only emits MessageBlockDelta for finish-reason chunks — so
                     # processed_chunk is always a ContentBlockDelta here.
-                    assert processed_chunk.get("type") == "content_block_delta", (
-                        f"Expected content_block_delta, got {processed_chunk.get('type')}"
-                    )
+                    assert (
+                        processed_chunk.get("type") == "content_block_delta"
+                    ), f"Expected content_block_delta, got {processed_chunk.get('type')}"
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
 
@@ -292,16 +292,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_creation_input_tokens"
-                        ] = chunk.usage._cache_creation_input_tokens
+                        usage_dict["cache_creation_input_tokens"] = (
+                            chunk.usage._cache_creation_input_tokens
+                        )
                     if (
                         hasattr(chunk.usage, "_cache_read_input_tokens")
                         and chunk.usage._cache_read_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_read_input_tokens"
-                        ] = chunk.usage._cache_read_input_tokens
+                        usage_dict["cache_read_input_tokens"] = (
+                            chunk.usage._cache_read_input_tokens
+                        )
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -344,9 +344,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         # finish-reason chunks, and translate_streaming_openai_response_to_anthropic
                         # only emits MessageBlockDelta for finish-reason chunks — so
                         # processed_chunk is always a ContentBlockDelta here.
-                        assert processed_chunk.get("type") == "content_block_delta", (
-                            f"Expected content_block_delta, got {processed_chunk.get('type')}"
-                        )
+                        assert (
+                            processed_chunk.get("type") == "content_block_delta"
+                        ), f"Expected content_block_delta, got {processed_chunk.get('type')}"
                         self.chunk_queue.append(processed_chunk)
 
                         # Return the first queued item
