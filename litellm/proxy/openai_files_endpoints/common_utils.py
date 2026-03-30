@@ -773,8 +773,10 @@ async def get_batch_from_database(
         # Enterprise managed_files post_call_success_hook needs these to unify
         # output_file_id / error_file_id when the batch is served from DB (terminal state).
         # Without them, output_file_id stays a raw provider id (e.g. file-batch-output-...).
-        if not hasattr(response, "_hidden_params") or response._hidden_params is None:
-            response._hidden_params = {}
+        # Always create a per-instance hidden params dict.
+        # LiteLLMBatch declares `_hidden_params` at class level, so relying on
+        # `hasattr()` can accidentally mutate shared state across instances.
+        response._hidden_params = {}
         if unified_batch_id:
             response._hidden_params["unified_batch_id"] = unified_batch_id
             model_id = get_model_id_from_unified_batch_id(unified_batch_id)

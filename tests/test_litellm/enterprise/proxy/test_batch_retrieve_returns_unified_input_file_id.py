@@ -10,7 +10,6 @@ without resolving it to the unified ID.
 
 import json
 import pytest
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.openai_files_endpoints.common_utils import get_batch_from_database
@@ -122,3 +121,51 @@ async def test_should_preserve_already_managed_input_file_id():
     )
 
     prisma.db.litellm_managedfiletable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_should_not_share_hidden_params_between_batch_instances():
+    """
+    Each retrieved LiteLLMBatch should get its own instance-level _hidden_params
+    to avoid leaking unified_batch_id/model_id across requests.
+    """
+    import base64
+
+    decoded_unified = "litellm_proxy:application/octet-stream;unified_id,test-123"
+    base64_input_file_id = (
+        base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    )
+
+    batch_data = {
+        "id": "batch-raw-123",
+        "completion_window": "24h",
+        "created_at": 1700000000,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": base64_input_file_id,
+        "object": "batch",
+        "status": "completed",
+    }
+
+    prisma_1 = _mock_prisma(batch_json=json.dumps(batch_data))
+    _, response_1 = await get_batch_from_database(
+        batch_id="batch-1",
+        unified_batch_id="litellm_proxy;model_id:model-a;llm_batch_id:batch-1",
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_1,
+        verbose_proxy_logger=MagicMock(),
+    )
+
+    prisma_2 = _mock_prisma(batch_json=json.dumps(batch_data))
+    _, response_2 = await get_batch_from_database(
+        batch_id="batch-2",
+        unified_batch_id="litellm_proxy;model_id:model-b;llm_batch_id:batch-2",
+        managed_files_obj=MagicMock(),
+        prisma_client=prisma_2,
+        verbose_proxy_logger=MagicMock(),
+    )
+
+    assert response_1 is not None
+    assert response_2 is not None
+    assert response_1._hidden_params is not response_2._hidden_params
+    assert response_1._hidden_params["model_id"] == "model-a"
+    assert response_2._hidden_params["model_id"] == "model-b"
