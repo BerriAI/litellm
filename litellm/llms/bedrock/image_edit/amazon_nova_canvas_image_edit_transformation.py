@@ -489,7 +489,7 @@ def get_bedrock_image_edit_config_for_model(
     """
     import litellm as _litellm
 
-    from litellm._logging import verbose_logger
+    from litellm.llms.bedrock.image_edit.stability_transformation import (
     from litellm.llms.bedrock.image_edit.stability_transformation import (
         BedrockStabilityImageEditConfig,
     )
