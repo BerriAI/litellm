@@ -15,7 +15,6 @@ All /budget management endpoints
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from prisma.errors import UniqueViolationError
 
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
@@ -48,6 +47,8 @@ async def new_budget(
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
+    from prisma.errors import UniqueViolationError
+
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
@@ -99,7 +100,9 @@ async def new_budget(
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }  # type: ignore
         )
-    except UniqueViolationError:
+    except Exception as e:
+        if not isinstance(e, UniqueViolationError):
+            raise
         raise HTTPException(
             status_code=400,
             detail={
