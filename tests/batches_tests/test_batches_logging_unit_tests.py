@@ -172,27 +172,29 @@ def test_get_response_from_batch_job_output_file(sample_file_content_dict):
 
 
 @pytest.mark.asyncio
-async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cost():
+@pytest.mark.parametrize("terminal_status", ["completed", "complete"])
+async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cost(
+    terminal_status: str,
+):
     """
-    Test that cost is calculated for completed batches when no explicit cost data is provided.
-    
-    Regression test for: When batch status is "completed" and explicit batch_cost/batch_usage/batch_models
-    are not provided, the system should compute batch data by calling _handle_completed_batch.
+    Test that cost is calculated for terminal batches when no explicit cost data is provided.
+
+    Regression: status "completed" (OpenAI) or "complete" (DB-normalized) triggers
+    _handle_completed_batch when explicit batch_cost/batch_usage/batch_models are absent.
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import CallTypes
     from litellm.types.utils import LiteLLMBatch
     from unittest.mock import AsyncMock, patch
-    
-    # Mock batch result with completed status
-    mock_batch = LiteLLMBatch(
+
+    _batch_fields = dict(
         id="batch-test-123",
         object="batch",
         endpoint="/v1/chat/completions",
         errors=None,
         input_file_id="file-input-123",
         completion_window="24h",
-        status="completed",
+        status=terminal_status,
         output_file_id="file-output-123",
         error_file_id=None,
         created_at=1234567890,
@@ -211,6 +213,12 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         },
         metadata=None,
     )
+    # LiteLLMBatch.status Literal matches OpenAI, not DB-normalized "complete"; use
+    # model_construct so we can still test isinstance(LiteLLMBatch) + status "complete".
+    if terminal_status == "complete":
+        mock_batch = LiteLLMBatch.model_construct(**_batch_fields)
+    else:
+        mock_batch = LiteLLMBatch(**_batch_fields)
     mock_batch._hidden_params = {}
     
     # Create logging object

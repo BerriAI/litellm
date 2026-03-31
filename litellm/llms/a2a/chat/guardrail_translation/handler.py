@@ -216,6 +216,71 @@ class A2AGuardrailHandler(BaseTranslation):
             response["result"] = result
             return response
 
+    def _ensure_a2a_streaming_request_data(
+        self,
+        request_data: Optional[dict],
+        responses_so_far: List[Any],
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+    ) -> dict:
+        if request_data is None:
+            request_data = {"responses_so_far": responses_so_far}
+        elif "responses_so_far" not in request_data:
+            request_data["responses_so_far"] = responses_so_far
+
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+        return request_data
+
+    def _spread_guardrailed_text_into_a2a_stream_chunks(
+        self,
+        valid_parsed: List[Tuple[int, Dict[str, Any]]],
+        first_chunk_with_text: Optional[int],
+        guardrailed_text: str,
+    ) -> None:
+        for orig_i, obj in valid_parsed:
+            result = obj.get("result", {})
+            if not isinstance(result, dict):
+                continue
+            texts_in_chunk: List[str] = []
+            mappings: List[Tuple[Tuple[str, ...], int]] = []
+            self._extract_texts_from_result(
+                result=result,
+                texts_to_check=texts_in_chunk,
+                task_mappings=mappings,
+            )
+            if not mappings:
+                continue
+            if orig_i == first_chunk_with_text:
+                for task_idx, (path, part_idx) in enumerate(mappings):
+                    text = guardrailed_text if task_idx == 0 else ""
+                    self._apply_text_to_path(
+                        result=result,
+                        path=path,
+                        part_idx=part_idx,
+                        text=text,
+                    )
+            else:
+                for path, part_idx in mappings:
+                    self._apply_text_to_path(
+                        result=result,
+                        path=path,
+                        part_idx=part_idx,
+                        text="",
+                    )
+
+    def _write_a2a_parsed_back_to_ndjson_strings(
+        self,
+        responses_so_far: List[Any],
+        parsed: List[Optional[Dict[str, Any]]],
+    ) -> None:
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, str) and parsed[i] is not None:
+                responses_so_far[i] = json.dumps(parsed[i]) + "\n"
+
     async def process_output_streaming_response(
         self,
         responses_so_far: List[Any],
@@ -238,24 +303,15 @@ class A2AGuardrailHandler(BaseTranslation):
         if not valid_parsed:
             return responses_so_far
 
-        combined_text, chunk_indices_with_text = (
-            self._collect_text_from_parsed_chunks(valid_parsed)
+        combined_text, chunk_indices_with_text = self._collect_text_from_parsed_chunks(
+            valid_parsed
         )
         if not combined_text:
             return responses_so_far
 
-        if request_data is None:
-            request_data = {"responses_so_far": responses_so_far}
-        else:
-            if "responses_so_far" not in request_data:
-                request_data["responses_so_far"] = responses_so_far
-
-        if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+        request_data = self._ensure_a2a_streaming_request_data(
+            request_data, responses_so_far, user_api_key_dict
+        )
 
         inputs = GenericGuardrailAPIInputs(texts=[combined_text])
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
@@ -269,56 +325,21 @@ class A2AGuardrailHandler(BaseTranslation):
             return responses_so_far
         guardrailed_text = guardrailed_texts[0]
 
-        # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
         first_chunk_with_text: Optional[int] = (
             chunk_indices_with_text[0] if chunk_indices_with_text else None
         )
-
-        for orig_i, obj in valid_parsed:
-            result = obj.get("result", {})
-            if not isinstance(result, dict):
-                continue
-            texts_in_chunk: List[str] = []
-            mappings: List[Tuple[Tuple[str, ...], int]] = []
-            self._extract_texts_from_result(
-                result=result,
-                texts_to_check=texts_in_chunk,
-                task_mappings=mappings,
-            )
-            if not mappings:
-                continue
-            if orig_i == first_chunk_with_text:
-                # Put full guardrailed text in first text part; clear others
-                for task_idx, (path, part_idx) in enumerate(mappings):
-                    text = guardrailed_text if task_idx == 0 else ""
-                    self._apply_text_to_path(
-                        result=result,
-                        path=path,
-                        part_idx=part_idx,
-                        text=text,
-                    )
-            else:
-                for path, part_idx in mappings:
-                    self._apply_text_to_path(
-                        result=result,
-                        path=path,
-                        part_idx=part_idx,
-                        text="",
-                    )
-
-        # Write back to responses_so_far where we had NDJSON strings
-        for i, item in enumerate(responses_so_far):
-            if isinstance(item, str) and parsed[i] is not None:
-                responses_so_far[i] = json.dumps(parsed[i]) + "\n"
-
+        self._spread_guardrailed_text_into_a2a_stream_chunks(
+            valid_parsed=valid_parsed,
+            first_chunk_with_text=first_chunk_with_text,
+            guardrailed_text=guardrailed_text,
+        )
+        self._write_a2a_parsed_back_to_ndjson_strings(responses_so_far, parsed)
         return responses_so_far
 
     def _parse_streaming_responses(
         self,
         responses_so_far: List[Any],
-    ) -> Tuple[
-        List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]
-    ]:
+    ) -> Tuple[List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
         parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):

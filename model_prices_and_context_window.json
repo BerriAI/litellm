@@ -22033,6 +22033,22 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "mistral/mistral-small-2603": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-07,
+        "source": "https://mistral.ai/pricing",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "mistral/mistral-small-3-2-2506": {
         "input_cost_per_token": 6e-08,
         "litellm_provider": "mistral",

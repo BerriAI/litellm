@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import traceback
 from datetime import datetime
 from typing import Any, List, Optional, Union, cast
@@ -24,6 +25,11 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+def _get_proxy_server_attr(name: str) -> Any:
+    proxy_server_module = importlib.import_module("litellm.proxy.proxy_server")
+    return getattr(proxy_server_module, name)
+
+
 class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(
@@ -46,7 +52,7 @@ class _ProxyDBLogger(CustomLogger):
         ):
             return
 
-        from litellm.proxy.proxy_server import proxy_logging_obj
+        proxy_logging_obj = _get_proxy_server_attr("proxy_logging_obj")
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
@@ -135,11 +141,9 @@ class _ProxyDBLogger(CustomLogger):
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
-        from litellm.proxy.proxy_server import (
-            increment_spend_counters,
-            proxy_logging_obj,
-            update_cache,
-        )
+        increment_spend_counters = _get_proxy_server_attr("increment_spend_counters")
+        proxy_logging_obj = _get_proxy_server_attr("proxy_logging_obj")
+        update_cache = _get_proxy_server_attr("update_cache")
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
         try:

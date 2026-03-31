@@ -41,6 +41,22 @@ from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 router = APIRouter()
 
 
+def _get_model_id_for_batch_file_id_encoding(batch_id: str) -> Optional[str]:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_model_id_for_batch_file_id_encoding,
+    )
+
+    return get_model_id_for_batch_file_id_encoding(batch_id)
+
+
+def _encode_raw_batch_output_error_file_ids(response: Any, model: str) -> None:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_raw_batch_output_error_file_ids,
+    )
+
+    encode_raw_batch_output_error_file_ids(response, model=model)
+
+
 @router.post(
     "/{provider}/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
@@ -426,6 +442,66 @@ async def retrieve_batch(  # noqa: PLR0915
                 await resolve_input_file_id_to_unified(response, prisma_client)
                 await resolve_output_file_ids_to_unified(response, prisma_client)
 
+            model_for_file_encoding = _get_model_id_for_batch_file_id_encoding(batch_id)
+            if model_for_file_encoding:
+                _encode_raw_batch_output_error_file_ids(
+                    response, model=model_for_file_encoding
+                )
+
+            # Managed batches returned from DB skip litellm.aretrieve_batch, so the @client
+            # wrapper never runs async_success_handler — spend/S3 callbacks would be missing.
+            # Mirror litellm.utils._client_async_logging_helper for this path.
+            try:
+                if model_for_file_encoding and llm_router is not None:
+                    from litellm.litellm_core_utils.get_litellm_params import (
+                        get_litellm_params,
+                    )
+                    from litellm.litellm_core_utils.logging_worker import (
+                        GLOBAL_LOGGING_WORKER,
+                    )
+                    from litellm.types.router import GenericLiteLLMParams
+
+                    _creds = get_credentials_for_model(
+                        llm_router=llm_router,
+                        model_id=model_for_file_encoding,
+                        operation_context="batch retrieval (managed DB cache)",
+                    )
+                    _enriched: Dict = {**data, **_creds}
+                    _optional = GenericLiteLLMParams(**_enriched)
+                    _litellm_params = get_litellm_params(
+                        custom_llm_provider=_creds["custom_llm_provider"],
+                        **_enriched,
+                    )
+                    litellm_logging_obj.update_from_kwargs(
+                        kwargs=_enriched,
+                        model=model_for_file_encoding,
+                        user=None,
+                        optional_params=_optional.model_dump(exclude_none=True),
+                        litellm_params=_litellm_params,
+                        custom_llm_provider=_creds["custom_llm_provider"],
+                    )
+                    _batch_log_end = datetime.now()
+                    _batch_log_start = litellm_logging_obj.start_time
+                    if _batch_log_start is None:
+                        _batch_log_start = _batch_log_end
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                        async_coroutine=litellm_logging_obj.async_success_handler(
+                            result=response,
+                            start_time=_batch_log_start,
+                            end_time=_batch_log_end,
+                        )
+                    )
+                    litellm_logging_obj.handle_sync_success_callbacks_for_async_calls(
+                        result=response,
+                        start_time=_batch_log_start,
+                        end_time=_batch_log_end,
+                    )
+            except Exception as _db_cache_log_err:
+                verbose_proxy_logger.warning(
+                    "retrieve_batch: managed DB-cache success logging failed: %s",
+                    _db_cache_log_err,
+                )
+
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
                     litellm_call_id=data.get("litellm_call_id", ""), status="success"
@@ -541,6 +617,12 @@ async def retrieve_batch(  # noqa: PLR0915
         if unified_batch_id:
             await resolve_input_file_id_to_unified(response, prisma_client)
             await resolve_output_file_ids_to_unified(response, prisma_client)
+
+        model_for_file_encoding = _get_model_id_for_batch_file_id_encoding(batch_id)
+        if model_for_file_encoding:
+            _encode_raw_batch_output_error_file_ids(
+                response, model=model_for_file_encoding
+            )
 
         ### ALERTING ###
         asyncio.create_task(
