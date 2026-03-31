@@ -477,7 +477,7 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
         response = await litellm.acompletion(
             model="azure_ai/azure-model-router",
             messages=[{"role": "user", "content": "hi"}],
-            api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+            api_base=os.getenv("AZURE_MODEL_ROUTER_API_BASE"),
             api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
             stream=True,
             stream_options={"include_usage": True},
