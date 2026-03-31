@@ -337,9 +337,7 @@ async def list_prompts(
             for original_prompt in all_prompts:
                 # Create a copy with base prompt_id (without version suffix)
                 prompt_copy = PromptSpec(
-                    prompt_id=get_base_prompt_id(
-                        prompt_id=original_prompt.prompt_id
-                    ),
+                    prompt_id=get_base_prompt_id(prompt_id=original_prompt.prompt_id),
                     litellm_params=original_prompt.litellm_params,
                     prompt_info=original_prompt.prompt_info,
                     created_at=original_prompt.created_at,
@@ -447,16 +445,18 @@ async def get_prompt_versions(
         )
         for db_prompt in db_prompts:
             spec = create_versioned_prompt_spec(db_prompt=db_prompt)
-            versioned_prompts.append(PromptSpec(
-                prompt_id=base_prompt_id,
-                litellm_params=spec.litellm_params,
-                prompt_info=spec.prompt_info,
-                created_at=spec.created_at,
-                updated_at=spec.updated_at,
-                version=get_version_number(prompt_id=spec.prompt_id),
-                environment=spec.environment,
-                created_by=spec.created_by,
-            ))
+            versioned_prompts.append(
+                PromptSpec(
+                    prompt_id=base_prompt_id,
+                    litellm_params=spec.litellm_params,
+                    prompt_info=spec.prompt_info,
+                    created_at=spec.created_at,
+                    updated_at=spec.updated_at,
+                    version=get_version_number(prompt_id=spec.prompt_id),
+                    environment=spec.environment,
+                    created_by=spec.created_by,
+                )
+            )
     else:
         # Fallback: in-memory registry (no DB)
         all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
@@ -467,16 +467,18 @@ async def get_prompt_versions(
         ]
         for prompt in prompt_versions:
             version_number = get_version_number(prompt_id=prompt.prompt_id)
-            versioned_prompts.append(PromptSpec(
-                prompt_id=base_prompt_id,
-                litellm_params=prompt.litellm_params,
-                prompt_info=prompt.prompt_info,
-                created_at=prompt.created_at,
-                updated_at=prompt.updated_at,
-                version=version_number,
-                environment=prompt.environment,
-                created_by=prompt.created_by,
-            ))
+            versioned_prompts.append(
+                PromptSpec(
+                    prompt_id=base_prompt_id,
+                    litellm_params=prompt.litellm_params,
+                    prompt_info=prompt.prompt_info,
+                    created_at=prompt.created_at,
+                    updated_at=prompt.updated_at,
+                    version=version_number,
+                    environment=prompt.environment,
+                    created_by=prompt.created_by,
+                )
+            )
         versioned_prompts.sort(key=lambda p: p.version or 1, reverse=True)
 
     if not versioned_prompts:
@@ -563,17 +565,22 @@ async def get_prompt_info(
         all_prompt_rows = await prisma_client.db.litellm_prompttable.find_many(
             where={"prompt_id": base_prompt_id}
         )
-        all_environments = sorted(set(
-            row.environment for row in all_prompt_rows if row.environment
-        ))
+        all_environments = sorted(
+            set(row.environment for row in all_prompt_rows if row.environment)
+        )
 
     # If environment is specified, find the version in that environment from DB
     # If prompt_id has a version suffix (e.g., "testprompt.v2"), fetch that specific version
     # Otherwise fetch the latest version in that environment
     prompt_spec = None
-    requested_version = get_version_number(prompt_id=prompt_id) if prompt_id != base_prompt_id else None
+    requested_version = (
+        get_version_number(prompt_id=prompt_id) if prompt_id != base_prompt_id else None
+    )
     if environment and prisma_client is not None:
-        where_clause: Dict[str, Any] = {"prompt_id": base_prompt_id, "environment": environment}
+        where_clause: Dict[str, Any] = {
+            "prompt_id": base_prompt_id,
+            "environment": environment,
+        }
         if requested_version is not None:
             where_clause["version"] = requested_version
         env_prompts = await prisma_client.db.litellm_prompttable.find_many(
@@ -647,7 +654,9 @@ async def get_prompt_info(
                     )
 
                     if isinstance(prompt_callback, DotpromptManager):
-                        template = prompt_callback.prompt_manager.get_all_prompts_as_json()
+                        template = (
+                            prompt_callback.prompt_manager.get_all_prompts_as_json()
+                        )
                         if template is not None and len(template) == 1:
                             template_id = list(template.keys())[0]
                             prompt_template = PromptTemplateBase(

@@ -225,6 +225,7 @@ export interface PromptTemplateBase {
 interface PromptInfoResponse {
   prompt_spec: PromptSpec;
   raw_prompt_template: PromptTemplateBase | null;
+  environments?: string[];
 }
 
 export interface ListPromptsResponse {
