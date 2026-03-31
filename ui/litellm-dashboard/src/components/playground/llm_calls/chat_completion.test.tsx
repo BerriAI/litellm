@@ -312,4 +312,62 @@ describe("chat_completion", () => {
 
     expect(onReasoningContent).toHaveBeenCalledWith("step 1 step 2");
   });
+
+  it("should support object-typed `reasoning` delta", async () => {
+    const onReasoningContent = vi.fn();
+    const mockChunks = [
+      {
+        choices: [{ delta: { reasoning: { text: "inner thought" } }, index: 0 }],
+        model: "qwen3.5",
+      },
+    ];
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk;
+      }
+    }
+    mockCreate.mockResolvedValueOnce(mockStream());
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "qwen3.5",
+      "test-token",
+      undefined,
+      undefined,
+      onReasoningContent,
+    );
+
+    expect(onReasoningContent).toHaveBeenCalledWith("inner thought");
+  });
+
+  it("should trigger first-token timing when reasoning field arrives", async () => {
+    const onTimingData = vi.fn();
+    const mockChunks = [
+      {
+        choices: [{ delta: { reasoning: "thinking..." }, index: 0 }],
+        model: "qwen3.5",
+      },
+    ];
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk;
+      }
+    }
+    mockCreate.mockResolvedValueOnce(mockStream());
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "qwen3.5",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      onTimingData,
+    );
+
+    expect(onTimingData).toHaveBeenCalledTimes(1);
+    expect(onTimingData).toHaveBeenCalledWith(expect.any(Number));
+  });
 });
