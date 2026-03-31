@@ -25,14 +25,12 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
-    get_model_id_for_batch_file_id_encoding,
     get_batch_from_database,
     get_credentials_for_model,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
-    encode_raw_batch_output_error_file_ids,
     resolve_input_file_id_to_unified,
     resolve_output_file_ids_to_unified,
     update_batch_in_database,
@@ -41,6 +39,22 @@ from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()
+
+
+def _get_model_id_for_batch_file_id_encoding(batch_id: str) -> Optional[str]:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_model_id_for_batch_file_id_encoding,
+    )
+
+    return get_model_id_for_batch_file_id_encoding(batch_id)
+
+
+def _encode_raw_batch_output_error_file_ids(response: Any, model: str) -> None:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_raw_batch_output_error_file_ids,
+    )
+
+    encode_raw_batch_output_error_file_ids(response, model=model)
 
 
 @router.post(
@@ -428,9 +442,9 @@ async def retrieve_batch(  # noqa: PLR0915
                 await resolve_input_file_id_to_unified(response, prisma_client)
                 await resolve_output_file_ids_to_unified(response, prisma_client)
 
-            model_for_file_encoding = get_model_id_for_batch_file_id_encoding(batch_id)
+            model_for_file_encoding = _get_model_id_for_batch_file_id_encoding(batch_id)
             if model_for_file_encoding:
-                encode_raw_batch_output_error_file_ids(
+                _encode_raw_batch_output_error_file_ids(
                     response, model=model_for_file_encoding
                 )
 
@@ -604,9 +618,9 @@ async def retrieve_batch(  # noqa: PLR0915
             await resolve_input_file_id_to_unified(response, prisma_client)
             await resolve_output_file_ids_to_unified(response, prisma_client)
 
-        model_for_file_encoding = get_model_id_for_batch_file_id_encoding(batch_id)
+        model_for_file_encoding = _get_model_id_for_batch_file_id_encoding(batch_id)
         if model_for_file_encoding:
-            encode_raw_batch_output_error_file_ids(
+            _encode_raw_batch_output_error_file_ids(
                 response, model=model_for_file_encoding
             )
 
