@@ -189,9 +189,9 @@ jobs:
     needs: test
     if: always()
     runs-on: ubuntu-latest
-    # Isolated job — CODECOV_TOKEN is never in scope during test execution
     permissions:
       contents: read
+      id-token: write  # Required for OIDC tokenless upload
 
     steps:
       - name: Download all coverage reports
@@ -203,6 +203,6 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           files: "*.xml"
           fail_ci_if_error: false
