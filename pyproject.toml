@@ -212,11 +212,9 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["litellm"]
-relative_files = true
 
 [tool.coverage.paths]
-source = [
-    "litellm/",
-    "/home/runner/work/litellm/litellm/litellm/",
-    "**/litellm/",
+litellm = [
+    "litellm",
+    "/home/runner/work/litellm/litellm/litellm",
 ]
