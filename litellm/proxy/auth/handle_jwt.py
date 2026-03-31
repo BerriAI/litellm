@@ -7,6 +7,7 @@ JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import fnmatch
+import hashlib
 import os
 import re
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
@@ -621,7 +622,7 @@ class JWTHandler:
 
         # Check cache first
         cache_key = (
-            f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
+            f"oidc_userinfo_{hashlib.sha256(token.encode()).hexdigest()}"
         )
         cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
 
