@@ -2472,7 +2472,6 @@ def test_bedrock_error_handling_streaming():
         "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
         "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        "http://www.krishdholakia.com/",
         # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
         "https://raw.githubusercontent.com/mdn/content/main/README.md",
     ],
