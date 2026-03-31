@@ -285,6 +285,7 @@ const config = {
             to: "docs/enterprise"
           },
           { to: '/blog', label: 'Blog', position: 'left' },
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
             href: 'https://github.com/BerriAI/litellm',
             position: 'right',
