@@ -316,3 +316,121 @@ async def test_multiple_fallbacks(function_name):
         result._hidden_params["api_base"]
         == "https://exampleopenaiendpoint-production.up.railway.app/"
     )
+
+
+@pytest.mark.asyncio
+async def test_fallback_kwargs_not_mutated():
+    """
+    Verify that each fallback attempt receives a fresh copy of kwargs.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24764:
+    When a provider handler mutates kwargs (e.g. Bedrock pops `tools`),
+    subsequent fallback attempts should still see the original parameters.
+    """
+    call_received_kwargs: List[Dict[str, Any]] = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:1/",
+                },
+            },
+            {
+                "model_name": "fallback-a",
+                "litellm_params": {
+                    "model": "openai/fallback-a",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:2/",
+                },
+            },
+            {
+                "model_name": "fallback-b",
+                "litellm_params": {
+                    "model": "openai/fallback-b",
+                    "api_key": "fake-key",
+                    "api_base": "http://localhost:3/",
+                },
+            },
+        ],
+    )
+
+    original_fn = router.async_function_with_fallbacks
+
+    async def mock_async_function_with_fallbacks(*args, **kwargs):
+        """
+        Capture kwargs snapshot, then simulate the first provider mutating
+        them (like Bedrock popping 'tools') before raising an error.
+        """
+        import copy
+
+        call_received_kwargs.append(copy.deepcopy(kwargs))
+
+        # Simulate a provider handler mutating kwargs — pop 'tools'
+        kwargs.pop("tools", None)
+        kwargs.pop("stream", None)
+
+        raise litellm.exceptions.ServiceUnavailableError(
+            message="simulated timeout",
+            model="test",
+            llm_provider="openai",
+        )
+
+    router.async_function_with_fallbacks = mock_async_function_with_fallbacks
+
+    original_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "classify",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    original_tool_choice = {
+        "type": "function",
+        "function": {"name": "classify"},
+    }
+
+    request_kwargs: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": original_tools,
+        "tool_choice": original_tool_choice,
+        "stream": True,
+        "metadata": {},
+    }
+
+    with pytest.raises(Exception):
+        await run_async_fallback(
+            litellm_router=router,
+            original_function=router._acompletion,
+            num_retries=0,
+            fallback_model_group=["fallback-a", "fallback-b"],
+            original_model_group="primary-model",
+            original_exception=Exception("primary failed"),
+            max_fallbacks=5,
+            fallback_depth=0,
+            **request_kwargs,
+        )
+
+    # Both fallback attempts should have received 'tools' and 'stream'
+    assert len(call_received_kwargs) == 2, (
+        f"Expected 2 fallback attempts, got {len(call_received_kwargs)}"
+    )
+
+    for i, received in enumerate(call_received_kwargs):
+        assert "tools" in received, (
+            f"Fallback attempt {i} missing 'tools' — kwargs were mutated by previous attempt"
+        )
+        assert "stream" in received, (
+            f"Fallback attempt {i} missing 'stream' — kwargs were mutated by previous attempt"
+        )
+        assert "tool_choice" in received, (
+            f"Fallback attempt {i} missing 'tool_choice' — kwargs were mutated by previous attempt"
+        )
+        assert received["tools"] == original_tools, (
+            f"Fallback attempt {i} has modified 'tools' value"
+        )
