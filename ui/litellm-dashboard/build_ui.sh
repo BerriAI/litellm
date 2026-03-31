@@ -8,7 +8,13 @@ if ! command -v nvm &> /dev/null; then
   NVM_SCRIPT=$(mktemp)
   trap 'rm -f "$NVM_SCRIPT"' EXIT
   curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT"
-  echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c - || { echo "nvm checksum verification failed"; exit 1; }
+  if command -v sha256sum &>/dev/null; then
+    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c -
+  elif command -v shasum &>/dev/null; then
+    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | shasum -a 256 -c -
+  else
+    echo "No sha256 tool found; cannot verify nvm checksum"; exit 1
+  fi || { echo "nvm checksum verification failed"; exit 1; }
   bash "$NVM_SCRIPT"
 
   # Source nvm script in the current session
