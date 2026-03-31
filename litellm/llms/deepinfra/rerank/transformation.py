@@ -108,7 +108,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         # Start with the basic parameters
         optional_rerank_params = {}
         if query:
-            optional_rerank_params["queries"] = [query]  # Single-element array; Deepinfra broadcasts it across all documents
+            optional_rerank_params["queries"] = [
+                query
+            ]  # Single-element array; Deepinfra broadcasts it across all documents
 
         if non_default_params is not None:
             for k, v in non_default_params.items():
