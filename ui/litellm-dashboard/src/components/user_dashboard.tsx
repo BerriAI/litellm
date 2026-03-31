@@ -99,11 +99,26 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
 
   // Clear session storage on page unload so next load fetches fresh data.
-  // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-  // They are only cleared on logout
+  // Preserve MCP OAuth flow state keys across the clear — they are needed
+  // to complete the OAuth PKCE redirect flow (code_verifier, state, etc.).
+  // Uses prefix matching so future per-server or per-flow keys are
+  // automatically covered without updating a hardcoded list.
   useEffect(() => {
     const handleBeforeUnload = () => {
+      const saved: Record<string, string> = {};
+      const keysToPreserve = Object.keys(sessionStorage).filter(
+        (key) =>
+          key.startsWith("litellm-mcp-oauth") ||
+          key.startsWith("litellm-user-mcp-oauth")
+      );
+      keysToPreserve.forEach((key) => {
+        const val = sessionStorage.getItem(key);
+        if (val) saved[key] = val;
+      });
       sessionStorage.clear();
+      Object.entries(saved).forEach(([key, val]) => {
+        sessionStorage.setItem(key, val);
+      });
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
