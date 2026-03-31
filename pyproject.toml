@@ -209,3 +209,7 @@ filterwarnings = [
     # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
     "ignore::DeprecationWarning:pytest_asyncio.plugin",
 ]
+
+[tool.coverage.run]
+source = ["litellm"]
+relative_files = true
