@@ -125,7 +125,6 @@ async def test_create_fine_tune_jobs_async():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -164,7 +163,10 @@ async def test_create_vertex_fine_tune_jobs_mocked():
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=mock_response,
-        ) as mock_post:
+        ) as mock_post, patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+            return_value=("fake-token", project_id),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
@@ -218,7 +220,6 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -257,7 +258,10 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=mock_response,
-        ) as mock_post:
+        ) as mock_post, patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+            return_value=("fake-token", project_id),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
