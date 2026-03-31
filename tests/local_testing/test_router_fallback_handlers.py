@@ -326,8 +326,15 @@ async def test_fallback_kwargs_not_mutated():
     Regression test for https://github.com/BerriAI/litellm/issues/24764:
     When a provider handler mutates kwargs (e.g. Bedrock pops `tools`),
     subsequent fallback attempts should still see the original parameters.
+
+    We verify this by patching `safe_deep_copy` with a wrapper that tracks
+    calls, ensuring it is invoked once per fallback iteration.  If the
+    `safe_deep_copy` call is removed, only a shallow reference is passed and
+    `safe_deep_copy` is never called — causing this test to fail.
     """
-    call_received_kwargs: List[Dict[str, Any]] = []
+    from litellm.litellm_core_utils.core_helpers import (
+        safe_deep_copy as _real_safe_deep_copy,
+    )
 
     router = Router(
         model_list=[
@@ -358,21 +365,8 @@ async def test_fallback_kwargs_not_mutated():
         ],
     )
 
-    original_fn = router.async_function_with_fallbacks
-
     async def mock_async_function_with_fallbacks(*args, **kwargs):
-        """
-        Capture kwargs snapshot, then simulate the first provider mutating
-        them (like Bedrock popping 'tools') before raising an error.
-        """
-        import copy
-
-        call_received_kwargs.append(copy.deepcopy(kwargs))
-
-        # Simulate a provider handler mutating kwargs — pop 'tools'
-        kwargs.pop("tools", None)
-        kwargs.pop("stream", None)
-
+        """Always fail so the fallback loop keeps going."""
         raise litellm.exceptions.ServiceUnavailableError(
             message="simulated timeout",
             model="test",
@@ -403,34 +397,26 @@ async def test_fallback_kwargs_not_mutated():
         "metadata": {},
     }
 
-    with pytest.raises(Exception):
-        await run_async_fallback(
-            litellm_router=router,
-            original_function=router._acompletion,
-            num_retries=0,
-            fallback_model_group=["fallback-a", "fallback-b"],
-            original_model_group="primary-model",
-            original_exception=Exception("primary failed"),
-            max_fallbacks=5,
-            fallback_depth=0,
-            **request_kwargs,
-        )
+    with patch(
+        "litellm.router_utils.fallback_event_handlers.safe_deep_copy",
+        wraps=_real_safe_deep_copy,
+    ) as mock_sdc:
+        with pytest.raises(Exception):
+            await run_async_fallback(
+                litellm_router=router,
+                original_function=router._acompletion,
+                num_retries=0,
+                fallback_model_group=["fallback-a", "fallback-b"],
+                original_model_group="primary-model",
+                original_exception=Exception("primary failed"),
+                max_fallbacks=5,
+                fallback_depth=0,
+                **request_kwargs,
+            )
 
-    # Both fallback attempts should have received 'tools' and 'stream'
-    assert len(call_received_kwargs) == 2, (
-        f"Expected 2 fallback attempts, got {len(call_received_kwargs)}"
-    )
-
-    for i, received in enumerate(call_received_kwargs):
-        assert "tools" in received, (
-            f"Fallback attempt {i} missing 'tools' — kwargs were mutated by previous attempt"
-        )
-        assert "stream" in received, (
-            f"Fallback attempt {i} missing 'stream' — kwargs were mutated by previous attempt"
-        )
-        assert "tool_choice" in received, (
-            f"Fallback attempt {i} missing 'tool_choice' — kwargs were mutated by previous attempt"
-        )
-        assert received["tools"] == original_tools, (
-            f"Fallback attempt {i} has modified 'tools' value"
+        # safe_deep_copy must be called once per fallback model group iteration.
+        # If the deep-copy is ever removed, this assertion will fail.
+        assert mock_sdc.call_count == 2, (
+            f"Expected safe_deep_copy to be called once per fallback attempt (2), "
+            f"but was called {mock_sdc.call_count} times"
         )
