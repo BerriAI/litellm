@@ -641,9 +641,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1537,9 +1537,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional[
-    "ClientSession"
-] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1550,13 +1550,13 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[
-    str
-] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[str] = (
+    []
+)  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1783,12 +1783,38 @@ async def increment_spend_counters(
             increment=response_cost,
         )
 
+        # Increment per-window budget counters for multi-budget keys
+        key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
+        if key_obj is not None:
+            key_budget_limits = getattr(key_obj, "budget_limits", None) or (
+                key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
+            )
+            if key_budget_limits:
+                for i in range(len(key_budget_limits)):
+                    await spend_counter_cache.async_increment_cache(
+                        key=f"spend:key:{hashed_token}:window:{i}",
+                        value=response_cost,
+                    )
+
     if team_id is not None:
         await _init_and_increment_spend_counter(
             counter_key=f"spend:team:{team_id}",
             source_cache_key=f"team_id:{team_id}",
             increment=response_cost,
         )
+
+        # Increment per-window budget counters for multi-budget teams
+        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
+        if team_obj is not None:
+            team_budget_limits = getattr(team_obj, "budget_limits", None) or (
+                team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+            )
+            if team_budget_limits:
+                for i in range(len(team_budget_limits)):
+                    await spend_counter_cache.async_increment_cache(
+                        key=f"spend:team:{team_id}:window:{i}",
+                        value=response_cost,
+                    )
 
     if user_id is not None and team_id is not None:
         await _init_and_increment_spend_counter(
@@ -2040,9 +2066,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2163,11 +2189,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -5215,10 +5239,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -5600,9 +5624,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -5944,9 +5968,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -12550,9 +12574,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
