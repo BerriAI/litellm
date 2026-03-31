@@ -3,7 +3,7 @@ const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
 
 const vertexAI = new VertexAI({
-    project: 'pathrise-convert-1606954137718',
+    project: 'litellm-ci-cd',
     location: 'us-central1',
     apiEndpoint: "127.0.0.1:4000/vertex-ai"
 });
