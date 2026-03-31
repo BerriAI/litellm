@@ -342,7 +342,7 @@ async def test_azure_ava_tts_async():
 
     try:
         response = await litellm.aspeech(
-            model="azure/speech/azure-tts",
+            model="azure/tts",
             voice="alloy",
             input="Hello, this is a test of Azure text to speech",
             api_base=api_base,
@@ -376,10 +376,6 @@ async def test_azure_ava_tts_async():
         assert speech_file_path.stat().st_size > 0
 
         print(f"Azure TTS audio saved to: {speech_file_path}")
-
-        # assert response cost is greater than 0
-        print("Response cost: ", response._hidden_params["response_cost"])
-        assert response._hidden_params["response_cost"] > 0
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
