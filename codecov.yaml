@@ -20,6 +20,9 @@ component_management:
     - component_id: "Enterprise"
       paths:
         - "enterprise/**"
+fixes:
+  - "::litellm/"   # prepend litellm/ to all paths (coverage records relative to package root)
+
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
 
