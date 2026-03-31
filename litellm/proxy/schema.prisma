@@ -140,6 +140,7 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    budget_limits    Json?      // multiple concurrent budget windows [{budget_duration, max_budget, reset_at}]
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
@@ -387,6 +388,7 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    budget_limits    Json?      // multiple concurrent budget windows [{budget_duration, max_budget, reset_at}]
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
