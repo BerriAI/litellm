@@ -22,9 +22,6 @@ Attacks that compromise our CI/CD pipeline, allowing a malicious actor to point 
 
 Application-level attacks where an unauthenticated user is able to gain access to a LiteLLM proxy instance that should be protected.
 
-**P2: Authenticated Malicious Actions**
-
-Application-level attacks where an authenticated user is able to perform actions beyond their intended permissions, such as privilege escalation or unauthorized data access.
 
 #### Bug Bounty Program
 
