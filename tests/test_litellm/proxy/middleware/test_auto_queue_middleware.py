@@ -114,3 +114,73 @@ async def test_scale_down_resets_success_counter(aqr):
     # Limit was default 5, 429 brought to 4, then 3 successes -> 5
     info = await aqr.get_model_info("gpt-4")
     assert info["limit"] == 5
+
+
+from litellm.proxy.middleware.auto_queue_middleware import ModelQueue
+
+
+# -- In-memory priority queue --------------------------------------------------
+
+
+@pytest.fixture
+def queue():
+    return ModelQueue(max_depth=3)
+
+
+@pytest.mark.asyncio
+async def test_queue_add_and_wake(queue):
+    event = asyncio.Event()
+    queue.add("req-1", event, priority=10)
+    assert queue.depth == 1
+    woken = queue.wake_next()
+    assert woken is True
+    assert event.is_set()
+    assert queue.depth == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_priority_ordering(queue):
+    low = asyncio.Event()
+    high = asyncio.Event()
+    queue.add("req-low", low, priority=10)
+    queue.add("req-high", high, priority=1)
+    queue.wake_next()
+    assert high.is_set()  # higher priority (lower number) woken first
+    assert not low.is_set()
+
+
+@pytest.mark.asyncio
+async def test_queue_fifo_within_same_priority(queue):
+    first = asyncio.Event()
+    second = asyncio.Event()
+    queue.add("req-1", first, priority=10)
+    queue.add("req-2", second, priority=10)
+    queue.wake_next()
+    assert first.is_set()
+    assert not second.is_set()
+
+
+@pytest.mark.asyncio
+async def test_queue_max_depth_exceeded(queue):
+    for i in range(3):
+        queue.add(f"req-{i}", asyncio.Event(), priority=10)
+    assert queue.is_full is True
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_by_id(queue):
+    event = asyncio.Event()
+    queue.add("req-1", event, priority=10)
+    queue.remove("req-1")
+    assert queue.depth == 0
+    assert queue.wake_next() is False
+
+
+@pytest.mark.asyncio
+async def test_queue_wake_all_sets_all_events(queue):
+    events = [asyncio.Event() for _ in range(3)]
+    for i, e in enumerate(events):
+        queue.add(f"req-{i}", e, priority=10)
+    queue.wake_all()
+    assert all(e.is_set() for e in events)
+    assert queue.depth == 0

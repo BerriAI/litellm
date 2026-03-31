@@ -137,3 +137,58 @@ class AutoQueueRedis:
             "queued": 0,  # filled by middleware, not Redis
             "ceiling": int(ceiling_raw or self.ceiling),
         }
+
+
+# -- In-Memory Priority Queue -------------------------------------------------
+
+@dataclass(order=True)
+class _QueueEntry:
+    priority: int
+    seq: int  # tie-breaker for FIFO within same priority
+    request_id: str = field(compare=False)
+    event: asyncio.Event = field(compare=False)
+
+
+class ModelQueue:
+    """Per-model priority queue of waiting requests."""
+
+    def __init__(self, max_depth: int = MAX_QUEUE_DEPTH):
+        self._heap: List[_QueueEntry] = []
+        self._entries: Dict[str, _QueueEntry] = {}  # request_id -> entry
+        self._seq = 0
+        self.max_depth = max_depth
+
+    @property
+    def depth(self) -> int:
+        return len(self._entries)
+
+    @property
+    def is_full(self) -> bool:
+        return self.depth >= self.max_depth
+
+    def add(self, request_id: str, event: asyncio.Event, priority: int = 10) -> None:
+        entry = _QueueEntry(priority=priority, seq=self._seq, request_id=request_id, event=event)
+        self._seq += 1
+        heapq.heappush(self._heap, entry)
+        self._entries[request_id] = entry
+
+    def remove(self, request_id: str) -> None:
+        entry = self._entries.pop(request_id, None)
+        if entry is not None:
+            # Lazy deletion -- mark as removed, skip during wake_next
+            entry.request_id = ""
+
+    def wake_next(self) -> bool:
+        while self._heap:
+            entry = heapq.heappop(self._heap)
+            if entry.request_id and entry.request_id in self._entries:
+                del self._entries[entry.request_id]
+                entry.event.set()
+                return True
+        return False
+
+    def wake_all(self) -> None:
+        for entry in self._entries.values():
+            entry.event.set()
+        self._entries.clear()
+        self._heap.clear()
