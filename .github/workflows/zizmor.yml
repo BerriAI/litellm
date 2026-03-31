@@ -17,10 +17,6 @@ jobs:
     name: zizmor
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Fork PRs use a restricted GITHUB_TOKEN that cannot query the advisory API
-    # used by zizmor's known-vulnerable-actions audit (403). Keep analysis for
-    # pushes and same-repo PRs where permissions are available.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       security-events: write
       contents: read
