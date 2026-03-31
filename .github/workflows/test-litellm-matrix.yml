@@ -173,7 +173,7 @@ jobs:
             --dist=loadscope \
             --durations=20 \
             --cov=litellm \
-            --cov-report=xml:coverage.xml \
+            --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
             --cov-config=pyproject.toml
 
       - name: Save coverage report
@@ -181,7 +181,7 @@ jobs:
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: coverage-${{ matrix.test-group.name }}
-          path: coverage.xml
+          path: coverage-${{ matrix.test-group.name }}.xml
           retention-days: 1
 
   upload-coverage:
