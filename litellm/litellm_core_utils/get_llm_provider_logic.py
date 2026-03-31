@@ -7,6 +7,10 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
 
+# Inlined from AnthropicTextConfig._is_anthropic_text_model to avoid triggering
+# the lazy import of litellm.llms.anthropic.completion.transformation.
+_ANTHROPIC_TEXT_MODELS: frozenset = frozenset({"claude-2", "claude-instant-1"})
+
 
 def _is_non_openai_azure_model(model: str) -> bool:
     try:
@@ -80,7 +84,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     if custom_llm_provider:
         if (
             custom_llm_provider == "anthropic"
-            and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
+            and model in _ANTHROPIC_TEXT_MODELS
         ):
             return model, "anthropic_text"
 
@@ -89,7 +93,7 @@ def handle_anthropic_text_model_custom_llm_provider(
         if (
             _custom_llm_provider
             and _custom_llm_provider == "anthropic"
-            and litellm.AnthropicTextConfig._is_anthropic_text_model(_model)
+            and _model in _ANTHROPIC_TEXT_MODELS
         ):
             return _model, "anthropic_text"
 
@@ -355,7 +359,7 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "text-completion-openai"
         ## anthropic
         elif model in litellm.anthropic_models:
-            if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+            if model in _ANTHROPIC_TEXT_MODELS:
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
