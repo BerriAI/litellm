@@ -102,3 +102,6 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+
+# Generated OpenAPI types (regenerate with: cd ui/litellm-dashboard && npm run generate:types)
+ui/litellm-dashboard/src/types/api.generated.ts
