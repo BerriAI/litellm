@@ -373,7 +373,7 @@ class TestPromptGuardRedactAction:
                 input_type="request",
             )
             assert result["structured_messages"] == redacted
-            assert "My SSN is *********" in result["texts"]
+            assert result["texts"] == ["My SSN is *********"]
 
     @pytest.mark.asyncio
     async def test_redact_structured_only_does_not_create_texts(
@@ -629,7 +629,7 @@ class TestPromptGuardErrorHandling:
     async def test_http_error_propagates_block_on_error(
         self, promptguard_guardrail, mock_request_data
     ):
-        """Default block_on_error=True re-raises HTTP errors."""
+        """Default block_on_error=True wraps HTTP errors in GuardrailRaisedException."""
         mock_request = httpx.Request("POST", "https://api.test.promptguard.co")
         mock_resp = httpx.Response(status_code=500, request=mock_request)
         with patch.object(
@@ -641,29 +641,33 @@ class TestPromptGuardErrorHandling:
                 response=mock_resp,
             ),
         ):
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
                 await promptguard_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data,
                     input_type="request",
                 )
+            assert "block_on_error=True" in str(exc_info.value)
+            assert exc_info.value.__cause__ is not None
 
     @pytest.mark.asyncio
     async def test_connection_error_propagates_block_on_error(
         self, promptguard_guardrail, mock_request_data
     ):
-        """Default block_on_error=True re-raises connection errors."""
+        """Default block_on_error=True wraps connection errors in GuardrailRaisedException."""
         with patch.object(
             promptguard_guardrail.async_handler,
             "post",
             side_effect=httpx.ConnectError("Connection refused"),
         ):
-            with pytest.raises(httpx.ConnectError):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
                 await promptguard_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data,
                     input_type="request",
                 )
+            assert "block_on_error=True" in str(exc_info.value)
+            assert exc_info.value.__cause__ is not None
 
     @pytest.mark.asyncio
     async def test_fail_open_returns_inputs_on_http_error(self, mock_request_data):
@@ -737,6 +741,22 @@ class TestPromptGuardErrorHandling:
         self, promptguard_guardrail, mock_request_data
     ):
         resp = _make_response({"event_id": "evt-888"})
+        with patch.object(
+            promptguard_guardrail.async_handler, "post", return_value=resp
+        ):
+            result = await promptguard_guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data,
+                input_type="request",
+            )
+            assert result["texts"] == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_null_decision_treated_as_allow(
+        self, promptguard_guardrail, mock_request_data
+    ):
+        """Explicit null decision should be treated as allow."""
+        resp = _make_response({"decision": None, "event_id": "evt-null"})
         with patch.object(
             promptguard_guardrail.async_handler, "post", return_value=resp
         ):

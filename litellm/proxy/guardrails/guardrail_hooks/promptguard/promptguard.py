@@ -155,7 +155,13 @@ class PromptGuardGuardrail(CustomGuardrail):
         except Exception as exc:
             verbose_proxy_logger.error("PromptGuard API error: %s", str(exc))
             if self.block_on_error:
-                raise
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=(
+                        f"PromptGuard API unreachable "
+                        f"(block_on_error=True): {exc}"
+                    ),
+                ) from exc
             return inputs
 
         verbose_proxy_logger.debug(
@@ -164,7 +170,7 @@ class PromptGuardGuardrail(CustomGuardrail):
             result.get("threat_type"),
         )
 
-        decision = result.get("decision", "allow")
+        decision = result.get("decision") or "allow"
 
         if decision == "block":
             threat_type = result.get("threat_type", "unknown")
@@ -196,9 +202,16 @@ class PromptGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _extract_texts_from_messages(messages: list) -> List[str]:
-        """Extract text content strings from a list of chat messages."""
+        """Extract text content from user-role messages only.
+
+        Only user messages are extracted to avoid injecting system or
+        assistant content into the ``texts`` list, which should mirror
+        the original user-provided input.
+        """
         texts: List[str] = []
         for message in messages:
+            if message.get("role") != "user":
+                continue
             content = message.get("content")
             if isinstance(content, str):
                 texts.append(content)
