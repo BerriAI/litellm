@@ -1234,13 +1234,15 @@ class TestAddAndDeleteModelLifecycle:
         mock_router.delete_deployment = MagicMock()
 
         _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
         with patch(f"{_PS}.prisma_client", mock_prisma), \
              patch(f"{_PS}.store_model_in_db", True), \
              patch(f"{_PS}.proxy_config", mock_proxy_config), \
              patch(f"{_PS}.proxy_logging_obj", MagicMock()), \
              patch(f"{_PS}.general_settings", {}), \
              patch(f"{_PS}.premium_user", True), \
-             patch(f"{_PS}.llm_router", mock_router):
+             patch(f"{_PS}.llm_router", mock_router), \
+             patch(_ENCRYPT, side_effect=lambda value, **kwargs: value):
 
             # --- ADD ---
             add_result = await add_new_model(
