@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 from urllib.parse import urlparse
 
 import litellm
@@ -6,7 +6,10 @@ from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from ..types.router import LiteLLM_Params
+if TYPE_CHECKING:
+    from ..types.router import LiteLLM_Params
+else:
+    LiteLLM_Params = Any
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:

@@ -14,7 +14,6 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardLoggingPayload
@@ -28,6 +27,7 @@ else:
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy._types import CommonProxyErrors
 
         super().__init__(bucket_name=bucket_name)
 
@@ -61,6 +61,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy._types import CommonProxyErrors
 
         if premium_user is not True:
             raise ValueError(
