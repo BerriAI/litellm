@@ -1930,6 +1930,16 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
+                    # Propagate provider-reported cost (e.g. OpenRouter)
+                    # to _hidden_params so the cost calculator picks it up
+                    _final_usage = getattr(complete_streaming_response, "usage", None)
+                    if _final_usage is not None and hasattr(_final_usage, "cost") and _final_usage.cost is not None:
+                        if "additional_headers" not in complete_streaming_response._hidden_params:
+                            complete_streaming_response._hidden_params["additional_headers"] = {}
+                        complete_streaming_response._hidden_params["additional_headers"][
+                            "llm_provider-x-litellm-response-cost"
+                        ] = float(_final_usage.cost)
+
                     setattr(
                         response,
                         "usage",
@@ -2156,6 +2166,16 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
+                    # Propagate provider-reported cost (e.g. OpenRouter)
+                    # to _hidden_params so the cost calculator picks it up
+                    _final_usage = getattr(complete_streaming_response, "usage", None)
+                    if _final_usage is not None and hasattr(_final_usage, "cost") and _final_usage.cost is not None:
+                        if "additional_headers" not in complete_streaming_response._hidden_params:
+                            complete_streaming_response._hidden_params["additional_headers"] = {}
+                        complete_streaming_response._hidden_params["additional_headers"][
+                            "llm_provider-x-litellm-response-cost"
+                        ] = float(_final_usage.cost)
+
                     setattr(
                         response,
                         "usage",

@@ -615,8 +615,7 @@ def test_cost_field_in_usage_chunks():
         usage=chunk1_usage,
     )
 
-    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15)
-    setattr(chunk2_usage, "cost", 0.00025)
+    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
     chunk2 = ModelResponseStream(
         id="chatcmpl-1",
         created=1745513207,
