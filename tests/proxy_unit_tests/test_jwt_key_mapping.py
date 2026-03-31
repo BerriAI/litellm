@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from litellm.proxy.auth.user_api_key_auth import (
+    _auto_register_jwt_client,
     _resolve_jwt_to_virtual_key,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -15,6 +16,7 @@ from litellm.proxy._types import (
     JWTKeyMappingResponse,
     LiteLLM_JWTAuth,
     LitellmUserRoles,
+    UpdateJWTClientRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
@@ -22,6 +24,7 @@ from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     create_jwt_key_mapping,
     delete_jwt_key_mapping,
     info_jwt_key_mapping,
+    update_jwt_client,
     update_jwt_key_mapping,
 )
 from litellm.caching.caching import DualCache
@@ -970,3 +973,146 @@ async def test_info_endpoint_still_returns_mapping_fields():
     assert result.jwt_claim_name == "email"
     assert result.jwt_claim_value == "user@corp.com"
     assert result.is_active is True
+
+
+# ---------------------------------------------------------------------------
+# P1/P2 fix tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_register_forwards_issuer_to_db():
+    """issuer must be written to the mapping row, not hardcoded to ''."""
+    from litellm.proxy._types import (
+        JWTClientAutoRegisterDefaults,
+        LiteLLM_JWTAuth,
+        hash_token,
+    )
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.create.return_value = MagicMock()
+    mock_cache = AsyncMock()
+
+    jwtauth = LiteLLM_JWTAuth(
+        unregistered_jwt_client_behavior="auto_register",
+        auto_register_defaults=JWTClientAutoRegisterDefaults(models=["gpt-4o-mini"]),
+    )
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = jwtauth
+
+    fake_key_data = {"token": "sk-autotest"}
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new=AsyncMock(return_value=fake_key_data),
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        await _auto_register_jwt_client(
+            jwt_claim_name="sub",
+            jwt_claim_value="svc-a",
+            issuer="https://idp1.example.com",
+            jwt_handler=jwt_handler,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+            cache_key="jwt_key_mapping:sub:svc-a:https://idp1.example.com",
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    create_call = mock_prisma.db.litellm_jwtkeymapping.create.call_args
+    assert create_call.kwargs["data"]["issuer"] == "https://idp1.example.com"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_race_condition_cleans_up_orphan():
+    """When the DB insert races and loses (P2002), the orphaned key is deleted
+    and the winning mapping's token_hash is used for the cache entry."""
+    from litellm.proxy._types import LiteLLM_JWTAuth, hash_token
+
+    winner_hash = hash_token("sk-winner")
+
+    mock_prisma = _mock_prisma()
+    # Simulate the unique-constraint violation on insert
+    mock_prisma.db.litellm_jwtkeymapping.create.side_effect = Exception(
+        "Unique constraint failed (p2002)"
+    )
+    mock_prisma.db.litellm_verificationtoken.delete.return_value = None
+    # get_jwt_key_mapping_object path — the find_first called by get_jwt_key_mapping_object
+    mock_prisma.db.litellm_jwtkeymapping.find_first.return_value = MagicMock(
+        token=winner_hash
+    )
+
+    mock_cache = AsyncMock()
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    fake_key_data = {"token": "sk-loser"}
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new=AsyncMock(return_value=fake_key_data),
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object",
+        new=AsyncMock(return_value=MagicMock()),
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.get_jwt_key_mapping_object",
+        new=AsyncMock(return_value=winner_hash),
+    ):
+        await _auto_register_jwt_client(
+            jwt_claim_name="sub",
+            jwt_claim_value="svc-race",
+            issuer="",
+            jwt_handler=jwt_handler,
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+            cache_key="jwt_key_mapping:sub:svc-race:",
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Orphan key was deleted
+    mock_prisma.db.litellm_verificationtoken.delete.assert_called_once()
+    # Cache was populated with the winner's hash, not the loser's
+    set_cache_call = mock_cache.async_set_cache.call_args
+    assert set_cache_call.kwargs["value"] == winner_hash
+
+
+@pytest.mark.asyncio
+async def test_jwt_client_update_null_clears_budget():
+    """Sending max_budget=null in the body should explicitly set it to None
+    (unlimited), not be silently skipped."""
+    mock_prisma = _mock_prisma()
+    from datetime import datetime as _dt
+
+    mock_mapping = MagicMock()
+    mock_mapping.id = "map-1"
+    mock_mapping.token = "hashed-token"
+    mock_mapping.jwt_claim_name = "sub"
+    mock_mapping.jwt_claim_value = "svc"
+    mock_mapping.issuer = ""
+    mock_mapping.description = None
+    mock_mapping.is_active = True
+    mock_mapping.created_at = _dt.utcnow()
+    mock_mapping.updated_at = _dt.utcnow()
+    mock_mapping.created_by = None
+    mock_mapping.updated_by = None
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = mock_mapping
+    mock_prisma.db.litellm_jwtkeymapping.update.return_value = mock_mapping
+    mock_key_row = MagicMock()
+    mock_key_row.max_budget = None
+    mock_prisma.db.litellm_verificationtoken.update.return_value = mock_key_row
+    mock_cache = AsyncMock()
+
+    # Explicit null for max_budget — field IS in model_fields_set
+    req = UpdateJWTClientRequest.model_validate({"id": "map-1", "max_budget": None})
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    ):
+        await update_jwt_client(data=req, user_api_key_dict=_make_admin_auth())
+
+    key_update_call = mock_prisma.db.litellm_verificationtoken.update.call_args
+    assert "max_budget" in key_update_call.kwargs["data"]
+    assert key_update_call.kwargs["data"]["max_budget"] is None

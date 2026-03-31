@@ -9,6 +9,7 @@ from litellm.proxy._types import (
     DeleteJWTKeyMappingRequest,
     JWTKeyMappingResponse,
     LitellmUserRoles,
+    UpdateJWTClientRequest,
     UpdateJWTKeyMappingRequest,
     UserAPIKeyAuth,
     hash_token,
@@ -413,18 +414,15 @@ async def create_jwt_client(
     response_model=JWTKeyMappingResponse,
 )
 async def update_jwt_client(
-    id: str,
-    models: Optional[list] = None,
-    max_budget: Optional[float] = None,
-    budget_duration: Optional[str] = None,
-    tpm_limit: Optional[int] = None,
-    rpm_limit: Optional[int] = None,
-    description: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    data: UpdateJWTClientRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update a JWT client's virtual key configuration and/or mapping metadata.
+
+    Uses a request body so callers can explicitly null out fields — e.g.
+    ``{"id": "...", "max_budget": null}`` removes the budget cap.
+    Fields absent from the body are left unchanged.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -436,33 +434,29 @@ async def update_jwt_client(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(where={"id": id})
+    mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
+        where={"id": data.id}
+    )
     if mapping is None:
         raise HTTPException(status_code=404, detail="JWT client not found")
 
-    # Update mapping metadata
+    # Build mapping update from explicitly-set fields only
+    set_fields = data.model_fields_set
     mapping_update: dict = {"updated_by": user_api_key_dict.user_id}
-    if description is not None:
-        mapping_update["description"] = description
-    if is_active is not None:
-        mapping_update["is_active"] = is_active
+    if "description" in set_fields:
+        mapping_update["description"] = data.description
+    if "is_active" in set_fields:
+        mapping_update["is_active"] = data.is_active
 
     updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
-        where={"id": id}, data=mapping_update
+        where={"id": data.id}, data=mapping_update
     )
 
-    # Update underlying virtual key
+    # Build key update — null values are intentional (clear the limit)
     key_update: dict = {}
-    if models is not None:
-        key_update["models"] = models
-    if max_budget is not None:
-        key_update["max_budget"] = max_budget
-    if budget_duration is not None:
-        key_update["budget_duration"] = budget_duration
-    if tpm_limit is not None:
-        key_update["tpm_limit"] = tpm_limit
-    if rpm_limit is not None:
-        key_update["rpm_limit"] = rpm_limit
+    for field in ("models", "max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
+        if field in set_fields:
+            key_update[field] = getattr(data, field)
 
     key_row = None
     if key_update:

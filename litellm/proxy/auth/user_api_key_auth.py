@@ -520,6 +520,7 @@ async def _resolve_jwt_to_virtual_key(
         return await _auto_register_jwt_client(
             jwt_claim_name=virtual_key_claim_field,
             jwt_claim_value=str(claim_value),
+            issuer=issuer,
             jwt_handler=jwt_handler,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -540,6 +541,7 @@ async def _resolve_jwt_to_virtual_key(
 async def _auto_register_jwt_client(
     jwt_claim_name: str,
     jwt_claim_value: str,
+    issuer: str,
     jwt_handler: "JWTHandler",
     prisma_client: "PrismaClient",
     user_api_key_cache: DualCache,
@@ -577,7 +579,6 @@ async def _auto_register_jwt_client(
     cleartext_token: str = key_data["token"]
     hashed_key = hash_token(cleartext_token)
 
-    issuer = ""  # populated by caller if available; extend as needed
     try:
         await prisma_client.db.litellm_jwtkeymapping.create(
             data={
@@ -587,11 +588,36 @@ async def _auto_register_jwt_client(
                 "token": hashed_key,
             }
         )
-    except Exception:
-        verbose_proxy_logger.warning(
-            f"JWT auto-register: failed to create mapping for {jwt_claim_name}={jwt_claim_value}. "
-            "Key was created but mapping row could not be saved."
-        )
+    except Exception as create_exc:
+        # Another concurrent request won the race and already inserted the mapping.
+        # Clean up the orphaned key we just created, then fetch the winning mapping.
+        error_str = str(create_exc).lower()
+        if "unique" in error_str or "p2002" in error_str:
+            try:
+                await prisma_client.db.litellm_verificationtoken.delete(
+                    where={"token": hashed_key}
+                )
+            except Exception:
+                pass
+            winner = await get_jwt_key_mapping_object(
+                jwt_claim_name=jwt_claim_name,
+                jwt_claim_value=jwt_claim_value,
+                prisma_client=prisma_client,
+                issuer=issuer,
+            )
+            if winner is not None:
+                hashed_key = winner
+            else:
+                verbose_proxy_logger.warning(
+                    f"JWT auto-register race: lost insert but winner mapping not found for "
+                    f"{jwt_claim_name}={jwt_claim_value} issuer={issuer!r}"
+                )
+                return None
+        else:
+            verbose_proxy_logger.warning(
+                f"JWT auto-register: failed to create mapping for "
+                f"{jwt_claim_name}={jwt_claim_value} issuer={issuer!r}: {create_exc}"
+            )
 
     await user_api_key_cache.async_set_cache(
         key=cache_key,

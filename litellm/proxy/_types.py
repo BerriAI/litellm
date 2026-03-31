@@ -3888,6 +3888,28 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     key: Optional[str] = None
 
 
+class UpdateJWTClientRequest(LiteLLMPydanticObjectBase):
+    """Request body for POST /jwt_client/update.
+
+    Uses a request body (not query params) so that callers can explicitly set
+    fields to null/unlimited — e.g. ``{"max_budget": null}`` clears the budget.
+    Fields absent from the body are left unchanged (exclude_unset semantics).
+    """
+
+    id: str
+    # Mapping-level fields
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Virtual key fields — null means "clear / set unlimited"
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    model_config = {"extra": "ignore"}
+
+
 class CreateJWTClientRequest(LiteLLMPydanticObjectBase):
     """Single-call request to create a virtual key + JWT mapping atomically."""
 
