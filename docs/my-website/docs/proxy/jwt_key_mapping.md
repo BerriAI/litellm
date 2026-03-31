@@ -18,21 +18,34 @@ Map JWT tokens to LiteLLM virtual keys — so every JWT client gets the same gra
 
 ## How It Works
 
-When a JWT arrives at the proxy:
+```mermaid
+sequenceDiagram
+    participant Client as Client (Claude Code / API)
+    participant Proxy as LiteLLM Proxy
+    participant OIDC as OIDC Provider
+    participant DB as Mapping Table
 
-1. LiteLLM validates the JWT signature against your OIDC provider.
-2. It extracts a configurable claim (e.g. `client_id`) from the token.
-3. It looks up that claim value in the JWT key mapping table.
-4. If a mapping exists, the request proceeds under that virtual key — same permission checks, spend tracking, and rate limiting as if the user had sent `Authorization: Bearer sk-...`.
+    Client->>Proxy: POST /v1/chat/completions<br/>Authorization: Bearer <JWT>
 
-```
-JWT Token                     LiteLLM Proxy                Virtual Key
-─────────────────────         ──────────────────────        ──────────────────────
-{                             1. Validate signature         sk-abc123
-  "client_id": "dev-alice",   2. Extract client_id   ────▶  models: ["claude-*"]
-  "sub": "alice@corp.com",    3. Look up mapping            max_budget: $50/month
-  ...                         4. Apply virtual key          rpm_limit: 100
-}                                permissions
+    Proxy->>OIDC: Verify JWT signature
+    OIDC-->>Proxy: Valid ✓
+
+    Proxy->>Proxy: Extract claim<br/>(e.g. client_id = "alice@corp.com")
+
+    Proxy->>DB: Look up (claim_name, claim_value)
+    alt Mapping found
+        DB-->>Proxy: virtual_key_id = sk-abc123
+        Proxy->>Proxy: Apply virtual key permissions<br/>(models, budget, rate limits)
+        Proxy-->>Client: 200 OK
+    else No mapping — fallback_team_mapping
+        Proxy->>Proxy: Fall through to team JWT auth
+        Proxy-->>Client: 200 OK
+    else No mapping — reject
+        Proxy-->>Client: 403 Forbidden
+    else No mapping — auto_register
+        Proxy->>DB: Create new virtual key + mapping
+        Proxy-->>Client: 200 OK
+    end
 ```
 
 ---
