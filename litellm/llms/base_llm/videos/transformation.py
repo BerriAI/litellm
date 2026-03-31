@@ -1,16 +1,16 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import httpx
 from httpx._types import RequestFiles
 
 from litellm.types.responses.main import *
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.router import GenericLiteLLMParams
     from litellm.types.videos.main import CharacterObject as _CharacterObject
     from litellm.types.videos.main import VideoObject as _VideoObject
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     VideoObject = _VideoObject
     CharacterObject = _CharacterObject
 else:
+    GenericLiteLLMParams: TypeAlias = Any
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     VideoObject = Any

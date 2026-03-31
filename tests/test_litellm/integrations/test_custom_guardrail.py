@@ -1682,6 +1682,28 @@ class TestGuardrailInterventionClassification:
         exc = HTTPException(status_code=status_code, detail="guardrail api error")
         assert CustomGuardrail._is_guardrail_intervention(exc) is False
 
+    def test_http_exception_subclass_is_intervention(self):
+        """Guardrail providers raise HTTPException subclasses (e.g. Noma's
+        NomaBlockedMessage) from their own module to signal a block. Detection
+        must use isinstance so a subclass is not misread as a technical error."""
+        from fastapi.exceptions import HTTPException
+
+        class NomaBlockedMessage(HTTPException):
+            pass
+
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                NomaBlockedMessage(status_code=400, detail="blocked content")
+            )
+            is True
+        )
+        assert (
+            CustomGuardrail._is_guardrail_intervention(
+                NomaBlockedMessage(status_code=429, detail="rate limited")
+            )
+            is False
+        )
+
     @pytest.mark.asyncio
     async def test_non_400_4xx_logged_as_intervened_not_failed(self):
         from fastapi.exceptions import HTTPException

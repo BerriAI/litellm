@@ -1,4 +1,4 @@
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, TypeAlias, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -9,7 +9,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+if TYPE_CHECKING:
+    from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+else:
+    GenericLiteLLMParams: TypeAlias = object
+    LiteLLM_Params: TypeAlias = object
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
