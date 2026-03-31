@@ -1021,6 +1021,7 @@ async def delete_prompt(
 async def patch_prompt(
     prompt_id: str,
     request: PatchPromptRequest,
+    environment: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1064,30 +1065,66 @@ async def patch_prompt(
         )
 
     try:
-        # Check if prompt exists and get current data
-        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-        if existing_prompt is None:
+        # Resolve the target row: find the latest version in the given environment
+        base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
+        env = environment or "development"
+        requested_version = (
+            get_version_number(prompt_id=prompt_id)
+            if prompt_id != base_prompt_id
+            else None
+        )
+
+        # Build query to find the exact row by composite unique key
+        find_where: Dict[str, Any] = {
+            "prompt_id": base_prompt_id,
+            "environment": env,
+        }
+        if requested_version is not None:
+            find_where["version"] = requested_version
+
+        db_rows = await prisma_client.db.litellm_prompttable.find_many(
+            where=find_where,
+            order={"version": "desc"},
+            take=1,
+        )
+        if not db_rows:
             raise HTTPException(
-                status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+                status_code=404,
+                detail=f"Prompt with ID {base_prompt_id} not found in environment {env}",
             )
 
-        if existing_prompt.prompt_info.prompt_type == "config":
+        target_row = db_rows[0]
+
+        # Check if prompt exists in memory
+        versioned_id = f"{base_prompt_id}.v{target_row.version}"
+        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(versioned_id)
+
+        if existing_prompt and existing_prompt.prompt_info.prompt_type == "config":
             raise HTTPException(
                 status_code=400,
                 detail="Cannot update config prompts.",
             )
 
+        # Use existing prompt from memory or build from DB row for field merging
+        if existing_prompt:
+            current_litellm_params = existing_prompt.litellm_params
+            current_prompt_info = existing_prompt.prompt_info
+        else:
+            current_spec = create_versioned_prompt_spec(db_prompt=target_row)
+            current_litellm_params = current_spec.litellm_params
+            current_prompt_info = current_spec.prompt_info
+
         # Update fields if provided
         updated_litellm_params = (
             request.litellm_params
             if request.litellm_params is not None
-            else existing_prompt.litellm_params
+            else current_litellm_params
         )
 
         updated_prompt_info = (
             request.prompt_info
             if request.prompt_info is not None
-            else existing_prompt.prompt_info
+            else current_prompt_info
         )
 
         # Ensure we have valid litellm_params
@@ -1102,18 +1139,21 @@ async def patch_prompt(
         if user_api_key_dict.user_id:
             update_data["created_by"] = user_api_key_dict.user_id
 
-        # Create updated prompt spec - cast to satisfy typing
+        # Update by primary key (id) to target exactly one row
         updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
-            where={"prompt_id": prompt_id},
+            where={"id": target_row.id},
             data=update_data,
         )
 
-        updated_prompt_spec = PromptSpec(**updated_prompt_db_entry.model_dump())
+        updated_prompt_spec = create_versioned_prompt_spec(
+            db_prompt=updated_prompt_db_entry
+        )
 
         # Remove the old prompt from memory
-        del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
-        if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[prompt_id]
+        if versioned_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS:
+            del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[versioned_id]
+        if versioned_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
+            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[versioned_id]
 
         # Initialize the updated prompt
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
