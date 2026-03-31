@@ -256,4 +256,60 @@ describe("chat_completion", () => {
     const callArgs = mockCreate.mock.calls[0][0];
     expect(callArgs).not.toHaveProperty("mock_testing_fallbacks");
   });
+
+  it("should forward vLLM reasoning delta via `reasoning` field", async () => {
+    const onReasoningContent = vi.fn();
+    const mockChunks = [
+      {
+        choices: [{ delta: { reasoning: "thinking..." }, index: 0 }],
+        model: "qwen3.5",
+      },
+    ];
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk;
+      }
+    }
+    mockCreate.mockResolvedValueOnce(mockStream());
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "qwen3.5",
+      "test-token",
+      undefined,
+      undefined,
+      onReasoningContent,
+    );
+
+    expect(onReasoningContent).toHaveBeenCalledWith("thinking...");
+  });
+
+  it("should support structured `reasoning` array deltas", async () => {
+    const onReasoningContent = vi.fn();
+    const mockChunks = [
+      {
+        choices: [{ delta: { reasoning: [{ text: "step 1 " }, { text: "step 2" }] }, index: 0 }],
+        model: "qwen3.5",
+      },
+    ];
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk;
+      }
+    }
+    mockCreate.mockResolvedValueOnce(mockStream());
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "qwen3.5",
+      "test-token",
+      undefined,
+      undefined,
+      onReasoningContent,
+    );
+
+    expect(onReasoningContent).toHaveBeenCalledWith("step 1 step 2");
+  });
 });
