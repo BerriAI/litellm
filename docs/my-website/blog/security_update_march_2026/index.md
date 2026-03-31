@@ -17,6 +17,10 @@ import VersionVerificationTable from '@site/src/components/VersionVerificationTa
 > **Status:** Active investigation
 > **Last updated:** March 27, 2026
 
+> **Update (March 30):** A new **clean** version of LiteLLM is now available (v1.83.0). This was released by our new [CI/CD v2](https://docs.litellm.ai/blog/ci-cd-v2-improvements) pipeline which added isolated environments, stronger security gates, and safer release separation for LiteLLM.
+
+> **Update (March 27):** Review Townhall updates, including explanation of the incident, what we've done, and what comes next. [Learn more](https://docs.litellm.ai/blog/security-townhall-updates)
+
 > **Update (March 27):** Added [Verified safe versions](#verified-safe-versions) section with SHA-256 checksums for all audited PyPI and Docker releases.
 
 > **Update (March 26):** Added `checkmarx[.]zone` to [Indicators of compromise](#indicators-of-compromise-iocs)
@@ -25,10 +29,10 @@ import VersionVerificationTable from '@site/src/components/VersionVerificationTa
 
 
 ## TLDR; 
-- The compromised PyPI packages were **litellm==1.82.7** and **litellm==1.82.8**. Those packages have now been removed from PyPI.
-- We believe that the compromise originated from the Trivy dependency used in our CI/CD security scanning workflow.
+- The compromised PyPI packages were **litellm==1.82.7** and **litellm==1.82.8**. Those packages were live on March 24, 2026 from 10:39 UTC for about 40 minutes before being quarantined by PyPI.
+- We believe that the compromise originated from the [Trivy dependency](https://www.aquasec.com/blog/trivy-supply-chain-attack-what-you-need-to-know/) used in our CI/CD security scanning workflow.
 - Customers running the official LiteLLM Proxy Docker image were not impacted. That deployment path pins dependencies in requirements.txt and does not rely on the compromised PyPI packages.
-- We are pausing new LiteLLM releases until we complete a broader supply-chain review and confirm the release path is safe.
+- ~~We have paused all new LiteLLM releases until we complete a broader supply-chain review and confirm the release path is safe.~~ **Updated:** We have now released a new **safe** version of LiteLLM (v1.83.0) by our new [CI/CD v2](https://docs.litellm.ai/blog/ci-cd-v2-improvements) pipeline which added isolated environments, stronger security gates, and safer release separation for LiteLLM. We have also verified the codebase is safe and no malicious code was pushed to `main`.
 
 
 ## Overview

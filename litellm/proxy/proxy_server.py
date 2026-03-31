@@ -503,7 +503,9 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_server_root_path,
     handle_exception_on_proxy,
+    hash_password,
     hash_token,
+    migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     update_spend,
 )
@@ -869,6 +871,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    if prisma_client is not None:
+
+        async def _run_pw_migration():
+            try:
+                result = await migrate_passwords_to_scrypt_async(prisma_client)
+                verbose_proxy_logger.info(f"Password migration: {result}")
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Password migration skipped: {e}")
+
+        asyncio.create_task(_run_pw_migration())
 
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
@@ -1714,9 +1727,7 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     # 1. Try Redis first (cross-pod authoritative)
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(
-                key=counter_key
-            )
+            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
                 return float(val)
         except Exception as e:
@@ -1820,9 +1831,7 @@ async def _init_and_increment_spend_counter(
                 key=counter_key, value=base_spend
             )
 
-    await spend_counter_cache.async_increment_cache(
-        key=counter_key, value=increment
-    )
+    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
 
 
 async def update_cache(  # noqa: PLR0915
@@ -5719,6 +5728,11 @@ def _restamp_streaming_chunk_model(
 
     # For Azure Model Router, preserve the actual model used in each chunk
     if _is_azure_model_router_request(requested_model_from_client):
+        return chunk, model_mismatch_logged
+
+    # For fastest_response batch completions, preserve the winning model's name
+    # instead of stamping the comma-separated list the client sent.
+    if request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
     downstream_model = (
@@ -11681,9 +11695,9 @@ async def claim_onboarding_link(data: InvitationClaim):
             },
         )
     ### UPDATE USER OBJECT ###
-    hash_password = hash_token(token=data.password)
+    hashed_pw = hash_password(data.password)
     user_obj = await prisma_client.db.litellm_usertable.update(
-        where={"user_id": invite_obj.user_id}, data={"password": hash_password}
+        where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
     )
 
     if user_obj is None:
@@ -11703,6 +11717,8 @@ async def claim_onboarding_link(data: InvitationClaim):
         },
     )
 
+    if user_obj and hasattr(user_obj, "__dict__"):
+        user_obj.__dict__.pop("password", None)
     return user_obj
 
 
@@ -12141,7 +12157,10 @@ async def invitation_delete(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
+async def update_config(  # noqa: PLR0915
+    config_info: ConfigYAML,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     For Admin UI - allows admin to update config via UI
 
@@ -12149,6 +12168,10 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403, detail="Only proxy admins can update config"
+            )
         import base64
 
         """

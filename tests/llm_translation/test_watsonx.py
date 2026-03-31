@@ -13,6 +13,16 @@ import pytest
 from typing import Optional
 
 
+@pytest.fixture(autouse=True)
+def watsonx_env_vars(monkeypatch):
+    """Set required WatsonX env vars so the provider passes validation.
+    Also clear WATSONX_ZENAPIKEY/WATSONX_TOKEN so they don't bypass the IAM token mock."""
+    monkeypatch.setenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
+    monkeypatch.delenv("WATSONX_ZENAPIKEY", raising=False)
+    monkeypatch.delenv("WATSONX_TOKEN", raising=False)
+
+
 @pytest.fixture
 def watsonx_chat_completion_call():
     def _call(

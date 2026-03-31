@@ -78,52 +78,47 @@ async def test_basic_s3_logging(sync_mode, streaming):
 @pytest.mark.parametrize("streaming", [True])
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_basic_s3_v2_logging(streaming):
-    from blockbuster import BlockBuster
+    from unittest.mock import AsyncMock, MagicMock, patch
     from litellm.integrations.s3_v2 import S3Logger
+
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
 
     s3_v2_logger = S3Logger(s3_flush_interval=1)
     litellm.callbacks = [s3_v2_logger]
-    blockbuster = BlockBuster()
-    blockbuster.activate()
 
-    litellm._turn_on_debug()
-    litellm.callbacks = ["s3_v2"]
-    litellm.s3_callback_params = {
-        "s3_bucket_name": "load-testing-oct",
-        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
-        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
-        "s3_region_name": "us-west-2",
-    }
+    uploaded_keys: list = []
+    original_upload = s3_v2_logger.async_upload_data_to_s3
+
+    async def mock_upload(batch_logging_element):
+        uploaded_keys.append(batch_logging_element.s3_object_key)
+
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+
     litellm.set_verbose = True
     response_id = None
     response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
         stream=streaming,
     )
     if streaming:
         async for chunk in response:
-            print(chunk)
             response_id = chunk.id
     else:
         response_id = response.id
 
-    await asyncio.sleep(30)
-    print(f"response: {response}")
+    await asyncio.sleep(5)
 
-    # stop blockbuster
-    blockbuster.deactivate()
-
-    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
-
-    print(f"all_s3_keys: {all_s3_keys}")
-
-    # assert that atlest one key has response.id in it
-    assert any(response_id in key for key in all_s3_keys)
-    s3 = boto3.client("s3")
-    # delete all objects
-    for key in all_s3_keys:
-        s3.delete_object(Bucket="load-testing-oct", Key=key)
+    assert len(uploaded_keys) > 0, "S3 upload was never called"
+    assert any(response_id in key for key in uploaded_keys), (
+        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    )
 
 
 @pytest.mark.asyncio
@@ -228,9 +223,6 @@ def list_all_s3_objects(bucket_name):
     print(f"Total number of objects in {bucket_name}: {total_objects}")
     print(all_s3_keys)
     return total_objects, all_s3_keys
-
-
-list_all_s3_objects("load-testing-oct")
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")

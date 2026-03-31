@@ -56,6 +56,16 @@ if TYPE_CHECKING:
     )
 
 
+def _get_reasoning_items(
+    msg: "AllMessageValues",
+) -> List[ChatCompletionReasoningItem]:
+    """Extract reasoning_items from a message dict with proper typing."""
+    items = msg.get("reasoning_items")  # type: ignore[union-attr]
+    if items:
+        return items  # type: ignore[return-value]
+    return []
+
+
 def _build_reasoning_item(
     item_id: str,
     encrypted_content: Optional[str],
@@ -86,7 +96,9 @@ def _build_reasoning_item(
     }
 
 
-def _reasoning_item_to_response_input(r_item: Dict[str, Any]) -> Dict[str, Any]:
+def _reasoning_item_to_response_input(
+    r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]]
+) -> Dict[str, Any]:
     """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
     r_input: Dict[str, Any] = {
         "type": "reasoning",
@@ -246,7 +258,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                for r_item in msg.get("reasoning_items") or []:
+                for r_item in _get_reasoning_items(msg):
                     input_items.append(_reasoning_item_to_response_input(r_item))
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
@@ -264,7 +276,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    for r_item in msg.get("reasoning_items") or []:
+                    for r_item in _get_reasoning_items(msg):
                         input_items.append(_reasoning_item_to_response_input(r_item))
                 input_items.append(
                     {

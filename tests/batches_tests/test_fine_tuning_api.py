@@ -125,7 +125,6 @@ async def test_create_fine_tune_jobs_async():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -164,7 +163,10 @@ async def test_create_vertex_fine_tune_jobs_mocked():
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=mock_response,
-        ) as mock_post:
+        ) as mock_post, patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+            return_value=("fake-token", project_id),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
@@ -218,7 +220,6 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
-    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -257,7 +258,10 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=mock_response,
-        ) as mock_post:
+        ) as mock_post, patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+            return_value=("fake-token", project_id),
+        ):
             create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
                 model=base_model,
                 custom_llm_provider="vertex_ai",
@@ -406,29 +410,6 @@ def test_convert_basic_openai_request_to_vertex_request():
     )
 
 
-@pytest.mark.asyncio()
-@pytest.mark.skip(reason="skipping - we run mock tests for vertex ai")
-async def test_create_vertex_fine_tune_jobs():
-    verbose_logger.setLevel(logging.DEBUG)
-    # load_vertex_ai_credentials()
-
-    vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
-    print("creating fine tuning job")
-    create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-        model="gemini-1.0-pro-002",
-        custom_llm_provider="vertex_ai",
-        training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
-        vertex_project="pathrise-convert-1606954137718",
-        vertex_location="us-central1",
-        vertex_credentials=vertex_credentials,
-    )
-    print("vertex ai create fine tuning response=", create_fine_tuning_response)
-
-    assert create_fine_tuning_response.id is not None
-    assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
-    assert create_fine_tuning_response.object == "fine_tuning.job"
-
-
 @pytest.mark.asyncio
 async def test_mock_openai_create_fine_tune_job():
     """Test that create_fine_tuning_job sends correct parameters to OpenAI"""
@@ -536,7 +517,6 @@ async def test_mock_openai_retrieve_fine_tune_job():
         except Exception as e:
             print("error=", e)
 
-
         # Verify the request
         mock_retrieve.assert_called_once_with(fine_tuning_job_id="ft-123")
 
@@ -544,7 +524,9 @@ async def test_mock_openai_retrieve_fine_tune_job():
 @pytest.mark.asyncio
 async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
     """Test that Azure-specific parameters are passed through extra_body"""
-    from openai.types.fine_tuning.fine_tuning_job import Hyperparameters as OAIHyperparameters
+    from openai.types.fine_tuning.fine_tuning_job import (
+        Hyperparameters as OAIHyperparameters,
+    )
     from litellm.types.utils import LiteLLMFineTuningJob
 
     mock_response = LiteLLMFineTuningJob(
@@ -564,7 +546,9 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
     async def mock_async_create(*args, **kwargs):
         return mock_response
 
-    with patch("litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job") as mock_create:
+    with patch(
+        "litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job"
+    ) as mock_create:
         mock_create.return_value = mock_async_create()
 
         response = await litellm.acreate_fine_tuning_job(
@@ -575,10 +559,7 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
             api_key="test-key",
             api_version="2025-04-01-preview",
             trainingType=1,
-            hyperparameters={
-                "n_epochs": 3,
-                "prompt_loss_weight": 0.1
-            },
+            hyperparameters={"n_epochs": 3, "prompt_loss_weight": 0.1},
         )
 
         # Verify the request
@@ -590,7 +571,7 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
         assert create_data["model"] == "gpt-4.1-mini-2025-04-14"
         assert create_data["training_file"] == "file-123"
         assert create_data["hyperparameters"] == {"n_epochs": 3}
-        
+
         # Azure-specific parameters should be in extra_body
         assert "extra_body" in create_data
         assert create_data["extra_body"]["trainingType"] == 1

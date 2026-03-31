@@ -7,6 +7,7 @@ JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import fnmatch
+import hashlib
 import os
 import re
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
@@ -620,9 +621,7 @@ class JWTHandler:
             )
 
         # Check cache first
-        cache_key = (
-            f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
-        )
+        cache_key = f"oidc_userinfo_{hashlib.sha256(token.encode()).hexdigest()}"
         cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
 
         if cached_userinfo is not None:
@@ -1397,8 +1396,12 @@ class JWTAuthManager:
         request_headers: Optional[dict] = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
-        # Check if OIDC UserInfo endpoint is enabled
-        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+        # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
+        # JWT auth if the token itself is a well-formed JWT (3-part structure).
+        if (
+            jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
+            and not jwt_handler.is_jwt(token=api_key)
+        ):
             verbose_proxy_logger.debug(
                 "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
             )

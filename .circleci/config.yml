@@ -1559,6 +1559,25 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install apscheduler
+      - run:
+          name: Install dockerize
+          command: |
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=litellm_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - attach_workspace:
           at: ~/project
       - run:
@@ -1567,29 +1586,41 @@ jobs:
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
-          name: Run Docker container
+          name: Seed database with real schema
+          command: |
+            docker run -d \
+              -p 4001:4000 \
+              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              --name schema-seed \
+              --add-host=host.docker.internal:host-gateway \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --use_prisma_db_push
+      - run:
+          name: Wait for schema seed to complete
+          command: dockerize -wait http://localhost:4001 -timeout 5m
+      - run:
+          name: Stop schema seed container
+          command: docker stop schema-seed && docker rm schema-seed
+      - run:
+          name: Run Docker container with bad schema and disabled updates
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
+              --name my-app \
+              --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
-              --name my-app \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
-      - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-
       - run:
           name: Wait for container to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
@@ -1997,9 +2028,6 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
-              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
-              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
-              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
@@ -2007,7 +2035,6 @@ jobs:
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e GCS_FLUSH_INTERVAL="1" \
               --add-host host.docker.internal:host-gateway \
@@ -2484,13 +2511,27 @@ jobs:
           command: |
             docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: |
+            timeout 60s bash -c 'until docker exec postgres-db pg_isready -U postgres -d circle_test; do sleep 2; done'
+      - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2498,18 +2539,15 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
-              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
-              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
-              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
+              --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
               my-app:latest \
@@ -2540,8 +2578,11 @@ jobs:
       - run:
           name: Stop and remove first container
           command: |
-            docker stop my-app
-            docker rm my-app
+            docker stop my-app || true
+            docker rm my-app || true
+            docker stop postgres-db || true
+            docker rm postgres-db || true
+          when: always
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3278,36 +3319,38 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
+          name: Install dockerize
+          command: |
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=litellm_schema_sync \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
           name: Load Docker Database Image
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
-          name: Install Neon CLI
+          name: Run schema sync via prisma db push
           command: |
-            npm i -g neonctl
-      - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
-          name: Sync schema on base e2e database
-          command: |
-            BASE_DATABASE_URL=$(neon connection-string \
-              --project-id $NEON_PROJECT_ID \
-              --api-key $NEON_API_KEY \
-              --branch br-fancy-paper-ad1olsb3 \
-              --database-name yuneng-trial-db \
-              --role neondb_owner)
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$BASE_DATABASE_URL \
+              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_schema_sync" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               --name schema-sync \
+              --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
@@ -3485,7 +3528,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - prisma_schema_sync:
-          context: e2e_ui_tests
           requires:
             - build_docker_database_image
           filters:
@@ -3493,32 +3535,32 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_chromium
-          browser: chromium
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-            - prisma_schema_sync
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_firefox
-          browser: firefox
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-            - prisma_schema_sync
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+      # - e2e_ui_testing: # migrate to dynamic db - currently requires neon cli 
+      #     name: e2e_ui_testing_chromium
+      #     browser: chromium
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #       - prisma_schema_sync
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - e2e_ui_testing:
+      #     name: e2e_ui_testing_firefox
+      #     browser: firefox
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #       - prisma_schema_sync
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
       - build_and_test:
           requires:
             - build_docker_database_image
