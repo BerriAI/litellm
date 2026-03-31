@@ -1196,6 +1196,54 @@ def test_completion_cost_fireworks_ai(model):
     cost = completion_cost(completion_response=resp)
 
 
+def test_fireworks_ai_cache_token_pricing():
+    """Test that Fireworks AI cost calculator accounts for cache read/creation tokens.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24774
+    """
+    from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
+    from litellm.types.utils import Usage
+
+    # Simulate usage with cache read tokens
+    usage_with_cache = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        cache_read_input_tokens=800,
+        cache_creation_input_tokens=0,
+    )
+
+    # Simulate usage without cache tokens
+    usage_no_cache = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_cost_cached, completion_cost_cached = cost_per_token(
+        model="fireworks_ai/llama-v3p3-70b-instruct", usage=usage_with_cache
+    )
+    prompt_cost_no_cache, completion_cost_no_cache = cost_per_token(
+        model="fireworks_ai/llama-v3p3-70b-instruct", usage=usage_no_cache
+    )
+
+    # Completion cost should be the same regardless of cache
+    assert completion_cost_cached == completion_cost_no_cache
+
+    # If the model has cache pricing, the prompt cost with cache should differ
+    # from the prompt cost without cache (cache read rate is cheaper)
+    model_info = litellm.get_model_info(
+        model="fireworks_ai/llama-v3p3-70b-instruct",
+        custom_llm_provider="fireworks_ai",
+    )
+    if model_info.get("cache_read_input_token_cost") is not None:
+        assert prompt_cost_cached < prompt_cost_no_cache, (
+            "Prompt cost with 800 cache-read tokens should be less than "
+            "full-price for the same total prompt tokens"
+        )
+
+
 def test_cost_azure_openai_prompt_caching():
     from litellm.utils import Choices, Message, ModelResponse, Usage
     from litellm.types.utils import (
