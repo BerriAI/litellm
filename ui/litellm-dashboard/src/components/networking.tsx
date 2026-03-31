@@ -9166,7 +9166,6 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
   const response = await fetch(`${base}/v3/login/exchange`, {
     method: "POST",
     body: JSON.stringify({ code }),
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
   });
 
@@ -9177,7 +9176,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    storeLoginToken(data.token);
+    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
   }
   return data.token;
 };

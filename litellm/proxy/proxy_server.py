@@ -11486,7 +11486,7 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"], httponly=True)
+        json_response.set_cookie(key="token", value=cached_data["token"])
         return json_response
     except ProxyException:
         raise
