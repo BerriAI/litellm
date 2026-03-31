@@ -868,78 +868,6 @@ def test_completion_mistral_api_modified_input():
             pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_oobabooga():
-#     try:
-#         response = completion(
-#             model="oobabooga/vicuna-1.3b", messages=messages, api_base="http://127.0.0.1:5000"
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_oobabooga()
-# aleph alpha
-# def test_completion_aleph_alpha():
-#     try:
-#         response = completion(
-#             model="luminous-base", messages=messages, logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_aleph_alpha()
-
-
-# def test_completion_aleph_alpha_control_models():
-#     try:
-#         response = completion(
-#             model="luminous-base-control", messages=messages, logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_aleph_alpha_control_models()
-
-import openai
-
-
-def test_completion_gpt4_turbo():
-    litellm.set_verbose = True
-    try:
-        response = completion(
-            model="gpt-4-1106-preview",
-            messages=messages,
-            max_completion_tokens=10,
-        )
-        print(response)
-    except openai.RateLimitError:
-        print("got a rate liimt error")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_gpt4_turbo()
-
-
-def test_completion_gpt4_turbo_0125():
-    try:
-        response = completion(
-            model="gpt-4-0125-preview",
-            messages=messages,
-            max_tokens=10,
-        )
-        print(response)
-    except openai.RateLimitError:
-        print("got a rate liimt error")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
@@ -3292,6 +3220,13 @@ def test_petals():
 ## test deep infra
 @pytest.mark.parametrize("drop_params", [True, False])
 def test_completion_deep_infra(drop_params):
+    """Test that DeepInfra requests are shaped correctly without making real API calls."""
+    from unittest.mock import MagicMock, patch
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    import httpx
+
     litellm.set_verbose = False
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
     tools = [
@@ -3320,7 +3255,51 @@ def test_completion_deep_infra(drop_params):
             "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
-    try:
+
+    mock_response = ChatCompletion(
+        id="chatcmpl-mock",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="It's sunny.", role="assistant"
+                ),
+            )
+        ],
+        created=1234567890,
+        model="meta-llama/Llama-2-70b-chat-hf",
+        object="chat.completion",
+        usage={"completion_tokens": 5, "prompt_tokens": 20, "total_tokens": 25},
+    )
+
+    mock_raw = MagicMock()
+    mock_raw.parse.return_value = mock_response
+    mock_raw.headers = httpx.Headers({"content-type": "application/json"})
+    mock_raw.status_code = 200
+
+    with patch(
+        "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request",
+        return_value=(mock_raw, mock_response),
+    ) as mock_create:
+        if drop_params is False:
+            # DeepInfra doesn't support tool_choice, should raise UnsupportedParamsError
+            with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+                completion(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=10,
+                    tools=tools,
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "get_current_weather"},
+                    },
+                    drop_params=drop_params,
+                    api_key="fake-api-key",
+                )
+            return
+
         response = completion(
             model=model_name,
             messages=messages,
@@ -3332,33 +3311,75 @@ def test_completion_deep_infra(drop_params):
                 "function": {"name": "get_current_weather"},
             },
             drop_params=drop_params,
+            api_key="fake-api-key",
         )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        if drop_params is True:
-            pytest.fail(f"Error occurred: {e}")
+
+        # Verify the call was made
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+
+        # Verify request shape
+        data = call_kwargs["data"]
+        assert data["model"] == "meta-llama/Llama-2-70b-chat-hf"
+        assert data["messages"] == messages
+        assert data["temperature"] == 0
+        assert data["max_tokens"] == 10
+        # tool_choice should be dropped for unsupported params
+        assert "tool_choice" not in data
 
 
 # test_completion_deep_infra()
 
 
 def test_completion_deep_infra_mistral():
-    print("deep infra test with temp=0")
+    """Test that DeepInfra Mistral requests are shaped correctly without making real API calls."""
+    from unittest.mock import MagicMock, patch
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    import httpx
+
     model_name = "deepinfra/mistralai/Mistral-7B-Instruct-v0.1"
-    try:
+
+    mock_response = ChatCompletion(
+        id="chatcmpl-mock",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Hello!", role="assistant"
+                ),
+            )
+        ],
+        created=1234567890,
+        model="mistralai/Mistral-7B-Instruct-v0.1",
+        object="chat.completion",
+        usage={"completion_tokens": 5, "prompt_tokens": 20, "total_tokens": 25},
+    )
+
+    mock_raw = MagicMock()
+    mock_raw.parse.return_value = mock_response
+    mock_raw.headers = httpx.Headers({"content-type": "application/json"})
+    mock_raw.status_code = 200
+
+    with patch(
+        "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request",
+        return_value=(mock_raw, mock_response),
+    ) as mock_create:
         response = completion(
             model=model_name,
             messages=messages,
-            temperature=0.01,  # mistrail fails with temperature=0
+            temperature=0.01,
             max_tokens=10,
+            api_key="fake-api-key",
         )
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.exceptions.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+        data = call_kwargs["data"]
+        assert data["model"] == "mistralai/Mistral-7B-Instruct-v0.1"
+        assert data["temperature"] == 0.01
+        assert data["max_tokens"] == 10
 
 
 # test_completion_deep_infra_mistral()

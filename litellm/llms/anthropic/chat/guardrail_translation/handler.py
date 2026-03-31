@@ -460,6 +460,95 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return responses_so_far
 
+    def _prepare_request_data(
+        self,
+        request_data: Optional[dict],
+        response: Any,
+        user_api_key_dict: Optional[Any],
+        key: str,
+    ) -> dict:
+        """Ensure request_data has the response/responses_so_far key and metadata."""
+        if request_data is None:
+            request_data = {key: response}
+        else:
+            if key not in request_data:
+                request_data[key] = response
+
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+        return request_data
+
+    @staticmethod
+    def _get_response_content(response: Any) -> List[Any]:
+        """Extract content list from a dict or object response."""
+        if isinstance(response, dict):
+            return response.get("content", []) or []
+        elif hasattr(response, "content"):
+            return getattr(response, "content", None) or []
+        return []
+
+    def _extract_from_content_blocks(
+        self,
+        response_content: List[Any],
+        texts_to_check: List[str],
+        images_to_check: List[str],
+        task_mappings: List[Tuple[int, Optional[int]]],
+        tool_calls_to_check: List["ChatCompletionToolCallChunk"],
+    ) -> None:
+        """Extract text, images, and tool calls from content blocks."""
+        for content_idx, content_block in enumerate(response_content):
+            block_dict: Dict[str, Any] = {}
+            if isinstance(content_block, dict):
+                block_type = content_block.get("type")
+                block_dict = cast(Dict[str, Any], content_block)
+            elif hasattr(content_block, "type"):
+                block_type = getattr(content_block, "type", None)
+                if hasattr(content_block, "model_dump"):
+                    block_dict = content_block.model_dump()
+                else:
+                    block_dict = {
+                        "type": block_type,
+                        "text": getattr(content_block, "text", None),
+                    }
+            else:
+                continue
+
+            if block_type in ["text", "tool_use"]:
+                self._extract_output_text_and_images(
+                    content_block=block_dict,
+                    content_idx=content_idx,
+                    texts_to_check=texts_to_check,
+                    images_to_check=images_to_check,
+                    task_mappings=task_mappings,
+                    tool_calls_to_check=tool_calls_to_check,
+                )
+
+    @staticmethod
+    def _build_guardrail_inputs(
+        texts_to_check: List[str],
+        images_to_check: List[str],
+        tool_calls_to_check: List["ChatCompletionToolCallChunk"],
+        response: Any,
+    ) -> "GenericGuardrailAPIInputs":
+        """Build GenericGuardrailAPIInputs with optional images, tool calls, model."""
+        inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if images_to_check:
+            inputs["images"] = images_to_check
+        if tool_calls_to_check:
+            inputs["tool_calls"] = tool_calls_to_check
+        response_model = None
+        if isinstance(response, dict):
+            response_model = response.get("model")
+        elif hasattr(response, "model"):
+            response_model = getattr(response, "model", None)
+        if response_model:
+            inputs["model"] = response_model
+        return inputs
+
     def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
         """
         Parse streaming responses and extract accumulated text content.

@@ -334,15 +334,13 @@ class A2AGuardrailHandler(BaseTranslation):
         then the combined guardrailed text is written into the first chunk that had text
         and all other text parts in other chunks are cleared (in-place).
         """
-        parsed = self._parse_a2a_streaming_response_items(responses_so_far)
-        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+        parsed, valid_parsed = self._parse_streaming_responses(responses_so_far)
         if not valid_parsed:
             return responses_so_far
 
-        (
-            combined_text,
-            chunk_indices_with_text,
-        ) = self._collect_a2a_streaming_combined_text(valid_parsed)
+        combined_text, chunk_indices_with_text = (
+            self._collect_text_from_parsed_chunks(valid_parsed)
+        )
         if not combined_text:
             return responses_so_far
 
@@ -372,6 +370,45 @@ class A2AGuardrailHandler(BaseTranslation):
         )
         self._write_a2a_parsed_back_to_ndjson_strings(responses_so_far, parsed)
         return responses_so_far
+
+    def _parse_streaming_responses(
+        self,
+        responses_so_far: List[Any],
+    ) -> Tuple[
+        List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]
+    ]:
+        """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
+        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        for i, item in enumerate(responses_so_far):
+            if isinstance(item, dict):
+                obj = item
+            elif isinstance(item, str):
+                try:
+                    obj = json.loads(item.strip())
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            else:
+                continue
+            if isinstance(obj.get("result"), dict):
+                parsed[i] = obj
+        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+        return parsed, valid_parsed
+
+    def _collect_text_from_parsed_chunks(
+        self,
+        valid_parsed: List[Tuple[int, Dict[str, Any]]],
+    ) -> Tuple[str, List[int]]:
+        """Collect text from parsed chunks, returning combined text and indices."""
+        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+        text_parts: List[str] = []
+        chunk_indices_with_text: List[int] = []
+        for _idx, (orig_i, obj) in enumerate(valid_parsed):
+            t = extract_text_from_a2a_response(obj)
+            if t:
+                text_parts.append(t)
+                chunk_indices_with_text.append(orig_i)
+        return "".join(text_parts), chunk_indices_with_text
 
     def _extract_texts_from_result(
         self,
