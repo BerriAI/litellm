@@ -11,7 +11,7 @@ Use this path if you are integrating LiteLLM directly into application code.
 ## 1. Install LiteLLM
 
 ```bash
-pip install litellm
+pip install litellm==1.82.6
 ```
 
 ## 2. Set Provider Credentials
