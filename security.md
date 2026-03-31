@@ -1,5 +1,44 @@
 # Data Privacy and Security
 
+## Security Vulnerability Reporting Guidelines
+
+We value the security community's role in protecting our systems and users. To report a security vulnerability:
+
+- Email support@berri.ai with details
+- Include steps to reproduce the issue
+- Provide any relevant additional information
+
+We'll review all reports promptly.
+
+#### Vulnerability Categories
+
+We classify vulnerabilities into the following categories:
+
+**P0: Supply Chain Attacks**
+
+Attacks that compromise our CI/CD pipeline, allowing a malicious actor to point our PyPI package or Docker images (GHCR or Docker Hub) to vulnerable or tampered artifacts.
+
+**P1: Unauthenticated Proxy Access**
+
+Application-level attacks where an unauthenticated user is able to gain access to a LiteLLM proxy instance that should be protected.
+
+**P2: Authenticated Malicious Actions**
+
+Application-level attacks where an authenticated user is able to perform actions beyond their intended permissions, such as privilege escalation or unauthorized data access.
+
+#### Bug Bounty Program
+
+We offer bounties for responsibly disclosed vulnerabilities based on severity:
+
+| Severity | Bounty Range | Example |
+|----------|-------------|---------|
+| **Critical** | $1,500 - $3,000 | P0 supply chain compromise |
+| **High** | $500 - $1,500 | P1 unauthenticated proxy access |
+| **Medium** | $250 - $500 | P2 authenticated privilege escalation |
+| **Low** | $50 - $250 | Minor information disclosure, low-impact misconfigurations |
+
+To qualify for a bounty, reports must include clear reproduction steps and must not involve systems or accounts you do not own. We review all submissions promptly and will follow up within 5 business days.
+
 ## Security Measures
 
 ### LiteLLM Github
@@ -11,11 +50,6 @@
 - **No data or telemetry is stored on LiteLLM Servers when you self host**
 - For installation and configuration, see: [Self-hosting guided](https://docs.litellm.ai/docs/proxy/deploy)
 - **Telemetry** We run no telemetry when you self host LiteLLM
-
-
-:::info
-✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
-:::
 
 ### LiteLLM Cloud
 
