@@ -36,6 +36,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 AZURE_AI_API_BASE = os.getenv("AZURE_AI_API_BASE")
 
+
 @pytest.mark.parametrize(
     "model_group_header, expected_model",
     [
@@ -398,7 +399,7 @@ async def test_azure_ai_model_router_streaming_model_in_chunk():
     response = await litellm.acompletion(
         model="azure_ai/azure-model-router",
         messages=[{"role": "user", "content": "hi"}],
-        api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+        api_base=os.getenv("AZURE_MODEL_ROUTER_API_BASE"),
         api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
         stream=True,
     )
