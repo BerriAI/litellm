@@ -1,25 +1,90 @@
-
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # Getting Started Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
-- Add an Azure OpenAI model 
-- Make a successful /chat/completion call 
-- Generate a virtual key 
-- Set RPM limit on virtual key 
+- Add an Azure OpenAI model
+- Make a successful /chat/completion call
+- Generate a virtual key
+- Set RPM limit on virtual key
 
+## Quick Install (Recommended for local / beginners)
+
+New to LiteLLM? This is the easiest way to get started locally. One command installs LiteLLM and walks you through setup interactively — no config files to write by hand.
+
+### 1. Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+```
+
+This detects your OS, installs `litellm[proxy]`, and drops you straight into the setup wizard.
+
+### 2. Follow the wizard
+
+```
+$ litellm --setup
+
+  Welcome to LiteLLM
+
+  Choose your LLM providers
+  ○ 1. OpenAI        GPT-4o, GPT-4o-mini, o1
+  ○ 2. Anthropic     Claude Opus, Sonnet, Haiku
+  ○ 3. Azure OpenAI  GPT-4o via Azure
+  ○ 4. Google Gemini Gemini 2.0 Flash, 1.5 Pro
+  ○ 5. AWS Bedrock   Claude, Llama via AWS
+  ○ 6. Ollama        Local models
+
+  ❯ Provider(s): 1,2
+
+  ❯ OpenAI API key: sk-...
+  ❯ Anthropic API key: sk-ant-...
+
+  ❯ Port [4000]:
+  ❯ Master key [auto-generate]:
+
+  ✔ Config saved → ./litellm_config.yaml
+
+  ❯ Start the proxy now? (Y/n):
+```
+
+The wizard walks you through:
+1. Pick your LLM providers (OpenAI, Anthropic, Azure, Bedrock, Gemini, Ollama)
+2. Enter API keys for each provider
+3. Set a port and master key (or accept the defaults)
+4. Config is saved to `./litellm_config.yaml` and the proxy starts immediately
+
+### 3. Make a call
+
+Your proxy is running on `http://0.0.0.0:4000`. Test it:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <your-master-key>' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+}'
+```
+
+:::tip Already have pip installed?
+You can skip the curl install and run `litellm --setup` directly after `pip install 'litellm[proxy]'`.
+:::
+
+---
 
 ## Pre-Requisites 
 
-- Install LiteLLM Docker Image **OR** LiteLLM CLI (pip package)
+Choose your install method. **Docker Compose** users complete their full setup inside the tab and are done. **Docker** and **pip** users continue with the steps below the tabs.
 
 <Tabs>
 
 <TabItem value="docker" label="Docker">
 
-```
+```bash
 docker pull docker.litellm.ai/berriai/litellm:main-latest
 ```
 
@@ -37,7 +102,25 @@ $ pip install 'litellm[proxy]'
 
 <TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
 
-Use this docker compose to spin up the proxy with a postgres database running locally. 
+Docker Compose bundles LiteLLM with a Postgres database. Follow the steps below — the proxy will be fully running by the end.
+
+### Step 1 — Pull the LiteLLM database image
+
+LiteLLM provides a dedicated `litellm-database` image for proxy deployments that connect to Postgres.
+
+```bash
+docker pull ghcr.io/berriai/litellm-database:main-latest
+```
+
+See all available tags on the [GitHub Container Registry](https://github.com/BerriAI/litellm/pkgs/container/litellm-database).
+
+---
+
+### Step 2 — Set up a database
+
+Complete all three config files **before** running `docker compose up`. The proxy server will not start correctly if any of these are missing.
+
+#### 2.1 — Get `docker-compose.yml` and create `.env`
 
 ```bash
 # Get the docker compose file
@@ -46,26 +129,154 @@ curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.ym
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
-# Add the litellm salt key - you cannot change this after adding a model
-# It is used to encrypt / decrypt your LLM API Key credentials
-# We recommend - https://1password.com/password-generator/ 
-# password generator to get a random hash for litellm salt key
+# Add the litellm salt key — cannot be changed after adding a model
+# Used to encrypt/decrypt your LLM API key credentials
+# Generate a strong random value: https://1password.com/password-generator/
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
-# Start
+# Add your model credentials
+echo 'AZURE_API_BASE="https://openai-***********/"' >> .env
+echo 'AZURE_API_KEY="your-azure-api-key"' >> .env
+```
+
+#### 2.2 — Create `config.yaml`
+
+The default `docker-compose.yml` starts a Postgres container at `db:5432`. Your `config.yaml` must include `database_url` pointing to it:
+
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/my_azure_deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2025-01-01-preview"
+
+general_settings:
+  master_key: sk-1234 # 🔑 your proxy admin key (must start with sk-)
+  database_url: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+```
+
+:::tip
+`database_url` enables virtual keys, spend tracking, and the UI. Replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string if you prefer a managed database.
+:::
+
+#### 2.3 — Create `prometheus.yml`
+
+This file **must exist as a file** before `docker compose up`. If it is missing, Docker auto-creates it as an empty directory and the Prometheus container fails to start.
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "litellm"
+    static_configs:
+      - targets: ["litellm:4000"]
+```
+
+Also verify that the `config.yaml` volume mount and `--config` flag are **not commented out** in `docker-compose.yml`:
+
+```yaml
+services:
+  litellm:
+    volumes:
+      - ./config.yaml:/app/config.yaml # ✅ must be uncommented
+    command:
+      - "--config=/app/config.yaml" # ✅ must be uncommented
+```
+
+:::warning
+All three files (`.env`, `config.yaml`, `prometheus.yml`) must be present before running `docker compose up`. See [Troubleshooting](#troubleshooting) if you run into issues.
+:::
+
+---
+
+### Step 3 — Start the proxy server and test it
+
+After `config.yaml`, `prometheus.yml`, and `.env` are complete, start the proxy:
+
+```bash
 docker compose up
 ```
 
+Once running, test it with a curl request:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-1234' \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+**Expected response:**
+
+```json
+{
+  "id": "chatcmpl-abcd",
+  "created": 1773817678,
+  "model": "gpt-4o",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_6b1ef07cda",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Hello! How can I assist you today?",
+        "role": "assistant",
+        "annotations": []
+      }
+    }
+  ],
+  "usage": {
+    "completion_tokens": 9,
+    "prompt_tokens": 9,
+    "total_tokens": 18,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": "default"
+}
+```
+
+---
+
+### Optional — Navigate to the LiteLLM UI and generate a virtual key
+
+Open [http://localhost:4000/ui](http://localhost:4000/ui) in your browser and log in with your master key (`sk-1234`).
+
+Navigate to **Virtual Keys** and click **+ Create New Key**:
+
+<Image img={require('../../img/litellm_ui_create_key.png')} alt="LiteLLM UI — Create Virtual Key" />
+
+Virtual keys let you track spend, set rate limits, and control model access per user or team.
+
 </TabItem>
+
 </Tabs>
 
-## 1. Add a model 
+:::note Docker Compose users
+Your setup is complete — the steps below are for **Docker** and **pip** users only.
+:::
 
-Control LiteLLM Proxy with a config.yaml file.
+---
 
-Setup your config.yaml with your azure model.
+## Step 1 — Add a model
 
-Note: When using the proxy with a database, you can also **just add models via UI** (UI is available on `/ui` route).
+Control LiteLLM Proxy with a `config.yaml` file. Create one with your Azure model:
 
 ```yaml
 model_list:
@@ -88,8 +299,6 @@ You can read more about how model resolution works in the [Model Configuration](
     - **`api_key`** (`str`) - The API key required for authentication. It can be retrieved from an environment variable using `os.environ/`.
     - **`api_base`** (`str`) - The API base for your azure deployment.
     - **`api_version`** (`str`) - The API Version to use when calling Azure's OpenAI API. Get the latest Inference API version [here](https://learn.microsoft.com/en-us/azure/ai-services/openai/api-version-deprecation?source=recommendations#latest-preview-api-releases).
-
----
 
 
 ---
@@ -138,19 +347,19 @@ $ litellm --config /app/config.yaml --detailed_debug
 
 </Tabs>
 
+Confirm your config was loaded correctly — you should see this in the logs:
 
-Confirm your config.yaml got mounted correctly
-
-```bash
+```
 Loaded config YAML (api_key and environment_variables are not shown):
 {
-"model_list": [
-{
-"model_name ...
+  "model_list": [
+    {
+      "model_name": ...
 ```
 
 ### 2.2 Make Call 
 
+LiteLLM Proxy is 100% OpenAI-compatible. Test your model via `/chat/completions`:
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -244,15 +453,17 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 - [Other/Non-Chat Completion Endpoints](../embedding/supported_embedding.md)
 - [Pass-through for VertexAI, Bedrock, etc.](../pass_through/vertex_ai.md)
 
-## 3. Generate a virtual key
+## Optional: Generate a virtual key
 
-Track Spend, and control model access via virtual keys for the proxy
+Track spend and control model access via virtual keys for the proxy.
 
-### 3.1 Set up a Database 
+### Prerequisite — Set up a database
 
-**Requirements**
-- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+:::note Docker Compose users
+Your Postgres container is already running — skip ahead to [Create Key w/ RPM Limit](#create-key-w-rpm-limit) below.
+:::
 
+**Docker / pip users** — you need a Postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), or self-hosted). Add `general_settings` to your `config.yaml`:
 
 ```yaml
 model_list:
@@ -268,7 +479,9 @@ general_settings:
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
 ```
 
-Save config.yaml as `litellm_config.yaml` (used in 3.2).
+Save config.yaml as `litellm_config.yaml` before continuing.
+
+You must finish this setup before starting the proxy server.
 
 ---
 
@@ -294,7 +507,7 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
         `database_url: "postgresql://..."`
      - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 
-### 3.2 Start Proxy 
+### Start Proxy
 
 ```bash
 docker run \
@@ -302,12 +515,11 @@ docker run \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
     -p 4000:4000 \
-    docker.litellm.ai/berriai/litellm:main-latest \
+    ghcr.io/berriai/litellm-database:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 
-
-### 3.3 Create Key w/ RPM Limit
+### Create Key w/ RPM Limit
 
 Create a key with `rpm_limit: 1`. This will only allow 1 request per minute for calls to proxy with this key.
 
@@ -330,9 +542,9 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 }
 ```
 
-### 3.4 Test it! 
+### Test it!
 
-**Use your virtual key from step 3.3**
+**Use the virtual key you just created.**
 
 1st call - Expect to work! 
 
@@ -546,6 +758,24 @@ model_list:
 
 ## Troubleshooting 
 
+### `prometheus.yml` mount error — "not a directory"
+
+If you see:
+
+```bash
+Error: cannot create subdirectories in ".../prometheus.yml": not a directory
+```
+
+Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time.
+
+Fix it:
+Then create the file (see [Step 2.3 — Create `prometheus.yml`](#23--create-prometheusyml)) and run `docker compose up` again.
+```bash
+rm -rf prometheus.yml
+```
+
+Then create the file (see [Step 2.4](#step-24--create-prometheusyml)) and run `docker compose up` again.
+
 ### Non-root docker image?
 
 If you need to run the docker image as a non-root user, use [this](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root).
@@ -645,6 +875,3 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
-
-
-

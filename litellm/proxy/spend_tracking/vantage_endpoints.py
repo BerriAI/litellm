@@ -40,9 +40,7 @@ def _get_registered_vantage_logger():
     return None
 
 
-async def _set_vantage_settings(
-    api_key: str, integration_token: str, base_url: str
-):
+async def _set_vantage_settings(api_key: str, integration_token: str, base_url: str):
     """Store Vantage settings in the database with encrypted API key."""
     from litellm.proxy.proxy_server import prisma_client
 
@@ -341,9 +339,7 @@ async def init_vantage_settings(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error initializing Vantage settings: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error initializing Vantage settings: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to initialize Vantage settings: {str(e)}"},
@@ -395,7 +391,8 @@ async def vantage_dry_run_export(
             """Cast Decimal columns to Float64 so .to_dicts() produces
             JSON-serializable float values instead of decimal.Decimal."""
             decimal_cols = [
-                col for col, dtype in zip(frame.columns, frame.dtypes)
+                col
+                for col, dtype in zip(frame.columns, frame.dtypes)
                 if isinstance(dtype, pl.Decimal)
             ]
             if decimal_cols:
@@ -404,8 +401,16 @@ async def vantage_dry_run_export(
                 )
             return frame.to_dicts()
 
-        usage_sample = _to_json_safe_dicts(data.head(min(50, len(data)))) if not data.is_empty() else []
-        normalized_sample = _to_json_safe_dicts(normalized.head(min(50, len(normalized)))) if not normalized.is_empty() else []
+        usage_sample = (
+            _to_json_safe_dicts(data.head(min(50, len(data))))
+            if not data.is_empty()
+            else []
+        )
+        normalized_sample = (
+            _to_json_safe_dicts(normalized.head(min(50, len(normalized))))
+            if not normalized.is_empty()
+            else []
+        )
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
@@ -437,14 +442,10 @@ async def vantage_dry_run_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error performing Vantage dry run export: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error performing Vantage dry run export: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": f"Failed to perform Vantage dry run export: {str(e)}"
-            },
+            detail={"error": f"Failed to perform Vantage dry run export: {str(e)}"},
         )
 
 

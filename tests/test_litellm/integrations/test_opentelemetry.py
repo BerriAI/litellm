@@ -3,7 +3,8 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -425,6 +426,7 @@ class TestOpenTelemetry(unittest.TestCase):
         ) as mock_get_headers, patch.object(
             otel, "_get_tracer_with_dynamic_headers"
         ) as mock_get_tracer:
+
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -2165,25 +2167,30 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")
 
-    def test_handle_failure_langfuse_otel_nulls_parent_span(self):
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_nulls_parent_span_if_ignore_context_propagation(
+        self, handle_method: str
+    ):
         """
-        For langfuse_otel, _handle_failure should ignore parent spans from other providers
-        and create a root-level error span (symmetric with _handle_success).
+        If ignore_context_propagation is True, _handle_success should ignore any parent span
+        and create a root-level span. This could be useful for langfuse_otel where
+        _handle_success may ignore parent spans from other providers and create a root-level
+        span (symmetric with _handle_failure).
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
 
         otel = OpenTelemetry(
-            callback_name="langfuse_otel",
+            config=OpenTelemetryConfig(ignore_context_propagation=True),
             tracer_provider=tracer_provider,
         )
         otel.tracer = tracer_provider.get_tracer("litellm")
 
         other_tracer = tracer_provider.get_tracer("other_provider")
-        other_span = other_tracer.start_span("other_provider_span")
+        other_span = other_tracer.start_span("parent_span")
 
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         end = start + timedelta(seconds=1)
 
         kwargs = {
@@ -2202,23 +2209,33 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
             "exception": Exception("test error"),
         }
 
-        otel._handle_failure(kwargs, None, start, end)
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         other_span.end()
 
         spans = span_exporter.get_finished_spans()
-        failure_spans = [s for s in spans if s.name != "other_provider_span"]
+        child_spans = [s for s in spans if s.name != "parent_span"]
+        child_span_ids = {s.context.span_id for s in child_spans if s.context}
 
-        self.assertTrue(failure_spans, "Expected at least one failure span")
-        for span in failure_spans:
-            self.assertIsNone(
-                span.parent,
-                f"langfuse_otel failure span should be a root span, but has parent: {span.parent}",
-            )
+        self.assertTrue(child_spans, "Expected at least one child span")
+        for span in child_spans:
+            assert (
+                span.parent is None or span.parent.span_id in child_span_ids
+            ), f"if ignore_context_propagation is True, span should not have parent from other providers, but got parent: {span.parent}"
 
-    def test_handle_failure_non_langfuse_preserves_parent_span(self):
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_default_preserves_parent_span(
+        self, handle_method: str
+    ):
         """
-        For non-langfuse_otel callbacks, _handle_failure should still use parent spans normally.
+        For default otel callbacks, _handle_success should use parent spans normally.
+        (symmetric with _handle_failure)
         """
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -2229,7 +2246,7 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
         parent_span = otel.tracer.start_span("parent_span")
 
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         end = start + timedelta(seconds=1)
 
         kwargs = {
@@ -2249,19 +2266,81 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         }
 
         with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
-            otel._handle_failure(kwargs, None, start, end)
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
 
         parent_span.end()
 
         spans = span_exporter.get_finished_spans()
         child_spans = [s for s in spans if s.name != "parent_span"]
 
-        self.assertTrue(child_spans, "Expected at least one child failure span")
+        self.assertTrue(child_spans, "Expected at least one child span")
         for span in child_spans:
-            self.assertIsNotNone(
-                span.parent,
-                "Non-langfuse_otel failure span should have a parent",
-            )
+            assert (
+                span.parent is not None
+            ), f"By default parent span should be preserved, but got None parent for span: {span.name}"
+
+    @parameterized.expand([("_handle_success",), ("_handle_failure",)])
+    def test_handle_success_failure_with_context_propagation_preserves_parent_span(
+        self, handle_method: str
+    ):
+        """
+        For otel callbacks with context propagation enabled, _handle_success should
+        use parent spans normally. (symmetric with _handle_failure)
+        """
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(ignore_context_propagation=False),
+            tracer_provider=tracer_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer("litellm")
+
+        parent_span = otel.tracer.start_span("parent_span")
+
+        start = datetime.now(timezone.utc)
+        end = start + timedelta(seconds=1)
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "metadata": {"litellm_parent_otel_span": parent_span},
+            },
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+            "exception": Exception("test error"),
+        }
+
+        with patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}):
+            if handle_method == "_handle_success":
+                otel._handle_success(kwargs, None, start, end)
+            elif handle_method == "_handle_failure":
+                otel._handle_failure(kwargs, None, start, end)
+            else:
+                self.fail(f"Invalid handle_method: {handle_method}")
+
+        parent_span.end()
+
+        spans = span_exporter.get_finished_spans()
+        child_spans = [s for s in spans if s.name != "parent_span"]
+
+        self.assertTrue(child_spans, "Expected at least one child span")
+        for span in child_spans:
+            assert (
+                span.parent is not None
+            ), f"If ignore_context_propagation is False, parent span should be preserved, but got None parent for span: {span.name}"
 
     def test_handle_failure_hasattr_guard_on_parent_name(self):
         """
@@ -2431,9 +2510,7 @@ class TestNoParentSpanDuplication(unittest.TestCase):
         otel._handle_success(kwargs, response_obj, start, end)
 
         spans = span_exporter.get_finished_spans()
-        proxy_spans = [
-            s for s in spans if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-        ]
+        proxy_spans = [s for s in spans if s.name == LITELLM_PROXY_REQUEST_SPAN_NAME]
         self.assertEqual(len(proxy_spans), 1, "Should have exactly one proxy span")
 
         proxy_attrs = proxy_spans[0].attributes or {}

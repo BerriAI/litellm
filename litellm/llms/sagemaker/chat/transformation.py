@@ -184,9 +184,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
                 llm_provider = LlmProviders(custom_llm_provider)
             except ValueError:
                 llm_provider = LlmProviders.SAGEMAKER_CHAT
-            client = get_async_httpx_client(
-                llm_provider=llm_provider, params={}
-            )
+            client = get_async_httpx_client(llm_provider=llm_provider, params={})
 
         try:
             response = await client.post(

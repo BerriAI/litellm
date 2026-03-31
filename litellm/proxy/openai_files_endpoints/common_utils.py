@@ -857,7 +857,10 @@ async def update_batch_in_database(
             # If the batch_processed column doesn't exist (old schema),
             # retry without it so the status update still succeeds.
             err_str = str(col_err).lower()
-            if "batch_processed" in err_str and update_data.get("batch_processed") is not None:
+            if (
+                "batch_processed" in err_str
+                and update_data.get("batch_processed") is not None
+            ):
                 verbose_proxy_logger.warning(
                     f"batch_processed column not found, retrying update without it: {col_err}"
                 )

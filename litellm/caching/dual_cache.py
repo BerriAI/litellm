@@ -393,16 +393,17 @@ class DualCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
         **kwargs,
-    ) -> float:
+    ) -> Optional[float]:
         """
         Key - the key in cache
 
         Value - float - the value you want to increment by
 
-        Returns - float - the incremented value
+        Returns - the incremented value, or None if no cache backend is
+        available (in_memory_cache is None and Redis failed/is absent).
         """
+        result: Optional[float] = None
         try:
-            result: float = value
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment(
                     key, value, **kwargs
@@ -418,7 +419,11 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_increment_cache_pipeline(
         self,
@@ -427,8 +432,8 @@ class DualCache(BaseCache):
         parent_otel_span: Optional[Span] = None,
         **kwargs,
     ) -> Optional[List[float]]:
+        result: Optional[List[float]] = None
         try:
-            result: Optional[List[float]] = None
             if self.in_memory_cache is not None:
                 result = await self.in_memory_cache.async_increment_pipeline(
                     increment_list=increment_list,
@@ -443,7 +448,11 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            raise e  # don't log if exception is raised
+            verbose_logger.warning(
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
+                e,
+            )
+            return result
 
     async def async_set_cache_sadd(
         self, key, value: List, local_only: bool = False, **kwargs
