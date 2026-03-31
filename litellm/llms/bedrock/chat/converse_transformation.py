@@ -1289,10 +1289,15 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
+        # Anthropic models handle tool_call history natively without tools= param.
+        # For non-Anthropic Bedrock models, keep the validation as they may not support this.
+        base_model = BedrockModelInfo.get_base_model(model)
+        if (
+            not base_model.startswith("anthropic")
+            and "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
             if litellm.modify_params:
                 optional_params["tools"] = add_dummy_tool(custom_llm_provider="bedrock_converse")
             else:
