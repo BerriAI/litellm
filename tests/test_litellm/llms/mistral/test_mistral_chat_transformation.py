@@ -103,10 +103,20 @@ class TestMistralReasoningSupport:
 
         assert result.get("_add_reasoning_prompt") is True
 
-    def test_reasoning_params_mistral_small_2603(self):
+    def test_reasoning_params_mistral_small_2603(self, monkeypatch):
         """Mistral Small 4 uses supports_reasoning in model_cost, not 'magistral' in name (#24416)."""
+        import litellm
+
         mistral_config = MistralConfig()
         model = "mistral/mistral-small-2603"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "litellm_provider": "mistral",
+                "supports_reasoning": True,
+            },
+        )
         params = mistral_config.get_supported_openai_params(model)
         assert "reasoning_effort" in params
         assert "thinking" in params
@@ -327,6 +337,36 @@ class TestMistralReasoningSupport:
         # Should not add system message for non-magistral models
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+        assert "_add_reasoning_prompt" not in result
+
+    def test_transform_request_reuses_cached_reasoning_support(self):
+        """transform_request should reuse support computed in map_openai_params."""
+        mistral_config = MistralConfig()
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+
+        with patch.object(
+            MistralConfig,
+            "_mistral_model_supports_reasoning",
+            return_value=True,
+        ) as mock_support:
+            mapped_params = mistral_config.map_openai_params(
+                non_default_params={"reasoning_effort": "high"},
+                optional_params={},
+                model="mistral/magistral-medium-2506",
+                drop_params=False,
+            )
+            result = mistral_config.transform_request(
+                model="mistral/magistral-medium-2506",
+                messages=messages,
+                optional_params=mapped_params,
+                litellm_params={},
+                headers={},
+            )
+
+        assert mock_support.call_count == 1
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["role"] == "system"
+        assert "_mistral_reasoning_model" not in result
 
     def test_case_insensitive_magistral_detection(self):
         """Reasoning params appear when model_cost / name supports reasoning (incl. mixed-case magistral)."""
@@ -666,9 +706,10 @@ class TestMistralEmptyContentHandling:
         message = {"role": "assistant", "content": "Hello"}
         assert MistralConfig._is_empty_assistant_message(message) is False
 
+
 class TestMistralFileHandling:
     """Test suite for Mistral file handling functionality."""
-    
+
     def test_handle_file_message_with_file_id(self):
         """Test that file messages with file_id are handled correctly."""
         mistral_config = MistralConfig()
@@ -677,8 +718,8 @@ class TestMistralFileHandling:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Please review this file."},
-                    {"type": "file", "file": {"file_id": "file-12345"}}
-                ]
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                ],
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)
@@ -691,7 +732,7 @@ class TestMistralFileHandling:
         # Check that file type is preserved
         assert result[0]["content"][1]["type"] == "file"
         # Check that file_id is modified to match Mistral's expected format
-        assert result[0]["content"][1]["file_id"] == "file-12345" # type: ignore
+        assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
 
     def test_handle_file_message_without_file_id(self):
         """Test that file messages without file_id are ignored."""
@@ -699,9 +740,7 @@ class TestMistralFileHandling:
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "Please review this file."}
-                ]
+                "content": [{"type": "text", "text": "Please review this file."}],
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)
@@ -720,8 +759,8 @@ class TestMistralFileHandling:
                 "content": [
                     {"type": "text", "text": "Please review these files."},
                     {"type": "file", "file": {"file_id": "file-12345"}},
-                    {"type": "file", "file": {"file_id": "file-67890"}}
-                ]
+                    {"type": "file", "file": {"file_id": "file-67890"}},
+                ],
             }
         ]
         casted_message = cast(list[AllMessageValues], messages)

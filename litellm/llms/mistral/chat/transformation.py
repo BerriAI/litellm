@@ -225,6 +225,7 @@ class MistralConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         mistral_reasoning_model = self._mistral_model_supports_reasoning(model)
+        optional_params["_mistral_reasoning_model"] = mistral_reasoning_model
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -619,15 +620,20 @@ class MistralConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        # Re-check model even when _add_reasoning_prompt is set: the flag can be set
-        # out-of-band (e.g. tests); avoid injecting the reasoning system prompt for
-        # non-reasoning models (see test_transform_request_non_magistral_with_reasoning_params).
-        if self._mistral_model_supports_reasoning(model) and optional_params.get(
-            "_add_reasoning_prompt", False
-        ):
-            messages = self._add_reasoning_system_prompt_if_needed(
-                messages, optional_params
-            )
+        mistral_reasoning_model = optional_params.pop("_mistral_reasoning_model", None)
+        if mistral_reasoning_model is None:
+            mistral_reasoning_model = self._mistral_model_supports_reasoning(model)
+
+        # Re-check model support when _add_reasoning_prompt is set out-of-band
+        # (e.g. tests), but avoid redundant model-cost lookups when map_openai_params
+        # already computed support for this request.
+        if optional_params.get("_add_reasoning_prompt", False):
+            if mistral_reasoning_model:
+                messages = self._add_reasoning_system_prompt_if_needed(
+                    messages, optional_params
+                )
+            else:
+                optional_params.pop("_add_reasoning_prompt", None)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
