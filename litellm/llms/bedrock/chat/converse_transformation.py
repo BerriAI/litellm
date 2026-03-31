@@ -91,6 +91,34 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
+# Models that support Bedrock's native structured outputs API (outputConfig.textFormat)
+# Uses substring matching against the Bedrock model ID
+# Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
+BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS = {
+    # Anthropic Claude 4.5+
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    # Qwen3
+    "qwen3",
+    # DeepSeek
+    "deepseek-v3.1",
+    # Gemma 3
+    "gemma-3",
+    # MiniMax
+    "minimax-m2",
+    # Mistral (magistral-small excluded: broken constrained decoding on Bedrock)
+    "ministral",
+    "mistral-large-3",
+    "voxtral",
+    # Moonshot
+    "kimi-k2",
+    # NVIDIA
+    "nemotron-nano",
+    # OpenAI (gpt-oss excluded: broken constrained decoding, works via tool-call fallback)
+}
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -465,7 +493,8 @@ class AmazonConverseConfig(BaseConfig):
             budget = thinking.get("budget_tokens")
             if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
                 verbose_logger.debug(
-                    "Bedrock requires thinking.budget_tokens >= %d, got %d. Clamping to minimum.",
+                    "Bedrock requires thinking.budget_tokens >= %d, got %d. "
+                    "Clamping to minimum.",
                     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
                     budget,
                 )
@@ -734,20 +763,10 @@ class AmazonConverseConfig(BaseConfig):
         return _tool
 
     @staticmethod
-    def _supports_native_structured_outputs(
-        model: str, custom_llm_provider: Optional[str] = None
-    ) -> bool:
-        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
-
-        Delegates to the standard ``supports_native_structured_output`` utility
-        which looks up the flag in ``litellm.model_cost`` via
-        ``_get_model_info_helper``.
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
-        """
-        from litellm.utils import supports_native_structured_output
-
-        return supports_native_structured_output(
-            model=model, custom_llm_provider=custom_llm_provider
+    def _supports_native_structured_outputs(model: str) -> bool:
+        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat)."""
+        return any(
+            substring in model for substring in BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
         )
 
     @staticmethod
@@ -894,9 +913,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
-                    model=model,
-                    tool_choice=value,
-                    drop_params=drop_params,  # type: ignore
+                    model=model, tool_choice=value, drop_params=drop_params  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -989,10 +1006,7 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if (
-            self._supports_native_structured_outputs(model, self.custom_llm_provider)
-            and json_schema is not None
-        ):
+        if self._supports_native_structured_outputs(model) and json_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
             # Requires an explicit schema — json_object with no schema falls through
@@ -1431,16 +1445,6 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
             original_tools, model, headers, additional_request_params
         )
-
-        # Append cachePoint to tools if cache_control_injection_points has tool_config
-        cache_injection_points = additional_request_params.pop(
-            "cache_control_injection_points", None
-        )
-        if cache_injection_points and len(bedrock_tools) > 0:
-            for point in cache_injection_points:
-                if point.get("location") == "tool_config":
-                    bedrock_tools.append({"cachePoint": {"type": "default"}})
-                    break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
