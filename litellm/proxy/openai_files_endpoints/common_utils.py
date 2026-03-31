@@ -780,8 +780,16 @@ async def get_batch_from_database(
             model_id = get_model_id_from_unified_batch_id(unified_batch_id)
             if model_id:
                 response._hidden_params["model_id"] = model_id
-        if response.input_file_id:
+        if response.input_file_id and _is_base64_encoded_unified_file_id(
+            response.input_file_id
+        ):
             response._hidden_params["unified_file_id"] = response.input_file_id
+        else:
+            verbose_proxy_logger.warning(
+                "get_batch_from_database: input_file_id %r is not a unified ID after resolution; "
+                "output_file_id unification may be skipped.",
+                response.input_file_id,
+            )
 
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"
