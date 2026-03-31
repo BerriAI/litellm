@@ -157,10 +157,7 @@ class PromptGuardGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(
-                        f"PromptGuard API unreachable "
-                        f"(block_on_error=True): {exc}"
-                    ),
+                    message=f"PromptGuard API unreachable (block_on_error=True): {exc}",
                 ) from exc
             return inputs
 
