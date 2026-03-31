@@ -17,7 +17,7 @@ import VersionVerificationTable from '@site/src/components/VersionVerificationTa
 > **Status:** Active investigation
 > **Last updated:** March 27, 2026
 
-> **Update (March 30):** A new **safe** version of LiteLLM is now available (v1.83.0). This was released by our new [CI/CD v2](https://docs.litellm.ai/blog/ci-cd-v2-improvements) pipeline which added isolated environments, stronger security gates, and safer release separation for LiteLLM.
+> **Update (March 30):** A new **clean** version of LiteLLM is now available (v1.83.0). This was released by our new [CI/CD v2](https://docs.litellm.ai/blog/ci-cd-v2-improvements) pipeline which added isolated environments, stronger security gates, and safer release separation for LiteLLM.
 
 > **Update (March 27):** Review Townhall updates, including explanation of the incident, what we've done, and what comes next. [Learn more](https://docs.litellm.ai/blog/security-townhall-updates)
 
