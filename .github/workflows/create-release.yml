@@ -52,7 +52,7 @@ jobs:
               ``,
               '```bash',
               `cosign verify \\`,
-              `  --key https://raw.githubusercontent.com/BerriAI/litellm/main/cosign.pub \\`,
+              `  --key https://raw.githubusercontent.com/BerriAI/litellm/${tag}/cosign.pub \\`,
               `  ghcr.io/berriai/litellm:${tag}`,
               '```',
               ``,
@@ -70,7 +70,7 @@ jobs:
 
             try {
               const response = await github.rest.repos.createRelease({
-                draft: false,
+                draft: true,
                 generate_release_notes: true,
                 target_commitish: commitHash,
                 name: tag,
@@ -80,12 +80,13 @@ jobs:
                 tag_name: tag,
               });
 
-              const updatedBody = cosignSection + response.data.body;
+              const updatedBody = cosignSection + (response.data.body ?? '');
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: response.data.id,
                 body: updatedBody,
+                draft: false,
               });
             } catch (error) {
               core.setFailed(error.message);
