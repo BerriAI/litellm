@@ -2758,7 +2758,7 @@ async def test_partner_models_httpx_ai21():
 
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
+            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/litellm-ci-cd/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
         )
 
         # json loads kwargs
@@ -3637,8 +3637,9 @@ def test_gemini_tool_calling_not_working():
                 },
             }
         ],
+        "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
     print(response)
 
 
