@@ -192,3 +192,128 @@ class ModelQueue:
             entry.event.set()
         self._entries.clear()
         self._heap.clear()
+
+
+# -- Path Matching -------------------------------------------------------------
+
+_QUEUED_PATHS = {
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/embeddings",
+    "/chat/completions",
+    "/completions",
+    "/embeddings",
+}
+
+
+def _should_queue(scope: Scope) -> bool:
+    if scope["type"] != "http":
+        return False
+    method = scope.get("method", "")
+    path = scope.get("path", "")
+    return method == "POST" and path in _QUEUED_PATHS
+
+
+# -- Body Buffering ------------------------------------------------------------
+
+async def _buffer_body(receive: Receive) -> bytes:
+    """Read the full ASGI request body, handling chunked transfer."""
+    body = b""
+    while True:
+        message = await receive()
+        body += message.get("body", b"")
+        if not message.get("more_body", False):
+            break
+    return body
+
+
+def _replay_receive(body: bytes) -> Receive:
+    """Create a receive callable that replays the buffered body once."""
+    sent = False
+
+    async def receive() -> dict:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        # After body is consumed, wait for disconnect
+        await asyncio.sleep(3600)
+        return {"type": "http.disconnect"}
+
+    return receive
+
+
+# -- ASGI Middleware -----------------------------------------------------------
+
+class AutoQueueMiddleware:
+    """ASGI middleware providing per-model concurrency control and request queuing."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        aqr: Optional[AutoQueueRedis] = None,
+        max_queue_depth: int = MAX_QUEUE_DEPTH,
+    ):
+        self.app = app
+        self._aqr = aqr  # injected in tests; created lazily in production
+        self._max_queue_depth = max_queue_depth
+        self._queues: Dict[str, ModelQueue] = {}
+        self._shutting_down = False
+
+    def _ensure_aqr(self) -> AutoQueueRedis:
+        """Lazy-init Redis connection on first use (production path)."""
+        if self._aqr is None:
+            r = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+            self._aqr = AutoQueueRedis(redis=r)
+        return self._aqr
+
+    def _get_queue(self, model: str) -> ModelQueue:
+        if model not in self._queues:
+            self._queues[model] = ModelQueue(max_depth=self._max_queue_depth)
+        return self._queues[model]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Handle /queue/status
+        if scope["type"] == "http" and scope.get("path") == "/queue/status" and scope.get("method") == "GET":
+            await self._handle_status(scope, receive, send)
+            return
+
+        if not _should_queue(scope):
+            await self.app(scope, receive, send)
+            return
+
+        # Buffer body and extract model
+        body = await _buffer_body(receive)
+        try:
+            data = json.loads(body)
+            model = data.get("model", "unknown")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Not JSON -- pass through without queuing
+            await self.app(scope, _replay_receive(body), send)
+            return
+
+        # Pass through with replayed body (queuing added in Task 4)
+        await self._process_request(scope, body, model, send, original_receive=receive)
+
+    async def _process_request(
+        self, scope: Scope, body: bytes, model: str, send: Send,
+        original_receive: Optional[Receive] = None,
+    ) -> None:
+        """Acquire slot, forward, release. Queuing logic added in Task 4."""
+        await self.app(scope, _replay_receive(body), send)
+
+    async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Respond to GET /queue/status with model queue info."""
+        models_info: Dict[str, Any] = {}
+        if self._aqr:
+            for model, q in self._queues.items():
+                info = await self._aqr.get_model_info(model)
+                info["queued"] = q.depth
+                models_info[model] = info
+        body = json.dumps({"models": models_info}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [[b"content-type", b"application/json"]],
+        })
+        await send({"type": "http.response.body", "body": body})

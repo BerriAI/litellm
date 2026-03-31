@@ -184,3 +184,73 @@ async def test_queue_wake_all_sets_all_events(queue):
     queue.wake_all()
     assert all(e.is_set() for e in events)
     assert queue.depth == 0
+
+
+import json
+
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.testclient import TestClient
+
+from litellm.proxy.middleware.auto_queue_middleware import AutoQueueMiddleware
+
+
+# -- Middleware helpers --------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def aqr_for_middleware(redis):
+    return AutoQueueRedis(
+        redis=redis,
+        default_max_concurrent=2,
+        ceiling=10,
+        scale_up_threshold=3,
+        scale_down_step=1,
+    )
+
+
+def _make_echo_app(aqr_instance):
+    """App that echoes back the request body, proving body replay works."""
+    async def echo(request: Request):
+        body = await request.body()
+        data = json.loads(body) if body else {}
+        return JSONResponse({"model": data.get("model", "none"), "echoed": True})
+
+    async def health(request: Request):
+        return JSONResponse({"status": "ok"})
+
+    app = Starlette(routes=[
+        Route("/v1/chat/completions", echo, methods=["POST"]),
+        Route("/health", health),
+    ])
+    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance)
+    return app
+
+
+# -- Passthrough ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_llm_routes_pass_through(aqr_for_middleware):
+    client = TestClient(_make_echo_app(aqr_for_middleware))
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_body_is_replayed_to_downstream(aqr_for_middleware):
+    client = TestClient(_make_echo_app(aqr_for_middleware))
+    resp = client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "gpt-4"
+    assert resp.json()["echoed"] is True
+
+
+@pytest.mark.asyncio
+async def test_queue_status_endpoint(aqr_for_middleware):
+    client = TestClient(_make_echo_app(aqr_for_middleware))
+    resp = client.get("/queue/status")
+    assert resp.status_code == 200
+    assert "models" in resp.json()
