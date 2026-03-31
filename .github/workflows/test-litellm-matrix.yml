@@ -174,7 +174,8 @@ jobs:
             --durations=20 \
             --cov=litellm \
             --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
-            --cov-append
+            --cov-append \
+            --cov-config=pyproject.toml
 
       - name: Save coverage report
         if: always()
