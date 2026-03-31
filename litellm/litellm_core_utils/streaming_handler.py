@@ -831,6 +831,10 @@ class CustomStreamWrapper:
                 "annotations" in model_response.choices[0].delta
                 and model_response.choices[0].delta.annotations is not None
             )
+            or (
+                getattr(model_response.choices[0].delta, "reasoning_items", None)
+                is not None
+            )
         ):
             return True
         else:

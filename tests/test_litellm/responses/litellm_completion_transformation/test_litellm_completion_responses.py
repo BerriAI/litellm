@@ -1899,3 +1899,97 @@ class TestStreamingIDConsistency:
             else getattr(assistant_messages[0], "tool_calls", None)
         )
         assert tool_calls is not None and len(tool_calls) == 1
+
+
+class TestEnsureOutputItemContentPartAdded:
+    """Test that _ensure_output_item_for_chunk emits content_part.added after
+    output_item.added for message items."""
+
+    def _make_iterator(self):
+        """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
+        from unittest.mock import MagicMock
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        iterator = LiteLLMCompletionStreamingIterator.__new__(
+            LiteLLMCompletionStreamingIterator
+        )
+        iterator.sent_output_item_added_event = False
+        iterator.sent_content_part_added_event = False
+        iterator._sequence_number = 0
+        iterator._cached_item_id = None
+        iterator._cached_reasoning_item_id = None
+        iterator._reasoning_active = False
+        iterator._pending_response_events = []
+        return iterator
+
+    def _make_text_chunk(self):
+        """Create a mock ModelResponseStream with a text delta."""
+        from unittest.mock import MagicMock
+
+        chunk = MagicMock()
+        delta = MagicMock()
+        delta.reasoning_content = None
+        delta.tool_calls = None
+        chunk.choices = [MagicMock(delta=delta)]
+        return chunk
+
+    def _make_reasoning_chunk(self):
+        """Create a mock ModelResponseStream with a reasoning delta."""
+        from unittest.mock import MagicMock
+
+        chunk = MagicMock()
+        delta = MagicMock()
+        delta.reasoning_content = "thinking..."
+        delta.tool_calls = None
+        chunk.choices = [MagicMock(delta=delta)]
+        return chunk
+
+    def test_message_item_emits_content_part_added(self):
+        """content_part.added must follow output_item.added for message items."""
+        from litellm.types.llms.openai import (
+            ContentPartAddedEvent,
+            OutputItemAddedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        iterator = self._make_iterator()
+        chunk = self._make_text_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 2
+        assert isinstance(events[0], OutputItemAddedEvent)
+        assert events[0].type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        assert isinstance(events[1], ContentPartAddedEvent)
+        assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+        assert events[1].part.type == "output_text"
+        assert iterator.sent_content_part_added_event is True
+
+    def test_reasoning_item_does_not_emit_content_part_added(self):
+        """Reasoning items should not get a content_part.added event."""
+        from litellm.types.llms.openai import OutputItemAddedEvent
+
+        iterator = self._make_iterator()
+        chunk = self._make_reasoning_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 1
+        assert isinstance(events[0], OutputItemAddedEvent)
+        assert iterator.sent_content_part_added_event is False
+
+    def test_only_emits_once(self):
+        """Calling _ensure_output_item_for_chunk twice should not duplicate events."""
+        iterator = self._make_iterator()
+        chunk = self._make_text_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 2

@@ -6,6 +6,7 @@ These are members of a Team on LiteLLM
 
 /user/new
 /user/update
+/user/bulk_update
 /user/delete
 /user/info
 /user/list
@@ -24,13 +25,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
 )
-from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
@@ -40,7 +41,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -55,6 +56,22 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
 
 router = APIRouter()
+
+
+def _hash_password_in_dict(data: dict) -> None:
+    """Hash password field in-place if present."""
+    if "password" in data and data["password"] is not None:
+        data["password"] = hash_password(data["password"])
+
+
+def _strip_password_from_response(response) -> None:
+    """Strip password from API response (handles dicts, nested dicts, and Prisma models)."""
+    if isinstance(response, dict):
+        response.pop("password", None)
+        if isinstance(response.get("data"), dict):
+            response["data"].pop("password", None)
+        elif hasattr(response.get("data"), "__dict__"):
+            response["data"].__dict__.pop("password", None)
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -437,6 +454,7 @@ async def new_user(
 
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        _hash_password_in_dict(data_json)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -557,6 +575,18 @@ def get_team_from_list(
     return None
 
 
+def _is_valid_user_id(user_id: str) -> bool:
+    """Validate that a decoded user_id is safe to use downstream."""
+    MAX_USER_ID_LENGTH = 512
+    if len(user_id) > MAX_USER_ID_LENGTH:
+        return False
+    # Reject ASCII control characters (U+0000–U+001F)
+    for ch in user_id:
+        if ord(ch) < 0x20:
+            return False
+    return True
+
+
 def get_user_id_from_request(request: Request) -> Optional[str]:
     """
     Get the user id from the request
@@ -573,7 +603,8 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
         if match:
             # Use unquote instead of unquote_plus to preserve + characters
             raw_user_id = unquote(match.group(1))
-            user_id = raw_user_id
+            if _is_valid_user_id(raw_user_id):
+                user_id = raw_user_id
     return user_id
 
 
@@ -709,6 +740,8 @@ async def user_info(
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
         )
+        if isinstance(_user_info, dict):
+            _user_info.pop("password", None)
         response_data = UserInfoResponse(
             user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
         )
@@ -936,6 +969,8 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
                 if isinstance(admin_user_info, BaseModel)
                 else admin_user_info
             )
+            if isinstance(admin_user_info, dict):
+                admin_user_info.pop("password", None)
 
     return UserInfoResponse(
         user_id=admin_user_id,
@@ -1075,6 +1110,8 @@ async def _update_single_user_helper(
         data_json=data_json, data=user_request
     )
 
+    _hash_password_in_dict(non_default_values)
+
     # Get existing user data for audit logging and metadata preparation
     existing_user_row: Optional[BaseModel] = None
     if user_request.user_id:
@@ -1191,6 +1228,7 @@ async def _update_single_user_helper(
             status_code=400,
             detail={"error": "Failed to update user"},
         )
+    _strip_password_from_response(response)
     return response
 
 

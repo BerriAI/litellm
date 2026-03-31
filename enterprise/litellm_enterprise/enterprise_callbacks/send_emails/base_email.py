@@ -632,7 +632,7 @@ class BaseEmailLogger(CustomLogger):
             warning_msg = (
                 f"Email sent with default values instead of custom values for: {fields_str}. "
                 "This is an Enterprise feature. To use custom email fields, please upgrade to LiteLLM Enterprise. "
-                "Schedule a meeting here: https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions"
+                "Schedule a meeting here: https://enterprise.litellm.ai/demo"
             )
             verbose_proxy_logger.warning(f"{warning_msg}")
 
