@@ -69,10 +69,10 @@ def test_caching_router():
         ]
         litellm.cache = Cache(
             type="redis",
-            host="os.environ/REDIS_HOST_2",
-            port="os.environ/REDIS_PORT_2",
-            password="os.environ/REDIS_PASSWORD_2",
-            ssl="os.environ/REDIS_SSL_2",
+            host="os.environ/REDIS_HOST",
+            port="os.environ/REDIS_PORT",
+            password="os.environ/REDIS_PASSWORD",
+            ssl="os.environ/REDIS_SSL",
         )
         router = Router(
             model_list=model_list,
