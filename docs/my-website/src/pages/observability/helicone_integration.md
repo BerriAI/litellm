@@ -24,7 +24,7 @@ os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 litellm.success_callback=["helicone"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
 
 #cohere call
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}]) 
@@ -47,7 +47,7 @@ litellm.api_base = "https://oai.hconeai.com/v1"
 litellm.headers = {"Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}"}
 
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "how does a court case get to the Supreme Court?"}]
 )
 

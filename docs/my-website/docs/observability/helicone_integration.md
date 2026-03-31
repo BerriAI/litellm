@@ -127,7 +127,7 @@ Helicone's AI Gateway provides [advanced functionality](https://docs.helicone.ai
       "Helicone-Retry-Enabled": "true",  # Enable retry mechanism
       "helicone-retry-num": "3",  # Set number of retries
       "helicone-retry-factor": "2",  # Set exponential backoff factor
-      "Helicone-Model-Override": "gpt-3.5-turbo-0613",  # Override the model used for cost calculation
+      "Helicone-Model-Override": "gpt-4o-0613",  # Override the model used for cost calculation
       "Helicone-Session-Id": "session-abc-123",  # Set session ID for tracking
       "Helicone-Session-Path": "parent-trace/child-trace",  # Set session path for hierarchical tracking
       "Helicone-Omit-Response": "false",  # Include response in logging (default behavior)
@@ -333,7 +333,7 @@ Track multi-step and agentic LLM interactions using session IDs and paths:
       Helicone-Retry-Enabled: "true"
       helicone-retry-num: "3"
       helicone-retry-factor: "2"
-      Helicone-Fallbacks: '["gpt-3.5-turbo", "gpt-4"]'
+      Helicone-Fallbacks: '["gpt-4o", "gpt-4"]'
 
   environment_variables:
     HELICONE_API_KEY: "your-helicone-key"

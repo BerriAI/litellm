@@ -59,5 +59,5 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LANGFUSE_HOST"] = ""
 
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 ```

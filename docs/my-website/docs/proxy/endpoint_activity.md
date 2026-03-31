@@ -32,7 +32,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \ # 👈 ENDPOINT AUTOMATICA
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
   --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "user",

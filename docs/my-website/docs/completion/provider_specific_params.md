@@ -22,7 +22,7 @@ os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 ## SET MAX TOKENS - via completion() 
 response_1 = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             max_tokens=10
         )
@@ -33,7 +33,7 @@ response_1_text = response_1.choices[0].message.content
 litellm.OpenAIConfig(max_tokens=10)
 
 response_2 = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
         )
 

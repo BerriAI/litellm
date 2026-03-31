@@ -46,7 +46,7 @@ litellm.callbacks = ["langsmith"]
  
 # openai call
 response = litellm.completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ]
@@ -58,9 +58,9 @@ response = litellm.completion(
 1. Setup config.yaml
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -78,7 +78,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-eWkpOhYaHiuIZV-29JDeTQ' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",
@@ -117,7 +117,7 @@ litellm.callbacks = ["langsmith"]
 litellm.langsmith_batch_size = 1 # 👈 KEY CHANGE
  
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
      messages=[
         {"role": "user", "content": "Hi 👋 - i'm openai"}
     ]
@@ -130,9 +130,9 @@ print(response)
 1. Setup config.yaml
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -151,7 +151,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-eWkpOhYaHiuIZV-29JDeTQ' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",
@@ -184,7 +184,7 @@ os.environ['OPENAI_API_KEY']=""
 litellm.success_callback = ["langsmith"] 
  
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
      messages=[
         {"role": "user", "content": "Hi 👋 - i'm openai"}
     ],

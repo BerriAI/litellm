@@ -73,7 +73,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 
@@ -218,7 +218,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -386,7 +386,7 @@ os.environ["OPENAI_API_KEY"]
 litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to lunary, mlflow, langfuse, helicone
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 ```
 
@@ -413,7 +413,7 @@ litellm.success_callback = [track_cost_callback] # set custom callback function
 
 # litellm.completion() call
 response = completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[\
         {\
             "role": "user",\
@@ -467,7 +467,7 @@ Example `litellm_config.yaml`
 
 ```codeBlockLines_e6Vv
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-azure-model-deployment>
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
@@ -495,7 +495,7 @@ docker run \
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [\
+response = client.chat.completions.create(model="gpt-4o", messages = [\
     {\
         "role": "user",\
         "content": "this is a test request, write a short poem"\
@@ -621,9 +621,9 @@ Here's the exact json output you can expect from a litellm `completion` call:
 
 | Model Name | Function Call | Required OS Variables |
 | --- | --- | --- |
-| gpt-3.5-turbo | `completion('gpt-3.5-turbo', messages)` | `os.environ['OPENAI_API_KEY']` |
-| gpt-3.5-turbo-16k | `completion('gpt-3.5-turbo-16k', messages)` | `os.environ['OPENAI_API_KEY']` |
-| gpt-3.5-turbo-16k-0613 | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']` |
+| gpt-4o | `completion('gpt-4o', messages)` | `os.environ['OPENAI_API_KEY']` |
+| gpt-4o-16k | `completion('gpt-4o-16k', messages)` | `os.environ['OPENAI_API_KEY']` |
+| gpt-4o-16k-0613 | `completion('gpt-4o-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']` |
 | gpt-4 | `completion('gpt-4', messages)` | `os.environ['OPENAI_API_KEY']` |
 
 ## Azure OpenAI Chat Completion Models [​](https://docs.litellm.ai/completion/supported\#azure-openai-chat-completion-models "Direct link to Azure OpenAI Chat Completion Models")
@@ -632,7 +632,7 @@ For Azure calls add the `azure/` prefix to `model`. If your azure deployment nam
 
 | Model Name | Function Call | Required OS Variables |
 | --- | --- | --- |
-| gpt-3.5-turbo | `completion('azure/gpt-3.5-turbo-deployment', messages)` | `os.environ['AZURE_API_KEY']`, `os.environ['AZURE_API_BASE']`, `os.environ['AZURE_API_VERSION']` |
+| gpt-4o | `completion('azure/gpt-4o-deployment', messages)` | `os.environ['AZURE_API_KEY']`, `os.environ['AZURE_API_BASE']`, `os.environ['AZURE_API_VERSION']` |
 | gpt-4 | `completion('azure/gpt-4-deployment', messages)` | `os.environ['AZURE_API_KEY']`, `os.environ['AZURE_API_BASE']`, `os.environ['AZURE_API_VERSION']` |
 
 ### OpenAI Text Completion Models [​](https://docs.litellm.ai/completion/supported\#openai-text-completion-models "Direct link to OpenAI Text Completion Models")
@@ -678,8 +678,8 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 | Model Name | Function Call | Required OS Variables |
 | --- | --- | --- |
-| openai/gpt-3.5-turbo | `completion('openai/gpt-3.5-turbo', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
-| openai/gpt-3.5-turbo-16k | `completion('openai/gpt-3.5-turbo-16k', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
+| openai/gpt-4o | `completion('openai/gpt-4o', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
+| openai/gpt-4o-16k | `completion('openai/gpt-4o-16k', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
 | openai/gpt-4 | `completion('openai/gpt-4', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
 | openai/gpt-4-32k | `completion('openai/gpt-4-32k', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
 | anthropic/claude-2 | `completion('anthropic/claude-2', messages)` | `os.environ['OR_SITE_URL']`, `os.environ['OR_APP_NAME']`, `os.environ['OR_API_KEY']` |
@@ -874,7 +874,7 @@ os.environ['SENTRY_DSN'], os.environ['SENTRY_API_TRACE_RATE']= ""
 os.environ['POSTHOG_API_KEY'], os.environ['POSTHOG_API_URL'] = "api-key", "api-url"
 os.environ["HELICONE_API_KEY"] = ""
 
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="gpt-4o", messages=messages)
 
 ```
 
@@ -916,7 +916,7 @@ os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 litellm.success_callback=["helicone"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 #cohere call
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
@@ -942,7 +942,7 @@ litellm.api_base = "https://oai.hconeai.com/v1"
 litellm.headers = {"Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}"}
 
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "how does a court case get to the Supreme Court?"}]
 )
 
@@ -1020,7 +1020,7 @@ litellm.success_callback=["supabase"]
 litellm.failure_callback=["supabase"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 #bad call
 response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}])
@@ -3340,7 +3340,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [\
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}\
     ],
@@ -5727,7 +5727,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [\
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}\
     ],
@@ -6605,7 +6605,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [\
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}\
     ],
@@ -7071,7 +7071,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [\
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}\
     ],

@@ -48,14 +48,14 @@ Add a new model to the proxy via the `/model/new` API, to add models without res
 curl -X POST "http://0.0.0.0:4000/model/new" \
     -H "accept: application/json" \
     -H "Content-Type: application/json" \
-    -d '{ "model_name": "azure-gpt-turbo", "litellm_params": {"model": "azure/gpt-3.5-turbo", "api_key": "os.environ/AZURE_API_KEY", "api_base": "my-azure-api-base"} }'
+    -d '{ "model_name": "azure-gpt-turbo", "litellm_params": {"model": "azure/gpt-4o", "api_key": "os.environ/AZURE_API_KEY", "api_base": "my-azure-api-base"} }'
 ```
 </TabItem>
 <TabItem value="Yaml">
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo ### RECEIVED MODEL NAME ### `openai.chat.completions.create(model="gpt-3.5-turbo",...)`
+  - model_name: gpt-4o ### RECEIVED MODEL NAME ### `openai.chat.completions.create(model="gpt-4o",...)`
     litellm_params: # all params accepted by litellm.completion() - https://github.com/BerriAI/litellm/blob/9b46ec05b02d36d6e4fb5c32321e51e7f56e4a6e/litellm/types/router.py#L297
       model: azure/gpt-turbo-small-eu ### MODEL NAME sent to `litellm.completion()` ###
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/

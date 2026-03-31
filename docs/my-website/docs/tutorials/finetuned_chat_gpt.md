@@ -1,6 +1,6 @@
-# Using Fine-Tuned gpt-3.5-turbo
-LiteLLM allows you to call `completion` with your fine-tuned gpt-3.5-turbo models
-If you're trying to create your custom fine-tuned gpt-3.5-turbo model following along on this tutorial: https://platform.openai.com/docs/guides/fine-tuning/preparing-your-dataset
+# Using Fine-Tuned gpt-4o
+LiteLLM allows you to call `completion` with your fine-tuned gpt-4o models
+If you're trying to create your custom fine-tuned gpt-4o model following along on this tutorial: https://platform.openai.com/docs/guides/fine-tuning/preparing-your-dataset
 
 Once you've created your fine-tuned model, you can call it with `litellm.completion()` 
 
@@ -13,7 +13,7 @@ from litellm import completion
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+  model="ft:gpt-4o:my-org:custom_suffix:id",
   messages=[
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello!"}
@@ -39,7 +39,7 @@ os.environ["OPENAI_API_KEY"] = "your-api-key"
 os.environ["OPENAI_ORGANIZATION"] = "your-org-id" # Optional
 
 response = completion(
-  model="ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+  model="ft:gpt-4o:my-org:custom_suffix:id",
   messages=[
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello!"}

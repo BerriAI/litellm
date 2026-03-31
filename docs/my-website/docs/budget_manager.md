@@ -51,7 +51,7 @@ if not budget_manager.is_valid_user(user):
 
 # check if a given call can be made
 if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
-    response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+    response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hey, how's it going?"}])
     budget_manager.update_cost(completion_obj=response, user=user)
 else:
     response = "Sorry - no budget!"
@@ -72,7 +72,7 @@ budget_manager.create_budget(total_budget=10, user=user, duration="daily")
 
 input_text = "hello world"
 output_text = "it's a sunny day in san francisco"
-model = "gpt-3.5-turbo"
+model = "gpt-4o"
 
 budget_manager.update_cost(user=user, model=model, input_text=input_text, output_text=output_text) # 👈
 print(budget_manager.get_current_cost(user))
@@ -108,7 +108,7 @@ if not budget_manager.is_valid_user(user):
 
 # check if a given call can be made
 if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
-    response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+    response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hey, how's it going?"}])
     budget_manager.update_cost(completion_obj=response, user=user)
 else:
     response = "Sorry - no budget!"
@@ -138,7 +138,7 @@ if not budget_manager.is_valid_user(user):
 
 # check if a given call can be made
 if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
-    response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+    response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hey, how's it going?"}])
     budget_manager.update_cost(completion_obj=response, user=user)
 else:
     response = "Sorry - no budget!"

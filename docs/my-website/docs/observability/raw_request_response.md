@@ -33,7 +33,7 @@ litellm.success_callback = ["langfuse"]
  
 # openai call
 response = litellm.completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ]
@@ -78,7 +78,7 @@ litellm.return_response_headers = True
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = litellm.completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 
@@ -92,9 +92,9 @@ print(response._hidden_params)
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/GROQ_API_KEY
 
 litellm_settings:
@@ -108,7 +108,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         { "role": "system", "content": "Use your tools smartly"},
         { "role": "user", "content": "What time is it now? Use your tool"}

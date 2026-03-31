@@ -63,7 +63,7 @@ curl -X POST http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer <your-api-key>" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```

@@ -25,7 +25,7 @@ messages = [{"content": user_message, "role": "user"}]
 
 # normal call 
 response = completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=messages,
             num_retries=2
         )
@@ -43,10 +43,10 @@ response = completion(
 ```python 
 from litellm import completion
 
-fallback_dict = {"gpt-3.5-turbo": "gpt-3.5-turbo-16k"}
+fallback_dict = {"gpt-4o": "gpt-4o-16k"}
 messages = [{"content": "how does a court case get to the Supreme Court?" * 500, "role": "user"}]
 
-completion(model="gpt-3.5-turbo", messages=messages, context_window_fallback_dict=fallback_dict)
+completion(model="gpt-4o", messages=messages, context_window_fallback_dict=fallback_dict)
 ```
 
 ### Fallbacks - Switch Models/API Keys/API Bases (SDK)
@@ -61,7 +61,7 @@ The `fallbacks` list should include the primary model you want to use, followed 
 #### switch models 
 ```python
 response = completion(model="bad-model", messages=messages, 
-    fallbacks=["gpt-3.5-turbo" "command-nightly"])
+    fallbacks=["gpt-4o" "command-nightly"])
 ```
 
 #### switch api keys/bases (E.g. azure deployment)
@@ -84,12 +84,12 @@ Completion with 'bad-model': got exception Unable to map your input to a model. 
 
 
 
-completion call gpt-3.5-turbo
+completion call gpt-4o
 {
   "id": "chatcmpl-7qTmVRuO3m3gIBg4aTmAumV1TmQhB",
   "object": "chat.completion",
   "created": 1692741891,
-  "model": "gpt-3.5-turbo-0613",
+  "model": "gpt-4o-0613",
   "choices": [
     {
       "index": 0,

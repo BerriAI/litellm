@@ -51,7 +51,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Autherization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -704,8 +704,8 @@ curl --location 'http://0.0.0.0:4000/team/new' \
 --header 'Content-Type: application/json' \
 --data '{
   "team_id": "my-prod-team",
-  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
-  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+  "model_rpm_limit": {"gpt-4": 100, "gpt-4o": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-4o": 20000}
 }'
 ```
 
@@ -717,8 +717,8 @@ curl --location 'http://0.0.0.0:4000/team/update' \
 --header 'Content-Type: application/json' \
 --data '{
   "team_id": "my-prod-team",
-  "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
-  "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+  "model_rpm_limit": {"gpt-4": 100, "gpt-4o": 200},
+  "model_tpm_limit": {"gpt-4": 10000, "gpt-4o": 20000}
 }'
 ```
 
@@ -733,8 +733,8 @@ curl --location 'http://0.0.0.0:4000/team/update' \
 --data '{
   "team_id": "my-prod-team",
   "metadata": {
-    "model_rpm_limit": {"gpt-4": 100, "gpt-3.5-turbo": 200},
-    "model_tpm_limit": {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    "model_rpm_limit": {"gpt-4": 100, "gpt-4o": 200},
+    "model_tpm_limit": {"gpt-4": 10000, "gpt-4o": 20000}
   }
 }'
 ```
@@ -948,9 +948,9 @@ This will NOT apply if a key has a team_id (team budgets will apply then). [Tell
 
 ```yaml
 model_list: 
-  - model_name: "gpt-3.5-turbo"
+  - model_name: "gpt-4o"
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -983,7 +983,7 @@ curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-X53RdxnDhzamRwjKXR4IHg' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hey, how's it going?"}]
 }'
 ```

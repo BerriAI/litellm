@@ -864,9 +864,9 @@ model_list:
     litellm_params:
       model: anthropic/claude-3-5-sonnet
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: gpt-3.5-turbo-testing
+  - model_name: gpt-4o-testing
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 general_settings:
@@ -878,7 +878,7 @@ general_settings:
       - scope: litellm.api.consumer
         models: ["anthropic-claude"]
       - scope: litellm.api.gpt_3_5_turbo
-        models: ["gpt-3.5-turbo-testing"]
+        models: ["gpt-4o-testing"]
     enforce_scope_based_access: true # 👈 enforce scope-based access control
     enforce_rbac: true # 👈 enforces only a Team/User/ProxyAdmin can access the proxy.
 ```
@@ -905,7 +905,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer eyJhbGci...' \
 -d '{
-  "model": "gpt-3.5-turbo-testing",
+  "model": "gpt-4o-testing",
   "messages": [
     {
       "role": "user",

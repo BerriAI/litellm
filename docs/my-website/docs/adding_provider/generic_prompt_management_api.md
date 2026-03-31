@@ -131,9 +131,9 @@ Add to `config.yaml`:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 prompts:

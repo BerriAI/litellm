@@ -37,22 +37,22 @@ Use the `order` parameter to prioritize specific deployments. [See Deployment Or
 ## Quick Start - Load Balancing
 #### Step 1 - Set deployments on config
 
-**Example config below**. Here requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
+**Example config below**. Here requests with `model=gpt-4o` will be routed across multiple instances of `azure/gpt-4o`
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-large
       api_base: https://openai-france-1234.openai.azure.com/
@@ -61,7 +61,7 @@ model_list:
 
 router_settings:
   routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
-  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  model_group_alias: {"gpt-4": "gpt-4o"} # all requests with `gpt-4` will be routed to models with `gpt-4o`
   num_retries: 2
   timeout: 30                                  # 30 seconds
   redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
@@ -142,9 +142,9 @@ $ litellm --config /path/to/config.yaml
 
 ### Test - Simple Call
 
-Here requests with model=gpt-3.5-turbo will be routed across multiple instances of azure/gpt-3.5-turbo
+Here requests with model=gpt-4o will be routed across multiple instances of azure/gpt-4o
 
-👉 Key Change: `model="gpt-3.5-turbo"`
+👉 Key Change: `model="gpt-4o"`
 
 **Check the `model_id` in Response Headers to make sure the requests are being load balanced**
 
@@ -160,7 +160,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -179,7 +179,7 @@ print(response)
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -202,7 +202,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
         {"role": "user", "content": "Hi there!"}
     ],
@@ -221,13 +221,13 @@ Example config
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
@@ -248,7 +248,7 @@ Expose an 'alias' for a 'model_name' on the proxy server.
 
 ```
 model_group_alias: {
-  "gpt-4": "gpt-3.5-turbo"
+  "gpt-4": "gpt-4o"
 }
 ```
 
@@ -264,14 +264,14 @@ Example config with `router_settings`
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
 
 router_settings:
-  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models 
+  model_group_alias: {"gpt-4": "gpt-4o"} # all requests with `gpt-4` will be routed to models 
 ```
 
 ### Hide Alias Models 
@@ -284,7 +284,7 @@ Use this if you want to set-up aliases for:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/<your-deployment-name>
       api_base: <your-azure-endpoint>
@@ -293,7 +293,7 @@ model_list:
 router_settings:
   model_group_alias:
     "GPT-3.5-turbo": # alias
-      model: "gpt-3.5-turbo"  # Actual model name in 'model_list'
+      model: "gpt-4o"  # Actual model name in 'model_list'
       hidden: true             # Exclude from `/v1/models`, `/v1/model/info`, `/v1/model_group/info`
 ```
 

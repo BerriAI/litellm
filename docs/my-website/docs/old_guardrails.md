@@ -11,9 +11,9 @@ Setup Prompt Injection Detection, Secret Detection on LiteLLM Proxy
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: sk-xxxxxxx
 
 litellm_settings:
@@ -56,7 +56,7 @@ curl --location 'http://localhost:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -280,7 +280,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
 --data '{
-"model": "gpt-3.5-turbo",
+"model": "gpt-4o",
     "messages": [
       {
         "role": "user",

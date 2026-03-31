@@ -41,7 +41,7 @@ model_list:
       model: anthropic/claude-3-sonnet-20240229
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/gpt-35-turbo
       api_key: os.environ/AZURE_API_KEY
@@ -726,7 +726,7 @@ agents['reviewer'] = client.create_agent(
     name="reviewer",
     system="You are an editor. Review and improve content quality.",
     llm_config=LLMConfig(
-        model="openai/gpt-3.5-turbo",
+        model="openai/gpt-4o",
         model_endpoint_type="openai"
     )
 )
@@ -795,7 +795,7 @@ print(article)
 1. **Model Selection**: Choose models based on task requirements:
    - Use `openai/gpt-4` for complex reasoning
    - Use `anthropic/claude-3-sonnet-20240229` for analysis
-   - Use `openai/gpt-3.5-turbo` for cost-effective simple tasks
+   - Use `openai/gpt-4o` for cost-effective simple tasks
 
 2. **Error Handling**: Implement robust error handling with retries:
    ```python
@@ -813,7 +813,7 @@ print(article)
        except Exception as e:
            print(f"LLM call failed: {e}")
            # Implement fallback logic
-           return completion(model="openai/gpt-3.5-turbo", **kwargs)
+           return completion(model="openai/gpt-4o", **kwargs)
    ```
 
 3. **Cost Management**:
@@ -882,7 +882,7 @@ print("Anthropic Key:", os.environ.get("ANTHROPIC_API_KEY", "Not set"))
 # Test direct LiteLLM call
 try:
     response = litellm.completion(
-        model="openai/gpt-3.5-turbo",
+        model="openai/gpt-4o",
         messages=[{"role": "user", "content": "Hello"}]
     )
     print("LiteLLM working:", response.choices[0].message.content)

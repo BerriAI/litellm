@@ -21,7 +21,7 @@ os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo-instruct", 
+    model = "gpt-4o-instruct", 
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -43,20 +43,20 @@ export OPENAI_API_KEY=""
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo                          # The `openai/` prefix will call openai.chat.completions.create
+      model: openai/gpt-4o                          # The `openai/` prefix will call openai.chat.completions.create
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-3.5-turbo-instruct
+  - model_name: gpt-4o-instruct
     litellm_params:
-      model: text-completion-openai/gpt-3.5-turbo-instruct # The `text-completion-openai/` prefix will call openai.completions.create
+      model: text-completion-openai/gpt-4o-instruct # The `text-completion-openai/` prefix will call openai.completions.create
       api_key: os.environ/OPENAI_API_KEY
 ```
 </TabItem>
 <TabItem value="config-*" label="config.yaml - proxy all OpenAI models">
 
 Use this to add all openai models with one API Key. **WARNING: This will not do any load balancing**
-This means requests to `gpt-4`, `gpt-3.5-turbo` , `gpt-4-turbo-preview` will all go through this route 
+This means requests to `gpt-4`, `gpt-4o` , `gpt-4-turbo-preview` will all go through this route 
 
 ```yaml
 model_list:
@@ -69,7 +69,7 @@ model_list:
 <TabItem value="cli" label="CLI">
 
 ```bash
-$ litellm --model gpt-3.5-turbo-instruct
+$ litellm --model gpt-4o-instruct
 
 # Server running on http://0.0.0.0:4000
 ```
@@ -87,7 +87,7 @@ $ litellm --model gpt-3.5-turbo-instruct
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-3.5-turbo-instruct",
+      "model": "gpt-4o-instruct",
       "messages": [
         {
           "role": "user",
@@ -108,7 +108,7 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo-instruct", messages = [
+response = client.chat.completions.create(model="gpt-4o-instruct", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
@@ -132,7 +132,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo-instruct",
+    model = "gpt-4o-instruct",
     temperature=0.1
 )
 
@@ -156,8 +156,8 @@ print(response)
 
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
-| gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
-| gpt-3.5-turbo-instruct-0914 | `response = completion(model="gpt-3.5-turbo-instruct-0914", messages=messages)` |
+| gpt-4o-instruct | `response = completion(model="gpt-4o-instruct", messages=messages)` |
+| gpt-4o-instruct-0914 | `response = completion(model="gpt-4o-instruct-0914", messages=messages)` |
 | text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
 | ada-001             | `response = completion(model="ada-001", messages=messages)` |
 | curie-001           | `response = completion(model="curie-001", messages=messages)` |

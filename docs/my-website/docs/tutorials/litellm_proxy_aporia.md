@@ -37,9 +37,9 @@ Add the `Toxicity - Response` to your Post LLM API Call project
 - Define your guardrails under the `guardrails` section and set `pre_call_guardrails` and `post_call_guardrails`
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -84,7 +84,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
     ],
@@ -123,7 +123,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
@@ -180,7 +180,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",

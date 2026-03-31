@@ -74,7 +74,7 @@ This variable is checked for all providers
 import litellm
 # openai call
 litellm.api_key = "sk-OpenAIKey"
-response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+response = litellm.completion(messages=messages, model="gpt-4o")
 
 # anthropic call
 litellm.api_key = "sk-AnthropicKey"
@@ -85,7 +85,7 @@ response = litellm.completion(messages=messages, model="claude-2")
 
 ```python
 litellm.openai_key = "sk-OpenAIKey"
-response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+response = litellm.completion(messages=messages, model="gpt-4o")
 
 # anthropic call
 litellm.anthropic_key = "sk-AnthropicKey"
@@ -97,7 +97,7 @@ response = litellm.completion(messages=messages, model="claude-2")
 ```python
 import litellm
 litellm.api_base = "https://hosted-llm-api.co"
-response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+response = litellm.completion(messages=messages, model="gpt-4o")
 ```
 
 ### litellm.api_version
@@ -105,14 +105,14 @@ response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```python
 import litellm
 litellm.api_version = "2023-05-15"
-response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+response = litellm.completion(messages=messages, model="gpt-4o")
 ```
 
 ### litellm.organization
 ```python
 import litellm
 litellm.organization = "LiteLlmOrg"
-response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+response = litellm.completion(messages=messages, model="gpt-4o")
 ```
 
 ## Passing Args to completion() (or any litellm endpoint - `transcription`, `embedding`, `text_completion`, etc)
@@ -156,7 +156,7 @@ Check if a user submitted a valid key for the model they're trying to call.
 
 ```python
 key = "bad-key"
-response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+response = check_valid_key(model="gpt-4o", api_key=key)
 assert(response == False)
 ```
 
@@ -217,5 +217,5 @@ This helper tells you if you have all the required environment variables for a m
 ```python
 from litellm import validate_environment
 
-print(validate_environment("openai/gpt-3.5-turbo"))
+print(validate_environment("openai/gpt-4o"))
 ```

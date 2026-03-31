@@ -7,7 +7,7 @@ LiteLLM returns `response_cost` in all calls.
 from litellm import completion 
 
 response = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             mock_response="Hello world",
         )
@@ -49,7 +49,7 @@ from litellm import encode, decode
 
 sample_text = "Hellö World, this is my input string!"
 # openai encoding + decoding
-openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
+openai_tokens = encode(model="gpt-4o", text=sample_text)
 print(openai_tokens)
 ```
 
@@ -62,8 +62,8 @@ from litellm import encode, decode
 
 sample_text = "Hellö World, this is my input string!"
 # openai encoding + decoding
-openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
-openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
+openai_tokens = encode(model="gpt-4o", text=sample_text)
+openai_text = decode(model="gpt-4o", tokens=openai_tokens)
 print(openai_text)
 ```
 
@@ -73,7 +73,7 @@ print(openai_text)
 from litellm import token_counter
 
 messages = [{"user": "role", "content": "Hey, how's it going"}]
-print(token_counter(model="gpt-3.5-turbo", messages=messages))
+print(token_counter(model="gpt-4o", messages=messages))
 ```
 
 ### 4. `create_pretrained_tokenizer` and `create_tokenizer`
@@ -100,7 +100,7 @@ from litellm import cost_per_token
 
 prompt_tokens =  5
 completion_tokens = 10
-prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model="gpt-3.5-turbo", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model="gpt-4o", prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
 
 print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 ```
@@ -134,13 +134,13 @@ print(formatted_string)
 ```
 ### 7. `get_max_tokens`
 
-Input: Accepts a model name - e.g., gpt-3.5-turbo (to get a complete list, call litellm.model_list).
+Input: Accepts a model name - e.g., gpt-4o (to get a complete list, call litellm.model_list).
 Output: Returns the maximum number of tokens allowed for the given model
 
 ```python 
 from litellm import get_max_tokens 
 
-model = "gpt-3.5-turbo"
+model = "gpt-4o"
 
 print(get_max_tokens(model)) # Output: 4097
 ```
@@ -152,7 +152,7 @@ print(get_max_tokens(model)) # Output: 4097
 ```python 
 from litellm import model_cost 
 
-print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
+print(model_cost) # {'gpt-4o': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
 ```
 
 ### 9. `register_model`

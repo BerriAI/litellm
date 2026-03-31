@@ -391,7 +391,7 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "Hello"}],
     "user": "my-customer-id"
 }'
@@ -508,7 +508,7 @@ client = OpenAI(
 )
 
 completion = client.chat.completions.create(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello!"}

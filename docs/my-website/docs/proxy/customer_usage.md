@@ -36,7 +36,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   --header 'Content-Type: application/json' \
   --header 'Authorization: Bearer sk-1234' \
   --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "user": "customer-123",
     "messages": [
       {
@@ -64,7 +64,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   --header 'Authorization: Bearer sk-1234' \
   --header 'x-litellm-customer-id: customer-123' \
   --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "user",

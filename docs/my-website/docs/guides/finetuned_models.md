@@ -11,9 +11,9 @@ import TabItem from '@theme/TabItem';
 |---------------------------|-----------------------------------------------------------------|
 | fine tuned `gpt-4-0613`    | `response = completion(model="ft:gpt-4-0613", messages=messages)`     |
 | fine tuned `gpt-4o-2024-05-13` | `response = completion(model="ft:gpt-4o-2024-05-13", messages=messages)` |
-| fine tuned `gpt-3.5-turbo-0125` | `response = completion(model="ft:gpt-3.5-turbo-0125", messages=messages)` |
-| fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
-| fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
+| fine tuned `gpt-4o-0125` | `response = completion(model="ft:gpt-4o-0125", messages=messages)` |
+| fine tuned `gpt-4o-1106` | `response = completion(model="ft:gpt-4o-1106", messages=messages)` |
+| fine tuned `gpt-4o-0613` | `response = completion(model="ft:gpt-4o-0613", messages=messages)` |
 
 
 ## Vertex AI

@@ -7,7 +7,7 @@
 LiteLLM supports streaming the model response back by passing `stream=True` as an argument to the completion function
 ### Usage
 ```python
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+response = completion(model="gpt-4o", messages=messages, stream=True)
 for chunk in response:
     print(chunk['choices'][0]['delta'])
 
@@ -24,7 +24,7 @@ import asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
-    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    response = await acompletion(model="gpt-4o", messages=messages)
     return response
 
 response = asyncio.run(test_get_response())
@@ -47,7 +47,7 @@ import os
 
 os.environ["OPENAI_API_KEY"] = "" 
 
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True, stream_options={"include_usage": True})
+response = completion(model="gpt-4o", messages=messages, stream=True, stream_options={"include_usage": True})
 for chunk in response:
     print(chunk['choices'][0]['delta'])
 ```

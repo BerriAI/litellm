@@ -45,7 +45,7 @@ litellm.success_callback = ["athina"]
 
 #openai call
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-4o", 
   messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]
 ) 
 ```
@@ -56,7 +56,7 @@ You can send some additional information to Athina by using the `metadata` field
 ```python
 #openai call with additional metadata
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ],

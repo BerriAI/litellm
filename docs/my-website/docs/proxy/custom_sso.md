@@ -81,7 +81,7 @@ custom_ui_sso_sign_in_handler = MyCustomSSOLoginHandler()
 model_list: 
   - model_name: "openai-model"
     litellm_params: 
-      model: "gpt-3.5-turbo"
+      model: "gpt-4o"
 
 general_settings:
   custom_ui_sso_sign_in_handler: custom_sso_handler.custom_ui_sso_sign_in_handler
@@ -184,7 +184,7 @@ e.g. if they're both in the same dir - `./config.yaml` and `./custom_sso.py`, th
 model_list: 
   - model_name: "openai-model"
     litellm_params: 
-      model: "gpt-3.5-turbo"
+      model: "gpt-4o"
 
 general_settings:
   custom_sso: custom_sso.custom_sso_handler

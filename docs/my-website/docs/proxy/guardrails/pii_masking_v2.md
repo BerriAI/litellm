@@ -70,9 +70,9 @@ Define your guardrails under the `guardrails` section
 
 ```yaml title="config.yaml" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -139,7 +139,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "Hello my name is Jane Doe"}
     ],
@@ -165,7 +165,7 @@ Expected response on failure
    }
  ],
  "created": 1725479980,
- "model": "gpt-3.5-turbo-2024-07-18",
+ "model": "gpt-4o-2024-07-18",
  "object": "chat.completion",
  "system_fingerprint": "fp_5bd87c427a",
  "usage": {
@@ -186,7 +186,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "Hello good morning"}
     ],
@@ -247,9 +247,9 @@ Define your guardrails with specific entity type configuration:
 
 ```yaml title="config.yaml with Entity Types" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -306,7 +306,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com"}
     ],
@@ -344,7 +344,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "My credit card is 4111-1111-1111-1111"}
     ],
@@ -407,7 +407,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my medical license is ABC123"}
     ],
@@ -431,7 +431,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "is this credit card number 9283833 correct?"}
     ],
@@ -454,7 +454,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages = [
         {
             "role": "user",
@@ -481,9 +481,9 @@ You can configure a default language for PII analysis in your YAML configuration
 
 ```yaml title="Default Language Configuration" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -544,7 +544,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "Mi tarjeta de crédito es 4111-1111-1111-1111"}
     ],
@@ -565,9 +565,9 @@ For presidio 'replace' operations, LiteLLM can check the LLM response and replac
 Define your guardrails under the `guardrails` section
 ```yaml title="Output Parsing Config" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -600,9 +600,9 @@ Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the pro
 Define your guardrails under the `guardrails` section
 ```yaml title="Ad Hoc Recognizers Config" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -660,9 +660,9 @@ This is currently only applied for
 Define your guardrails under the `guardrails` section
 ```yaml title="Logging Only Config" showLineNumbers
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -693,7 +693,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-  "model": "gpt-3.5-turbo",
+  "model": "gpt-4o",
   "messages": [
     {
       "role": "user",

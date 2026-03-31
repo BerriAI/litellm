@@ -25,7 +25,7 @@ litellm.success_callback = ["agentops"]
 
 # Make your LLM calls as usual
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
 )
 ```

@@ -11,13 +11,13 @@ litellm.cache = Cache(type="hosted") # init cache to use api.litellm.ai
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}]
     caching=True
 )
 
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}],
     caching=True
 )
@@ -59,7 +59,7 @@ litellm.cache = Cache(type="hosted")
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}], 
     stream=True,
     caching=True)
@@ -69,7 +69,7 @@ for chunk in response1:
 time.sleep(1) # cache is updated asynchronously
 
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-4o", 
     messages=[{"role": "user", "content": "Tell me a joke."}], 
     stream=True,
     caching=True)

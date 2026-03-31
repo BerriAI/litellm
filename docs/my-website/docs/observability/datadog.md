@@ -26,9 +26,9 @@ We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will lo
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["datadog"] # logs llm success + failure logs on datadog
   service_callback: ["datadog"] # logs redis, postgres failures on datadog
@@ -47,9 +47,9 @@ litellm_settings:
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
 ```
@@ -103,7 +103,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -131,9 +131,9 @@ When redaction is enabled, the actual message content and response text will be 
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
 
@@ -148,7 +148,7 @@ litellm_settings:
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -193,9 +193,9 @@ All metrics include the following tags: `env`, `service`, `version`, `HOSTNAME`,
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   success_callback: ["datadog_metrics"]
   failure_callback: ["datadog_metrics"]
@@ -219,7 +219,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer sk-1234' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [{"role": "user", "content": "hello"}]
 }'
 ```
@@ -242,9 +242,9 @@ We will use the `--config` to set `litellm.callbacks = ["datadog_cost_management
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["datadog_cost_management"]
 ```

@@ -18,7 +18,7 @@ def my_custom_rule(input): # receives the model response
 
 litellm.post_call_rules = [my_custom_rule] # have these be functions that can be called to fail a call
 
-response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", 
+response = litellm.completion(model="gpt-4o", messages=[{"role": "user", 
 "content": "Hey, how's it going?"}], fallbacks=["openrouter/gryphe/mythomax-l2-13b"])
 ```
 
@@ -63,7 +63,7 @@ def my_custom_rule(input): # receives the model response
 
 litellm.pre_call_rules = [my_custom_rule] # have these be functions that can be called to fail a call
 
-response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+response = litellm.completion(model="gpt-4o", messages=[{"role": "user", "content": "Hey, how's it going?"}])
 ```
 
 ### Example 2: Fallback to uncensored model if llm refuses to answer
@@ -84,6 +84,6 @@ def my_custom_rule(input): # receives the model response
 
 litellm.post_call_rules = [my_custom_rule] # have these be functions that can be called to fail a call
 
-response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", 
+response = litellm.completion(model="gpt-4o", messages=[{"role": "user", 
 "content": "Hey, how's it going?"}], fallbacks=["openrouter/gryphe/mythomax-l2-13b"])
 ```

@@ -44,7 +44,7 @@ os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 litellm.success_callback = ["promptlayer"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 #cohere call
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
@@ -72,7 +72,7 @@ os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 litellm.success_callback = ["promptlayer"]
 
 #openai call - log llm provider is openai
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}], metadata={"provider": "openai"})
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}], metadata={"provider": "openai"})
 
 #cohere call - log llm provider is cohere
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}], metadata={"provider": "cohere"})

@@ -10,9 +10,9 @@ PostHog is an open-source product analytics platform that helps you track and an
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 
 litellm_settings:
   success_callback: ["posthog"]
@@ -41,7 +41,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -102,7 +102,7 @@ litellm.success_callback = ["posthog"]
 
 # openai call
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Hi - i'm openai"}
     ],
@@ -126,7 +126,7 @@ import litellm
 litellm.success_callback = ["posthog"]
 
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Hello world"}
     ],
@@ -148,7 +148,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Hello world"}
     ],
@@ -173,7 +173,7 @@ litellm.success_callback = ["posthog"]
 
 # Use custom PostHog credentials for this specific request
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "Hello world"}
     ],
@@ -197,7 +197,7 @@ import litellm
 litellm.success_callback = ["posthog"]
 
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[
         {"role": "user", "content": "This won't be logged"}
     ],

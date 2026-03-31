@@ -55,7 +55,7 @@ litellm.success_callback=["supabase"]
 litellm.failure_callback=["supabase"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+response = completion(model="gpt-4o", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
 
 #bad call
 response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}]) 

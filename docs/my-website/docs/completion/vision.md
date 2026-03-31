@@ -120,7 +120,7 @@ Use `litellm.supports_vision(model="")` -> returns `True` if model supports `vis
 ```python
 assert litellm.supports_vision(model="openai/gpt-4-vision-preview") == True
 assert litellm.supports_vision(model="vertex_ai/gemini-1.0-pro-vision") == True
-assert litellm.supports_vision(model="openai/gpt-3.5-turbo") == False
+assert litellm.supports_vision(model="openai/gpt-4o") == False
 assert litellm.supports_vision(model="xai/grok-2-vision-latest") == True
 assert litellm.supports_vision(model="xai/grok-2-latest") == False
 ```

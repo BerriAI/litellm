@@ -400,9 +400,9 @@ model_list:
         model: gpt-4o
         api_key: <my-openai-key>
         rpm: 200      
-  - model_name: gpt-3.5-turbo-16k
+  - model_name: gpt-4o-16k
     litellm_params:
-        model: gpt-3.5-turbo-16k
+        model: gpt-4o-16k
         api_key: <my-openai-key>
         rpm: 100      
 
@@ -410,7 +410,7 @@ litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-4o"]}] # fallback to gpt-4o if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-4o": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-4o-16k"]}, {"gpt-4o": ["gpt-4o-16k"]}] # fallback to gpt-4o-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 
 router_settings: # router_settings are optional
@@ -497,9 +497,9 @@ Supported Environments:
 2. For each model set the list of supported environments in `model_info.supported_environments`
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo-16k
+ - model_name: gpt-4o-16k
    litellm_params:
-     model: openai/gpt-3.5-turbo-16k
+     model: openai/gpt-4o-16k
      api_key: os.environ/OPENAI_API_KEY
    model_info:
      supported_environments: ["development", "production", "staging"]

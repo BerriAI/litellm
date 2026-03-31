@@ -24,7 +24,7 @@ import TabItem from '@theme/TabItem';
 from litellm import text_completion
 
 response = text_completion(
-    model="gpt-3.5-turbo-instruct",
+    model="gpt-4o-instruct",
     prompt="Say this is a test",
     max_tokens=7
 )
@@ -37,9 +37,9 @@ response = text_completion(
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo-instruct
+  - model_name: gpt-4o-instruct
     litellm_params:
-      model: text-completion-openai/gpt-3.5-turbo-instruct # The `text-completion-openai/` prefix will call openai.completions.create
+      model: text-completion-openai/gpt-4o-instruct # The `text-completion-openai/` prefix will call openai.completions.create
       api_key: os.environ/OPENAI_API_KEY
   - model_name: text-davinci-003
     litellm_params:
@@ -64,7 +64,7 @@ from openai import OpenAI
 client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:4000")
 
 response = client.completions.create(
-    model="gpt-3.5-turbo-instruct",
+    model="gpt-4o-instruct",
     prompt="Say this is a test",
     max_tokens=7
 )
@@ -80,7 +80,7 @@ curl --location 'http://0.0.0.0:4000/completions' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer sk-1234' \
     --data '{
-        "model": "gpt-3.5-turbo-instruct",
+        "model": "gpt-4o-instruct",
         "prompt": "Say this is a test",
         "max_tokens": 7
     }'
@@ -133,7 +133,7 @@ Here's the exact JSON output format you can expect from completion calls:
   "id": "cmpl-uqkvlQyYK7bGYrRHQ0eXlWi7",
   "object": "text_completion",
   "created": 1589478378,
-  "model": "gpt-3.5-turbo-instruct",
+  "model": "gpt-4o-instruct",
   "system_fingerprint": "fp_44709d6fcb",
   "choices": [
     {
@@ -167,7 +167,7 @@ Here's the exact JSON output format you can expect from completion calls:
       "finish_reason": null
     }
   ],
-  "model": "gpt-3.5-turbo-instruct"
+  "model": "gpt-4o-instruct"
   "system_fingerprint": "fp_44709d6fcb",
 }
 

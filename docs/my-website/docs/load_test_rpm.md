@@ -36,7 +36,7 @@ model_list = [
     {
         "model_name": "fake-openai-endpoint",
         "litellm_params": {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4o",
             "api_key": "my-fake-key",
             "api_base": "http://0.0.0.0:8080",
             "rpm": 100
@@ -45,7 +45,7 @@ model_list = [
     {
         "model_name": "fake-openai-endpoint",
         "litellm_params": {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4o",
             "api_key": "my-fake-key",
             "api_base": "http://0.0.0.0:8081",
             "rpm": 100

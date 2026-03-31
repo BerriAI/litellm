@@ -282,7 +282,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
@@ -339,7 +339,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
@@ -478,7 +478,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
+    model="gpt-4o",
     messages=[{"role": "user", "content": "Write a short poem"}],
     extra_body={
         "guardrails": [
@@ -499,7 +499,7 @@ response = client.chat.completions.create(
 curl 'http://0.0.0.0:4000/chat/completions' \
     -H 'Content-Type: application/json' \
     -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
             "role": "user",

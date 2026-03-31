@@ -48,7 +48,7 @@ POST Request Sent from LiteLLM:
 curl -X POST \
 https://api.openai.com/v1/chat/completions \
 -H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
--d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+-d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
 ```
 
 ## Debug single request
@@ -81,7 +81,7 @@ https://exampleopenaiendpoint-production.up.railway.app/chat/completions \
 
 
 20:14:06 - LiteLLM:WARNING: litellm_logging.py:1015 - RAW RESPONSE:
-{"id":"chatcmpl-817fc08f0d6c451485d571dab39b26a1","object":"chat.completion","created":1677652288,"model":"gpt-3.5-turbo-0301","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"message":{"role":"assistant","content":"\n\nHello there, how may I assist you today?"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":12,"total_tokens":21}}
+{"id":"chatcmpl-817fc08f0d6c451485d571dab39b26a1","object":"chat.completion","created":1677652288,"model":"gpt-4o-0301","system_fingerprint":"fp_44709d6fcb","choices":[{"index":0,"message":{"role":"assistant","content":"\n\nHello there, how may I assist you today?"},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":12,"total_tokens":21}}
 
 
 INFO:     127.0.0.1:56155 - "POST /chat/completions HTTP/1.1" 200 OK

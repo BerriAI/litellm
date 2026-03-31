@@ -18,12 +18,12 @@ When we have breaking changes (i.e. going from 1.x.x to 2.x.x), we will document
 - *NEW* default exception - `APIConnectionError` (prev. `APIError`)
 - litellm.get_max_tokens() now returns an int not a dict
     ```python
-    max_tokens = litellm.get_max_tokens("gpt-3.5-turbo") # returns an int not a dict 
+    max_tokens = litellm.get_max_tokens("gpt-4o") # returns an int not a dict 
     assert max_tokens==4097
     ```
 - Streaming - OpenAI Chunks now return `None` for empty stream chunks. This is how to process stream chunks with content
     ```python
-    response = litellm.completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+    response = litellm.completion(model="gpt-4o", messages=messages, stream=True)
     for part in response:
         print(part.choices[0].delta.content or "")
     ```

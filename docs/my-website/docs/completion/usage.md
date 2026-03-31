@@ -20,7 +20,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 

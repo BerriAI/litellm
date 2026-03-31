@@ -34,9 +34,9 @@ Only the aliases of your virtual keys (and not the actual key secrets) will be s
 Define your guardrails under the `guardrails` section
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
@@ -77,7 +77,7 @@ When using LiteLLM with virtual keys, an `Authorization` header with the virtual
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
     ],
@@ -110,7 +110,7 @@ When using LiteLLM with virtual keys, an `Authorization` header with the virtual
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
@@ -122,7 +122,7 @@ The above request should not be blocked, and you should receive a regular LLM re
 
 ```json
 {
-  "model": "gpt-3.5-turbo-0125",
+  "model": "gpt-4o-0125",
   "choices": [
     {
       "finish_reason": "stop",
@@ -151,7 +151,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-aim-user-email: ishaan@berri.ai" \
   -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],

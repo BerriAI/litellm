@@ -68,7 +68,7 @@ os.environ['OPENAI_API_KEY'] = ""
 os.environ['COHERE_API_KEY'] = ""
 
 response = batch_completion_models(
-    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+    models=["gpt-4o", "claude-instant-1.2", "command-nightly"], 
     messages=[{"role": "user", "content": "Hey, how's it going"}]
 )
 print(result)
@@ -203,7 +203,7 @@ os.environ['OPENAI_API_KEY'] = ""
 os.environ['COHERE_API_KEY'] = ""
 
 responses = batch_completion_models_all_responses(
-    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+    models=["gpt-4o", "claude-instant-1.2", "command-nightly"], 
     messages=[{"role": "user", "content": "Hey, how's it going"}]
 )
 print(responses)
@@ -259,7 +259,7 @@ print(responses)
   "id": "chatcmpl-80szFnKHzCxObW0RqCMw1hWW1Icrq",
   "object": "chat.completion",
   "created": 1695222061,
-  "model": "gpt-3.5-turbo-0613",
+  "model": "gpt-4o-0613",
   "choices": [
     {
       "index": 0,
