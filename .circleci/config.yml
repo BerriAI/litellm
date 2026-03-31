@@ -3543,32 +3543,32 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_chromium
-          browser: chromium
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-            - prisma_schema_sync
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_firefox
-          browser: firefox
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-            - prisma_schema_sync
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+      # - e2e_ui_testing: # migrate to dynamic db - currently requires neon cli 
+      #     name: e2e_ui_testing_chromium
+      #     browser: chromium
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #       - prisma_schema_sync
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - e2e_ui_testing:
+      #     name: e2e_ui_testing_firefox
+      #     browser: firefox
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #       - prisma_schema_sync
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
       - build_and_test:
           requires:
             - build_docker_database_image
