@@ -635,7 +635,7 @@ class TestMistralEmptyContentHandling:
         )
 
     def test_handle_empty_content_response_handles_multiple_choices(self):
-        """Test that only the first choice is processed for empty content."""
+        """Test that all choices are processed for empty content."""
         response_data = {
             "choices": [
                 {
@@ -651,9 +651,9 @@ class TestMistralEmptyContentHandling:
 
         result = MistralConfig._handle_empty_content_response(response_data)
 
-        # Only first choice should be converted to None
+        # First choice should be converted to None
         assert result["choices"][0]["message"]["content"] is None
-        # Second choice should remain as empty string
+        # Second choice should also be converted to None
         assert result["choices"][1]["message"]["content"] is None
 
     def test_is_empty_assistant_message(self):
