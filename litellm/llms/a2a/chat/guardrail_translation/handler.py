@@ -216,41 +216,6 @@ class A2AGuardrailHandler(BaseTranslation):
             response["result"] = result
             return response
 
-    def _parse_a2a_streaming_response_items(
-        self, responses_so_far: List[Any]
-    ) -> List[Optional[Dict[str, Any]]]:
-        """Parse each streaming item; None entries align with unparseable slots."""
-        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
-        for i, item in enumerate(responses_so_far):
-            if isinstance(item, dict):
-                obj = item
-            elif isinstance(item, str):
-                try:
-                    obj = json.loads(item.strip())
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            else:
-                continue
-            if isinstance(obj.get("result"), dict):
-                parsed[i] = obj
-        return parsed
-
-    def _collect_a2a_streaming_combined_text(
-        self,
-        valid_parsed: List[Tuple[int, Dict[str, Any]]],
-    ) -> Tuple[str, List[int]]:
-        """Return concatenated text and original indices of chunks that contributed text."""
-        from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
-
-        text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []
-        for _idx, (orig_i, obj) in enumerate(valid_parsed):
-            t = extract_text_from_a2a_response(obj)
-            if t:
-                text_parts.append(t)
-                chunk_indices_with_text.append(orig_i)
-        return "".join(text_parts), chunk_indices_with_text
-
     def _ensure_a2a_streaming_request_data(
         self,
         request_data: Optional[dict],

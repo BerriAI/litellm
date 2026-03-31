@@ -310,7 +310,7 @@ print(response)
 ### Important Notes
 
 - **Model Compatibility**: Reasoning parameters are only accepted for models with `supports_reasoning` in LiteLLM's model map (not only names containing `magistral`).
-- **Backward Compatibility**: Other Mistral models will reject unknown params unless you set `litellm.drop_params=True` (or proxy `drop_params: true`).
+- **Backward Compatibility**: For other Mistral models, LiteLLM drops `reasoning_effort` / `thinking` instead of forwarding them to the provider.
 
 ## Audio Transcription
 
