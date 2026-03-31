@@ -1559,6 +1559,25 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install apscheduler
+      - run:
+          name: Install dockerize
+          command: |
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=litellm_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - attach_workspace:
           at: ~/project
       - run:
@@ -1567,29 +1586,41 @@ jobs:
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
       - run:
-          name: Run Docker container
+          name: Seed database with real schema
+          command: |
+            docker run -d \
+              -p 4001:4000 \
+              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              --name schema-seed \
+              --add-host=host.docker.internal:host-gateway \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --use_prisma_db_push
+      - run:
+          name: Wait for schema seed to complete
+          command: dockerize -wait http://localhost:4001 -timeout 5m
+      - run:
+          name: Stop schema seed container
+          command: docker stop schema-seed && docker rm schema-seed
+      - run:
+          name: Run Docker container with bad schema and disabled updates
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
+              --name my-app \
+              --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
-              --name my-app \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
-      - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-
       - run:
           name: Wait for container to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
