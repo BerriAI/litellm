@@ -305,7 +305,7 @@ def test_completion_azure():
                     "content": "Hello, how are you?",
                 }
             ],
-            api_key="os.environ/AZURE_AI_API_KEY",
+            api_key=os.getenv("AZURE_AI_API_KEY"),
         )
         print(f"response: {response}")
         print(f"response hidden params: {response._hidden_params}")
