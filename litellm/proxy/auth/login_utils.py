@@ -21,7 +21,6 @@ from litellm.proxy._types import (
     ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
-    hash_token,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (

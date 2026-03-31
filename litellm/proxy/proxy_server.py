@@ -12154,10 +12154,10 @@ async def invitation_delete(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def update_config(
+async def update_config(  # noqa: PLR0915
     config_info: ConfigYAML,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):  # noqa: PLR0915
+):
     """
     For Admin UI - allows admin to update config via UI
 

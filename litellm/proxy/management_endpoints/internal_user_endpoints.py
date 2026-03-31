@@ -615,7 +615,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
     response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
-async def user_info(
+async def user_info(  # noqa: PLR0915
     request: Request,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
