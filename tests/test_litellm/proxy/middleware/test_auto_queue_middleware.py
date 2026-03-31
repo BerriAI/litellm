@@ -346,3 +346,37 @@ async def test_queue_full_returns_503(redis):
         hold_event.set()
         await task1
         await task2
+
+
+# -- Disconnect and shutdown ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shutdown_rejects_new_requests(redis, aqr_for_middleware):
+    inner_app = Starlette(routes=[
+        Route("/v1/chat/completions", lambda r: JSONResponse({"ok": True}), methods=["POST"]),
+    ])
+    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware)
+    mw._shutting_down = True
+
+    from httpx import ASGITransport, AsyncClient
+    async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
+        # Fill the only slots so the next request tries to queue
+        await redis.set("autoq:active:gpt-4", 2)  # at limit
+        resp = await client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+        assert resp.status_code == 503
+        assert "shutting down" in resp.json()["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_wakes_all_queued(redis, aqr_for_middleware):
+    inner_app = Starlette(routes=[
+        Route("/v1/chat/completions", lambda r: JSONResponse({"ok": True}), methods=["POST"]),
+    ])
+    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware)
+    q = mw._get_queue("gpt-4")
+    event = asyncio.Event()
+    q.add("req-1", event, priority=10)
+    mw.shutdown()
+    assert event.is_set()
+    assert mw._shutting_down is True

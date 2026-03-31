@@ -419,6 +419,17 @@ class AutoQueueMiddleware:
                     queue.wake_next()
                 # If re_acquired fails, waiter stays queued until another release
 
+    def shutdown(self) -> None:
+        """Trigger graceful shutdown -- reject new requests, wake all queued."""
+        self._shutting_down = True
+        for q in self._queues.values():
+            q.wake_all()
+
+    def register_signal_handlers(self) -> None:
+        """Register SIGTERM handler. Call once after event loop is running."""
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGTERM, self.shutdown)
+
     async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Respond to GET /queue/status with model queue info."""
         models_info: Dict[str, Any] = {}
