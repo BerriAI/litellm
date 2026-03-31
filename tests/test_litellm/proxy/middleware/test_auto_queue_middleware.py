@@ -380,3 +380,83 @@ async def test_shutdown_wakes_all_queued(redis, aqr_for_middleware):
     mw.shutdown()
     assert event.is_set()
     assert mw._shutting_down is True
+
+
+# -- Integration: concurrent requests -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_queued_and_served(redis):
+    """3 concurrent requests with max_concurrent=1: served sequentially."""
+    aqr = AutoQueueRedis(redis=redis, default_max_concurrent=1, ceiling=5,
+                          scale_up_threshold=100, scale_down_step=1)
+
+    call_order = []
+
+    async def ordered_handler(request: Request):
+        body = await request.body()
+        data = json.loads(body)
+        call_order.append(data["id"])
+        await asyncio.sleep(0.05)
+        return JSONResponse({"id": data["id"]})
+
+    inner = Starlette(routes=[
+        Route("/v1/chat/completions", ordered_handler, methods=["POST"]),
+    ])
+    mw = AutoQueueMiddleware(inner, aqr=aqr)
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
+        tasks = [
+            asyncio.create_task(
+                client.post("/v1/chat/completions",
+                            json={"model": "gpt-4", "messages": [], "id": i})
+            )
+            for i in range(3)
+        ]
+        responses = await asyncio.gather(*tasks)
+
+    assert all(r.status_code == 200 for r in responses)
+    # All 3 should have been served (order may vary due to async scheduling)
+    assert sorted(call_order) == [0, 1, 2]
+
+    # Verify all slots released
+    active = int(await redis.get("autoq:active:gpt-4") or 0)
+    assert active == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_status_reflects_active_requests(redis):
+    aqr = AutoQueueRedis(redis=redis, default_max_concurrent=1, ceiling=5,
+                          scale_up_threshold=100, scale_down_step=1)
+    hold = asyncio.Event()
+
+    async def blocking_handler(request: Request):
+        body = await request.body()
+        await hold.wait()
+        return JSONResponse({"ok": True})
+
+    inner = Starlette(routes=[
+        Route("/v1/chat/completions", blocking_handler, methods=["POST"]),
+    ])
+    mw = AutoQueueMiddleware(inner, aqr=aqr)
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
+        # Start a request that blocks
+        task = asyncio.create_task(
+            client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+        )
+        await asyncio.sleep(0.05)
+
+        # Check status
+        status_resp = await client.get("/queue/status")
+        assert status_resp.status_code == 200
+        models = status_resp.json()["models"]
+        assert "gpt-4" in models
+        assert models["gpt-4"]["active"] == 1
+
+        hold.set()
+        await task
