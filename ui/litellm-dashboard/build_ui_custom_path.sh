@@ -12,8 +12,14 @@ UI_BASE_PATH="$1"
 
 # Check if nvm is not installed
 if ! command -v nvm &> /dev/null; then
-    # Install nvm
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash
+    # Install nvm with checksum verification
+    NVM_VERSION="v0.40.4"
+    NVM_CHECKSUM="4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f"
+    NVM_SCRIPT=$(mktemp)
+    trap 'rm -f "$NVM_SCRIPT"' EXIT
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT"
+    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c - || { echo "nvm checksum verification failed"; exit 1; }
+    bash "$NVM_SCRIPT"
 
     # Source nvm script in the current session
     export NVM_DIR="$HOME/.nvm"
