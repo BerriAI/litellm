@@ -1582,11 +1582,17 @@ async def test_token_exchange_persists_credentials_to_db():
     assert update_data["registration_url"] == "https://auth.example.com/register"
     assert update_data["updated_by"] == "oauth_token_exchange"
 
-    # Verify credentials are stored (encrypted, so check it's a non-empty JSON string)
+    # Verify credentials are stored and sensitive fields are encrypted
     credentials_json = json.loads(update_data["credentials"])
     assert "auth_value" in credentials_json
     assert "client_id" in credentials_json
+    assert "refresh_token" in credentials_json
     assert "type" in credentials_json
+
+    # Verify sensitive fields are NOT stored as plaintext (they should be encrypted)
+    assert credentials_json["auth_value"] != "test_access_token_123"
+    assert credentials_json["client_id"] != "test-client-id"
+    assert credentials_json["refresh_token"] != "test_refresh_token_456"
 
 
 @pytest.mark.asyncio

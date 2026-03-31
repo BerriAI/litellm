@@ -86,6 +86,12 @@ def encrypt_credentials(
             value=client_secret,
             new_encryption_key=encryption_key,
         )
+    refresh_token = credentials.get("refresh_token")
+    if refresh_token is not None:
+        credentials["refresh_token"] = encrypt_value_helper(
+            value=refresh_token,
+            new_encryption_key=encryption_key,
+        )
     return credentials
 
 
