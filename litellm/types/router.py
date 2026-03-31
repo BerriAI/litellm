@@ -77,6 +77,7 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     model_group_retry_policy: Optional[dict] = None
+    model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
     cooldown_time: Optional[float] = None
     num_retries: Optional[int] = None
@@ -187,6 +188,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     litellm_trace_id: Optional[str] = None
 
     max_file_size_mb: Optional[float] = None
+
+    # Proxy-wide default rate limits applied to any API key using this deployment
+    # when the key does not have a model-specific tpm/rpm limit configured.
+    default_api_key_tpm_limit: Optional[int] = None
+    default_api_key_rpm_limit: Optional[int] = None
 
     # Deployment budgets
     max_budget: Optional[float] = None

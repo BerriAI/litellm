@@ -1,0 +1,20 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "ftjob-azure-create-123",
+      "object": "fine_tuning.job",
+      "created_at": 1735689600,
+      "model": "davinci-002",
+      "status": "running"
+    },
+    {
+      "id": "ftjob-azure-prev-000",
+      "object": "fine_tuning.job",
+      "created_at": 1735603200,
+      "model": "davinci-002",
+      "status": "succeeded"
+    }
+  ],
+  "has_more": false
+}
