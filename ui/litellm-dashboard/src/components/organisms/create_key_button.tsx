@@ -153,6 +153,76 @@ export const fetchUserModels = async (
   }
 };
 
+const BUDGET_WINDOW_OPTIONS = [
+  { value: "1h", label: "Hourly" },
+  { value: "24h", label: "Daily" },
+  { value: "7d", label: "Weekly" },
+  { value: "30d", label: "Monthly" },
+];
+
+function BudgetWindowsEditor({
+  value,
+  onChange,
+}: {
+  value: Array<{ budget_duration: string; max_budget: number | null }>;
+  onChange: (v: Array<{ budget_duration: string; max_budget: number | null }>) => void;
+}) {
+  const addWindow = () => {
+    onChange([...value, { budget_duration: "24h", max_budget: null }]);
+  };
+
+  const removeWindow = (idx: number) => {
+    onChange(value.filter((_, i) => i !== idx));
+  };
+
+  const updateWindow = (idx: number, field: string, fieldValue: any) => {
+    const updated = value.map((w, i) => (i === idx ? { ...w, [field]: fieldValue } : w));
+    onChange(updated);
+  };
+
+  return (
+    <div>
+      {value.map((window, idx) => (
+        <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+          <Select
+            value={window.budget_duration}
+            onChange={(v) => updateWindow(idx, "budget_duration", v)}
+            style={{ width: 120 }}
+          >
+            {BUDGET_WINDOW_OPTIONS.map((opt) => (
+              <Select.Option key={opt.value} value={opt.value}>
+                {opt.label}
+              </Select.Option>
+            ))}
+          </Select>
+          <NumericalInput
+            step={0.01}
+            min={0}
+            value={window.max_budget ?? undefined}
+            onChange={(v: number | null) => updateWindow(idx, "max_budget", v)}
+            placeholder="Max $ (e.g. 10.00)"
+            style={{ width: 160 }}
+          />
+          <span
+            onClick={() => removeWindow(idx)}
+            style={{ cursor: "pointer", color: "#ff4d4f", fontSize: 16, lineHeight: 1 }}
+            title="Remove"
+          >
+            ✕
+          </span>
+        </div>
+      ))}
+      <Button
+        size="xs"
+        variant="secondary"
+        onClick={(e: React.MouseEvent) => { e.preventDefault(); addWindow(); }}
+      >
+        + Add Window
+      </Button>
+    </div>
+  );
+}
+
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -201,6 +271,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [budgetLimits, setBudgetLimits] = useState<Array<{ budget_duration: string; max_budget: number | null }>>([]);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -218,6 +289,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
+    setBudgetLimits([]);
   };
 
   const handleCancel = () => {
@@ -236,6 +308,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedAgentId(null);
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
+    setBudgetLimits([]);
   };
 
   useEffect(() => {
@@ -519,6 +592,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
       }
 
+      // Add multi-window budget limits (filter out incomplete entries)
+      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      if (validWindows.length > 0) {
+        formValues.budget_limits = validWindows;
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -540,6 +619,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setSoftBudget(response["soft_budget"]);
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
+      setBudgetLimits([]);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
@@ -1044,6 +1124,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
                   >
                     <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Budget Windows{" "}
+                        <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <BudgetWindowsEditor
+                      value={budgetLimits}
+                      onChange={setBudgetLimits}
+                    />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"
