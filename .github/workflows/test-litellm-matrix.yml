@@ -191,7 +191,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # Required for OIDC tokenless upload
+      id-token: write        # Required for OIDC tokenless upload
+      pull-requests: write   # Required for Codecov PR comments
 
     steps:
       - name: Download all coverage reports
