@@ -540,7 +540,7 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
-            verbose_logger.warning(f"{type(e).__name__} on PUT {url}: {e}")
+            verbose_logger.warning(f"{type(e).__name__} on PUT {mask_sensitive_info(url)}: {e}")
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
