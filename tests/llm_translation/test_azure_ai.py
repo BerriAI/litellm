@@ -297,7 +297,7 @@ def test_completion_azure():
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/gpt-4.1-mini",
+            model="azure_ai/gpt-4.1-mini",
             api_base=os.getenv("AZURE_AI_API_BASE"),
             messages=[
                 {
