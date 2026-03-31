@@ -101,7 +101,7 @@ export function KeyEditView({
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
-  const [keyRotationEmail, setKeyRotationEmail] = useState<string>((keyData as any).key_rotation_email || "");
+  const [keyRotationEmail, setKeyRotationEmail] = useState<string>(keyData.key_rotation_email || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();

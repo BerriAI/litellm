@@ -93,6 +93,7 @@ export interface KeyResponse {
   access_group_ids?: string[];
   auto_rotate?: boolean;
   rotation_interval?: string;
+  key_rotation_email?: string;
   last_rotation_at?: string;
   key_rotation_at?: string;
   next_rotation_at?: string;
