@@ -545,7 +545,7 @@ class ChunkProcessor:
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         cost: Optional[float] = None
-        
+
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if hasattr(chunk, "usage") and chunk.usage is not None:

@@ -183,7 +183,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         make_chunk(role="assistant", content=None),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 1 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -201,7 +205,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         ),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 2 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -512,7 +520,7 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
-    assert usage.server_tool_use['web_search_requests'] == 2
+    assert usage.server_tool_use["web_search_requests"] == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -602,7 +610,9 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    assert (
+        response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    )
 
 
 def test_cost_field_in_usage_chunks():
@@ -611,21 +621,29 @@ def test_cost_field_in_usage_chunks():
         id="chatcmpl-1",
         created=1745513206,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
         usage=chunk1_usage,
     )
 
-    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
+    chunk2_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
     chunk2 = ModelResponseStream(
         id="chatcmpl-1",
         created=1745513207,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
         usage=chunk2_usage,
     )
 
     processor = ChunkProcessor(chunks=[chunk1, chunk2])
-    usage = processor.calculate_usage(chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi")
+    usage = processor.calculate_usage(
+        chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi"
+    )
 
     assert hasattr(usage, "cost")
     assert usage.cost == 0.00025

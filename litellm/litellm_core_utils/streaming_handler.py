@@ -1026,7 +1026,10 @@ class CustomStreamWrapper:
 
                 # Don't raise StopIteration here - some providers (like OpenRouter)
                 # send usage/cost data in chunks after the finish_reason chunk
-                if hasattr(model_response, "usage") and model_response.usage is not None:
+                if (
+                    hasattr(model_response, "usage")
+                    and model_response.usage is not None
+                ):
                     self.chunks.append(model_response)
                     return model_response
                 return
@@ -1933,12 +1936,23 @@ class CustomStreamWrapper:
                     # Propagate provider-reported cost (e.g. OpenRouter)
                     # to _hidden_params so the cost calculator picks it up
                     _final_usage = getattr(complete_streaming_response, "usage", None)
-                    if _final_usage is not None and hasattr(_final_usage, "cost") and _final_usage.cost is not None:
-                        if "additional_headers" not in complete_streaming_response._hidden_params:
-                            complete_streaming_response._hidden_params["additional_headers"] = {}
-                        complete_streaming_response._hidden_params["additional_headers"][
-                            "llm_provider-x-litellm-response-cost"
-                        ] = float(_final_usage.cost)
+                    if (
+                        _final_usage is not None
+                        and hasattr(_final_usage, "cost")
+                        and _final_usage.cost is not None
+                    ):
+                        if (
+                            "additional_headers"
+                            not in complete_streaming_response._hidden_params
+                        ):
+                            complete_streaming_response._hidden_params[
+                                "additional_headers"
+                            ] = {}
+                        complete_streaming_response._hidden_params[
+                            "additional_headers"
+                        ]["llm_provider-x-litellm-response-cost"] = float(
+                            _final_usage.cost
+                        )
 
                     setattr(
                         response,
@@ -2169,12 +2183,23 @@ class CustomStreamWrapper:
                     # Propagate provider-reported cost (e.g. OpenRouter)
                     # to _hidden_params so the cost calculator picks it up
                     _final_usage = getattr(complete_streaming_response, "usage", None)
-                    if _final_usage is not None and hasattr(_final_usage, "cost") and _final_usage.cost is not None:
-                        if "additional_headers" not in complete_streaming_response._hidden_params:
-                            complete_streaming_response._hidden_params["additional_headers"] = {}
-                        complete_streaming_response._hidden_params["additional_headers"][
-                            "llm_provider-x-litellm-response-cost"
-                        ] = float(_final_usage.cost)
+                    if (
+                        _final_usage is not None
+                        and hasattr(_final_usage, "cost")
+                        and _final_usage.cost is not None
+                    ):
+                        if (
+                            "additional_headers"
+                            not in complete_streaming_response._hidden_params
+                        ):
+                            complete_streaming_response._hidden_params[
+                                "additional_headers"
+                            ] = {}
+                        complete_streaming_response._hidden_params[
+                            "additional_headers"
+                        ]["llm_provider-x-litellm-response-cost"] = float(
+                            _final_usage.cost
+                        )
 
                     setattr(
                         response,
@@ -2400,7 +2425,11 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
 
-    if latest_usage_chunk and hasattr(latest_usage_chunk, "cost") and latest_usage_chunk.cost is not None:
+    if (
+        latest_usage_chunk
+        and hasattr(latest_usage_chunk, "cost")
+        and latest_usage_chunk.cost is not None
+    ):
         return latest_usage_chunk
 
     returned_usage_chunk = Usage(

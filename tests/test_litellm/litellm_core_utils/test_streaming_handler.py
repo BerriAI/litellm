@@ -770,7 +770,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -788,7 +790,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
-async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
     """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
 
     Regression test for https://github.com/BerriAI/litellm/issues/20870
@@ -797,7 +801,9 @@ async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_o
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -825,7 +831,9 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -850,7 +858,9 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -1169,16 +1179,22 @@ def test_calculate_total_usage_with_cost():
         id="test-1",
         created=1745513206,
         model="openrouter/test",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
         usage=chunk1_usage,
     )
 
-    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
+    chunk2_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
     chunk2 = ModelResponseStream(
         id="test-1",
         created=1745513207,
         model="openrouter/test",
-        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
         usage=chunk2_usage,
     )
 
@@ -1198,26 +1214,38 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
         id="chatcmpl-or",
         created=1742056047,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant"))],
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
         usage=None,
     )
     chunk2 = ModelResponseStream(
         id="chatcmpl-or",
         created=1742056048,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
         usage=None,
     )
-    chunk3_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
+    chunk3_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
     chunk3 = ModelResponseStream(
         id="chatcmpl-or",
         created=1742056049,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))],
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+        ],
         usage=chunk3_usage,
     )
 
-    completion_stream = ModelResponseListIterator(model_responses=[chunk1, chunk2, chunk3])
+    completion_stream = ModelResponseListIterator(
+        model_responses=[chunk1, chunk2, chunk3]
+    )
     response = CustomStreamWrapper(
         completion_stream=completion_stream,
         model="openrouter/claude",
@@ -1248,22 +1276,32 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
         id="chatcmpl-or",
         created=1742056047,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant"))],
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
         usage=None,
     )
     chunk2 = ModelResponseStream(
         id="chatcmpl-or",
         created=1742056048,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
         usage=None,
     )
     chunk3 = ModelResponseStream(
         id="chatcmpl-or",
         created=1742056049,
         model="openrouter/claude",
-        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))],
-        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025),
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+        ),
     )
 
     # Build the complete response as stream_chunk_builder does
@@ -1278,7 +1316,11 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
 
     # Simulate the propagation logic from streaming_handler
     _final_usage = getattr(complete_response, "usage", None)
-    if _final_usage is not None and hasattr(_final_usage, "cost") and _final_usage.cost is not None:
+    if (
+        _final_usage is not None
+        and hasattr(_final_usage, "cost")
+        and _final_usage.cost is not None
+    ):
         if "additional_headers" not in complete_response._hidden_params:
             complete_response._hidden_params["additional_headers"] = {}
         complete_response._hidden_params["additional_headers"][
@@ -1296,7 +1338,9 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     # Verify the cost calculator would pick this up
     from litellm.cost_calculator import get_response_cost_from_hidden_params
 
-    provider_cost = get_response_cost_from_hidden_params(complete_response._hidden_params)
+    provider_cost = get_response_cost_from_hidden_params(
+        complete_response._hidden_params
+    )
     assert provider_cost == 0.00025
 
 
@@ -1502,6 +1546,7 @@ def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
             chunks.append(_make_chunk(p))
     return chunks
 
+
 _REPETITION_TEST_CASES = [
     # Basic cases
     pytest.param(
@@ -1558,7 +1603,14 @@ _REPETITION_TEST_CASES = [
         id="last_chunk_different_no_raise",
     ),
     pytest.param(
-        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1)
+        + ["different_mid"]
+        + ["same"]
+        * (
+            litellm.REPEATED_STREAMING_CHUNK_LIMIT
+            - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2
+            + 1
+        ),
         False,
         id="middle_chunk_different_no_raise",
     ),
@@ -1568,7 +1620,9 @@ _REPETITION_TEST_CASES = [
         id="last_two_different_no_raise",
     ),
     pytest.param(
-        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["diff"],
         True,
         id="in_between_same_and_diff_raise",
     ),
@@ -1594,6 +1648,8 @@ def test_raise_on_model_repetition(
         for chunk in chunks:
             wrapper.chunks.append(chunk)
             wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -1675,12 +1731,13 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     last_chunk = collected[-1]
     hidden_usage = last_chunk._hidden_params.get("usage")
     assert hidden_usage is not None, "Expected usage in _hidden_params"
-    assert hidden_usage.prompt_tokens == 20, (
-        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
-    )
-    assert hidden_usage.completion_tokens == 135, (
-        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
-    )
+    assert (
+        hidden_usage.prompt_tokens == 20
+    ), f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    assert (
+        hidden_usage.completion_tokens == 135
+    ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+
 
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
@@ -1754,9 +1811,9 @@ def test_content_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — content was dropped (issue #22098)"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — content was dropped (issue #22098)"
     assert result.choices[0].delta.content == "world!"
 
 
@@ -1808,14 +1865,14 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — tool_use data was dropped"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — tool_use data was dropped"
 
     tool_calls = result.choices[0].delta.tool_calls
-    assert tool_calls is not None and len(tool_calls) > 0, (
-        "tool_calls should contain at least one tool call"
-    )
+    assert (
+        tool_calls is not None and len(tool_calls) > 0
+    ), "tool_calls should contain at least one tool call"
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
 
