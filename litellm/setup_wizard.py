@@ -557,11 +557,16 @@ class SetupWizard:
                         f'      api_base: "{_yaml_escape(str(p["api_base"]))}"'
                     )
                 elif p.get("needs_api_base"):
-                    azure_base_key = f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"
-                    if azure_base_key in env_copy:
-                        lines.append(
-                            f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'
-                        )
+                    azure_base_keys = (
+                        f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}",
+                        f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}",
+                    )
+                    for azure_base_key in azure_base_keys:
+                        if azure_base_key in env_copy:
+                            lines.append(
+                                f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'
+                            )
+                            break
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")
 

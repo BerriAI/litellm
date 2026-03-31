@@ -12,6 +12,9 @@ get_secret_pattern = re.compile(
 get_secret_str_pattern = re.compile(
     r'litellm\.get_secret_str\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)'
 )
+get_env_bool_pattern = re.compile(
+    r'get_env_bool\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*)?\)'
+)
 
 # Set to store unique keys from the code
 env_keys = set()
@@ -72,6 +75,9 @@ for root, dirs, files in os.walk(repo_base):
                 # Find all keys using litellm.get_secret_str()
                 get_secret_str_matches = get_secret_str_pattern.findall(content)
                 env_keys.update(match for match in get_secret_str_matches)
+
+                get_env_bool_matches = get_env_bool_pattern.findall(content)
+                env_keys.update(match for match in get_env_bool_matches)
 
 # Print the unique keys found
 print(env_keys)

@@ -1246,7 +1246,7 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
     from litellm.proxy.utils import ProxyLogging
 
     # Three-part token: recognised as a JWT by is_jwt()
-    api_key = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0X3VzZXIifQ.some_signature"
+    api_key = "not_a_real_jwt.token.parts"
     request_data = {"model": "gpt-4"}
     general_settings = {"enforce_rbac": False}
     route = "/chat/completions"

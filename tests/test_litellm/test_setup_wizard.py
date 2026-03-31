@@ -124,7 +124,7 @@ def test_build_config_does_not_mutate_env_vars():
     """_build_config must not modify the caller's env_vars dict."""
     env_vars = {
         "AZURE_AI_API_KEY": "az-key",
-        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://my.azure.com",
+        "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-deployment",
     }
     original_keys = set(env_vars.keys())
@@ -135,7 +135,7 @@ def test_build_config_does_not_mutate_env_vars():
 def test_build_config_azure_uses_deployment_name():
     env_vars = {
         "AZURE_AI_API_KEY": "az-key",
-        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://my.azure.com",
+        "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
     }
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
@@ -182,7 +182,7 @@ def test_build_config_internal_sentinel_keys_excluded():
     """_LITELLM_ prefixed sentinel keys must not appear in environment_variables."""
     env_vars = {
         "OPENAI_API_KEY": "sk-real",
-        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://x.azure.com",
+        "_LITELLM_AZURE_API_BASE_AZURE": "https://x.azure.com",
     }
     config = SetupWizard._build_config([_OPENAI], env_vars, "sk-master")
     assert "_LITELLM_" not in config

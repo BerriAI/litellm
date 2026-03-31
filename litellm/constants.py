@@ -2,7 +2,7 @@ import os
 import sys
 from typing import List, Literal
 
-from litellm.litellm_core_utils.env_utils import get_env_int
+from litellm.litellm_core_utils.env_utils import get_env_bool, get_env_int
 
 DEFAULT_HEALTH_CHECK_PROMPT = str(
     os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
@@ -66,6 +66,12 @@ MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 6
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING = (
     os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+)
+
+# Bedrock image edit: when True, unknown model ids use the legacy Stability adapter.
+# Default False raises ValueError. Re-exported on the ``litellm`` module for tests/runtime.
+BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK = get_env_bool(
+    "LITELLM_BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK", False
 )
 
 # Model cost map validation constants

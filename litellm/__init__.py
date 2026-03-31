@@ -79,6 +79,7 @@ from litellm.constants import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
+    BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK,
 )
 import httpx
 
@@ -214,6 +215,12 @@ token: Optional[
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
+# When True, unknown Bedrock image-edit model ids use the Stability adapter (legacy).
+# Default False raises ValueError so misconfigured model IDs fail fast.
+# Value from constants (re-exported on this module for tests and ``import litellm``).
+bedrock_image_edit_unknown_model_fallback: bool = (
+    BEDROCK_IMAGE_EDIT_UNKNOWN_MODEL_FALLBACK
+)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)

@@ -1714,9 +1714,7 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     # 1. Try Redis first (cross-pod authoritative)
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(
-                key=counter_key
-            )
+            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
                 return float(val)
         except Exception as e:
@@ -1820,9 +1818,7 @@ async def _init_and_increment_spend_counter(
                 key=counter_key, value=base_spend
             )
 
-    await spend_counter_cache.async_increment_cache(
-        key=counter_key, value=increment
-    )
+    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
 
 
 async def update_cache(  # noqa: PLR0915

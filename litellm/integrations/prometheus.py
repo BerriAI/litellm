@@ -2789,9 +2789,7 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        async def fetch_orgs(
-            page_size: int, page: int
-        ) -> Tuple[list, Optional[int]]:
+        async def fetch_orgs(page_size: int, page: int) -> Tuple[list, Optional[int]]:
             skip = (page - 1) * page_size
             orgs = await prisma_client.db.litellm_organizationtable.find_many(
                 skip=skip,
