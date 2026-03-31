@@ -298,6 +298,7 @@ def test_completion_azure():
         ## Test azure call
         response = completion(
             model="azure/gpt-4.1-mini",
+            api_base=os.getenv("AZURE_AI_API_BASE"),
             messages=[
                 {
                     "role": "user",
