@@ -1030,7 +1030,6 @@ class CustomStreamWrapper:
                     hasattr(model_response, "usage")
                     and model_response.usage is not None
                 ):
-                    self.chunks.append(model_response)
                     return model_response
                 return
             # flush any remaining holding chunk
@@ -1145,11 +1144,7 @@ class CustomStreamWrapper:
                         not isinstance(chunk, dict)
                         or "provider_specific_fields" not in chunk
                     ):
-                        if self.custom_llm_provider != "openrouter":
-                            raise StopIteration
-                        else:
-                            # OpenRouter: continue processing - usage will come in later chunks
-                            pass
+                        raise StopIteration
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
                 if anthropic_response_obj["is_finished"]:
@@ -1829,6 +1824,23 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    @staticmethod
+    def _propagate_usage_cost_to_hidden_params(
+        response: "ModelResponse",
+    ) -> None:
+        """
+        If the assembled response carries a provider-reported cost on
+        usage.cost, copy it into _hidden_params so litellm's cost
+        calculator uses it instead of a token-based estimate.
+        """
+        _usage = getattr(response, "usage", None)
+        if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
+            if "additional_headers" not in response._hidden_params:
+                response._hidden_params["additional_headers"] = {}
+            response._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ] = float(_usage.cost)
+
     def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
@@ -1933,26 +1945,9 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    # Propagate provider-reported cost (e.g. OpenRouter)
-                    # to _hidden_params so the cost calculator picks it up
-                    _final_usage = getattr(complete_streaming_response, "usage", None)
-                    if (
-                        _final_usage is not None
-                        and hasattr(_final_usage, "cost")
-                        and _final_usage.cost is not None
-                    ):
-                        if (
-                            "additional_headers"
-                            not in complete_streaming_response._hidden_params
-                        ):
-                            complete_streaming_response._hidden_params[
-                                "additional_headers"
-                            ] = {}
-                        complete_streaming_response._hidden_params[
-                            "additional_headers"
-                        ]["llm_provider-x-litellm-response-cost"] = float(
-                            _final_usage.cost
-                        )
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response
+                    )
 
                     setattr(
                         response,
@@ -2180,26 +2175,9 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    # Propagate provider-reported cost (e.g. OpenRouter)
-                    # to _hidden_params so the cost calculator picks it up
-                    _final_usage = getattr(complete_streaming_response, "usage", None)
-                    if (
-                        _final_usage is not None
-                        and hasattr(_final_usage, "cost")
-                        and _final_usage.cost is not None
-                    ):
-                        if (
-                            "additional_headers"
-                            not in complete_streaming_response._hidden_params
-                        ):
-                            complete_streaming_response._hidden_params[
-                                "additional_headers"
-                            ] = {}
-                        complete_streaming_response._hidden_params[
-                            "additional_headers"
-                        ]["llm_provider-x-litellm-response-cost"] = float(
-                            _final_usage.cost
-                        )
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response
+                    )
 
                     setattr(
                         response,
@@ -2425,18 +2403,18 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
 
-    if (
-        latest_usage_chunk
-        and hasattr(latest_usage_chunk, "cost")
-        and latest_usage_chunk.cost is not None
-    ):
-        return latest_usage_chunk
-
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
+
+    if (
+        latest_usage_chunk
+        and hasattr(latest_usage_chunk, "cost")
+        and latest_usage_chunk.cost is not None
+    ):
+        returned_usage_chunk.cost = latest_usage_chunk.cost
 
     return returned_usage_chunk
 

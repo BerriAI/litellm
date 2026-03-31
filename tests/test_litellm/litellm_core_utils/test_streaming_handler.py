@@ -1314,18 +1314,8 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert hasattr(complete_response.usage, "cost")
     assert complete_response.usage.cost == 0.00025
 
-    # Simulate the propagation logic from streaming_handler
-    _final_usage = getattr(complete_response, "usage", None)
-    if (
-        _final_usage is not None
-        and hasattr(_final_usage, "cost")
-        and _final_usage.cost is not None
-    ):
-        if "additional_headers" not in complete_response._hidden_params:
-            complete_response._hidden_params["additional_headers"] = {}
-        complete_response._hidden_params["additional_headers"][
-            "llm_provider-x-litellm-response-cost"
-        ] = float(_final_usage.cost)
+    # Use the real propagation method from CustomStreamWrapper
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
 
     assert "additional_headers" in complete_response._hidden_params
     assert (
