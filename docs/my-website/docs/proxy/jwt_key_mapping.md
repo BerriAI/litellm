@@ -1,6 +1,3 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # JWT → Virtual Key Mapping
 
 :::info Enterprise
@@ -188,7 +185,10 @@ curl -X POST 'http://0.0.0.0:4000/jwt_client/new' \
 Set the proxy as the API base in your team's Claude Code config:
 
 ```bash
-export ANTHROPIC_API_KEY="<your-sso-jwt-token>"
+# Point Claude Code at the LiteLLM proxy instead of Anthropic directly.
+# ANTHROPIC_API_KEY here is the bearer token sent to the proxy — set it to
+# the user's SSO/OIDC JWT token (obtained from your IdP at login).
+export ANTHROPIC_API_KEY="<user-sso-jwt-token>"
 export ANTHROPIC_BASE_URL="http://your-litellm-proxy:4000"
 ```
 
