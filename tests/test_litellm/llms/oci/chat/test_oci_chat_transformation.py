@@ -777,7 +777,7 @@ class TestSyncStreamSplitChunks:
 
     def test_sync_stream_wrapper_splits_batched_chunks(self):
         """Verify get_sync_custom_stream_wrapper splits multi-event HTTP chunks."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         config = OCIChatConfig()
 
@@ -792,17 +792,16 @@ class TestSyncStreamSplitChunks:
         mock_client = MagicMock()
         mock_client.post.return_value = mock_response
 
-        with patch("litellm.llms.oci.chat.transformation.track_llm_api_timing", lambda: lambda f: f):
-            result = config.get_sync_custom_stream_wrapper(
-                model=TEST_MODEL_NAME,
-                custom_llm_provider="oci",
-                logging_obj=MagicMock(),
-                api_base="https://example.com/chat",
-                headers={},
-                data={"test": "data"},
-                messages=[],
-                client=mock_client,
-            )
+        result = config.get_sync_custom_stream_wrapper(
+            model=TEST_MODEL_NAME,
+            custom_llm_provider="oci",
+            logging_obj=MagicMock(),
+            api_base="https://example.com/chat",
+            headers={},
+            data={"test": "data"},
+            messages=[],
+            client=mock_client,
+        )
 
         # Consume the stream wrapper's completion_stream to verify splitting
         chunks = list(result.completion_stream)
