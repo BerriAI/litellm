@@ -1,12 +1,10 @@
-import os
-import sys
+import asyncio
 import json
+import os
 import httpx
 from typing import Any, Dict, List
-from unittest.mock import Mock, MagicMock, patch
-from dotenv import load_dotenv
+from unittest.mock import AsyncMock, MagicMock, patch
 
-load_dotenv()
 import pytest
 
 from litellm import completion, acompletion, responses

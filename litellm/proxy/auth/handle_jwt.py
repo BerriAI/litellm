@@ -1397,8 +1397,12 @@ class JWTAuthManager:
         request_headers: Optional[dict] = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
-        # Check if OIDC UserInfo endpoint is enabled
-        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+        # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
+        # JWT auth if the token itself is a well-formed JWT (3-part structure).
+        if (
+            jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
+            and not jwt_handler.is_jwt(token=api_key)
+        ):
             verbose_proxy_logger.debug(
                 "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
             )

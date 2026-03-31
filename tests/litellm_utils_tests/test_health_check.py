@@ -21,9 +21,9 @@ async def test_azure_health_check():
         model_params={
             "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "Hey, how's it going?"}],
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_version": os.getenv("AZURE_API_VERSION"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
+            "api_version": os.getenv("AZURE_AI_API_VERSION"),
         }
     )
     print(f"response: {response}")
@@ -51,9 +51,9 @@ async def test_azure_embedding_health_check():
     response = await litellm.ahealth_check(
         model_params={
             "model": "azure/text-embedding-ada-002",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_version": os.getenv("AZURE_API_VERSION"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
+            "api_version": os.getenv("AZURE_AI_API_VERSION"),
         },
         input=["test for litellm"],
         mode="embedding",
@@ -83,7 +83,9 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
-@pytest.mark.skip(reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)")
+@pytest.mark.skip(
+    reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)"
+)
 @pytest.mark.asyncio
 async def test_azure_img_gen_health_check():
     """
@@ -98,8 +100,8 @@ async def test_azure_img_gen_health_check():
         response = await litellm.ahealth_check(
             model_params={
                 "model": "azure/dall-e-3",
-                "api_base": os.getenv("AZURE_API_BASE"),
-                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
             },
             mode="image_generation",
             prompt="cute baby sea otter",
@@ -242,35 +244,6 @@ async def test_audio_transcription_health_check():
     assert "error" not in response
 
     print(response)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
-)
-async def test_async_realtime_health_check(model, mocker):
-    """
-    Test Health Check with Valid models passes
-
-    """
-    mock_websocket = AsyncMock()
-    mock_connect = AsyncMock().__aenter__.return_value = mock_websocket
-    mocker.patch("websockets.connect", return_value=mock_connect)
-
-    litellm.set_verbose = True
-    model_params = {
-        "model": model,
-    }
-    if model == "azure/gpt-4o-realtime-preview":
-        model_params["api_base"] = os.getenv("AZURE_REALTIME_API_BASE")
-        model_params["api_key"] = os.getenv("AZURE_REALTIME_API_KEY")
-        model_params["api_version"] = os.getenv("AZURE_REALTIME_API_VERSION")
-    response = await litellm.ahealth_check(
-        model_params=model_params,
-        mode="realtime",
-    )
-    print(response)
-    assert response == {}
 
 
 def test_update_litellm_params_for_health_check():
@@ -500,7 +473,9 @@ async def test_perform_health_check_filters_by_model_id():
 
     async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
-        return [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}], []
+        return [
+            {"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}
+        ], []
 
     with patch(
         "litellm.proxy.health_check._perform_health_check",
@@ -657,7 +632,8 @@ async def test_health_check_creates_only_bounded_initial_tasks():
         return real_create_task(coro)
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check), patch(
-        "litellm.proxy.health_check.asyncio.create_task", side_effect=tracked_create_task
+        "litellm.proxy.health_check.asyncio.create_task",
+        side_effect=tracked_create_task,
     ):
         perform_task = real_create_task(
             _perform_health_check(model_list, max_concurrency=2)

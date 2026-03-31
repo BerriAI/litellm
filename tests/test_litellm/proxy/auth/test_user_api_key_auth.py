@@ -334,7 +334,6 @@ async def test_proxy_admin_expired_key_from_cache():
         "litellm.proxy.auth.user_api_key_auth._delete_cache_key_object",
         new_callable=AsyncMock,
     ) as mock_delete_cache:
-
         mock_get_key_object.return_value = expired_token
 
         # Set attributes on proxy_server module (these are imported inside _user_api_key_auth_builder)
@@ -609,7 +608,6 @@ class TestJWTOAuth2Coexistence:
             "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
             new_callable=AsyncMock,
         ) as mock_jwt_auth:
-
             litellm.proxy.proxy_server.jwt_handler.update_environment(
                 prisma_client=None,
                 user_api_key_cache=DualCache(),
@@ -674,7 +672,6 @@ class TestJWTOAuth2Coexistence:
             new_callable=AsyncMock,
             return_value=mock_jwt_result,
         ) as mock_jwt_auth:
-
             litellm.proxy.proxy_server.jwt_handler.update_environment(
                 prisma_client=None,
                 user_api_key_cache=DualCache(),
@@ -726,7 +723,6 @@ class TestJWTOAuth2Coexistence:
             new_callable=AsyncMock,
             return_value=mock_oauth2_response,
         ) as mock_oauth2:
-
             result = await user_api_key_auth(
                 request=mock_request,
                 api_key=f"Bearer {jwt_like_token}",

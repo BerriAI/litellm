@@ -24,12 +24,6 @@ On March 24, 2026 at 10:39 UTC, LiteLLM v1.82.7 was pushed to PyPI. Version v1.8
 
 At this point, our understanding is that this was a supply-chain incident affecting those two published versions.
 
-### Q. Were older packages impacted?
-
-Our current findings show no indicators of compromise in the last 20 versions of LiteLLM. This was manually verified by our team and independently reviewed by Veria Labs.
-
-We have also published the verified versions for users to use. [Check Security Blog for release verification.](https://docs.litellm.ai/blog/security-update-march-2026#verified-safe-versions)
-
 ## How did this happen?
 
 Our understanding is that the issue came from the [compromised Trivy security scanner](https://www.aquasec.com/blog/trivy-supply-chain-attack-what-you-need-to-know/) dependency in our CI/CD pipeline.
@@ -158,6 +152,24 @@ We believe that [Cosign](https://github.com/sigstore/cosign) is a good fit for t
 - Add a cooldown period before upgrading to a new version of a package - allows more time to investigate and verify the new version. 
 
 We've added zizmor to help us catch issues such as unpinned dependencies and credential leakage. [commit](https://github.com/BerriAI/litellm/commit/a671275f5c5b0e1fb1adacdf3b6ef779aaa5d56c).
+
+
+## Frequently Asked Questions
+
+**Q: Did you observe any lateral movement into your corporate environment during this incident?**
+
+A: No. Our investigation to date, conducted in coordination with external security experts, has found no evidence of lateral movement into our internal corporate systems. The incident was isolated to the CI/CD pipeline and the release path for specific versions (v1.82.7 and v1.82.8). As a proactive measure, we have rotated all potentially impacted or adjacent secrets—including PyPI, GitHub, and Docker credentials—and updated maintainer account security to ensure continued isolation.
+
+**Q: Do you expect delays in future product releases due to these new security measures?**
+
+A: We are committed to balancing security with speed. While we have temporarily paused releases to implement stronger controls, we are moving quickly to automate our new security protocols. We are currently implementing isolated CI/CD environments, ephemeral credentials (via Trusted Publishers), and release auditing with Cosign. These improvements are designed to be integrated into our automated pipeline, allowing us to maintain a fast release cadence while ensuring every package is verified and secure.
+
+**Q: Were older packages impacted?**
+
+Our current findings show no indicators of compromise in the last 20 versions of LiteLLM. This was manually verified by our team and independently reviewed by Veria Labs.
+
+We have also published the verified versions for users to use. [Check Security Blog for release verification.](https://docs.litellm.ai/blog/security-update-march-2026#verified-safe-versions)
+
 
 
 ## Questions & Support 
