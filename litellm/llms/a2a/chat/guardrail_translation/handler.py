@@ -238,8 +238,8 @@ class A2AGuardrailHandler(BaseTranslation):
         if not valid_parsed:
             return responses_so_far
 
-        combined_text, chunk_indices_with_text = (
-            self._collect_text_from_parsed_chunks(valid_parsed)
+        combined_text, chunk_indices_with_text = self._collect_text_from_parsed_chunks(
+            valid_parsed
         )
         if not combined_text:
             return responses_so_far
@@ -316,9 +316,7 @@ class A2AGuardrailHandler(BaseTranslation):
     def _parse_streaming_responses(
         self,
         responses_so_far: List[Any],
-    ) -> Tuple[
-        List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]
-    ]:
+    ) -> Tuple[List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
         parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):

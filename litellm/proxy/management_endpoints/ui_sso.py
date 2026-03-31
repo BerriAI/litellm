@@ -827,7 +827,9 @@ async def get_generic_sso_response(
     ],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
-) -> Tuple[Union[OpenID, dict], Optional[dict], Optional[dict]]:  # (result, received_response, access_token_payload)
+) -> Tuple[
+    Union[OpenID, dict], Optional[dict], Optional[dict]
+]:  # (result, received_response, access_token_payload)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
     from fastapi_sso.sso.generic import create_provider
@@ -1369,7 +1371,11 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     elif generic_client_id is not None:
-        result, received_response, access_token_payload = await get_generic_sso_response(
+        (
+            result,
+            received_response,
+            access_token_payload,
+        ) = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,

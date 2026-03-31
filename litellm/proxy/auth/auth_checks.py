@@ -3078,10 +3078,7 @@ async def _team_max_budget_check(
         BudgetExceededError if the team is over it's max budget.
         Triggers a budget alert if the team is over it's max budget.
     """
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-    ):
+    if team_object is not None and team_object.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)

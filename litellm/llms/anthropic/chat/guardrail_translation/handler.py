@@ -284,18 +284,27 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # Step 1: Extract all text content and tool calls from response
         self._extract_from_content_blocks(
-            response_content, texts_to_check, images_to_check,
-            task_mappings, tool_calls_to_check,
+            response_content,
+            texts_to_check,
+            images_to_check,
+            task_mappings,
+            tool_calls_to_check,
         )
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
             request_data = self._prepare_request_data(
-                request_data, response, user_api_key_dict, key="response",
+                request_data,
+                response,
+                user_api_key_dict,
+                key="response",
             )
 
             inputs = self._build_guardrail_inputs(
-                texts_to_check, images_to_check, tool_calls_to_check, response,
+                texts_to_check,
+                images_to_check,
+                tool_calls_to_check,
+                response,
             )
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
