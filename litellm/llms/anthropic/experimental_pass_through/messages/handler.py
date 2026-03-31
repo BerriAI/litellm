@@ -136,9 +136,12 @@ async def _try_websearch_short_circuit(
     if not litellm.callbacks:
         return None
 
-    from litellm.integrations.websearch_interception.handler import (
-        WebSearchInterceptionLogger,
-    )
+    try:
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+    except ImportError:
+        return None
 
     for callback in litellm.callbacks:
         if not isinstance(callback, WebSearchInterceptionLogger):
