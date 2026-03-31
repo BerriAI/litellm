@@ -761,6 +761,13 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
+            # Remove keys from kwargs_for_followup that are already in
+            # optional_params to avoid "got multiple values for keyword
+            # argument" TypeError (e.g. output_config appears in both
+            # anthropic optional params and the forwarded kwargs).
+            for key in optional_params_without_max_tokens:
+                kwargs_for_followup.pop(key, None)
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             if logging_obj is not None:
