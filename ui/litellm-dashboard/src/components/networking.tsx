@@ -202,6 +202,7 @@ export interface Model {
 
 interface PromptInfo {
   prompt_type: string;
+  environment?: string;
 }
 
 export interface PromptSpec {
@@ -211,6 +212,8 @@ export interface PromptSpec {
   created_at?: string;
   updated_at?: string;
   version?: number; // Explicit version number for version history
+  environment?: string;
+  created_by?: string;
 }
 
 export interface PromptTemplateBase {
@@ -6035,9 +6038,15 @@ export const estimateAttachmentImpactCall = async (
   }
 };
 
-export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
+export const getPromptsList = async (
+  accessToken: string,
+  environment?: string,
+): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6061,9 +6070,12 @@ export const getPromptsList = async (accessToken: string): Promise<ListPromptsRe
   }
 };
 
-export const getPromptInfo = async (accessToken: string, promptId: string): Promise<PromptInfoResponse> => {
+export const getPromptInfo = async (accessToken: string, promptId: string, environment?: string): Promise<PromptInfoResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6087,9 +6099,12 @@ export const getPromptInfo = async (accessToken: string, promptId: string): Prom
   }
 };
 
-export const getPromptVersions = async (accessToken: string, promptId: string): Promise<ListPromptsResponse> => {
+export const getPromptVersions = async (accessToken: string, promptId: string, environment?: string): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
