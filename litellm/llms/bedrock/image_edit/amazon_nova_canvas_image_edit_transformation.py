@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -266,8 +267,14 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 # Re-emit unknown values (e.g. OpenAI "auto") so transform_image_edit_request
                 # forwards them and the API can reject, or drop_params can still apply upstream.
                 mapped["quality"] = _quality
-        for k in ("response_format",):
-            mapped.pop(k, None)
+        # Accepted for OpenAI compatibility but ignored for Nova Canvas image edit;
+        # Bedrock returns base64 images only (no URL mode).
+        response_format = mapped.pop("response_format", None)
+        if response_format not in (None, "b64_json"):
+            verbose_logger.debug(
+                "Nova Canvas image edit ignores response_format=%s and returns base64 images",
+                response_format,
+            )
         # Drop unknown keys if drop_params
         if drop_params:
             for k in list(mapped.keys()):

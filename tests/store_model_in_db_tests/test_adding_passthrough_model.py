@@ -10,8 +10,6 @@ Cases to cover
 4. Bad API Key / credential - 401
 """
 
-import time
-import assemblyai as aai
 import pytest
 import httpx
 import os
@@ -174,6 +172,7 @@ def add_assembly_ai_model_to_db(
 def make_assemblyai_basic_transcribe_request(
     virtual_key: str, assemblyai_base_url: str
 ):
+    aai = pytest.importorskip("assemblyai", reason="assemblyai SDK not installed")
     print("making basic transcribe request to assemblyai passthrough")
 
     # Replace with your API key

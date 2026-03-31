@@ -135,7 +135,7 @@ def test_build_config_does_not_mutate_env_vars():
 def test_build_config_azure_uses_deployment_name():
     env_vars = {
         "AZURE_AI_API_KEY": "az-key",
-        "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
+        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
     }
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
@@ -143,6 +143,16 @@ def test_build_config_azure_uses_deployment_name():
     assert "model_name: azure-my-gpt4o" in config
     # api_base must be quoted to survive YAML special chars
     assert 'api_base: "https://my.azure.com"' in config
+
+
+def test_build_config_azure_uses_legacy_api_base_sentinel():
+    env_vars = {
+        "AZURE_AI_API_KEY": "az-key",
+        "_LITELLM_AZURE_API_BASE_AZURE": "https://legacy.azure.com",
+        "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
+    }
+    config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
+    assert 'api_base: "https://legacy.azure.com"' in config
 
 
 def test_build_config_azure_no_deployment_skipped():
