@@ -13,9 +13,22 @@ else:
     LitellmRouter = Any
 
 
+def _validate_user_config(router_config: dict) -> None:
+    """Reject user_config models that specify api_base without api_key."""
+    for model in router_config.get("model_list", []):
+        params = model.get("litellm_params", {})
+        if params.get("api_base") is not None and params.get("api_key") is None:
+            raise HTTPException(
+                status_code=400,
+                detail="user_config models with a custom api_base must also provide an api_key",
+            )
+
+
 def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config = data.pop("user_config")
+
+    _validate_user_config(router_config)
 
     # Filter router_config to only include valid Router.__init__ arguments
     # This prevents TypeError when invalid parameters are stored in the database
