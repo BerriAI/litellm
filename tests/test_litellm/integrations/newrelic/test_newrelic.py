@@ -1,0 +1,710 @@
+import os
+import sys
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# newrelic is a container-only dependency (requirements.txt) and is not installed
+# in the CI Python environment. Mock it in sys.modules before importing the
+# integration so that deferred `import newrelic.agent` calls inside NewRelicLogger
+# methods resolve to these mocks rather than failing with ModuleNotFoundError.
+_mock_newrelic = MagicMock()
+_mock_newrelic_agent = MagicMock()
+# Explicitly link so _mock_newrelic.agent IS _mock_newrelic_agent. Without this,
+# the first getattr(_mock_newrelic, 'agent') auto-creates a different child mock,
+# causing patch("newrelic.agent.xxx") to patch the wrong object.
+_mock_newrelic.agent = _mock_newrelic_agent
+sys.modules["newrelic"] = _mock_newrelic
+sys.modules["newrelic.agent"] = _mock_newrelic_agent
+
+sys.path.insert(0, os.path.abspath("../.."))
+
+import litellm.integrations.newrelic.newrelic as nr_module
+from litellm.integrations.newrelic.newrelic import NewRelicLogger
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+NR_ENV = {
+    "NEW_RELIC_LICENSE_KEY": "test-license-key",
+    "NEW_RELIC_APP_NAME": "test-app",
+}
+
+
+def make_logger(**kwargs) -> NewRelicLogger:
+    """Instantiate NewRelicLogger with NR agent calls mocked out."""
+    with patch.dict(os.environ, NR_ENV):
+        return NewRelicLogger(**kwargs)
+
+
+def make_kwargs(
+    model="gpt-4",
+    provider="openai",
+    messages=None,
+    optional_params=None,
+    traceparent=None,
+) -> dict:
+    """Build a minimal kwargs dict representative of a litellm callback invocation."""
+    headers = {}
+    if traceparent:
+        headers["traceparent"] = traceparent
+
+    return {
+        "model": model,
+        "messages": messages or [{"role": "user", "content": "Hello"}],
+        "optional_params": optional_params or {},
+        "litellm_params": {
+            "custom_llm_provider": provider,
+            "metadata": {"headers": headers},
+        },
+        "start_time": 1_000_000.0,
+        "end_time": 1_000_001.5,
+        "llm_api_duration_ms": 1500.0,
+    }
+
+
+def make_response(
+    model="gpt-4",
+    response_id="chatcmpl-abc123",
+    content="Hello there!",
+    finish_reason="stop",
+    prompt_tokens=10,
+    completion_tokens=20,
+):
+    """Build a minimal ModelResponse-like dict."""
+    return {
+        "id": response_id,
+        "model": model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. Init / configuration
+# ---------------------------------------------------------------------------
+
+
+class TestNewRelicLoggerInit:
+    def test_disabled_when_license_key_missing(self):
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(os.environ, {"NEW_RELIC_APP_NAME": "app"}, clear=True):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
+    def test_disabled_when_app_name_missing(self):
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(
+                os.environ, {"NEW_RELIC_LICENSE_KEY": "key"}, clear=True
+            ):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
+    def test_enabled_with_valid_env_vars(self):
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(os.environ, NR_ENV):
+                logger = NewRelicLogger()
+        assert logger.enabled is True
+
+    def test_disabled_on_import_error(self):
+        with patch.object(
+            _mock_newrelic_agent, "register_application", side_effect=ImportError
+        ):
+            with patch.dict(os.environ, NR_ENV):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
+    def test_disabled_on_agent_startup_error(self):
+        with patch.object(
+            _mock_newrelic_agent,
+            "register_application",
+            side_effect=RuntimeError("agent startup failed"),
+        ):
+            with patch.dict(os.environ, NR_ENV):
+                logger = NewRelicLogger()
+        assert logger.enabled is False
+
+    def test_record_content_default_true(self):
+        logger = make_logger()
+        assert logger.record_content is True
+
+    def test_record_content_disabled_by_param(self):
+        logger = make_logger(turn_off_message_logging=True)
+        assert logger.record_content is False
+
+    def test_record_content_disabled_by_env_var(self):
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(
+                os.environ,
+                {**NR_ENV, "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": "false"},
+            ):
+                logger = NewRelicLogger()
+        assert logger.record_content is False
+
+    def test_record_content_requires_both_enabled(self):
+        """param says record, but env var says no — result is False."""
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(
+                os.environ,
+                {**NR_ENV, "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": "false"},
+            ):
+                logger = NewRelicLogger(turn_off_message_logging=False)
+        assert logger.record_content is False
+
+    def test_constructor_kwargs_take_priority_over_global_params(self):
+        """Constructor turn_off_message_logging=True must not be overwritten by
+        litellm.newrelic_params which defaults turn_off_message_logging to False."""
+        from litellm.types.integrations.newrelic import NewRelicInitParams
+
+        with patch("newrelic.agent.register_application"):
+            with patch.dict(os.environ, NR_ENV):
+                with patch(
+                    "litellm.newrelic_params",
+                    NewRelicInitParams(turn_off_message_logging=False),
+                ):
+                    logger = NewRelicLogger(turn_off_message_logging=True)
+        assert logger.record_content is False
+
+
+# ---------------------------------------------------------------------------
+# 2. _parse_bool_env
+# ---------------------------------------------------------------------------
+
+
+class TestParseBoolEnv:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_true_string(self):
+        with patch.dict(os.environ, {"MY_VAR": "true"}):
+            assert self.logger._parse_bool_env("MY_VAR") is True
+
+    def test_true_uppercase(self):
+        with patch.dict(os.environ, {"MY_VAR": "TRUE"}):
+            assert self.logger._parse_bool_env("MY_VAR") is True
+
+    def test_false_string(self):
+        with patch.dict(os.environ, {"MY_VAR": "false"}):
+            assert self.logger._parse_bool_env("MY_VAR") is False
+
+    def test_missing_uses_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert self.logger._parse_bool_env("MY_VAR", default=True) is True
+            assert self.logger._parse_bool_env("MY_VAR", default=False) is False
+
+
+# ---------------------------------------------------------------------------
+# 3. _get_trace_context
+# ---------------------------------------------------------------------------
+
+
+class TestGetTraceContext:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_extracts_trace_id_from_traceparent(self):
+        kwargs = make_kwargs(
+            traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        )
+        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+
+    def test_generates_uuid_when_no_headers(self):
+        kwargs = make_kwargs()
+        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+        assert len(trace_id) == 32  # 32-char lowercase hex, matches W3C traceparent format
+
+    def test_generates_uuid_when_traceparent_malformed(self):
+        kwargs = make_kwargs(traceparent="not-valid")
+        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        # Falls back to a 32-char lowercase hex, matching W3C traceparent format
+        assert trace_id is not None
+        assert len(trace_id) == 32
+
+    def test_extracts_trace_id_from_mixed_case_traceparent_header(self):
+        # Callers passing headers directly may not normalise case; per W3C spec
+        # header names are case-insensitive, so "Traceparent" must work too.
+        kwargs = make_kwargs()
+        kwargs["litellm_params"]["metadata"]["headers"] = {
+            "Traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+        }
+        trace_id, span_id = self.logger._get_trace_context(kwargs)
+        assert trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+
+
+# ---------------------------------------------------------------------------
+# 4. _extract_message_content edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMessageContent:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_plain_text(self):
+        assert self.logger._extract_message_content({"content": "hello"}) == "hello"
+
+    def test_none_content_returns_empty_string(self):
+        assert self.logger._extract_message_content({"content": None}) == ""
+
+    def test_missing_content_returns_empty_string(self):
+        assert self.logger._extract_message_content({}) == ""
+
+    def test_tool_calls_serialized_as_json(self):
+        msg = {
+            "content": None,
+            "tool_calls": [{"id": "call_1", "function": {"name": "get_weather"}}],
+        }
+        result = self.logger._extract_message_content(msg)
+        assert "get_weather" in result
+        assert "call_1" in result
+
+    def test_multimodal_list_serialized_as_json(self):
+        msg = {"content": [{"type": "text", "text": "describe this"}, {"type": "image_url"}]}
+        result = self.logger._extract_message_content(msg)
+        assert "describe this" in result
+        assert "image_url" in result
+
+
+# ---------------------------------------------------------------------------
+# 5. _extract_all_messages — record_content=False path
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAllMessagesContentDisabled:
+    def test_no_content_key_when_recording_disabled(self):
+        logger = make_logger(turn_off_message_logging=True)
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "secret"}])
+        response = make_response(content="also secret")
+
+        messages = logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        for msg in messages:
+            assert "content" not in msg
+
+
+class TestExtractAllMessagesTimestamps:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_input_messages_get_start_time_timestamp(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        # make_kwargs sets start_time=1_000_000.0 and end_time=1_000_001.5
+        response = make_response()
+
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        input_msg = next(m for m in messages if not m.get("is_response"))
+        assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
+
+    def test_output_messages_get_end_time_timestamp(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_response()
+
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        output_msg = next(m for m in messages if m.get("is_response"))
+        assert output_msg["timestamp"] == int(1_000_001.5 * 1000.0)
+
+    def test_timestamp_forwarded_to_event_data(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        kwargs = make_kwargs(
+            traceparent="00-aabbccddeeff00112233445566778899-0011223344556677-01",
+            messages=[{"role": "user", "content": "Hi"}],
+        )
+        response = make_response()
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            logger._process_success(kwargs, response, start_time=1.0, end_time=2.5)
+
+        calls = mock_app.record_custom_event.call_args_list
+        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
+        for event in message_events:
+            assert "timestamp" in event
+
+
+# ---------------------------------------------------------------------------
+# 6. Explicit-None defensive tests
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitNoneValues:
+    """Verify that explicitly None values in kwargs/response don't raise or silently drop events."""
+
+    def setup_method(self):
+        self.logger = make_logger()
+
+    # _get_trace_context — chained dict lookups
+    def test_trace_context_litellm_params_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = None
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None  # falls back to UUID
+
+    def test_trace_context_metadata_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = {"metadata": None}
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+
+    def test_trace_context_headers_none(self):
+        kwargs = make_kwargs()
+        kwargs["litellm_params"] = {"metadata": {"headers": None}}
+        trace_id, _ = self.logger._get_trace_context(kwargs)
+        assert trace_id is not None
+
+    # _get_request_params
+    def test_request_params_optional_params_none(self):
+        assert self.logger._get_request_params({"optional_params": None}) == {}
+
+    # _get_model_names
+    def test_model_names_model_none_in_kwargs(self):
+        request_model, _ = self.logger._get_model_names({"model": None}, make_response())
+        assert request_model == "unknown"
+
+    def test_model_names_model_none_in_response(self):
+        response = make_response()
+        response["model"] = None
+        _, response_model = self.logger._get_model_names(make_kwargs(), response)
+        assert response_model == "gpt-4"  # falls back to request_model from kwargs
+
+    # _extract_all_messages
+    def test_extract_messages_messages_none(self):
+        kwargs = make_kwargs()
+        kwargs["messages"] = None
+        response = make_response()
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+        # No request messages, but response message should still be extracted
+        assert any(m.get("is_response") for m in messages)
+
+    def test_extract_messages_choices_none(self):
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "Hi"}])
+        response = make_response()
+        response["choices"] = None
+        messages = self.logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+        # No response messages, but request message should still be extracted
+        assert any(not m.get("is_response") for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# 7. Helper edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestExtractUsage:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_missing_usage_returns_zeros(self):
+        response = {"id": "r1", "model": "gpt-4", "choices": []}
+        usage = self.logger._extract_usage(response)
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    def test_explicit_none_token_fields_return_zeros(self):
+        response = {
+            "usage": {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+        }
+        usage = self.logger._extract_usage(response)
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+class TestGetFinishReason:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_returns_unknown_when_no_choices(self):
+        response = {"choices": []}
+        assert self.logger._get_finish_reason(response) == "unknown"
+
+    def test_returns_unknown_when_choices_missing(self):
+        assert self.logger._get_finish_reason({}) == "unknown"
+
+    def test_returns_unknown_when_finish_reason_explicitly_none(self):
+        response = {"choices": [{"finish_reason": None}]}
+        assert self.logger._get_finish_reason(response) == "unknown"
+
+
+class TestToEpochMs:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_float_passthrough(self):
+        assert self.logger._to_epoch_ms(1.0) == pytest.approx(1000.0)
+
+    def test_datetime_converted(self):
+        dt = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        assert self.logger._to_epoch_ms(dt) == pytest.approx(dt.timestamp() * 1000.0)
+
+
+class TestGetDuration:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_uses_kwargs_value_when_present(self):
+        kwargs = {"llm_api_duration_ms": 750.0}
+        assert self.logger._get_duration(kwargs, 0.0, 1.0) == 750.0
+
+    def test_calculates_from_float_timestamps(self):
+        kwargs = {}
+        result = self.logger._get_duration(kwargs, 1.0, 2.5)
+        assert result == pytest.approx(1500.0)
+
+    def test_calculates_from_datetime_timestamps(self):
+        kwargs = {}
+        start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2024, 1, 1, 0, 0, 1, 500000, tzinfo=timezone.utc)  # +1.5s
+        result = self.logger._get_duration(kwargs, start, end)
+        assert result == pytest.approx(1500.0)
+
+    def test_returns_none_when_nothing_available(self):
+        assert self.logger._get_duration({}, None, None) is None
+
+
+class TestGetRequestParams:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_includes_only_present_params(self):
+        kwargs = {"optional_params": {"temperature": 0.7}}
+        params = self.logger._get_request_params(kwargs)
+        assert params == {"temperature": 0.7}
+        assert "max_tokens" not in params
+
+    def test_empty_when_no_optional_params(self):
+        assert self.logger._get_request_params({}) == {}
+
+
+# ---------------------------------------------------------------------------
+# 8. _process_success — comprehensive happy-path
+# ---------------------------------------------------------------------------
+
+
+class TestProcessSuccess:
+    def test_records_summary_and_message_events(self):
+        logger = make_logger()
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        kwargs = make_kwargs(
+            traceparent="00-aabbccddeeff00112233445566778899-0011223344556677-01",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"temperature": 0.5, "max_tokens": 100},
+        )
+        response = make_response(
+            response_id="chatcmpl-xyz",
+            content="Hi there!",
+            finish_reason="stop",
+            prompt_tokens=5,
+            completion_tokens=10,
+        )
+
+        with patch("newrelic.agent.application", return_value=mock_app):
+            logger._process_success(kwargs, response, start_time=1.0, end_time=2.5)
+
+        calls = mock_app.record_custom_event.call_args_list
+        event_types = [c[0][0] for c in calls]
+
+        assert "LlmChatCompletionSummary" in event_types
+        assert "LlmChatCompletionMessage" in event_types
+
+        # Verify summary event fields
+        summary_data = next(
+            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionSummary"
+        )
+        assert summary_data["vendor"] == "openai"
+        assert summary_data["request.model"] == "gpt-4"
+        assert summary_data["response.model"] == "gpt-4"
+        assert summary_data["response.choices.finish_reason"] == "stop"
+        assert summary_data["response.usage.prompt_tokens"] == 5
+        assert summary_data["response.usage.completion_tokens"] == 10
+        assert summary_data["response.usage.total_tokens"] == 15
+        assert summary_data["request.temperature"] == 0.5
+        assert summary_data["request.max_tokens"] == 100
+        assert summary_data["ingest_source"] == "litellm"
+        assert summary_data["trace_id"] == "aabbccddeeff00112233445566778899"
+
+        # Verify message event id format: "{llm_response_id}-{sequence}"
+        message_events = [
+            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
+        ]
+        assert any(e["id"].startswith("chatcmpl-xyz-") for e in message_events)
+        response_msg = next(e for e in message_events if e.get("is_response"))
+        assert response_msg["content"] == "Hi there!"
+        assert response_msg["role"] == "assistant"
+
+    def test_skips_when_disabled(self):
+        logger = make_logger()
+        logger.enabled = False
+
+        with patch("newrelic.agent.application") as mock_app:
+            logger._process_success(make_kwargs(), make_response())
+
+        mock_app.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 9. _record_error_metric
+# ---------------------------------------------------------------------------
+
+
+class TestRecordErrorMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+
+    def test_calls_record_custom_metric(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+
+        with patch.object(self.logger, "_check_and_emit_periodic_metric"):
+            with patch("newrelic.agent.application", return_value=mock_app):
+                self.logger._record_error_metric()
+
+        mock_app.record_custom_metric.assert_called_once_with("LLM/LiteLLM/Error", 1)
+
+    def test_skips_when_app_disabled(self):
+        mock_app = MagicMock()
+        mock_app.enabled = False
+
+        with patch.object(self.logger, "_check_and_emit_periodic_metric"):
+            with patch("newrelic.agent.application", return_value=mock_app):
+                self.logger._record_error_metric()
+
+        mock_app.record_custom_metric.assert_not_called()
+
+    def test_calls_check_and_emit_periodic_metric(self):
+        with patch.object(
+            self.logger, "_check_and_emit_periodic_metric"
+        ) as mock_periodic:
+            with patch("newrelic.agent.application", return_value=MagicMock()):
+                self.logger._record_error_metric()
+
+        mock_periodic.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 10. _emit_supportability_metric
+# ---------------------------------------------------------------------------
+
+
+class TestEmitSupportabilityMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+        nr_module._last_metric_emission_time = 0.0
+
+    def test_records_metric_with_correct_name_and_value(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        with patch("newrelic.agent.application", return_value=mock_app):
+            with patch.object(self.logger, "_get_litellm_version", return_value="1.80.0"):
+                self.logger._emit_supportability_metric()
+        mock_app.record_custom_metric.assert_called_once_with(
+            "Supportability/Python/ML/LiteLLM/1.80.0", 1
+        )
+
+    def test_updates_last_emission_time(self):
+        mock_app = MagicMock()
+        mock_app.enabled = True
+        fake_now = 9_999_999.0
+        with patch("newrelic.agent.application", return_value=mock_app):
+            with patch("litellm.integrations.newrelic.newrelic.time.time", return_value=fake_now):
+                self.logger._emit_supportability_metric()
+        assert nr_module._last_metric_emission_time == fake_now
+
+    def test_skips_when_app_disabled(self):
+        mock_app = MagicMock()
+        mock_app.enabled = False
+        with patch("newrelic.agent.application", return_value=mock_app):
+            self.logger._emit_supportability_metric()
+        mock_app.record_custom_metric.assert_not_called()
+        # Timestamp is still updated to back off lock contention during registration.
+        assert nr_module._last_metric_emission_time != 0.0
+
+    def test_skips_when_no_app(self):
+        with patch("newrelic.agent.application", return_value=None):
+            self.logger._emit_supportability_metric()
+        # Timestamp is updated even when app is None to back off lock contention
+        # if the agent never starts or is slow to initialise.
+        assert nr_module._last_metric_emission_time != 0.0
+
+
+# ---------------------------------------------------------------------------
+# 11. _check_and_emit_periodic_metric
+# ---------------------------------------------------------------------------
+
+
+class TestCheckAndEmitPeriodicMetric:
+    def setup_method(self):
+        self.logger = make_logger()
+        nr_module._last_metric_emission_time = 0.0
+
+    def test_emits_on_first_call(self):
+        """_last_metric_emission_time starts at 0.0; any real time satisfies 27-hour window."""
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time", return_value=100_000.0
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
+
+    def test_does_not_re_emit_within_27_hours(self):
+        recent = 1_000_000.0
+        nr_module._last_metric_emission_time = recent
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=recent + 3600,  # 1 hour later
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_not_called()
+
+    def test_re_emits_after_27_hours(self):
+        old = 1_000_000.0
+        nr_module._last_metric_emission_time = old
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=old + 97201,  # 27 hours + 1 second
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
+
+    def test_boundary_exactly_27_hours_triggers_emission(self):
+        old = 1_000_000.0
+        nr_module._last_metric_emission_time = old
+        with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=old + 97200,
+            ):
+                self.logger._check_and_emit_periodic_metric()
+        mock_emit.assert_called_once()
