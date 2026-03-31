@@ -96,7 +96,9 @@ def _build_reasoning_item(
     }
 
 
-def _reasoning_item_to_response_input(r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]]) -> Dict[str, Any]:
+def _reasoning_item_to_response_input(
+    r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]]
+) -> Dict[str, Any]:
     """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
     r_input: Dict[str, Any] = {
         "type": "reasoning",

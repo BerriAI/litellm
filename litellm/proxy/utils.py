@@ -4575,7 +4575,9 @@ def verify_password(password: str, stored: str) -> bool:
         try:
             raw = base64.b64decode(stored[7:])
             salt, dk = raw[:16], raw[16:]
-            dk2 = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+            dk2 = hashlib.scrypt(
+                password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32
+            )
             return secrets.compare_digest(dk, dk2)
         except Exception:
             return False
@@ -4596,12 +4598,16 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     all_with_pw = await prisma_client.db.litellm_usertable.find_many(
         where={"password": {"not": None}},
     )
+
     def _is_sha256_hex(s: str) -> bool:
         return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
     plaintext_users = [
-        u for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        u
+        for u in all_with_pw
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
