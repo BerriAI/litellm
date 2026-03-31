@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Card,
   Title,
@@ -103,12 +103,22 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     }
   };
 
+  const isInitialMount = useRef(true);
+
   useEffect(() => {
     fetchPromptInfo();
   }, [promptId, accessToken]);
 
-  // When environment changes, re-fetch prompt info and version history
+  // When environment changes (user clicks tab), re-fetch — skip initial mount
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      // Still fetch version history on initial mount once selectedEnv is set
+      if (selectedEnv && accessToken) {
+        fetchVersionHistory(selectedEnv);
+      }
+      return;
+    }
     if (selectedEnv && accessToken) {
       fetchPromptInfo(selectedEnv);
       fetchVersionHistory(selectedEnv);

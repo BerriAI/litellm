@@ -559,11 +559,12 @@ async def get_prompt_info(
 
     base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
 
-    # Query all environments this prompt exists in
+    # Query all environments this prompt exists in (lightweight: distinct on environment)
     all_environments: List[str] = []
     if prisma_client is not None:
         all_prompt_rows = await prisma_client.db.litellm_prompttable.find_many(
-            where={"prompt_id": base_prompt_id}
+            where={"prompt_id": base_prompt_id},
+            distinct=["environment"],
         )
         all_environments = sorted(
             set(row.environment for row in all_prompt_rows if row.environment)
@@ -626,9 +627,9 @@ async def get_prompt_info(
     # Get prompt content
     prompt_template: Optional[PromptTemplateBase] = None
     try:
-        # When fetched from DB (environment-specific), parse dotprompt_content directly
+        # Parse dotprompt_content directly when available (avoids stale in-memory data)
         dotprompt_content = prompt_spec.litellm_params.dotprompt_content
-        if dotprompt_content and environment:
+        if dotprompt_content:
             from litellm.integrations.dotprompt import (
                 _get_prompt_data_from_dotprompt_content,
             )
@@ -983,13 +984,26 @@ async def delete_prompt(
         if environment:
             delete_where["environment"] = environment
 
-        # Delete all versions of the prompt from the database
+        # Delete versions from the database (scoped to environment if provided)
         await prisma_client.db.litellm_prompttable.delete_many(where=delete_where)
 
-        # Remove all versions of the prompt from memory
-        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
+        # Remove matching prompts from memory — scope to environment if provided
+        if environment:
+            prompts_to_delete = [
+                pid
+                for pid, prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
+                if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+                and prompt.environment == environment
+            ]
+            for pid in prompts_to_delete:
+                del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[pid]
+                if pid in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
+                    del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[pid]
+        else:
+            IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
 
-        return {"message": f"Prompt {base_prompt_id} deleted successfully"}
+        env_msg = f" from {environment}" if environment else ""
+        return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}
 
     except HTTPException as e:
         raise e
