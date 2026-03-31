@@ -2,7 +2,10 @@ name: LiteLLM MCP Tests (folder - tests/mcp_tests)
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -10,38 +13,40 @@ jobs:
     timeout-minutes: 25
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
-    - name: Thank You Message
-      run: |
-        echo "### 🙏 Thank you for contributing to LiteLLM!" >> $GITHUB_STEP_SUMMARY
-        echo "Your PR is being tested now. We appreciate your help in making LiteLLM better!" >> $GITHUB_STEP_SUMMARY
+      - name: Thank You Message
+        run: |
+          echo "### 🙏 Thank you for contributing to LiteLLM!" >> $GITHUB_STEP_SUMMARY
+          echo "Your PR is being tested now. We appreciate your help in making LiteLLM better!" >> $GITHUB_STEP_SUMMARY
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+      - name: Install Poetry
+        run: pip install 'poetry==2.3.2'
 
-    - name: Install dependencies
-      run: |
-        poetry lock
-        poetry install --with dev,proxy-dev --extras "proxy semantic-router"
-        poetry run pip install "pytest==7.3.1"
-        poetry run pip install "pytest-retry==1.6.3"
-        poetry run pip install "pytest-cov==5.0.0"
-        poetry run pip install "pytest-asyncio==0.21.1"
-        poetry run pip install "respx==0.22.0"
-        poetry run pip install "pydantic==2.11.0"
-        poetry run pip install "mcp==1.25.0"
-        poetry run pip install pytest-xdist
+      - name: Install dependencies
+        run: |
+          poetry lock
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install "pytest==7.3.1"
+          poetry run pip install "pytest-retry==1.6.3"
+          poetry run pip install "pytest-cov==5.0.0"
+          poetry run pip install "pytest-asyncio==0.21.1"
+          poetry run pip install "respx==0.22.0"
+          poetry run pip install "pydantic==2.11.0"
+          poetry run pip install "mcp==1.25.0"
+          poetry run pip install 'pytest-xdist==3.8.0'
 
-    - name: Setup litellm-enterprise as local package
-      run: |
-        poetry run pip install --force-reinstall --no-deps -e enterprise/
+      - name: Setup litellm-enterprise as local package
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
 
-    - name: Run MCP tests
-      run: |
-        poetry run pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5
+      - name: Run MCP tests
+        run: |
+          poetry run pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5

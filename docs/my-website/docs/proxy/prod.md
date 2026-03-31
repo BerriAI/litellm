@@ -47,7 +47,7 @@ export LITELLM_LOG="ERROR"
 
 :::info
 
-Need Help or want dedicated support ? Talk to a founder [here]: (https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+Need Help or want dedicated support ? Talk to a founder [here]: (https://enterprise.litellm.ai/demo)
 
 :::
 

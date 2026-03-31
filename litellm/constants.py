@@ -350,6 +350,12 @@ AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
 )
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5)
+)
+REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(
+    os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
+)
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -1396,6 +1402,9 @@ DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
 DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
     os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
 )  # 1 minute - TTL for health check lock
+DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER = (
+    2  # health state is stale after interval * this
+)
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
@@ -1444,6 +1453,7 @@ SENTRY_DENYLIST = [
     "credential",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
     "AZURE_API_KEY",
     "COHERE_API_KEY",
     "REPLICATE_API_KEY",

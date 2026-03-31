@@ -1,28 +1,22 @@
 import React, { useEffect } from "react";
 import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
-import { budgetUpdateCall } from "../networking";
+import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "./budget_panel";
 import NotificationsManager from "../molecules/notifications_manager";
 
-interface BudgetModalProps {
+interface EditBudgetModalProps {
   isModalVisible: boolean;
-  accessToken: string | null;
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  setBudgetList: React.Dispatch<React.SetStateAction<any[]>>;
   existingBudget: budgetItem;
-  handleUpdateCall: () => void;
 }
-const EditBudgetModal: React.FC<BudgetModalProps> = ({
+const EditBudgetModal: React.FC<EditBudgetModalProps> = ({
   isModalVisible,
-  accessToken,
   setIsModalVisible,
-  setBudgetList,
   existingBudget,
-  handleUpdateCall,
 }) => {
-  console.log("existingBudget", existingBudget);
   const [form] = Form.useForm();
+  const updateBudget = useUpdateBudget();
 
   useEffect(() => {
     form.setFieldsValue(existingBudget);
@@ -38,21 +32,16 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: Record<string, any>) => {
-    if (accessToken == null || accessToken == undefined) {
-      return;
-    }
+  const handleUpdate = async (formValues: Record<string, any>) => {
     try {
       NotificationsManager.info("Making API Call");
-      setIsModalVisible(true);
-      const response = await budgetUpdateCall(accessToken, formValues);
-      setBudgetList((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
+      await updateBudget.mutateAsync(formValues);
       NotificationsManager.success("Budget Updated");
       form.resetFields();
-      handleUpdateCall();
+      setIsModalVisible(false);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
+      console.error("Error updating the budget:", error);
+      NotificationsManager.fromBackend(`Error updating the budget: ${error}`);
     }
   };
 
@@ -67,7 +56,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
     >
       <Form
         form={form}
-        onFinish={handleCreate}
+        onFinish={handleUpdate}
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
@@ -77,15 +66,9 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
           <Form.Item
             label="Budget ID"
             name="budget_id"
-            rules={[
-              {
-                required: true,
-                message: "Please input a human-friendly name for the budget",
-              },
-            ]}
-            help="A human-friendly name for the budget"
+            help="Budget ID cannot be changed after creation"
           >
-            <TextInput placeholder="" />
+            <TextInput placeholder="" disabled={true} />
           </Form.Item>
           <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />

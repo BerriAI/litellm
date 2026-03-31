@@ -1,0 +1,67 @@
+name: "Unit Tests: Documentation Validation"
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install 'poetry==2.3.2'
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+          poetry run pip install google-genai==1.22.0 \
+            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
+
+      - name: Setup litellm-enterprise
+        run: |
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
+
+      # Run the same documentation tests that CircleCI ran (as direct Python scripts)
+      - name: Run documentation validation tests
+        run: |
+          poetry run python ./tests/documentation_tests/test_env_keys.py
+          poetry run python ./tests/documentation_tests/test_router_settings.py
+          poetry run python ./tests/documentation_tests/test_api_docs.py
+          poetry run python ./tests/documentation_tests/test_circular_imports.py

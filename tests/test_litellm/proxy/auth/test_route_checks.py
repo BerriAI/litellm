@@ -1329,3 +1329,78 @@ def test_non_org_admin_with_organizations_list():
         organization_memberships=[membership],
     )
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+@pytest.mark.asyncio
+async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
+    """
+    Test that initialize_pass_through_endpoints registers both base path and
+    wildcard path in openai_routes when auth=true and include_subpath=true,
+    and that subpath requests pass is_llm_api_route.
+
+    Also verifies:
+    - Dedup: calling init twice does not duplicate entries
+    - Cleanup: removing the endpoint cleans up openai_routes
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        initialize_pass_through_endpoints,
+    )
+
+    base_path = "/v1/ocr/nvidia/community/nemoretriever-ocr-v1"
+    wildcard_path = base_path + "/*"
+
+    endpoint_config = {
+        "path": base_path,
+        "target": "https://httpbin.org/post",
+        "include_subpath": True,
+        "auth": True,
+        "headers": {"content-type": "application/json"},
+    }
+
+    original_routes = LiteLLMRoutes.openai_routes.value[:]
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.app",
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ), patch(
+            "litellm.proxy.proxy_server.config_passthrough_endpoints",
+            None,
+        ):
+            await initialize_pass_through_endpoints([endpoint_config])
+
+            # Both base and wildcard paths should be registered
+            assert base_path in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path in LiteLLMRoutes.openai_routes.value
+
+            # Subpath requests should pass the auth route check
+            assert RouteChecks.is_llm_api_route(base_path) is True
+            assert RouteChecks.is_llm_api_route(base_path + "/v1/infer") is True
+
+            # Calling init again should not duplicate entries
+            await initialize_pass_through_endpoints([endpoint_config])
+            assert LiteLLMRoutes.openai_routes.value.count(base_path) == 1
+            assert LiteLLMRoutes.openai_routes.value.count(wildcard_path) == 1
+
+            # Removing the endpoint should clean up openai_routes
+            # remove_endpoint_routes takes endpoint_id (UUID portion of
+            # the route key "{id}:exact:{path}:{methods}")
+            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+            endpoint_ids = {k.split(":")[0] for k in registered}
+            for eid in endpoint_ids:
+                InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
+            assert base_path not in LiteLLMRoutes.openai_routes.value
+            assert wildcard_path not in LiteLLMRoutes.openai_routes.value
+    finally:
+        LiteLLMRoutes.openai_routes.value[:] = original_routes
+        # Clean up any routes registered during this test to avoid
+        # polluting the module-level _registered_pass_through_routes
+        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        for k in registered:
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(
+                k.split(":")[0]
+            )

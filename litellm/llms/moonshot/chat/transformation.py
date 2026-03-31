@@ -155,9 +155,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         message that contains tool_calls (multi-turn tool-calling flows).
 
         For each such message that is missing the field:
-          1. Promote provider_specific_fields["reasoning_content"] if present and non-empty
+          1. Check if reasoning_content exists at the top level (for Pydantic models
+             that have the attribute but don't support 'in' operator)
+          2. Promote provider_specific_fields["reasoning_content"] if present and non-empty
              (this is where LiteLLM stores it from a previous response)
-          2. Otherwise inject a single space — the minimum value the API accepts
+          3. Otherwise inject a single space — the minimum value the API accepts
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
@@ -166,7 +168,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if (
                 msg.get("role") == "assistant"
                 and msg.get("tool_calls")
-                and "reasoning_content" not in msg
+                and not msg.get(
+                    "reasoning_content"
+                )  # Check using .get() which works for both dicts and Pydantic models
             ):
                 patched = dict(cast(dict, msg))
                 provider_fields = patched.get("provider_specific_fields") or {}

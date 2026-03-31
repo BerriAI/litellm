@@ -48,6 +48,20 @@ const sidebars = {
         slug: "/guardrail_providers"
       },
       items: [
+        {
+          type: "category",
+          label: "Contributing to Guardrails",
+          items: [
+            "adding_provider/generic_guardrail_api",
+            "adding_provider/simple_guardrail_tutorial",
+            "adding_provider/adding_guardrail_support",
+          ]
+        },
+        {
+          type: "doc",
+          id: "proxy/guardrails/team_based_guardrails",
+          label: "Team Bring-Your-Own Guardrails",
+        },
         ...[
           "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
@@ -416,6 +430,7 @@ const sidebars = {
             "proxy/architecture",
             "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
+            "proxy/high_availability_control_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
             "proxy/image_handling",
@@ -570,6 +585,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "tutorials/vertex_ai_pay_go",
             "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
@@ -723,6 +739,7 @@ const sidebars = {
         "proxy/realtime_webrtc",
         "rerank",
         "response_api",
+        "prompt_management",
         "response_api_compact",
         {
           type: "category",
@@ -833,6 +850,7 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/gemini/videos",
+            "providers/gemini/music",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
@@ -1419,6 +1437,7 @@ const learnSidebar = {
           },
           items: [
             "tutorials/prompt_caching",
+            "tutorials/file_search_responses_api",
             "tutorials/anthropic_file_usage",
             "tutorials/gemini_realtime_with_audio",
             "tutorials/litellm_proxy_aporia",

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from litellm._uuid import uuid
 
@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
     _setup_team_mappings,
+    _sync_user_role_from_jwt_role_map,
     determine_role_from_groups,
     normalize_email,
     process_sso_jwt_access_token,
@@ -1321,7 +1322,7 @@ async def test_get_generic_sso_response_with_additional_headers():
                 "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
             ):
                 # Act
-                result, received_response = await get_generic_sso_response(
+                result, received_response, _ = await get_generic_sso_response(
                     request=mock_request,
                     jwt_handler=mock_jwt_handler,
                     generic_client_id=generic_client_id,
@@ -1383,7 +1384,7 @@ async def test_get_generic_sso_response_with_empty_headers():
                 "fastapi_sso.sso.generic.create_provider", return_value=mock_sso_class
             ):
                 # Act
-                result, received_response = await get_generic_sso_response(
+                result, received_response, _ = await get_generic_sso_response(
                     request=mock_request,
                     jwt_handler=mock_jwt_handler,
                     generic_client_id=generic_client_id,
@@ -5159,4 +5160,254 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
     assert result.extra_fields is not None
     assert result.extra_fields["missing_field"] is None
     assert result.extra_fields["another_missing"] is None
+
+
+class TestValidateReturnTo:
+    """Tests for SSOAuthenticationHandler._validate_return_to"""
+
+    def test_returns_false_when_no_control_plane_url_configured(self, monkeypatch):
+        """return_to should be silently ignored if control_plane_url is not in general_settings."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings", {}
+        )
+        result = SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+        assert result is False
+
+    def test_allows_matching_origin(self, monkeypatch):
+        """return_to matching the configured control_plane_url origin should pass."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        # Should not raise
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui?page=models")
+
+    def test_allows_matching_origin_with_trailing_slash(self, monkeypatch):
+        """Trailing slash on control_plane_url should not affect origin comparison."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com/"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+
+    def test_rejects_prefix_attack(self, monkeypatch):
+        """return_to like cp.example.com.evil.com must be rejected (not just prefix match)."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com.evil.com/steal")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_different_origin(self, monkeypatch):
+        """return_to pointing to a completely different domain should be rejected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://evil.com/phish")
+        assert exc_info.value.status_code == 400
+
+    def test_case_insensitive_hostname(self, monkeypatch):
+        """Hostname comparison should be case-insensitive per RFC 3986."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://CP.Example.COM"},
+        )
+        # Should not raise
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com/ui")
+
+    def test_rejects_scheme_mismatch(self, monkeypatch):
+        """http:// must be rejected when control_plane_url uses https://."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("http://cp.example.com/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_rejects_port_mismatch(self, monkeypatch):
+        """Non-default port must be rejected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            SSOAuthenticationHandler._validate_return_to("https://cp.example.com:8443/ui")
+        assert exc_info.value.status_code == 400
+
+    def test_allows_explicit_default_port(self, monkeypatch):
+        """https://host:443 should match https://host (default port normalisation)."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:443/ui")
+
+    def test_allows_matching_custom_port(self, monkeypatch):
+        """Both sides on the same custom port should match."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"control_plane_url": "https://cp.example.com:3000"},
+        )
+        SSOAuthenticationHandler._validate_return_to("https://cp.example.com:3000/ui")
+
+
+class TestSyncUserRoleFromJwtRoleMap:
+    """Tests for _sync_user_role_from_jwt_role_map."""
+
+    @staticmethod
+    def _make_jwt_handler():
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import (
+            JWTLiteLLMRoleMap,
+            LiteLLM_JWTAuth,
+            LitellmUserRoles,
+        )
+
+        handler = JWTHandler()
+        handler.update_environment(
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            litellm_jwtauth=LiteLLM_JWTAuth(
+                roles_jwt_field="custom_roles",
+                user_id_upsert=True,
+                sync_user_role_and_teams=True,
+                jwt_litellm_role_map=[
+                    JWTLiteLLMRoleMap(
+                        jwt_role="my-admin",
+                        litellm_role=LitellmUserRoles.PROXY_ADMIN,
+                    ),
+                    JWTLiteLLMRoleMap(
+                        jwt_role="my-viewer",
+                        litellm_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                ],
+            ),
+        )
+        return handler
+
+    @staticmethod
+    def _make_sso_values(user_role=None):
+        from litellm.proxy._types import SSOUserDefinedValues
+
+        user_id = "testuser@example.com"
+        return SSOUserDefinedValues(
+            models=[],
+            user_id=user_id,
+            user_email=user_id,
+            user_role=user_role,
+            max_budget=None,
+            budget_duration=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_stripped_response_has_no_roles(self):
+        """Bug repro: stripped received_response lacks role claims."""
+        from litellm.caching.caching import DualCache
+
+        handler = self._make_jwt_handler()
+        sso_values = self._make_sso_values()
+
+        await _sync_user_role_from_jwt_role_map(
+            jwt_handler=handler,
+            received_response={"token_type": "Bearer", "expires_in": 3600},
+            user_info=None,
+            prisma_client=AsyncMock(),
+            user_api_key_cache=DualCache(),
+            user_defined_values=sso_values,
+        )
+
+        assert sso_values["user_role"] is None
+
+    @pytest.mark.asyncio
+    async def test_decoded_access_token_maps_role(self):
+        """Decoded JWT payload with role claims maps correctly."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import LitellmUserRoles
+
+        handler = self._make_jwt_handler()
+        sso_values = self._make_sso_values()
+
+        await _sync_user_role_from_jwt_role_map(
+            jwt_handler=handler,
+            received_response={"sub": "testuser@example.com", "custom_roles": ["my-admin"]},
+            user_info=None,
+            prisma_client=AsyncMock(),
+            user_api_key_cache=DualCache(),
+            user_defined_values=sso_values,
+        )
+
+        assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+
+    @pytest.mark.asyncio
+    async def test_existing_user_role_updated_in_db_and_cache(self):
+        """Existing user with stale role gets updated in DB and cache."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import LitellmUserRoles
+
+        handler = self._make_jwt_handler()
+        cache = DualCache()
+        prisma = AsyncMock()
+        prisma.db.litellm_usertable.update = AsyncMock()
+        user_id = "testuser@example.com"
+
+        existing_user = LiteLLM_UserTable(
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        )
+        await cache.async_set_cache(key=user_id, value=existing_user.model_dump(), ttl=60)
+
+        sso_values = self._make_sso_values(
+            user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        )
+
+        await _sync_user_role_from_jwt_role_map(
+            jwt_handler=handler,
+            received_response={"sub": user_id, "custom_roles": ["my-admin"]},
+            user_info=existing_user,
+            prisma_client=prisma,
+            user_api_key_cache=cache,
+            user_defined_values=sso_values,
+        )
+
+        prisma.db.litellm_usertable.update.assert_called_once_with(
+            where={"user_id": user_id},
+            data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
+        )
+        assert existing_user.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+
+    @pytest.mark.asyncio
+    async def test_same_role_no_db_write(self):
+        """No DB update when the mapped role matches the existing role."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import LitellmUserRoles
+
+        handler = self._make_jwt_handler()
+        prisma = AsyncMock()
+        prisma.db.litellm_usertable.update = AsyncMock()
+
+        existing_user = LiteLLM_UserTable(
+            user_id="testuser@example.com",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        )
+
+        sso_values = self._make_sso_values(
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        )
+
+        await _sync_user_role_from_jwt_role_map(
+            jwt_handler=handler,
+            received_response={"sub": "testuser@example.com", "custom_roles": ["my-admin"]},
+            user_info=existing_user,
+            prisma_client=prisma,
+            user_api_key_cache=DualCache(),
+            user_defined_values=sso_values,
+        )
+
+        prisma.db.litellm_usertable.update.assert_not_called()
 

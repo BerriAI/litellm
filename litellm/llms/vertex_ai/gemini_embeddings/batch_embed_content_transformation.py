@@ -152,6 +152,8 @@ def transform_openai_input_gemini_content(
     gemini_params = optional_params.copy()
     if "dimensions" in gemini_params:
         gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
+    if "task_type" in gemini_params:
+        gemini_params["taskType"] = gemini_params.pop("task_type")
 
     requests: List[EmbedContentRequest] = []
     if isinstance(input, str):
@@ -196,6 +198,8 @@ def transform_openai_input_gemini_embed_content(
     gemini_params = optional_params.copy()
     if "dimensions" in gemini_params:
         gemini_params["outputDimensionality"] = gemini_params.pop("dimensions")
+    if "task_type" in gemini_params:
+        gemini_params["taskType"] = gemini_params.pop("task_type")
 
     input_list = [input] if isinstance(input, str) else input
     parts: List[PartType] = []

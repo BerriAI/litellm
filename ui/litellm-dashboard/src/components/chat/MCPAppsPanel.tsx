@@ -5,7 +5,7 @@ import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import { deleteMCPOAuthUserCredential, fetchMCPServers, getMCPOAuthUserCredentialStatus, listMCPTools } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
-import { message } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
 // ── OAuth2 connect button ─────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
       const idToFetch = serverId ?? serverName;
       const result = await listMCPTools(accessToken, idToFetch);
       if (result?.error) {
-        message.warning(`Could not load tools for ${serverName}`);
+        MessageManager.warning(`Could not load tools for ${serverName}`);
         return;
       }
       // Use the ref so we read the most up-to-date list; guard against duplicates
@@ -207,7 +207,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         onChange([...selectedServersRef.current, serverName]);
       }
     } catch {
-      message.warning(`Could not load tools for ${serverName}`);
+      MessageManager.warning(`Could not load tools for ${serverName}`);
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);

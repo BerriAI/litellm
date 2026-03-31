@@ -1214,17 +1214,9 @@ if MCP_AVAILABLE:
                     "error": "User does not have permission to create mcp servers. You can only create mcp servers if you are a PROXY_ADMIN."
                 },
             )
-        elif payload.server_id is not None:
-            # fail if the mcp server with id already exists
-            mcp_server = await get_mcp_server(prisma_client, payload.server_id)
-            if mcp_server is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
-                    },
-                )
-        elif (
+
+        # Block reserved special server IDs
+        if (
             SpecialMCPServerName.all_team_servers == payload.server_id
             or SpecialMCPServerName.all_proxy_servers == payload.server_id
         ):
@@ -1234,6 +1226,17 @@ if MCP_AVAILABLE:
                     "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
                 },
             )
+
+        if payload.server_id is not None:
+            # fail if the mcp server with id already exists
+            mcp_server = await get_mcp_server(prisma_client, payload.server_id)
+            if mcp_server is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
+                    },
+                )
 
         # TODO: audit log for create
 
@@ -1399,6 +1402,8 @@ if MCP_AVAILABLE:
         client_id: Optional[str] = Form(None),
         client_secret: Optional[str] = Form(None),
         code_verifier: Optional[str] = Form(None),
+        refresh_token: Optional[str] = Form(None),
+        scope: Optional[str] = Form(None),
     ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
         resolved_client_id = mcp_server.client_id or client_id or ""
@@ -1422,6 +1427,8 @@ if MCP_AVAILABLE:
             client_id=resolved_client_id,
             client_secret=client_secret,
             code_verifier=code_verifier,
+            refresh_token=refresh_token,
+            scope=scope,
         )
 
     @router.post(

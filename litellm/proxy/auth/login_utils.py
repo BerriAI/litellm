@@ -20,7 +20,6 @@ from litellm.proxy._types import (
     ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
-    hash_token,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -29,9 +28,27 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
-from litellm.proxy.utils import PrismaClient, get_server_root_path
+from litellm.proxy.utils import (
+    PrismaClient,
+    get_server_root_path,
+    hash_password,
+    verify_password,
+)
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+
+async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
+    """Rehash legacy password (SHA256) to scrypt on successful login."""
+    if stored.startswith("scrypt:"):
+        return
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user_id},
+            data={"password": hash_password(password)},
+        )
 
 
 def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
@@ -254,13 +271,8 @@ async def authenticate_user(  # noqa: PLR0915
                 code=401,
             )
 
-        # check if password == _user_row.password
-        hash_password = hash_token(token=password)
-        if secrets.compare_digest(
-            password.encode("utf-8"), _password.encode("utf-8")
-        ) or secrets.compare_digest(
-            hash_password.encode("utf-8"), _password.encode("utf-8")
-        ):
+        if verify_password(password, _password):
+            await _rehash_password_if_needed(_user_row.user_id, password, _password)
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
