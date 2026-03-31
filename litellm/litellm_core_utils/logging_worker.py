@@ -73,9 +73,8 @@ class LoggingWorker:
             )
             # Cancel orphaned tasks bound to the old (likely closed) event
             # loop and suppress "Task was destroyed but it is pending!"
-            # warnings.  We cannot await these tasks because their event loop
-            # is no longer running, so we mark them to skip the __del__
-            # warning instead.
+            # warnings. We cannot await these tasks because their event loop
+            # is no longer running.
             self._discard_orphaned_tasks()
             # Clear old state - these are bound to the old loop
             self._queue = None
@@ -418,25 +417,25 @@ class LoggingWorker:
                 break
 
     def _discard_orphaned_tasks(self) -> None:
-        """Cancel orphaned tasks and suppress their destroy warnings.
+        """Cancel orphaned tasks and suppress destroy warnings.
 
-        When the event loop changes or the process is exiting, pending tasks
-        bound to the old (likely closed) loop cannot be properly awaited.
-        We attempt to cancel them and, regardless of whether cancel()
-        succeeds (it may raise ``RuntimeError`` if the loop is already
-        closed), suppress the ``"Task was destroyed but it is pending!"``
-        warning by setting ``_log_destroy_pending = False``.
+        When the event loop changes or the process exits, pending tasks bound to
+        the old loop cannot be awaited. We still cancel them best-effort and
+        disable asyncio's pending-task destroy warning.
         """
         all_tasks = list(self._running_tasks)
         if self._worker_task is not None:
             all_tasks.append(self._worker_task)
-        for t in all_tasks:
-            if not t.done():
-                try:
-                    t.cancel()
-                except RuntimeError:
-                    pass  # Event loop is already closed
-                t._log_destroy_pending = False
+
+        for task in all_tasks:
+            if task.done():
+                continue
+            try:
+                task.cancel()
+            except RuntimeError:
+                pass  # Event loop is already closed.
+            task._log_destroy_pending = False
+
         self._worker_task = None
         self._running_tasks.clear()
 
@@ -495,9 +494,8 @@ class LoggingWorker:
         Note: All logging in this method is wrapped to handle cases where
         logging handlers are closed during shutdown.
         """
-        # Cancel the old worker task — its event loop is already closed.
-        # Suppress "Task was destroyed but it is pending!" warnings since
-        # the closed loop cannot process cancellation.
+        # The original worker loop is bound to the old event loop, which is
+        # often already closed by the time atexit runs.
         self._discard_orphaned_tasks()
 
         if self._queue is None:
