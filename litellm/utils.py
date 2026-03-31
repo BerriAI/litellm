@@ -1495,10 +1495,6 @@ def client(original_function):  # noqa: PLR0915
             )
             logging_obj._llm_caching_handler = _llm_caching_handler
 
-            # CHECK FOR 'os.environ/' in kwargs
-            for k, v in kwargs.items():
-                if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                    kwargs[k] = litellm.get_secret(v)
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
                 if litellm._current_cost > litellm.max_budget:
