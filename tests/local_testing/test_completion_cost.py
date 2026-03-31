@@ -1221,27 +1221,23 @@ def test_fireworks_ai_cache_token_pricing():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
+    # Use kimi-k2p5 which has cache_read_input_token_cost in the pricing config
     prompt_cost_cached, completion_cost_cached = cost_per_token(
-        model="fireworks_ai/llama-v3p3-70b-instruct", usage=usage_with_cache
+        model="fireworks_ai/kimi-k2p5", usage=usage_with_cache
     )
     prompt_cost_no_cache, completion_cost_no_cache = cost_per_token(
-        model="fireworks_ai/llama-v3p3-70b-instruct", usage=usage_no_cache
+        model="fireworks_ai/kimi-k2p5", usage=usage_no_cache
     )
 
     # Completion cost should be the same regardless of cache
     assert completion_cost_cached == completion_cost_no_cache
 
-    # If the model has cache pricing, the prompt cost with cache should differ
-    # from the prompt cost without cache (cache read rate is cheaper)
-    model_info = litellm.get_model_info(
-        model="fireworks_ai/llama-v3p3-70b-instruct",
-        custom_llm_provider="fireworks_ai",
+    # kimi-k2p5 has cache_read_input_token_cost (1e-07) < input_cost_per_token (6e-07),
+    # so prompt cost with 800 cache-read tokens must be cheaper
+    assert prompt_cost_cached < prompt_cost_no_cache, (
+        "Prompt cost with 800 cache-read tokens should be less than "
+        "full-price for the same total prompt tokens"
     )
-    if model_info.get("cache_read_input_token_cost") is not None:
-        assert prompt_cost_cached < prompt_cost_no_cache, (
-            "Prompt cost with 800 cache-read tokens should be less than "
-            "full-price for the same total prompt tokens"
-        )
 
 
 def test_cost_azure_openai_prompt_caching():
