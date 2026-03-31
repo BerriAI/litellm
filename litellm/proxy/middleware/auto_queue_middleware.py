@@ -243,6 +243,39 @@ def _replay_receive(body: bytes) -> Receive:
     return receive
 
 
+async def _send_json_error(send: Send, status: int, message: str) -> None:
+    body = json.dumps({"error": message}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [[b"content-type", b"application/json"]],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+def _get_key_config(scope: Scope) -> Tuple[int, int]:
+    """Extract queue_timeout and priority from LiteLLM's key cache. Best-effort."""
+    timeout = DEFAULT_TIMEOUT
+    priority = 10
+    try:
+        from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.proxy._types import hash_token
+
+        headers = dict(scope.get("headers", []))
+        auth = headers.get(b"authorization", b"").decode()
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+            hashed = hash_token(token)
+            cached = user_api_key_cache.get_cache(key=hashed)
+            if cached and hasattr(cached, "metadata") and cached.metadata:
+                meta = cached.metadata
+                timeout = meta.get("queue_timeout_seconds", timeout)
+                priority = meta.get("queue_priority", priority)
+    except Exception:
+        pass  # Fall back to defaults if LiteLLM internals aren't available
+    return timeout, priority
+
+
 # -- ASGI Middleware -----------------------------------------------------------
 
 class AutoQueueMiddleware:
@@ -299,8 +332,92 @@ class AutoQueueMiddleware:
         self, scope: Scope, body: bytes, model: str, send: Send,
         original_receive: Optional[Receive] = None,
     ) -> None:
-        """Acquire slot, forward, release. Queuing logic added in Task 4."""
-        await self.app(scope, _replay_receive(body), send)
+        """Acquire slot (or queue), forward request, release slot, auto-scale."""
+        aqr = self._ensure_aqr()
+        request_id = f"{model}-{time.monotonic_ns()}"
+        queue = self._get_queue(model)
+
+        # Try to acquire a slot
+        acquired = await aqr.try_acquire(model)
+        if not acquired:
+            # Check shutdown
+            if self._shutting_down:
+                await _send_json_error(send, 503, "Server shutting down")
+                return
+
+            # Check queue depth
+            if queue.is_full:
+                await _send_json_error(send, 503, f"Queue full for model {model}")
+                return
+
+            # Read per-key timeout/priority (best-effort from LiteLLM cache)
+            timeout, priority = _get_key_config(scope)
+
+            # Enqueue and wait with disconnect detection
+            event = asyncio.Event()
+            disconnected = False
+            queue.add(request_id, event, priority)
+
+            async def _watch_disconnect():
+                nonlocal disconnected
+                if original_receive is None:
+                    return
+                try:
+                    msg = await original_receive()
+                    if msg.get("type") == "http.disconnect":
+                        disconnected = True
+                        queue.remove(request_id)
+                        event.set()
+                except Exception:
+                    pass
+
+            disconnect_task = asyncio.create_task(_watch_disconnect())
+
+            try:
+                await asyncio.wait_for(event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                queue.remove(request_id)
+                disconnect_task.cancel()
+                await _send_json_error(
+                    send, 504, f"Queue timeout after {timeout}s for model {model}"
+                )
+                return
+
+            disconnect_task.cancel()
+
+            # If woken by disconnect, exit silently
+            if disconnected:
+                return
+
+            # Slot was pre-acquired for us by release_and_wake_next()
+
+        # Slot acquired -- forward request and intercept response status
+        response_status = 0
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal response_status
+            if message["type"] == "http.response.start":
+                response_status = message.get("status", 0)
+            await send(message)
+
+        try:
+            await self.app(scope, _replay_receive(body), send_wrapper)
+        finally:
+            # Release slot and wake next queued request
+            await aqr.release(model)
+
+            # Auto-scale based on response
+            if response_status == 429:
+                await aqr.on_429(model)
+            elif 200 <= response_status < 400:
+                await aqr.on_success(model)
+
+            # Try to acquire for next waiter, then wake them
+            if queue.depth > 0:
+                re_acquired = await aqr.try_acquire(model)
+                if re_acquired:
+                    queue.wake_next()
+                # If re_acquired fails, waiter stays queued until another release
 
     async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Respond to GET /queue/status with model queue info."""

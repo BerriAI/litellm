@@ -254,3 +254,95 @@ async def test_queue_status_endpoint(aqr_for_middleware):
     resp = client.get("/queue/status")
     assert resp.status_code == 200
     assert "models" in resp.json()
+
+
+import time
+
+
+# -- Full flow -----------------------------------------------------------------
+
+
+def _make_slow_app(aqr_instance, delay: float = 0.1, status: int = 200):
+    """App that takes `delay` seconds and returns `status`."""
+    async def handler(request: Request):
+        body = await request.body()
+        await asyncio.sleep(delay)
+        return JSONResponse({"ok": True}, status_code=status)
+
+    app = Starlette(routes=[
+        Route("/v1/chat/completions", handler, methods=["POST"]),
+    ])
+    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_request_acquires_and_releases_slot(redis, aqr_for_middleware):
+    app = _make_slow_app(aqr_for_middleware, delay=0.0)
+    client = TestClient(app)
+    client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+    # After request completes, slot should be released
+    active = int(await redis.get("autoq:active:gpt-4") or 0)
+    assert active == 0
+
+
+@pytest.mark.asyncio
+async def test_429_response_triggers_scale_down(redis, aqr_for_middleware):
+    app = _make_slow_app(aqr_for_middleware, delay=0.0, status=429)
+    client = TestClient(app)
+    await redis.set("autoq:limit:gpt-4", 10)
+    client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+    limit = int(await redis.get("autoq:limit:gpt-4") or 0)
+    assert limit == 9
+
+
+@pytest.mark.asyncio
+async def test_success_response_increments_success_counter(redis, aqr_for_middleware):
+    app = _make_slow_app(aqr_for_middleware, delay=0.0, status=200)
+    client = TestClient(app)
+    client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+    count = int(await redis.get("autoq:success:gpt-4") or 0)
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_full_returns_503(redis):
+    """When max_concurrent=1 and max_queue_depth=1, third request gets 503."""
+    aqr = AutoQueueRedis(
+        redis=redis, default_max_concurrent=1, ceiling=10,
+        scale_up_threshold=3, scale_down_step=1,
+    )
+    hold_event = asyncio.Event()
+
+    async def slow_handler(request: Request):
+        body = await request.body()
+        await hold_event.wait()
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[
+        Route("/v1/chat/completions", slow_handler, methods=["POST"]),
+    ])
+    mw = AutoQueueMiddleware(app, aqr=aqr, max_queue_depth=1)
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
+        # Fill the slot
+        task1 = asyncio.create_task(
+            client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+        )
+        await asyncio.sleep(0.05)
+
+        # Fill the queue (1 deep)
+        task2 = asyncio.create_task(
+            client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+        )
+        await asyncio.sleep(0.05)
+
+        # This should get 503 -- queue full
+        resp = await client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
+        assert resp.status_code == 503
+
+        hold_event.set()
+        await task1
+        await task2
