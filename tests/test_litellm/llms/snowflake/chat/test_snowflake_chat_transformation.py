@@ -1,18 +1,22 @@
 """
 Unit tests for Snowflake chat transformation
-Tests tool calling request/response transformations
+Tests tool calling request/response transformations and chat completions
 """
 
+import asyncio
 import os
 import copy
 import json
+from typing import Any, Dict, List
 
-from unittest.mock import patch
-from unittest.mock import MagicMock
+from unittest.mock import patch, Mock, MagicMock
 
 import httpx
+import pytest
 
 import litellm
+from litellm import completion, acompletion
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
 from litellm.types.utils import ModelResponse
 
@@ -438,3 +442,144 @@ class TestSnowFlakeCompletion:
 
         os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
         os.environ.pop("SNOWFLAKE_JWT", None)
+
+
+def _mock_snowflake_chat_response() -> Dict[str, Any]:
+    return {
+        "id": "chatcmpl-snowflake-123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "mistral-7b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The sky above is painted blue,\nWith clouds of white and morning dew.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 30,
+            "total_tokens": 40,
+        },
+    }
+
+
+def _mock_snowflake_streaming_chunks() -> List[str]:
+    base = {
+        "id": "chatcmpl-snowflake-stream-123",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "mistral-7b",
+    }
+    deltas = [
+        {"role": "assistant", "content": "The"},
+        {"content": " sky"},
+        {"content": " is blue"},
+    ]
+    finish_reasons = [None, None, "stop"]
+    return [
+        json.dumps(
+            {**base, "choices": [{"index": 0, "delta": d, "finish_reason": fr}]}
+        )
+        for d, fr in zip(deltas, finish_reasons)
+    ]
+
+
+class TestSnowflakeChatCompletion:
+    """End-to-end chat completion tests (mocked HTTP)."""
+
+    messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake(self, sync_mode):
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = _mock_snowflake_chat_response()
+
+        if sync_mode:
+            handler = HTTPHandler()
+            with patch.object(HTTPHandler, "post", return_value=mock_response):
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    client=handler,
+                )
+        else:
+            handler = AsyncHTTPHandler()
+            with patch.object(AsyncHTTPHandler, "post", return_value=mock_response):
+                response = asyncio.run(
+                    acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        client=handler,
+                    )
+                )
+
+        assert response is not None
+        assert response.choices[0].message.content is not None
+        assert "sky" in response.choices[0].message.content.lower()
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake_stream(self, sync_mode):
+        mock_chunks = _mock_snowflake_streaming_chunks()
+
+        if sync_mode:
+            handler = HTTPHandler()
+
+            def mock_iter_lines():
+                for chunk in mock_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.iter_lines.side_effect = mock_iter_lines
+            mock_resp.status_code = 200
+
+            with patch.object(HTTPHandler, "post", return_value=mock_resp):
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    max_tokens=100,
+                    stream=True,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    client=handler,
+                )
+                chunks_received = list(response)
+            assert len(chunks_received) > 0
+        else:
+            handler = AsyncHTTPHandler()
+
+            async def mock_iter_lines():
+                for chunk in mock_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.iter_lines.side_effect = mock_iter_lines
+            mock_resp.status_code = 200
+
+            with patch.object(AsyncHTTPHandler, "post", return_value=mock_resp):
+
+                async def run():
+                    resp = await acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        max_tokens=100,
+                        stream=True,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        client=handler,
+                    )
+                    return [chunk async for chunk in resp]
+
+                chunks_received = asyncio.run(run())
+            assert len(chunks_received) > 0
