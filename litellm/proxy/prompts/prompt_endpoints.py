@@ -464,6 +464,7 @@ async def get_prompt_versions(
             prompt
             for prompt in all_prompts
             if get_base_prompt_id(prompt_id=prompt.prompt_id) == base_prompt_id
+            and (environment is None or prompt.environment == environment)
         ]
         for prompt in prompt_versions:
             version_number = get_version_number(prompt_id=prompt.prompt_id)

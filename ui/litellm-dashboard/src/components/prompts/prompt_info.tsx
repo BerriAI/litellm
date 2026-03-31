@@ -41,12 +41,6 @@ export interface PromptInfoProps {
   onEdit?: (promptData: any) => void;
 }
 
-const ENV_COLORS: Record<string, string> = {
-  production: "red",
-  staging: "yellow",
-  development: "green",
-};
-
 const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete, onEdit }) => {
   const [promptData, setPromptData] = useState<PromptSpec | null>(null);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
@@ -106,6 +100,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const isInitialMount = useRef(true);
 
   useEffect(() => {
+    setSelectedEnv(null);
+    setEnvironments([]);
+    setVersionHistory([]);
     fetchPromptInfo();
   }, [promptId, accessToken]);
 

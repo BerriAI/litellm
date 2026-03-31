@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState } from "react";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { createPromptCall, updatePromptCall, getPromptInfo } from "../../networking";
