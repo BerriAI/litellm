@@ -416,6 +416,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -425,9 +426,16 @@ class AsyncHTTPHandler:
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
 
-        response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
-        )
+        # Build kwargs for the underlying httpx call
+        kwargs: dict = {
+            "params": params,
+            "headers": headers,
+            "follow_redirects": _follow_redirects,
+        }
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+
+        response = await self.client.get(url, **kwargs)  # type: ignore
         return response
 
     @track_llm_api_timing()
@@ -961,6 +969,7 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -969,11 +978,15 @@ class HTTPHandler:
         params = params or {}
         params.update(self.extract_query_params(url))
 
-        response = self.client.get(
-            url,
-            params=params,
-            headers=headers,
-        )
+        # Build kwargs for the underlying httpx call
+        kwargs: dict = {
+            "params": params,
+            "headers": headers,
+        }
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+
+        response = self.client.get(url, **kwargs)
 
         return response
 

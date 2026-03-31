@@ -4,6 +4,7 @@ Helper functions to handle images passed in messages
 
 import base64
 
+import httpx
 from httpx import Response
 
 import litellm
@@ -13,7 +14,30 @@ from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 
 MAX_IMGS_IN_MEMORY = 10
 
+# Maximum connect timeout for image URL fetching (seconds).
+# Caps the connect phase independently of litellm.request_timeout so that
+# unreachable hosts (e.g. internal IPs) fail fast instead of blocking
+# the caller (and potentially the asyncio event loop) for minutes.
+_IMAGE_FETCH_CONNECT_TIMEOUT = 5.0
+
+# Maximum overall timeout for a single image fetch attempt (seconds).
+_IMAGE_FETCH_OVERALL_TIMEOUT = 30.0
+
 in_memory_cache = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
+
+
+def _get_image_fetch_timeout() -> httpx.Timeout:
+    """
+    Build an httpx.Timeout with a capped connect timeout for image fetching.
+
+    The connect timeout is always capped at _IMAGE_FETCH_CONNECT_TIMEOUT to
+    prevent long hangs on unreachable hosts. The overall (read/write/pool)
+    timeout uses _IMAGE_FETCH_OVERALL_TIMEOUT.
+    """
+    return httpx.Timeout(
+        timeout=_IMAGE_FETCH_OVERALL_TIMEOUT,
+        connect=_IMAGE_FETCH_CONNECT_TIMEOUT,
+    )
 
 
 def _process_image_response(response: Response, url: str) -> str:
@@ -82,14 +106,19 @@ async def async_convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client = litellm.module_level_aclient
-    for _ in range(3):
+    image_timeout = _get_image_fetch_timeout()
+    for attempt in range(3):
         try:
-            response = await client.get(url, follow_redirects=True)
+            response = await client.get(
+                url, follow_redirects=True, timeout=image_timeout
+            )
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_logger.warning(
+                "Image fetch attempt %d/3 failed for url=%s: %s", attempt + 1, url, e
+            )
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}"
     )
@@ -107,15 +136,19 @@ def convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client = litellm.module_level_client
-    for _ in range(3):
+    image_timeout = _get_image_fetch_timeout()
+    for attempt in range(3):
         try:
-            response = client.get(url, follow_redirects=True)
+            response = client.get(
+                url, follow_redirects=True, timeout=image_timeout
+            )
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
         except Exception as e:
-            verbose_logger.exception(e)
-            pass
+            verbose_logger.warning(
+                "Image fetch attempt %d/3 failed for url=%s: %s", attempt + 1, url, e
+            )
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}",
     )

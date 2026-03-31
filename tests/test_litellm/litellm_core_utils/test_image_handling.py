@@ -1,17 +1,19 @@
 from unittest.mock import patch
 
+import httpx
 import pytest
 from httpx import Request, Response
 
 import litellm
 from litellm import constants
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    _get_image_fetch_timeout,
     convert_url_to_base64,
 )
 
 
 class DummyClient:
-    def get(self, url, follow_redirects=True):
+    def get(self, url, follow_redirects=True, timeout=None):
         return Response(status_code=404, request=Request("GET", url))
 
 
@@ -53,7 +55,7 @@ class LargeImageClient:
         self.size_mb = size_mb
         self.include_content_length = include_content_length
 
-    def get(self, url, follow_redirects=True):
+    def get(self, url, follow_redirects=True, timeout=None):
         size_bytes = int(self.size_mb * 1024 * 1024)
         headers = {"Content-Type": "image/jpeg"}
         if self.include_content_length:
@@ -76,7 +78,7 @@ class StreamingLargeImageClient:
         self.size_mb = size_mb
         self.include_content_length = include_content_length
 
-    def get(self, url, follow_redirects=True):
+    def get(self, url, follow_redirects=True, timeout=None):
         size_bytes = int(self.size_mb * 1024 * 1024)
         headers = {"Content-Type": "image/jpeg"}
         if self.include_content_length:
@@ -158,7 +160,7 @@ class SmallImageClient:
     Client that returns a small valid image.
     """
 
-    def get(self, url, follow_redirects=True):
+    def get(self, url, follow_redirects=True, timeout=None):
         size_bytes = 1024
         headers = {
             "Content-Type": "image/jpeg",
@@ -217,3 +219,109 @@ def test_image_size_limit_disabled(monkeypatch):
     
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+# ---------- Image fetch timeout tests ----------
+
+
+def test_image_fetch_timeout_has_capped_connect():
+    """
+    Verify _get_image_fetch_timeout() returns an httpx.Timeout whose connect
+    phase is capped at 5 s regardless of litellm.request_timeout.
+    """
+    timeout = _get_image_fetch_timeout()
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 5.0
+    assert timeout.read == 30.0
+
+
+class TimeoutCapturingClient:
+    """Dummy client that records the timeout passed to .get()."""
+
+    def __init__(self):
+        self.last_timeout = None
+
+    def get(self, url, follow_redirects=True, timeout=None):
+        self.last_timeout = timeout
+        return Response(
+            status_code=200,
+            headers={"Content-Type": "image/jpeg", "Content-Length": "4"},
+            content=b"\xff\xd8\xff\xe0",
+            request=Request("GET", url),
+        )
+
+
+def test_convert_url_to_base64_passes_capped_timeout(monkeypatch):
+    """
+    Ensure convert_url_to_base64 passes a capped timeout to the HTTP client so
+    that unreachable hosts fail fast instead of blocking the caller for minutes.
+    """
+    client = TimeoutCapturingClient()
+    monkeypatch.setattr(litellm, "module_level_client", client)
+
+    convert_url_to_base64("https://example.com/tiny.jpg")
+
+    assert client.last_timeout is not None
+    assert isinstance(client.last_timeout, httpx.Timeout)
+    assert client.last_timeout.connect == 5.0
+
+
+class ConnectTimeoutClient:
+    """Simulates an unreachable host that raises ConnectTimeout."""
+
+    def __init__(self):
+        self.call_count = 0
+
+    def get(self, url, follow_redirects=True, timeout=None):
+        self.call_count += 1
+        raise httpx.ConnectTimeout(
+            "Timed out connecting", request=Request("GET", url)
+        )
+
+
+def test_unreachable_host_fails_after_3_retries(monkeypatch):
+    """
+    When the host is unreachable, convert_url_to_base64 should retry 3 times
+    then raise ImageFetchError — not hang indefinitely.
+    """
+    client = ConnectTimeoutClient()
+    monkeypatch.setattr(litellm, "module_level_client", client)
+
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        convert_url_to_base64("http://10.254.3.71/uploads/photo.png")
+
+    assert "after 3 attempts" in str(excinfo.value)
+    assert client.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_async_convert_url_to_base64_passes_capped_timeout(monkeypatch):
+    """
+    Ensure async_convert_url_to_base64 passes a capped timeout to the async
+    HTTP client.
+    """
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        async_convert_url_to_base64,
+    )
+
+    class AsyncTimeoutCapturingClient:
+        def __init__(self):
+            self.last_timeout = None
+
+        async def get(self, url, follow_redirects=True, timeout=None):
+            self.last_timeout = timeout
+            return Response(
+                status_code=200,
+                headers={"Content-Type": "image/png", "Content-Length": "4"},
+                content=b"\x89PNG",
+                request=Request("GET", url),
+            )
+
+    client = AsyncTimeoutCapturingClient()
+    monkeypatch.setattr(litellm, "module_level_aclient", client)
+
+    await async_convert_url_to_base64("https://example.com/tiny.png")
+
+    assert client.last_timeout is not None
+    assert isinstance(client.last_timeout, httpx.Timeout)
+    assert client.last_timeout.connect == 5.0
