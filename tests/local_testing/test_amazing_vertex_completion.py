@@ -2352,7 +2352,7 @@ async def test_completion_fine_tuned_model():
         # this is the fine-tuned model endpoint
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1/projects/pathrise-convert-1606954137718/locations/us-central1/endpoints/4965075652664360960:generateContent"
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/litellm-ci-cd/locations/us-central1/endpoints/4965075652664360960:generateContent"
         )
 
         print("call args = ", kwargs)
