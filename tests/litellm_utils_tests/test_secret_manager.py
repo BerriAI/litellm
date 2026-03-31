@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import time
@@ -24,7 +25,7 @@ from litellm.secret_managers.main import (
     get_secret,
     _should_read_secret_from_secret_manager,
 )
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 
 def load_vertex_ai_credentials():
@@ -221,53 +222,79 @@ def test_oidc_env_path():
         del os.environ[env_var_name]
 
 
-@pytest.mark.flaky(retries=6, delay=1)
 def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
     """
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    load_vertex_ai_credentials()
-    secret_manager = GoogleSecretManager()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "payload": {
+            "data": base64.b64encode(b"anything").decode("utf-8"),
+        }
+    }
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="OPENAI_API_KEY"
-    )
-    print("secret_val: {}".format(secret_val))
+    with patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch.object(
+        GoogleSecretManager,
+        "sync_construct_request_headers",
+        return_value={"Authorization": "Bearer mock_token"},
+    ):
+        secret_manager = GoogleSecretManager()
+        secret_manager.sync_httpx_client = MagicMock()
+        secret_manager.sync_httpx_client.get.return_value = mock_response
 
-    assert (
-        secret_val == "anything"
-    ), "did not get expected secret value. expect 'anything', got '{}'".format(
-        secret_val
-    )
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="OPENAI_API_KEY"
+        )
+        print("secret_val: {}".format(secret_val))
+
+        assert (
+            secret_val == "anything"
+        ), "did not get expected secret value. expect 'anything', got '{}'".format(
+            secret_val
+        )
+
+        secret_manager.sync_httpx_client.get.assert_called_once()
+        call_url = secret_manager.sync_httpx_client.get.call_args[1]["url"]
+        assert "projects/litellm-ci-cd/secrets/OPENAI_API_KEY" in call_url
 
 
 def test_google_secret_manager_read_in_memory():
     """
-    Test that Google Secret manager returs in memory value when it exists
+    Test that Google Secret manager returns in memory value when it exists
     """
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    load_vertex_ai_credentials()
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "pathrise-convert-1606954137718"
-    secret_manager = GoogleSecretManager()
-    secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
-    secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="UNIQUE_KEY"
-    )
-    print("secret_val: {}".format(secret_val))
-    assert secret_val == None
+    with patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch.object(
+        GoogleSecretManager,
+        "sync_construct_request_headers",
+        return_value={"Authorization": "Bearer mock_token"},
+    ):
+        secret_manager = GoogleSecretManager()
+        secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
+        secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
 
-    secret_val = secret_manager.get_secret_from_google_secret_manager(
-        secret_name="UNIQUE_KEY_2"
-    )
-    print("secret_val: {}".format(secret_val))
-    assert secret_val == "lite-llm"
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="UNIQUE_KEY"
+        )
+        print("secret_val: {}".format(secret_val))
+        assert secret_val is None
+
+        secret_val = secret_manager.get_secret_from_google_secret_manager(
+            secret_name="UNIQUE_KEY_2"
+        )
+        print("secret_val: {}".format(secret_val))
+        assert secret_val == "lite-llm"
 
 
 def test_should_read_secret_from_secret_manager():
@@ -336,6 +363,7 @@ def test_get_secret_with_access_mode():
     litellm.secret_manager_client = None
     litellm._key_management_settings = KeyManagementSettings()
     del os.environ[test_secret_name]
+
 
 def test_key_management_settings_defaults():
     """

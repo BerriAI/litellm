@@ -747,6 +747,7 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ]
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]]
 
 
 class ChatCompletionToolMessage(TypedDict):

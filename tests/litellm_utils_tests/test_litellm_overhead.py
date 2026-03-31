@@ -101,7 +101,7 @@ async def test_litellm_overhead_non_streaming(model):
         kwargs["vertex_project"] = "fake-project"
         kwargs["vertex_location"] = "us-central1"
     if model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
+        kwargs["api_base"] = os.environ.get("FAKE_OPENAI_API_BASE")
 
     async def _run():
         return await litellm.acompletion(**kwargs)

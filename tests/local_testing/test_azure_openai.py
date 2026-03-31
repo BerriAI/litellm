@@ -40,11 +40,13 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
 
     PROD Test
     """
-    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
-    
+    litellm.disable_aiohttp_transport = (
+        True  # since this uses respx, we need to set use_aiohttp_transport to False
+    )
+
     # Clear the HTTP client cache to ensure respx mocking works
     # This is critical because respx only intercepts clients created AFTER mocking is active
-    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
     router = Router(
@@ -53,7 +55,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "tenant_id": os.getenv("AZURE_TENANT_ID"),
                     "client_id": os.getenv("AZURE_CLIENT_ID"),
                     "client_secret": os.getenv("AZURE_CLIENT_SECRET"),

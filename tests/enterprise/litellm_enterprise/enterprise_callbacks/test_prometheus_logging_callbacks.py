@@ -1608,15 +1608,24 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_teamtable = MagicMock()
         mock_teamtable.count = MagicMock(side_effect=Exception("Team count error"))
 
+        # Mock litellm_organizationtable to raise an exception for org budget metrics
+        mock_orgtable = MagicMock()
+        mock_orgtable.find_many = MagicMock(
+            side_effect=Exception("Org database error")
+        )
+        mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
+
         mock_db = MagicMock()
         mock_db.litellm_usertable = mock_usertable
         mock_db.litellm_teamtable = mock_teamtable
+        mock_db.litellm_organizationtable = mock_orgtable
         mock_prisma.db = mock_db
 
         # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+        prometheus_logger.litellm_remaining_org_budget_metric = MagicMock()
         prometheus_logger.litellm_total_users_metric = MagicMock()
         prometheus_logger.litellm_teams_count_metric = MagicMock()
 
@@ -1625,8 +1634,8 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify all four errors were logged (teams, keys, users, and user/team count)
-            assert mock_logger.call_count == 4
+            # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
+            assert mock_logger.call_count == 5
             assert (
                 "Error initializing teams budget metrics"
                 in mock_logger.call_args_list[0][0][0]
@@ -1640,14 +1649,19 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
                 in mock_logger.call_args_list[2][0][0]
             )
             assert (
-                "Error initializing user/team count metrics"
+                "Error initializing orgs budget metrics"
                 in mock_logger.call_args_list[3][0][0]
+            )
+            assert (
+                "Error initializing user/team count metrics"
+                in mock_logger.call_args_list[4][0][0]
             )
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_user_budget_metric.assert_not_called()
+        prometheus_logger.litellm_remaining_org_budget_metric.assert_not_called()
         prometheus_logger.litellm_total_users_metric.assert_not_called()
         prometheus_logger.litellm_teams_count_metric.assert_not_called()
 
