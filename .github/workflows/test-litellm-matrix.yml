@@ -173,9 +173,13 @@ jobs:
             --dist=loadscope \
             --durations=20 \
             --cov=litellm \
-            --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
-            --cov-append \
+            --cov-report=xml \
             --cov-config=pyproject.toml
+
+      - name: Remap coverage paths
+        if: always()
+        run: |
+          poetry run coverage xml -o coverage-${{ matrix.test-group.name }}.xml --rcfile=pyproject.toml
 
       - name: Save coverage report
         if: always()
