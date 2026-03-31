@@ -596,13 +596,31 @@ curl 'http://0.0.0.0:4000/key/generate' \
       }'
 ```
 
+**Set a custom rotation notification email (useful for service accounts)**
+
+By default, rotation emails go to the key owner. Use `key_rotation_email` to send notifications to a specific address instead — useful when the key is owned by a service account with no real inbox.
+
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "models": ["gpt-4o"],
+        "auto_rotate": true,
+        "rotation_interval": "30d",
+        "key_rotation_email": "platform-alerts@yourcompany.com"
+      }'
+```
+
 **LiteLLM UI**
 
 On the LiteLLM UI, Navigate to the Keys page and click on `Generate Key` > `Key Lifecycle` > `Enable Auto Rotation`
-<Image 
+<Image
   img={require('../../img/key_r.png')}
   style={{width: '30%', display: 'block', margin: '0'}}
 />
+
+When auto-rotation is enabled, a **Rotation Notification Email** field appears. Leave it empty to use the key owner's email, or enter a specific address (e.g. a team alias or alert inbox).
 
 **Valid rotation_interval formats:**
 - `"30s"` - 30 seconds
@@ -622,7 +640,8 @@ curl 'http://0.0.0.0:4000/key/update' \
   -d '{
         "key": "sk-existing-key",
         "auto_rotate": true,
-        "rotation_interval": "90d"
+        "rotation_interval": "90d",
+        "key_rotation_email": "platform-alerts@yourcompany.com"
       }'
 ```
 
@@ -630,7 +649,7 @@ curl 'http://0.0.0.0:4000/key/update' \
 
 On the LiteLLM UI, Navigate to the Keys page. Select the key you want to update and click on `Edit Settings` > `Auto-Rotation Settings`
 
-<Image 
+<Image
   img={require('../../img/key_u.png')}
   style={{width: '30%', display: 'block', margin: '0'}}
 />
