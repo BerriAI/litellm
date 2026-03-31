@@ -360,6 +360,7 @@ class TestOCIEmbeddingConfig:
             "oci/cohere.command-a-translate-08-2025",
             "oci/google.gemini-2.5-pro",
             "oci/google.gemini-2.5-flash",
+            "oci/google.gemini-2.5-flash-lite",
         ]
 
         for model_key in expected_chat_models:
