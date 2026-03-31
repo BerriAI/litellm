@@ -608,6 +608,98 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
     return user_id
 
 
+def _normalize_user_info_user_id(
+    request: Request, user_id: Optional[str]
+) -> Optional[str]:
+    """Normalize URL-decoded user_id while preserving '+' characters."""
+    if user_id is not None and " " in user_id:
+        return get_user_id_from_request(request=request)
+    return user_id
+
+
+async def _get_user_info_teams(
+    prisma_client: Any,
+    user_id: Optional[str],
+    user_info: Optional[Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[list[Any], Optional[list[Any]]]:
+    """Fetch and merge teams from membership + user.teams field."""
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+    team_list: list[Any] = []
+    team_id_list: list[str] = []
+
+    teams_1 = await list_team(
+        http_request=Request(
+            scope={"type": "http", "path": "/user/info"},
+        ),
+        user_id=user_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    if teams_1 is not None and isinstance(teams_1, list):
+        team_list = teams_1
+        team_id_list = [team.team_id for team in teams_1]
+
+    teams_2: Optional[list[Any]] = None
+    target_team_ids = getattr(user_info, "teams", None)
+
+    if target_team_ids and isinstance(target_team_ids, list):
+        teams_2 = await prisma_client.get_data(
+            team_id_list=target_team_ids,
+            table_name="team",
+            query_type="find_all",
+        )
+    elif user_api_key_dict.user_id is not None and user_id is None:
+        caller_user_info = await prisma_client.get_data(
+            user_id=user_api_key_dict.user_id
+        )
+        caller_team_ids = getattr(caller_user_info, "teams", None)
+        if caller_team_ids:
+            teams_2 = await prisma_client.get_data(
+                team_id_list=caller_team_ids,
+                table_name="team",
+                query_type="find_all",
+            )
+
+    if teams_2 is not None and isinstance(teams_2, list):
+        for team in teams_2:
+            if team.team_id not in team_id_list:
+                team_list.append(team)
+                team_id_list.append(team.team_id)
+
+    return team_list, teams_1
+
+
+def _build_user_info_response(
+    user_id: Optional[str],
+    user_info: Optional[Any],
+    keys: Optional[List[LiteLLM_VerificationToken]],
+    team_list: list[Any],
+    teams_1: Optional[list[Any]],
+) -> UserInfoResponse:
+    """Create UserInfoResponse while filtering sensitive fields."""
+    if user_info is None and keys is not None:
+        spend = sum(getattr(k, "spend", 0) for k in keys)
+        user_info = {"spend": spend}
+
+    returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
+    team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+
+    _user_info = (
+        user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
+    )
+    if isinstance(_user_info, dict):
+        _user_info.pop("password", None)
+
+    return UserInfoResponse(
+        user_id=user_id,
+        user_info=_user_info,
+        keys=returned_keys,
+        teams=team_list,
+    )
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
@@ -638,11 +730,7 @@ async def user_info(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        # Handle URL encoding properly by getting user_id from the original request
-        if (
-            user_id is not None and " " in user_id
-        ):  # if user_id is not None and contains a space, get the user_id from the request - this is to handle the case where the user_id is encoded in the url
-            user_id = get_user_id_from_request(request=request)
+        user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
 
         if prisma_client is None:
             raise Exception(
@@ -669,56 +757,12 @@ async def user_info(
                 detail=f"User {user_id} not found",
             )
 
-        ## GET ALL TEAMS ##
-        team_list = []
-        team_id_list = []
-        from litellm.proxy.management_endpoints.team_endpoints import list_team
-
-        teams_1 = await list_team(
-            http_request=Request(
-                scope={"type": "http", "path": "/user/info"},
-            ),
+        team_list, teams_1 = await _get_user_info_teams(
+            prisma_client=prisma_client,
             user_id=user_id,
+            user_info=user_info,
             user_api_key_dict=user_api_key_dict,
         )
-
-        if teams_1 is not None and isinstance(teams_1, list):
-            team_list = teams_1
-            for team in teams_1:
-                team_id_list.append(team.team_id)
-
-        teams_2: Optional[Any] = None
-        if user_info is not None:
-            # *NEW* get all teams in user 'teams' field
-            teams_2 = await prisma_client.get_data(
-                team_id_list=user_info.teams, table_name="team", query_type="find_all"
-            )
-
-            if teams_2 is not None and isinstance(teams_2, list):
-                for team in teams_2:
-                    if team.team_id not in team_id_list:
-                        team_list.append(team)
-                        team_id_list.append(team.team_id)
-
-        elif (
-            user_api_key_dict.user_id is not None and user_id is None
-        ):  # the key querying the endpoint is the one asking for it's teams
-            caller_user_info = await prisma_client.get_data(
-                user_id=user_api_key_dict.user_id
-            )
-            # *NEW* get all teams in user 'teams' field
-            if caller_user_info is not None:
-                teams_2 = await prisma_client.get_data(
-                    team_id_list=caller_user_info.teams,
-                    table_name="team",
-                    query_type="find_all",
-                )
-
-            if teams_2 is not None and isinstance(teams_2, list):
-                for team in teams_2:
-                    if team.team_id not in team_id_list:
-                        team_list.append(team)
-                        team_id_list.append(team.team_id)
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
@@ -727,23 +771,12 @@ async def user_info(
             query_type="find_all",
         )
 
-        if user_info is None and keys is not None:
-            ## make sure we still return a total spend ##
-            spend = 0
-            for k in keys:
-                spend += getattr(k, "spend", 0)
-            user_info = {"spend": spend}
-
-        ## REMOVE HASHED TOKEN INFO before returning ##
-        returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-        team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
-        _user_info = (
-            user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
-        )
-        if isinstance(_user_info, dict):
-            _user_info.pop("password", None)
-        response_data = UserInfoResponse(
-            user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
+        response_data = _build_user_info_response(
+            user_id=user_id,
+            user_info=user_info,
+            keys=keys,
+            team_list=team_list,
+            teams_1=teams_1,
         )
 
         return response_data
@@ -2213,9 +2246,7 @@ async def _resolve_team_org_filter(
     proxy_logging_obj: Any,
 ) -> List[str]:
     """Look up the team and return its org as a filter list, or raise 403."""
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-    )
+    from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 
     try:
         team_obj = await get_team_object(
