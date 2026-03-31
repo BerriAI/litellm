@@ -73,6 +73,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
+      // codeql[js/clear-text-storage-of-sensitive-data]
       window.sessionStorage.setItem(
         EDIT_OAUTH_UI_STATE_KEY,
         JSON.stringify({
