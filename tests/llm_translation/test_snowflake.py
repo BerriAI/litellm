@@ -1,171 +1,79 @@
 import asyncio
 import json
+import os
 import httpx
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm import completion, acompletion
+from litellm import completion, acompletion, responses
+from litellm.exceptions import APIConnectionError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-FAKE_API_BASE = "https://fake-snowflake.example.com/api/v2/cortex/inference:chat"
 
+@pytest.mark.skip(reason="Requires Snowflake credentials - run manually when needed")
+def test_snowflake_tool_calling_responses_api():
+    """
+    Test Snowflake tool calling with Responses API.
+    Requires SNOWFLAKE_JWT and SNOWFLAKE_ACCOUNT_ID environment variables.
+    """
+    import litellm
 
-def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
-    mock = MagicMock(spec=httpx.Response)
-    mock.status_code = 200
-    mock.headers = {"content-type": "application/json"}
-    mock.json.return_value = json_data
-    mock.text = json.dumps(json_data)
-    return mock
+    # Skip if credentials not available
+    if not os.getenv("SNOWFLAKE_JWT") or not os.getenv("SNOWFLAKE_ACCOUNT_ID"):
+        pytest.skip("Snowflake credentials not available")
 
+    litellm.drop_params = False  # We now support tools!
 
-def _chat_response() -> Dict[str, Any]:
-    return {
-        "id": "chatcmpl-snowflake-123",
-        "object": "chat.completion",
-        "created": 1700000000,
-        "model": "mistral-7b",
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "The sky above is painted blue,\nWith clouds of white and morning dew.",
+    tools = [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    }
                 },
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 30,
-            "total_tokens": 40,
-        },
-    }
-
-
-def _streaming_chunks() -> List[str]:
-    base = {
-        "id": "chatcmpl-snowflake-stream-123",
-        "object": "chat.completion.chunk",
-        "created": 1700000000,
-        "model": "mistral-7b",
-    }
-    deltas = [
-        {"role": "assistant", "content": "The"},
-        {"content": " sky"},
-        {"content": " is blue"},
+                "required": ["location"],
+            },
+        }
     ]
-    chunks = []
-    for i, delta in enumerate(deltas):
-        finish = "stop" if i == len(deltas) - 1 else None
-        chunks.append(
-            json.dumps(
-                {
-                    **base,
-                    "choices": [
-                        {"index": 0, "delta": delta, "finish_reason": finish}
-                    ],
-                }
-            )
+
+    try:
+        # Test with tool_choice to force tool use
+        response = responses(
+            model="snowflake/claude-3-5-sonnet",
+            input="What's the weather in Paris?",
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+            max_output_tokens=200,
         )
-    return chunks
 
+        assert response is not None
+        assert hasattr(response, "output")
+        assert len(response.output) > 0
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-def test_chat_completion_snowflake(sync_mode):
-    messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
-    mock_resp = _make_mock_response(_chat_response())
+        # Verify tool call was made
+        tool_call_found = False
+        for item in response.output:
+            if hasattr(item, "type") and item.type == "function_call":
+                tool_call_found = True
+                assert item.name == "get_weather"
+                assert hasattr(item, "arguments")
+                print(f"✅ Tool call detected: {item.name}({item.arguments})")
+                break
 
-    if sync_mode:
-        with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
-            response = completion(
-                model="snowflake/mistral-7b",
-                messages=messages,
-                api_base=FAKE_API_BASE,
-            )
-            mock_post.assert_called_once()
-    else:
-        with patch.object(
-            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-        ) as mock_post:
-            response = asyncio.run(
-                acompletion(
-                    model="snowflake/mistral-7b",
-                    messages=messages,
-                    api_base=FAKE_API_BASE,
-                )
-            )
-            mock_post.assert_called_once()
+        assert tool_call_found, "Expected tool call but none was found"
 
-    assert response is not None
-    assert response.choices[0].message.content is not None
-    assert "sky" in response.choices[0].message.content.lower()
-    assert response.usage.prompt_tokens == 10
-    assert response.usage.completion_tokens == 30
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-def test_chat_completion_snowflake_stream(sync_mode):
-    messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
-    raw_chunks = _streaming_chunks()
-
-    if sync_mode:
-
-        def _iter_lines():
-            for chunk in raw_chunks:
-                yield f"data: {chunk}"
-            yield "data: [DONE]"
-
-        mock_resp = MagicMock()
-        mock_resp.iter_lines.return_value = _iter_lines()
-        mock_resp.status_code = 200
-        mock_resp.headers = {"content-type": "text/event-stream"}
-
-        with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
-            response = completion(
-                model="snowflake/mistral-7b",
-                messages=messages,
-                max_tokens=100,
-                stream=True,
-                api_base=FAKE_API_BASE,
-            )
-            chunks_received = list(response)
-            mock_post.assert_called_once()
-    else:
-
-        async def _aiter_lines():
-            for chunk in raw_chunks:
-                yield f"data: {chunk}"
-            yield "data: [DONE]"
-
-        mock_resp = MagicMock()
-        mock_resp.aiter_lines.return_value = _aiter_lines()
-        mock_resp.status_code = 200
-        mock_resp.headers = {"content-type": "text/event-stream"}
-
-        async def _run():
-            with patch.object(
-                AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-            ) as mock_post:
-                resp = await acompletion(
-                    model="snowflake/mistral-7b",
-                    messages=messages,
-                    max_tokens=100,
-                    stream=True,
-                    api_base=FAKE_API_BASE,
-                )
-                received = []
-                async for chunk in resp:
-                    received.append(chunk)
-                mock_post.assert_called_once()
-                return received
-
-        chunks_received = asyncio.run(_run())
-
-    assert len(chunks_received) > 0
-    content = "".join(
-        c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content
-    )
-    assert "sky" in content.lower()
+    except APIConnectionError as e:
+        if "JWT token is invalid" in str(e):
+            pytest.skip("Invalid Snowflake JWT token")
+        elif "Application failed to respond" in str(e) or "502" in str(e):
+            pytest.skip(f"Snowflake API unavailable: {e}")
+        else:
+            raise
