@@ -2192,7 +2192,9 @@ if MCP_AVAILABLE:
 
     def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
         """
-        Get the MCP servers from the path
+        Get the MCP servers from the path.
+        Handles both /mcp/<server> (full path) and /<server> (child app receives
+        stripped path when mounted at /mcp).
         """
         import re
 
@@ -2234,6 +2236,12 @@ if MCP_AVAILABLE:
                         mcp_servers_from_path = [server_name]
                     else:
                         mcp_servers_from_path = [servers_and_path]
+        else:
+            # Child app receives path like /undefined when mounted at /mcp
+            # Extract first path segment as server name
+            segments = path.strip("/").split("/")
+            if segments and segments[0] and "?" not in segments[0] and "#" not in segments[0]:
+                mcp_servers_from_path = [segments[0]]
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):
@@ -2358,10 +2366,28 @@ if MCP_AVAILABLE:
         ]
         return False
 
+    async def _send_error_response(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        status_code: int,
+        content: dict,
+        headers: Optional[dict] = None,
+    ) -> None:
+        """Send a JSON error response. Shared by handle_streamable_http_mcp and handle_sse_mcp."""
+        response = JSONResponse(
+            status_code=status_code,
+            content=content,
+            headers=headers or {},
+        )
+        await response(scope, receive, send)
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
+        from litellm.proxy._types import ProxyException
+
         try:
             path = scope.get("path", "")
             (
@@ -2382,12 +2408,17 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
-            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            # Validate MCP servers exist and check OAuth requirements
             for server_name in mcp_servers or []:
                 server = global_mcp_server_manager.get_mcp_server_by_name(
                     server_name, client_ip=_client_ip
                 )
-                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                if server is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"MCP server '{server_name}' not found",
+                    )
+                if server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
 
@@ -2442,30 +2473,60 @@ if MCP_AVAILABLE:
                 return
 
             await session_manager.handle_request(scope, receive, send)
-        except HTTPException:
-            # Re-raise HTTP exceptions to preserve status codes and details
-            raise
+        except HTTPException as e:
+            try:
+                detail = e.detail
+                content = (
+                    {"error": detail}
+                    if isinstance(detail, dict)
+                    else {"error": {"message": str(detail)}}
+                )
+                headers = dict(e.headers) if e.headers else {}
+                await _send_error_response(
+                    scope, receive, send, e.status_code, content, headers
+                )
+            except Exception:
+                raise e
+        except ProxyException as e:
+            status_code = 500
+            try:
+                if e.code:
+                    status_code = int(e.code)
+            except (ValueError, TypeError):
+                pass
+            verbose_logger.warning(
+                "MCP auth error (status=%s): %s", status_code, e.message
+            )
+            try:
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code,
+                    {"error": {"message": e.message, "type": e.type}},
+                )
+            except Exception:
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Try to send a graceful error response for non-HTTP exceptions
             try:
-                from starlette.responses import JSONResponse
-                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
-
-                error_response = JSONResponse(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"error": "MCP request failed", "details": str(e)},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    500,
+                    {"error": "MCP request failed", "details": str(e)},
                 )
-                await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
                     f"Failed to send error response: {response_error}"
                 )
-                # If we can't send a proper response, re-raise the original error
                 raise e
 
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
+        from litellm.proxy._types import ProxyException
+
         try:
             path = scope.get("path", "")
             (
@@ -2486,6 +2547,30 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # Validate MCP servers exist and check OAuth requirements (same as handle_streamable_http_mcp)
+            for server_name in mcp_servers or []:
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=_sse_client_ip
+                )
+                if server is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"MCP server '{server_name}' not found",
+                    )
+                if server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    request = StarletteRequest(scope)
+                    base_url = get_request_base_url(request)
+
+                    authorization_uri = (
+                        f"Bearer authorization_uri="
+                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    )
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -2501,24 +2586,54 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException as e:
+            try:
+                detail = e.detail
+                content = (
+                    {"error": detail}
+                    if isinstance(detail, dict)
+                    else {"error": {"message": str(detail)}}
+                )
+                headers = dict(e.headers) if e.headers else {}
+                await _send_error_response(
+                    scope, receive, send, e.status_code, content, headers
+                )
+            except Exception:
+                raise e
+        except ProxyException as e:
+            status_code = 500
+            try:
+                if e.code:
+                    status_code = int(e.code)
+            except (ValueError, TypeError):
+                pass
+            verbose_logger.warning(
+                "MCP SSE auth error (status=%s): %s", status_code, e.message
+            )
+            try:
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    status_code,
+                    {"error": {"message": e.message, "type": e.type}},
+                )
+            except Exception:
+                raise e
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            # Instead of re-raising, try to send a graceful error response
             try:
-                # Send a proper HTTP error response instead of letting the exception bubble up
-                from starlette.responses import JSONResponse
-                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
-
-                error_response = JSONResponse(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"error": "MCP request failed", "details": str(e)},
+                await _send_error_response(
+                    scope,
+                    receive,
+                    send,
+                    500,
+                    {"error": "MCP request failed", "details": str(e)},
                 )
-                await error_response(scope, receive, send)
             except Exception as response_error:
                 verbose_logger.exception(
                     f"Failed to send error response: {response_error}"
                 )
-                # If we can't send a proper response, re-raise the original error
                 raise e
 
     app = FastAPI(
