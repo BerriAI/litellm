@@ -2301,6 +2301,9 @@ async def initialize_pass_through_endpoints(
         )
 
     # remove the ones that are not visited from the list
+    import re
+
+    removed_endpoint_ids: set = set()
     for endpoint_key in registered_pass_through_endpoints:
         if endpoint_key not in visited_endpoints:
             # Route keys are formatted as "{endpoint_id}:exact:{path}:{methods}"
@@ -2309,8 +2312,21 @@ async def initialize_pass_through_endpoints(
             # we must split it out here.  Previously the full key was passed
             # verbatim, which never matched any stored endpoint_id and silently
             # left stale routes in the registry forever.
-            stale_endpoint_id = endpoint_key.split(":", 1)[0]
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(stale_endpoint_id)
+            #
+            # Use regex to anchor on `:exact:` or `:subpath:` delimiters so
+            # endpoint IDs that contain colons (e.g. "svc:v2") are handled
+            # correctly instead of being truncated at the first colon.
+            _match = re.match(r"^(.+?):(?:exact|subpath):", endpoint_key)
+            stale_endpoint_id = (
+                _match.group(1) if _match else endpoint_key.split(":", 1)[0]
+            )
+            # Deduplicate: an endpoint with include_subpath=True produces two
+            # registry keys (exact + subpath).  Only call remove once.
+            if stale_endpoint_id not in removed_endpoint_ids:
+                InitPassThroughEndpointHelpers.remove_endpoint_routes(
+                    stale_endpoint_id
+                )
+                removed_endpoint_ids.add(stale_endpoint_id)
 
 
 def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint]:
