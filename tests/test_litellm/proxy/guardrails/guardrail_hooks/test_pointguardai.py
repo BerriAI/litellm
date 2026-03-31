@@ -681,6 +681,32 @@ class TestPointGuardAIGuardrailAPICall:
         assert call_kwargs["headers"]["X-appsoc-api-key"] == "my_secret_key"
         assert "X-appsoc-api-email" not in call_kwargs["headers"]
 
+    @pytest.mark.asyncio
+    async def test_api_call_non_200_success_returns_none(self):
+        """Test API call for successful non-200 responses with no body to process."""
+        guardrail = PointGuardAIGuardrail(
+            api_key="test_key",
+            api_base="https://api.appsoc.com",
+            org_code="test-org",
+            policy_config_name="test-policy",
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_response.text = ""
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+        messages = [{"role": "user", "content": "Hello"}]
+
+        result = await guardrail.make_pointguard_api_request(
+            request_data={},
+            new_messages=messages,
+            response_string=None,
+        )
+
+        assert result is None
+
 
 class TestPointGuardAIGuardrailApplyGuardrail:
     """Tests for the unified apply_guardrail method."""

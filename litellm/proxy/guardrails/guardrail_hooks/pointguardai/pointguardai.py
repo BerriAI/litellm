@@ -1,6 +1,6 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, NoReturn, Optional, Type, Union
 
 import httpx
 from fastapi import HTTPException
@@ -176,13 +176,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 data["output"] = [{"role": "assistant", "content": response_string}]
             else:
                 # Input endpoint - include only input field
-                if new_messages:
-                    data["input"] = new_messages
-                else:
-                    verbose_proxy_logger.warning(
-                        "PointGuardAI: No input messages for input endpoint"
-                    )
-                    return None
+                data["input"] = new_messages
 
             verbose_proxy_logger.debug("PointGuardAI request: %s", data)
             return data
@@ -432,7 +426,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         return None
 
-    def _handle_http_status_error(self, e: httpx.HTTPStatusError) -> None:
+    def _handle_http_status_error(self, e: httpx.HTTPStatusError) -> NoReturn:
         """Handle HTTP status errors"""
         status_code = e.response.status_code
         response_text = e.response.text if hasattr(e.response, "text") else str(e)
@@ -457,7 +451,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
     def _handle_network_errors(
         self, e: Union[httpx.ConnectError, httpx.TimeoutException, httpx.RequestError]
-    ) -> None:
+    ) -> NoReturn:
         """Handle network-related errors"""
         if isinstance(e, httpx.TimeoutException):
             verbose_proxy_logger.error("PointGuardAI timeout error: %s", str(e))
@@ -477,7 +471,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
         request_data: dict,
         new_messages: List[dict],
         response_string: Optional[str] = None,
-    ):
+    ) -> Optional[List[dict]]:
         """Make the API request to PointGuardAI API"""
         try:
             # Select appropriate endpoint based on whether we have output
@@ -589,6 +583,12 @@ class PointGuardAIGuardrail(CustomGuardrail):
                     "PointGuardAI: No blocking or modifications required"
                 )
                 return None
+
+            verbose_proxy_logger.debug(
+                "PointGuardAI: Received successful non-200 response status %s with no content to process",
+                response.status_code,
+            )
+            return None
 
         except HTTPException:
             # Re-raise HTTP exceptions as-is

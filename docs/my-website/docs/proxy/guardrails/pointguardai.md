@@ -33,6 +33,7 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "pre_call"  # supported values: "pre_call", "post_call", "during_call"
+      default_on: true
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
       api_key: os.environ/POINTGUARDAI_API_KEY
@@ -161,6 +162,7 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "during_call"
+      default_on: true
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
       api_key: os.environ/POINTGUARDAI_API_KEY
@@ -205,6 +207,7 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "pre_call"
+      default_on: true
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
       api_key: os.environ/POINTGUARDAI_API_KEY
@@ -215,17 +218,18 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "during_call"
+      default_on: true
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
       api_key: os.environ/POINTGUARDAI_API_KEY
       policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
-      api_base: os.environ/POINTGUARDAI_API_URL_BASE
       
   # Post-call guardrail - validates both input and output after LLM response
   - guardrail_name: "pointguardai-post-guard"
     litellm_params:
       guardrail: pointguard_ai
       mode: "post_call"
+      default_on: true
       org_code: os.environ/POINTGUARDAI_ORG_CODE
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
       api_key: os.environ/POINTGUARDAI_API_KEY
