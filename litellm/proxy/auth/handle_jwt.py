@@ -621,9 +621,7 @@ class JWTHandler:
             )
 
         # Check cache first
-        cache_key = (
-            f"oidc_userinfo_{hashlib.sha256(token.encode()).hexdigest()}"
-        )
+        cache_key = f"oidc_userinfo_{hashlib.sha256(token.encode()).hexdigest()}"
         cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
 
         if cached_userinfo is not None:

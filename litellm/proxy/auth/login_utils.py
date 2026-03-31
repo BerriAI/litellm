@@ -40,6 +40,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
     if stored.startswith("scrypt:"):
         return
     from litellm.proxy.proxy_server import prisma_client
+
     if prisma_client is not None:
         await prisma_client.db.litellm_usertable.update(
             where={"user_id": user_id},
