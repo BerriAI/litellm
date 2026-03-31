@@ -211,11 +211,5 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["."]
-omit = [
-    "tests/*",
-    "enterprise/*",
-    ".venv/*",
-    "*/site-packages/*",
-]
+source = ["litellm"]
 relative_files = true
