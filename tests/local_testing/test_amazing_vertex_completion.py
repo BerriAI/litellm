@@ -3564,8 +3564,9 @@ def test_gemini_tool_calling_working_demo():
                 },
             }
         ],
+        "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
     print(response)
 
 
@@ -3989,7 +3990,7 @@ def test_vertex_ai_gemini_audio_ogg():
 @pytest.mark.asyncio
 async def test_vertex_ai_deepseek():
     """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -4065,7 +4066,7 @@ def test_gemini_google_maps_tool_simple():
     """
     Test googleMaps tool with just enableWidget parameter.
     """
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     litellm._turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
