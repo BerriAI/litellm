@@ -209,7 +209,13 @@ class RouteChecks:
                 route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
             )
         ):
-            pass
+            # JWT-bound sessions (resolved from a JWT-to-virtual-key mapping) are
+            # restricted to LLM API routes only. Non-LLM routes reach this branch
+            # only because they passed the is_llm_api_route check above, so deny here.
+            if valid_token.jwt_claims is not None:
+                RouteChecks._raise_admin_only_route_exception(
+                    user_obj=user_obj, route=route
+                )
         elif _user_is_org_admin(
             request_data=request_data, user_object=user_obj
         ) and RouteChecks.check_route_access(

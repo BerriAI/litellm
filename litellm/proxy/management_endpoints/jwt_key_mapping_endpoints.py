@@ -1,6 +1,10 @@
+import json
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm.proxy._types import (
+    CreateJWTClientRequest,
     CreateJWTKeyMappingRequest,
     DeleteJWTKeyMappingRequest,
     JWTKeyMappingResponse,
@@ -14,12 +18,17 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 
 
-def _to_response(mapping) -> JWTKeyMappingResponse:
-    """Convert a Prisma mapping object to a safe response (no hashed token)."""
-    return JWTKeyMappingResponse(
+def _to_response(mapping, key_row=None) -> JWTKeyMappingResponse:
+    """Convert a Prisma mapping object to a safe response (no hashed token).
+
+    Optionally accepts the linked LiteLLM_VerificationToken row to populate
+    virtual key fields (models, budget, rate limits, etc.).
+    """
+    resp = JWTKeyMappingResponse(
         id=mapping.id,
         jwt_claim_name=mapping.jwt_claim_name,
         jwt_claim_value=mapping.jwt_claim_value,
+        issuer=getattr(mapping, "issuer", ""),
         description=mapping.description,
         is_active=mapping.is_active,
         created_at=mapping.created_at,
@@ -27,6 +36,17 @@ def _to_response(mapping) -> JWTKeyMappingResponse:
         created_by=mapping.created_by,
         updated_by=mapping.updated_by,
     )
+    if key_row is not None:
+        resp.models = key_row.models or []
+        resp.max_budget = key_row.max_budget
+        resp.budget_duration = key_row.budget_duration
+        resp.tpm_limit = key_row.tpm_limit
+        resp.rpm_limit = key_row.rpm_limit
+        resp.team_id = key_row.team_id
+        resp.key_alias = key_row.key_alias
+        resp.spend = key_row.spend
+        resp.expires = key_row.expires
+    return resp
 
 
 @router.post(
@@ -53,6 +73,7 @@ async def create_jwt_key_mapping(
         create_data = {
             "jwt_claim_name": data.jwt_claim_name,
             "jwt_claim_value": data.jwt_claim_value,
+            "issuer": data.issuer,
             "token": hashed_key,
             "created_by": user_api_key_dict.user_id,
             "updated_by": user_api_key_dict.user_id,
@@ -64,8 +85,34 @@ async def create_jwt_key_mapping(
             data=create_data
         )
 
-        # Invalidate cache
-        cache_key = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}"
+        # Stamp jwt_bound metadata and restrict routes on the mapped key
+        existing_key = await prisma_client.db.litellm_verificationtoken.find_first(
+            where={"token": hashed_key}
+        )
+        if existing_key is not None:
+            existing_metadata = {}
+            if existing_key.metadata:
+                raw = existing_key.metadata
+                if isinstance(raw, str):
+                    existing_metadata = json.loads(raw)
+                elif isinstance(raw, dict):
+                    existing_metadata = raw
+            jwt_metadata = {
+                **existing_metadata,
+                "jwt_bound": True,
+                "jwt_claim_name": data.jwt_claim_name,
+                "jwt_claim_value": data.jwt_claim_value,
+            }
+            await prisma_client.db.litellm_verificationtoken.update(
+                where={"token": hashed_key},
+                data={
+                    "metadata": json.dumps(jwt_metadata),
+                    "allowed_routes": ["llm_api_routes"],
+                },
+            )
+
+        # Invalidate cache (include issuer in cache key)
+        cache_key = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}:{data.issuer}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
         return _to_response(new_mapping)
@@ -119,7 +166,8 @@ async def update_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
+        old_issuer = getattr(old_mapping, "issuer", "")
+        cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}:{old_issuer}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
         updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
@@ -127,7 +175,8 @@ async def update_jwt_key_mapping(
         )
 
         # Invalidate new cache key if claim fields changed
-        cache_key = f"jwt_key_mapping:{updated_mapping.jwt_claim_name}:{updated_mapping.jwt_claim_value}"
+        new_issuer = getattr(updated_mapping, "issuer", "")
+        cache_key = f"jwt_key_mapping:{updated_mapping.jwt_claim_name}:{updated_mapping.jwt_claim_value}:{new_issuer}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
         return _to_response(updated_mapping)
@@ -172,7 +221,8 @@ async def delete_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
+        del_issuer = getattr(old_mapping, "issuer", "")
+        cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}:{del_issuer}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
         await prisma_client.db.litellm_jwtkeymapping.delete(where={"id": data.id})
@@ -247,10 +297,188 @@ async def info_jwt_key_mapping(
         )
         if mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
-        return _to_response(mapping)
+        key_row = await prisma_client.db.litellm_verificationtoken.find_first(
+            where={"token": mapping.token}
+        )
+        return _to_response(mapping, key_row=key_row)
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(
             status_code=500, detail="Failed to get JWT key mapping info."
         )
+
+
+@router.post(
+    "/jwt_client/new",
+    tags=["JWT Key Mapping"],
+    response_model=JWTKeyMappingResponse,
+)
+async def create_jwt_client(
+    data: CreateJWTClientRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Atomically create a virtual key + JWT mapping in one call.
+    The key is automatically typed as JWT_CLIENT (LLM API routes only)
+    and stamped with jwt_bound metadata.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can create JWT clients"
+        )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    jwt_metadata = {
+        **(data.metadata or {}),
+        "jwt_bound": True,
+        "jwt_claim_name": data.jwt_claim_name,
+        "jwt_claim_value": data.jwt_claim_value,
+    }
+
+    key_data = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",  # skip user-table upsert (user_id may be None for master key)
+        models=data.models or [],
+        metadata=jwt_metadata,
+        key_max_budget=data.max_budget,
+        key_budget_duration=data.budget_duration,
+        tpm_limit=data.tpm_limit,
+        rpm_limit=data.rpm_limit,
+        team_id=data.team_id,
+        key_alias=data.key_alias,
+        duration=data.duration,
+        allowed_routes=["llm_api_routes"],
+        created_by=user_api_key_dict.user_id,
+        updated_by=user_api_key_dict.user_id,
+    )
+
+    cleartext_token: str = key_data["token"]
+    hashed_key = hash_token(cleartext_token)
+
+    try:
+        create_data = {
+            "jwt_claim_name": data.jwt_claim_name,
+            "jwt_claim_value": data.jwt_claim_value,
+            "issuer": data.issuer,
+            "token": hashed_key,
+            "created_by": user_api_key_dict.user_id,
+            "updated_by": user_api_key_dict.user_id,
+        }
+        if data.description is not None:
+            create_data["description"] = data.description
+
+        new_mapping = await prisma_client.db.litellm_jwtkeymapping.create(
+            data=create_data
+        )
+    except Exception as e:
+        # Best-effort cleanup of the orphaned key
+        try:
+            await prisma_client.db.litellm_verificationtoken.delete(
+                where={"token": hashed_key}
+            )
+        except Exception:
+            pass
+        error_str = str(e).lower()
+        if "unique" in error_str or "p2002" in error_str:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A JWT client for claim '{data.jwt_claim_name}' = '{data.jwt_claim_value}' already exists.",
+            )
+        raise HTTPException(status_code=500, detail="Failed to create JWT client.")
+
+    cache_key = (
+        f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}:{data.issuer}"
+    )
+    await user_api_key_cache.async_delete_cache(cache_key)
+
+    key_row = await prisma_client.db.litellm_verificationtoken.find_first(
+        where={"token": hashed_key}
+    )
+    resp = _to_response(new_mapping, key_row=key_row)
+    resp.key = cleartext_token  # return cleartext key only on creation
+    return resp
+
+
+@router.post(
+    "/jwt_client/update",
+    tags=["JWT Key Mapping"],
+    response_model=JWTKeyMappingResponse,
+)
+async def update_jwt_client(
+    id: str,
+    models: Optional[list] = None,
+    max_budget: Optional[float] = None,
+    budget_duration: Optional[str] = None,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
+    description: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update a JWT client's virtual key configuration and/or mapping metadata.
+    """
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update JWT clients"
+        )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(where={"id": id})
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="JWT client not found")
+
+    # Update mapping metadata
+    mapping_update: dict = {"updated_by": user_api_key_dict.user_id}
+    if description is not None:
+        mapping_update["description"] = description
+    if is_active is not None:
+        mapping_update["is_active"] = is_active
+
+    updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
+        where={"id": id}, data=mapping_update
+    )
+
+    # Update underlying virtual key
+    key_update: dict = {}
+    if models is not None:
+        key_update["models"] = models
+    if max_budget is not None:
+        key_update["max_budget"] = max_budget
+    if budget_duration is not None:
+        key_update["budget_duration"] = budget_duration
+    if tpm_limit is not None:
+        key_update["tpm_limit"] = tpm_limit
+    if rpm_limit is not None:
+        key_update["rpm_limit"] = rpm_limit
+
+    key_row = None
+    if key_update:
+        key_row = await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": mapping.token},
+            data=key_update,
+        )
+    else:
+        key_row = await prisma_client.db.litellm_verificationtoken.find_first(
+            where={"token": mapping.token}
+        )
+
+    issuer = getattr(mapping, "issuer", "")
+    cache_key = (
+        f"jwt_key_mapping:{mapping.jwt_claim_name}:{mapping.jwt_claim_value}:{issuer}"
+    )
+    await user_api_key_cache.async_delete_cache(cache_key)
+
+    return _to_response(updated_mapping, key_row=key_row)
