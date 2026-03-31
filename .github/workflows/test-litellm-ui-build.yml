@@ -28,7 +28,7 @@ jobs:
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build

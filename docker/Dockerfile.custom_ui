@@ -51,7 +51,7 @@ ENV UI_BASE_PATH="/prod/ui"
 
 # Build the UI with the specified UI_BASE_PATH
 WORKDIR /app/ui/litellm-dashboard
-RUN npm install
+RUN npm ci
 RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
 
 # Create the destination directory
