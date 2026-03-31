@@ -938,6 +938,7 @@ class LiteLLMKeyType(str, enum.Enum):
     MANAGEMENT = "management"  # Can call management routes (user/team/key management)
     READ_ONLY = "read_only"  # Can only call info/read routes
     DEFAULT = "default"  # Uses default allowed routes
+    JWT_CLIENT = "jwt_client"  # JWT-mapped service identity — LLM API routes only, no key management
 
 
 class GenerateKeyRequest(KeyRequestBase):
@@ -3848,6 +3849,7 @@ class KeyHealthResponse(TypedDict, total=False):
 class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     jwt_claim_name: str
     jwt_claim_value: str
+    issuer: str = ""
     key: str
     description: Optional[str] = None
 
@@ -3867,12 +3869,77 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     id: str
     jwt_claim_name: str
     jwt_claim_value: str
+    issuer: str = ""
     description: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
+    # Virtual key fields — populated by info/unified endpoints
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
+    key_alias: Optional[str] = None
+    spend: Optional[float] = None
+    expires: Optional[datetime] = None
+    # Cleartext key — only populated on creation (never returned again)
+    key: Optional[str] = None
+
+
+class UpdateJWTClientRequest(LiteLLMPydanticObjectBase):
+    """Request body for POST /jwt_client/update.
+
+    Uses a request body (not query params) so that callers can explicitly set
+    fields to null/unlimited — e.g. ``{"max_budget": null}`` clears the budget.
+    Fields absent from the body are left unchanged (exclude_unset semantics).
+    """
+
+    id: str
+    # Mapping-level fields
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Virtual key fields — null means "clear / set unlimited"
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class CreateJWTClientRequest(LiteLLMPydanticObjectBase):
+    """Single-call request to create a virtual key + JWT mapping atomically."""
+
+    jwt_claim_name: str
+    jwt_claim_value: str
+    issuer: str = ""
+    description: Optional[str] = None
+    # Virtual key configuration
+    models: Optional[list] = []
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
+    key_alias: Optional[str] = None
+    duration: Optional[str] = None
+    metadata: Optional[dict] = {}
+
+
+class JWTClientAutoRegisterDefaults(LiteLLMPydanticObjectBase):
+    """Default virtual key settings applied when auto-registering unknown JWT clients."""
+
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
 
 
 class SpecialHeaders(enum.Enum):
@@ -4199,6 +4266,21 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    unregistered_jwt_client_behavior: Literal[
+        "reject", "fallback_team_mapping", "auto_register"
+    ] = Field(
+        default="fallback_team_mapping",
+        description=(
+            "Behavior when a JWT arrives with no virtual-key mapping. "
+            "'reject' → 403. "
+            "'fallback_team_mapping' → standard JWT team auth (default). "
+            "'auto_register' → create a mapping + virtual key on first encounter."
+        ),
+    )
+    auto_register_defaults: Optional["JWTClientAutoRegisterDefaults"] = Field(
+        default=None,
+        description="Default virtual key settings used when auto_register creates keys for unknown JWT clients.",
     )
     #########################################################
 
