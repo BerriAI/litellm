@@ -96,10 +96,26 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
-      // Clear session storage
+      // Preserve MCP OAuth flow state across page unloads (OAuth redirects)
+      const mcpKeysToPreserve = [
+        "litellm-mcp-oauth-flow-state",
+        "litellm-mcp-oauth-return-url",
+        "litellm-mcp-oauth-result",
+        "litellm-user-mcp-oauth-flow-state",
+        "litellm-user-mcp-oauth-return-url",
+        "litellm-user-mcp-oauth-result",
+      ];
+      const saved: Record<string, string> = {};
+      mcpKeysToPreserve.forEach(function(key) {
+        const val = sessionStorage.getItem(key);
+        if (val) saved[key] = val;
+      });
+
       sessionStorage.clear();
-      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
-      // They are only cleared on logout
+
+      Object.entries(saved).forEach(function([key, val]) {
+        sessionStorage.setItem(key, val);
+      });
     });
   }
 

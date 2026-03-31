@@ -1,10 +1,12 @@
 import json
+import time
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -255,7 +257,94 @@ async def exchange_token_with_server(
     if "scope" in token_response and token_response["scope"]:
         result["scope"] = token_response["scope"]
 
+    # Persist OAuth credentials and discovery URLs to the database
+    await _persist_oauth_credentials(
+        mcp_server=mcp_server,
+        client_id=token_data["client_id"],
+        client_secret=token_data.get("client_secret"),
+        access_token=access_token,
+        refresh_token=token_response.get("refresh_token"),
+        expires_in=token_response.get("expires_in"),
+    )
+
     return JSONResponse(result)
+
+
+async def _persist_oauth_credentials(
+    mcp_server: MCPServer,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    access_token: str,
+    refresh_token: Optional[str],
+    expires_in: Optional[int],
+) -> None:
+    """
+    Persist OAuth credentials and discovery URLs to the MCP server record
+    in the database after a successful token exchange.
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.warning(
+                "Cannot persist OAuth credentials: no database connected"
+            )
+            return
+
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import _get_salt_key
+
+        # Build credentials dict with OAuth tokens and client registration
+        credentials = {}
+        if client_id:
+            credentials["client_id"] = client_id
+        if client_secret:
+            credentials["client_secret"] = client_secret
+        credentials["auth_value"] = access_token
+        if refresh_token:
+            credentials["refresh_token"] = refresh_token
+        if expires_in is not None:
+            credentials["expires_at"] = int(time.time()) + expires_in
+        credentials["type"] = "oauth2"
+
+        encrypted_credentials = encrypt_credentials(
+            credentials=credentials,
+            encryption_key=_get_salt_key(),
+        )
+
+        # Build the update data — persist credentials and discovery URLs
+        update_data: dict = {
+            "auth_type": "oauth2",
+            "credentials": safe_dumps(encrypted_credentials),
+            "updated_by": "oauth_token_exchange",
+        }
+
+        # Persist discovery URLs if they were found during the flow
+        if mcp_server.token_url:
+            update_data["token_url"] = mcp_server.token_url
+        if mcp_server.authorization_url:
+            update_data["authorization_url"] = mcp_server.authorization_url
+        if mcp_server.registration_url:
+            update_data["registration_url"] = mcp_server.registration_url
+
+        await prisma_client.db.litellm_mcpservertable.update(
+            where={"server_id": mcp_server.server_id},
+            data=update_data,
+        )
+
+        verbose_logger.info(
+            "Persisted OAuth credentials for MCP server %s (%s)",
+            mcp_server.name,
+            mcp_server.server_id,
+        )
+    except Exception as e:
+        verbose_logger.error(
+            "Failed to persist OAuth credentials for MCP server %s: %s",
+            mcp_server.server_id,
+            e,
+        )
 
 
 async def register_client_with_server(
