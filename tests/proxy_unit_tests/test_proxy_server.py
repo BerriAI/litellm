@@ -2787,7 +2787,9 @@ async def test_update_config_success_callback_normalization():
 
     # Update config with mixed-case callbacks - expect normalization to lowercase
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
-    await proxy_server.update_config(config_update)
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
+    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
 
     saved = mock_proxy_config.saved_config
     assert saved is not None, "save_config was not called"
