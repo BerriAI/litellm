@@ -13,6 +13,7 @@ Refs:
 from __future__ import annotations
 
 import base64
+import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -140,6 +141,9 @@ def _file_types_to_b64(image: Optional[FileTypes]) -> str:
         return base64.b64encode(image).decode("utf-8")
     if isinstance(image, str):
         return image
+    if isinstance(image, os.PathLike):
+        with open(image, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
     if isinstance(image, tuple):
         raise ValueError(
             "Nova Canvas image edit does not support tuple FileTypes. "

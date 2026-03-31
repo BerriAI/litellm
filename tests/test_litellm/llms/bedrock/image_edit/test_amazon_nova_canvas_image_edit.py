@@ -1,5 +1,6 @@
 """Unit tests for Bedrock Amazon Nova Canvas image edit (issue #24267)."""
 
+import base64
 import io
 from typing import cast
 
@@ -182,6 +183,28 @@ def test_transform_request_image_variation_without_mask():
     assert body["taskType"] == "IMAGE_VARIATION"
     assert body["imageVariationParams"]["text"] == "make it warmer"
     assert len(body["imageVariationParams"]["images"]) == 1
+
+
+def test_transform_request_image_pathlike_input(tmp_path):
+    """PathLike image input should be read and base64-encoded."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    image_path = tmp_path / "img.bin"
+    image_bytes = b"pathlike-image-bytes"
+    image_path.write_bytes(image_bytes)
+
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="pathlike",
+        image=image_path,
+        image_edit_optional_request_params={},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+
+    assert body["taskType"] == "IMAGE_VARIATION"
+    assert body["imageVariationParams"]["images"][0] == base64.b64encode(
+        image_bytes
+    ).decode("utf-8")
 
 
 def test_transform_request_inpainting_with_mask():
