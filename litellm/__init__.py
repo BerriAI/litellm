@@ -1220,6 +1220,7 @@ from .exceptions import (
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
+    ConflictError,
     ContextWindowExceededError,
     ContentPolicyViolationError,
     BudgetExceededError,
