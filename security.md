@@ -73,7 +73,7 @@ All data, user accounts, and infrastructure are completely separated between the
 
 We value the security community's role in protecting our systems and users. To report a security vulnerability:
 
-- Email support@berri.ai with details
+- File a private vulnerability report on GitHub: [Report a vulnerability](https://github.com/BerriAI/litellm/security/advisories/new)
 - Include steps to reproduce the issue
 - Provide any relevant additional information
 
