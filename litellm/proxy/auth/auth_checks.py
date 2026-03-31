@@ -82,6 +82,10 @@ def _check_key_or_team_allowed_ips(
     Key-level `metadata.allowed_ips` takes priority over team-level.
     No-op when neither is set.
     """
+    import os
+    LITELLM_ALLOWED_IPS_ENABLED = os.environ.get("LITELLM_ALLOWED_IPS_ENABLED", 'true')
+    if LITELLM_ALLOWED_IPS_ENABLED != "true":
+        return
     if valid_token is None:
         return
     key_meta = (
