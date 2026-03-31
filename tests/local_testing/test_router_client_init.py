@@ -83,7 +83,7 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     To allow for local testing without real credentials, first must mock Azure SDK authentication functions
     and environment variables.
     """
-    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
     monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
     litellm.enable_azure_ad_token_refresh = True
     # mock the token provider function
@@ -168,9 +168,9 @@ async def test_audio_speech_router():
         {
             "model_name": "tts",
             "litellm_params": {
-                "model": "azure/azure-tts",
-                "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+                "model": "azure/tts",
+                "api_base": os.getenv("AZURE_TTS_API_BASE"),
+                "api_key": os.getenv("AZURE_TTS_API_KEY"),
             },
         },
     ]

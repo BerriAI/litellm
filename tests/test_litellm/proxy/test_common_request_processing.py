@@ -1431,6 +1431,83 @@ class TestOverrideOpenAIResponseModel:
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
 
+    def test_override_model_uses_winning_model_for_fastest_response(self):
+        """
+        Test that when fastest_response batch completion is used with a
+        comma-separated model list, the response model is set to the winning
+        model's group name (not the comma-separated list).
+        """
+        requested_model = "openai/gpt-4o,gemini/gemini-2.5-flash"
+        winning_model_group = "gemini/gemini-2.5-flash"
+        downstream_model = "gemini-2.5-flash"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "fastest_response_batch_completion": True,
+            "additional_headers": {
+                "x-litellm-model-group": winning_model_group,
+            },
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == winning_model_group
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_response_when_fastest_response_no_model_group(
+        self,
+    ):
+        """
+        Test that when fastest_response is set but no model group header is
+        available, the actual downstream model is preserved.
+        """
+        requested_model = "openai/gpt-4o,gemini/gemini-2.5-flash"
+        downstream_model = "gpt-4o-2024-08-06"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "fastest_response_batch_completion": True,
+            "additional_headers": {},
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == downstream_model
+
+    def test_override_model_normal_when_fastest_response_not_set(self):
+        """
+        Test that when fastest_response_batch_completion is not set, the
+        normal override behavior applies (model is set to requested_model).
+        """
+        requested_model = "openai/gpt-4o"
+        downstream_model = "gpt-4o-2024-08-06"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-model-group": "openai/gpt-4o",
+            },
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == requested_model
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""

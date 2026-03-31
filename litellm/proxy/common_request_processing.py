@@ -293,25 +293,45 @@ def _override_openai_response_model(
        we preserve the actual model that was used (the fallback model).
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
+    3. If this was a fastest_response batch completion, use the winning model's
+       model group name instead of the comma-separated list the client sent.
     """
     if not requested_model:
         return
 
-    # Check if a fallback occurred - if so, preserve the actual model used
     hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
     if isinstance(hidden_params, dict):
+        # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
         attempted_fallbacks = fallback_headers.get(
             "x-litellm-attempted-fallbacks", None
         )
         if attempted_fallbacks is not None and attempted_fallbacks > 0:
-            # A fallback occurred - preserve the actual model that was used
             verbose_proxy_logger.debug(
                 "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
                 log_context,
                 attempted_fallbacks,
             )
             return
+
+        # For fastest_response batch completions, use the winning model's group
+        # name rather than the comma-separated list the client sent.
+        if hidden_params.get("fastest_response_batch_completion"):
+            winning_model = fallback_headers.get("x-litellm-model-group")
+            if winning_model:
+                verbose_proxy_logger.debug(
+                    "%s: fastest_response detected, using winning model group=%r instead of requested=%r.",
+                    log_context,
+                    winning_model,
+                    requested_model,
+                )
+                requested_model = winning_model
+            else:
+                verbose_proxy_logger.debug(
+                    "%s: fastest_response detected but no model group header found, preserving actual model from response.",
+                    log_context,
+                )
+                return
 
     # Check if this is an Azure Model Router request - if so, preserve the actual model used
     if _is_azure_model_router_request(requested_model):
