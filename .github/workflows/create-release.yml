@@ -44,8 +44,32 @@ jobs:
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
+
+            const cosignSection = [
+              `## Verify Docker Image Signature`,
+              ``,
+              `All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:`,
+              ``,
+              '```bash',
+              `cosign verify \\`,
+              `  --key https://raw.githubusercontent.com/BerriAI/litellm/main/cosign.pub \\`,
+              `  ghcr.io/berriai/litellm:${tag}`,
+              '```',
+              ``,
+              `Expected output:`,
+              ``,
+              '```',
+              `The following checks were performed on each of these signatures:`,
+              `  - The cosign claims were validated`,
+              `  - The signatures were verified against the specified public key`,
+              '```',
+              ``,
+              `---`,
+              ``,
+            ].join('\n');
+
             try {
-              await github.rest.repos.createRelease({
+              const response = await github.rest.repos.createRelease({
                 draft: false,
                 generate_release_notes: true,
                 target_commitish: commitHash,
@@ -54,6 +78,14 @@ jobs:
                 prerelease: false,
                 repo: context.repo.repo,
                 tag_name: tag,
+              });
+
+              const updatedBody = cosignSection + response.data.body;
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: response.data.id,
+                body: updatedBody,
               });
             } catch (error) {
               core.setFailed(error.message);
