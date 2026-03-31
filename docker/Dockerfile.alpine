@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11-alpine
+ARG LITELLM_BUILD_IMAGE=python:3.11-alpine@sha256:f07e2ace46f560f09a6eeec7b4913b80ee99546e749ef82342a419a326620856
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine@sha256:f07e2ace46f560f09a6eeec7b4913b80ee99546e749ef82342a419a326620856
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
