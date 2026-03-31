@@ -288,6 +288,46 @@ class PrometheusLogger(CustomLogger):
             )
 
             ########################################
+            # Rate Limit Allowed / Used Metrics
+            ########################################
+
+            # API Key rate limit allowed (configured limit)
+            self.litellm_api_key_rate_limit_allowed_metric = self._gauge_factory(
+                "litellm_api_key_rate_limit_allowed_metric",
+                "Configured rate limit for API key (RPM or TPM)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_api_key_rate_limit_allowed_metric"
+                ),
+            )
+
+            # API Key rate limit used (current consumption)
+            self.litellm_api_key_rate_limit_used_metric = self._gauge_factory(
+                "litellm_api_key_rate_limit_used_metric",
+                "Current rate limit consumption for API key (RPM or TPM)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_api_key_rate_limit_used_metric"
+                ),
+            )
+
+            # Team rate limit allowed (configured limit)
+            self.litellm_team_rate_limit_allowed_metric = self._gauge_factory(
+                "litellm_team_rate_limit_allowed_metric",
+                "Configured rate limit for team (RPM or TPM)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_team_rate_limit_allowed_metric"
+                ),
+            )
+
+            # Team rate limit used (current consumption)
+            self.litellm_team_rate_limit_used_metric = self._gauge_factory(
+                "litellm_team_rate_limit_used_metric",
+                "Current rate limit consumption for team (RPM or TPM)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_team_rate_limit_used_metric"
+                ),
+            )
+
+            ########################################
             # LLM API Deployment Metrics / analytics
             ########################################
 
@@ -1151,6 +1191,17 @@ class PrometheusLogger(CustomLogger):
             model_id=enum_values.model_id,
         )
 
+        # set rate limit allowed/used metrics from pre-call rate limit check
+        rate_limit_response = _metadata.get("litellm_proxy_rate_limit_response")
+        if rate_limit_response is not None:
+            self._set_rate_limit_metrics_from_response(
+                rate_limit_response=rate_limit_response,
+                hashed_api_key=user_api_key,
+                api_key_alias=user_api_key_alias,
+                team_id=user_api_team,
+                team_alias=user_api_team_alias,
+            )
+
         # set latency metrics
         self._set_latency_metrics(
             kwargs=kwargs,
@@ -1410,6 +1461,60 @@ class PrometheusLogger(CustomLogger):
             _sanitize_prometheus_label_value(model_group),
             _sanitize_prometheus_label_value(model_id),
         ).set(remaining_tokens)
+
+    def _set_rate_limit_metrics_from_response(
+        self,
+        rate_limit_response: dict,
+        hashed_api_key: Optional[str],
+        api_key_alias: Optional[str],
+        team_id: Optional[str],
+        team_alias: Optional[str],
+    ) -> None:
+        """
+        Set rate limit gauge metrics from a RateLimitResponse.
+
+        Extracts current_limit and used (= current_limit - limit_remaining)
+        for api_key and team descriptors and sets the corresponding Prometheus gauges.
+        """
+        statuses = rate_limit_response.get("statuses", [])
+        for status in statuses:
+            descriptor_key = status.get("descriptor_key")
+            rate_limit_type_raw = status.get("rate_limit_type")
+            current_limit = status.get("current_limit")
+            limit_remaining = status.get("limit_remaining")
+
+            if current_limit is None or rate_limit_type_raw is None:
+                continue
+
+            if rate_limit_type_raw == "max_parallel_requests":
+                continue
+
+            rate_limit_type = "rpm" if rate_limit_type_raw == "requests" else "tpm"
+            used = max(0, current_limit - (limit_remaining or 0))
+
+            if descriptor_key == "api_key" and hashed_api_key:
+                self.litellm_api_key_rate_limit_allowed_metric.labels(
+                    _sanitize_prometheus_label_value(hashed_api_key),
+                    _sanitize_prometheus_label_value(api_key_alias),
+                    rate_limit_type,
+                ).set(current_limit)
+                self.litellm_api_key_rate_limit_used_metric.labels(
+                    _sanitize_prometheus_label_value(hashed_api_key),
+                    _sanitize_prometheus_label_value(api_key_alias),
+                    rate_limit_type,
+                ).set(used)
+
+            elif descriptor_key == "team" and team_id:
+                self.litellm_team_rate_limit_allowed_metric.labels(
+                    _sanitize_prometheus_label_value(team_id),
+                    _sanitize_prometheus_label_value(team_alias),
+                    rate_limit_type,
+                ).set(current_limit)
+                self.litellm_team_rate_limit_used_metric.labels(
+                    _sanitize_prometheus_label_value(team_id),
+                    _sanitize_prometheus_label_value(team_alias),
+                    rate_limit_type,
+                ).set(used)
 
     def _set_latency_metrics(
         self,
@@ -2789,9 +2894,7 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        async def fetch_orgs(
-            page_size: int, page: int
-        ) -> Tuple[list, Optional[int]]:
+        async def fetch_orgs(page_size: int, page: int) -> Tuple[list, Optional[int]]:
             skip = (page - 1) * page_size
             orgs = await prisma_client.db.litellm_organizationtable.find_many(
                 skip=skip,
@@ -2848,6 +2951,169 @@ class PrometheusLogger(CustomLogger):
         await self._initialize_user_budget_metrics()
         await self._initialize_org_budget_metrics()
         await self._initialize_user_and_team_count_metrics()
+
+    async def initialize_rate_limit_metrics(self):
+        """
+        Background cron handler for rate limit allowed/used metrics.
+
+        Uses pod lock for multi-pod safety (same pattern as budget metrics).
+        Fetches all keys/teams from DB and sets the configured rate limit gauges.
+        """
+        from litellm.constants import PROMETHEUS_EMIT_RATE_LIMIT_METRICS_JOB_NAME
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            if await pod_lock_manager.acquire_lock(
+                cronjob_id=PROMETHEUS_EMIT_RATE_LIMIT_METRICS_JOB_NAME
+            ):
+                try:
+                    await self._initialize_rate_limit_metrics()
+                finally:
+                    await pod_lock_manager.release_lock(
+                        cronjob_id=PROMETHEUS_EMIT_RATE_LIMIT_METRICS_JOB_NAME
+                    )
+        else:
+            await self._initialize_rate_limit_metrics()
+
+    async def _initialize_rate_limit_metrics(self):
+        """Fetch all keys/teams with rate limits from DB and set gauge values."""
+        verbose_logger.debug("Emitting key, team rate limit metrics....")
+        await self._initialize_key_rate_limit_metrics()
+        await self._initialize_team_rate_limit_metrics()
+
+    async def _initialize_key_rate_limit_metrics(self):
+        """
+        Fetch all API keys with rate limits from DB and set the allowed gauge.
+        Used gauge is set to 0 as a baseline; the inline path updates actual values.
+        """
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _list_key_helper,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            page = 1
+            page_size = 50
+            while True:
+                key_list_response = await _list_key_helper(
+                    prisma_client=prisma_client,
+                    page=page,
+                    size=page_size,
+                    user_id=None,
+                    team_id=None,
+                    key_alias=None,
+                    key_hash=None,
+                    exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
+                    return_full_object=True,
+                    organization_id=None,
+                )
+                keys = key_list_response.get("keys", [])
+                total_count = key_list_response.get("total_count")
+                if total_count is None:
+                    total_count = len(keys)
+
+                for key in keys:
+                    if not isinstance(key, UserAPIKeyAuth):
+                        continue
+                    hashed_key = key.token or ""
+                    alias = key.key_alias or ""
+
+                    if key.rpm_limit is not None:
+                        self.litellm_api_key_rate_limit_allowed_metric.labels(
+                            _sanitize_prometheus_label_value(hashed_key),
+                            _sanitize_prometheus_label_value(alias),
+                            "rpm",
+                        ).set(key.rpm_limit)
+                        self.litellm_api_key_rate_limit_used_metric.labels(
+                            _sanitize_prometheus_label_value(hashed_key),
+                            _sanitize_prometheus_label_value(alias),
+                            "rpm",
+                        ).set(0)
+
+                    if key.tpm_limit is not None:
+                        self.litellm_api_key_rate_limit_allowed_metric.labels(
+                            _sanitize_prometheus_label_value(hashed_key),
+                            _sanitize_prometheus_label_value(alias),
+                            "tpm",
+                        ).set(key.tpm_limit)
+                        self.litellm_api_key_rate_limit_used_metric.labels(
+                            _sanitize_prometheus_label_value(hashed_key),
+                            _sanitize_prometheus_label_value(alias),
+                            "tpm",
+                        ).set(0)
+
+                if page * page_size >= total_count:
+                    break
+                page += 1
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing key rate limit metrics: {str(e)}"
+            )
+
+    async def _initialize_team_rate_limit_metrics(self):
+        """
+        Fetch all teams with rate limits from DB and set the allowed gauge.
+        Used gauge is set to 0 as a baseline; the inline path updates actual values.
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            get_paginated_teams,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            page = 1
+            page_size = 50
+            while True:
+                teams, total_count = await get_paginated_teams(
+                    prisma_client=prisma_client, page_size=page_size, page=page
+                )
+                if total_count is None:
+                    total_count = len(teams)
+
+                for team in teams:
+                    team_id = team.team_id or ""
+                    team_alias_val = team.team_alias or ""
+
+                    if team.rpm_limit is not None:
+                        self.litellm_team_rate_limit_allowed_metric.labels(
+                            _sanitize_prometheus_label_value(team_id),
+                            _sanitize_prometheus_label_value(team_alias_val),
+                            "rpm",
+                        ).set(team.rpm_limit)
+                        self.litellm_team_rate_limit_used_metric.labels(
+                            _sanitize_prometheus_label_value(team_id),
+                            _sanitize_prometheus_label_value(team_alias_val),
+                            "rpm",
+                        ).set(0)
+
+                    if team.tpm_limit is not None:
+                        self.litellm_team_rate_limit_allowed_metric.labels(
+                            _sanitize_prometheus_label_value(team_id),
+                            _sanitize_prometheus_label_value(team_alias_val),
+                            "tpm",
+                        ).set(team.tpm_limit)
+                        self.litellm_team_rate_limit_used_metric.labels(
+                            _sanitize_prometheus_label_value(team_id),
+                            _sanitize_prometheus_label_value(team_alias_val),
+                            "tpm",
+                        ).set(0)
+
+                if page * page_size >= total_count:
+                    break
+                page += 1
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing team rate limit metrics: {str(e)}"
+            )
 
     async def _initialize_user_and_team_count_metrics(self):
         """
@@ -3414,6 +3680,23 @@ class PrometheusLogger(CustomLogger):
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
                 # REMOVED jitter parameter - major cause of memory leak
                 id="prometheus_budget_metrics_job",
+                replace_existing=True,
+            )
+
+            # Rate limit metrics cron job
+            from litellm.constants import (
+                PROMETHEUS_RATE_LIMIT_METRICS_REFRESH_INTERVAL_MINUTES,
+            )
+
+            verbose_logger.debug(
+                "Initializing rate limit metrics as a cron job executing every %s minutes"
+                % PROMETHEUS_RATE_LIMIT_METRICS_REFRESH_INTERVAL_MINUTES
+            )
+            scheduler.add_job(
+                prometheus_logger.initialize_rate_limit_metrics,
+                "interval",
+                minutes=PROMETHEUS_RATE_LIMIT_METRICS_REFRESH_INTERVAL_MINUTES,
+                id="prometheus_rate_limit_metrics_job",
                 replace_existing=True,
             )
 

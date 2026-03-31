@@ -270,6 +270,11 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_check_batch_cost_jobs_processed_total",
     "litellm_check_batch_cost_errors_total",
     "litellm_check_batch_cost_last_run_timestamp",
+    # Rate limit allowed/used metrics
+    "litellm_api_key_rate_limit_allowed_metric",
+    "litellm_api_key_rate_limit_used_metric",
+    "litellm_team_rate_limit_allowed_metric",
+    "litellm_team_rate_limit_used_metric",
 ]
 
 
@@ -626,6 +631,25 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
+
+    # Rate limit allowed/used metrics
+    _api_key_rate_limit_labels = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        "rate_limit_type",
+    ]
+
+    litellm_api_key_rate_limit_allowed_metric = _api_key_rate_limit_labels
+    litellm_api_key_rate_limit_used_metric = _api_key_rate_limit_labels
+
+    _team_rate_limit_labels = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        "rate_limit_type",
+    ]
+
+    litellm_team_rate_limit_allowed_metric = _team_rate_limit_labels
+    litellm_team_rate_limit_used_metric = _team_rate_limit_labels
 
     litellm_llm_api_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
