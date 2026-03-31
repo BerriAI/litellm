@@ -32,6 +32,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    @staticmethod
+    def _get_authenticator_for_request(
+        api_base: Optional[str],
+        litellm_params: Optional[GenericLiteLLMParams],
+    ) -> Authenticator:
+        auth_file_path: Optional[str] = None
+        if litellm_params is not None:
+            auth_file_path = litellm_params.get("chatgpt_auth_file_path")
+        return Authenticator(auth_file_path=auth_file_path, api_base=api_base)
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
@@ -42,8 +52,12 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
+        authenticator = self._get_authenticator_for_request(
+            api_base=litellm_params.get("api_base") if litellm_params else None,
+            litellm_params=litellm_params,
+        )
         try:
-            access_token = self.authenticator.get_access_token()
+            access_token = authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -51,7 +65,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=str(e),
             )
 
-        account_id = self.authenticator.get_account_id()
+        account_id = authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(
             access_token, account_id, session_id
@@ -197,7 +211,13 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        request_api_base = api_base
+        if request_api_base is None and litellm_params is not None:
+            request_api_base = litellm_params.get("api_base")
+        authenticator = self._get_authenticator_for_request(
+            api_base=request_api_base, litellm_params=litellm_params
+        )
+        api_base = request_api_base or authenticator.get_api_base() or CHATGPT_API_BASE
         api_base = api_base.rstrip("/")
         return f"{api_base}/responses"
 

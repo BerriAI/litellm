@@ -57,6 +57,27 @@ vi.mock("../networking", async () => {
         ],
       },
       {
+        provider: "ChatGPT",
+        provider_display_name: Providers.ChatGPT,
+        litellm_provider: "chatgpt",
+        default_model_placeholder: "chatgpt/gpt-5.3-codex",
+        credential_fields: [
+          {
+            key: "chatgpt_auth_file_path",
+            label: "ChatGPT Auth File Path",
+            field_type: "text",
+            placeholder: "/path/to/auth.json",
+            required: true,
+          },
+          {
+            key: "api_base",
+            label: "API Base",
+            field_type: "text",
+            placeholder: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
+      },
+      {
         provider: "Azure",
         provider_display_name: Providers.Azure,
         litellm_provider: "azure",
@@ -213,6 +234,27 @@ describe("ProviderSpecificFields", () => {
 
       const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
       expect(baseModelInput).toBeInTheDocument();
+    });
+  });
+
+  it("should render the provider specific fields for ChatGPT", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.ChatGPT} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      const authFilePathInput = screen.getByLabelText("ChatGPT Auth File Path");
+      expect(authFilePathInput).toBeInTheDocument();
+      expect(authFilePathInput).toHaveAttribute("placeholder", "/path/to/auth.json");
+
+      const apiBaseInput = screen.getByPlaceholderText("https://chatgpt.com/backend-api/codex");
+      expect(apiBaseInput).toBeInTheDocument();
+      expect(apiBaseInput).toHaveAttribute("type", "text");
     });
   });
 });

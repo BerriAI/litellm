@@ -110,6 +110,23 @@ def test_watsonx_provider_fields():
     assert "zen_api_key" in field_keys
 
 
+def test_chatgpt_provider_fields():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    chatgpt = next((p for p in providers if p["litellm_provider"] == "chatgpt"), None)
+    assert chatgpt is not None
+    assert chatgpt["provider_display_name"] == "ChatGPT"
+
+    field_keys = [f["key"] for f in chatgpt["credential_fields"]]
+    assert "chatgpt_auth_file_path" in field_keys
+    assert "api_base" in field_keys
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()

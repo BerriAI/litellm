@@ -24,6 +24,7 @@ export enum Providers {
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
   COMPACTIFAI = "Compactifai",
+  ChatGPT = "ChatGPT",
   Cursor = "Cursor",
   Dashscope = "Dashscope",
   Databricks = "Databricks (Qwen API)",
@@ -130,6 +131,7 @@ export const provider_map: Record<string, string> = {
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
   COMPACTIFAI: "compactifai",
+  ChatGPT: "chatgpt",
   Cursor: "cursor",
   Dashscope: "dashscope",
   Databricks: "databricks",
@@ -236,6 +238,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
   [Providers.COHERE_CHAT]: `${asset_logos_folder}cohere.svg`,
   [Providers.COMETAPI]: `${asset_logos_folder}cometapi.svg`,
+  [Providers.ChatGPT]: `${asset_logos_folder}openai_small.svg`,
   [Providers.Cursor]: `${asset_logos_folder}cursor.svg`,
   [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
   [Providers.Dashscope]: `${asset_logos_folder}dashscope.svg`,
@@ -364,6 +367,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "runwayml/gen4_turbo";
   } else if (selectedProvider === Providers.WATSONX) {
     return "watsonx/ibm/granite-3-3-8b-instruct";
+  } else if (selectedProvider === Providers.ChatGPT) {
+    return "chatgpt/gpt-5.3-codex";
   } else if (selectedProvider === Providers.Cursor) {
     return "cursor/claude-4-sonnet";
   } else {

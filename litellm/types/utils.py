@@ -3095,6 +3095,7 @@ all_litellm_params = (
         "azure_password",
         "azure_scope",
         "client_secret",
+        "chatgpt_auth_file_path",
         "user_continue_message",
         "configurable_clientside_auth_params",
         "weight",

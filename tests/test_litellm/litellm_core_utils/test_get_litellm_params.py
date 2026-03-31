@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
 )
+from litellm.types.utils import all_litellm_params
 
 
 class TestGetBaseModelFromLitellmCallMetadata:
@@ -66,12 +67,20 @@ class TestGetLitellmParamsKwargsExtraction:
         result = get_litellm_params(some_random_kwarg="value")
         assert "some_random_kwarg" not in result
 
+    def test_chatgpt_auth_file_path_is_extracted(self):
+        auth_file_path = "/path/to/chatgpt-auth.json"
+        result = get_litellm_params(chatgpt_auth_file_path=auth_file_path)
+        assert result["chatgpt_auth_file_path"] == auth_file_path
+
     def test_all_optional_kwargs_extractable(self):
         """Every key in _OPTIONAL_KWARGS_KEYS can be extracted."""
         kwargs = {key: f"val_{key}" for key in _OPTIONAL_KWARGS_KEYS}
         result = get_litellm_params(**kwargs)
         for key in _OPTIONAL_KWARGS_KEYS:
             assert result[key] == f"val_{key}"
+
+    def test_chatgpt_auth_file_path_in_all_litellm_params(self):
+        assert "chatgpt_auth_file_path" in all_litellm_params
 
 
 class TestGetLitellmParamsBaseModel:
@@ -125,4 +134,3 @@ class TestGetLitellmParamsExplicitFields:
     def test_no_log_from_explicit_param(self):
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
-
