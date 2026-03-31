@@ -77,6 +77,81 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   return "default";
 };
 
+interface BudgetLimitEntry {
+  budget_duration: string;
+  max_budget: number | null;
+}
+
+const BUDGET_WINDOW_OPTIONS = [
+  { value: "1h", label: "Hourly" },
+  { value: "24h", label: "Daily" },
+  { value: "7d", label: "Weekly" },
+  { value: "30d", label: "Monthly" },
+];
+
+function BudgetWindowsEditor({
+  value,
+  onChange,
+}: {
+  value: BudgetLimitEntry[];
+  onChange: (v: BudgetLimitEntry[]) => void;
+}) {
+  const addWindow = () => {
+    onChange([...value, { budget_duration: "24h", max_budget: null }]);
+  };
+
+  const removeWindow = (idx: number) => {
+    onChange(value.filter((_, i) => i !== idx));
+  };
+
+  const updateWindow = (idx: number, field: keyof BudgetLimitEntry, fieldValue: any) => {
+    const updated = value.map((w, i) => (i === idx ? { ...w, [field]: fieldValue } : w));
+    onChange(updated);
+  };
+
+  return (
+    <div>
+      {value.map((window, idx) => (
+        <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+          <Select
+            value={window.budget_duration}
+            onChange={(v) => updateWindow(idx, "budget_duration", v)}
+            style={{ width: 120 }}
+          >
+            {BUDGET_WINDOW_OPTIONS.map((opt) => (
+              <Select.Option key={opt.value} value={opt.value}>
+                {opt.label}
+              </Select.Option>
+            ))}
+          </Select>
+          <NumericalInput
+            step={0.01}
+            min={0}
+            value={window.max_budget ?? undefined}
+            onChange={(v: number | null) => updateWindow(idx, "max_budget", v)}
+            placeholder="Max $ (e.g. 10.00)"
+            style={{ width: 160 }}
+          />
+          <span
+            onClick={() => removeWindow(idx)}
+            style={{ cursor: "pointer", color: "#ff4d4f", fontSize: 16, lineHeight: 1 }}
+            title="Remove"
+          >
+            ✕
+          </span>
+        </div>
+      ))}
+      <TremorButton
+        size="xs"
+        variant="secondary"
+        onClick={(e: React.MouseEvent) => { e.preventDefault(); addWindow(); }}
+      >
+        + Add Window
+      </TremorButton>
+    </div>
+  );
+}
+
 export function KeyEditView({
   keyData,
   onCancel,
@@ -103,6 +178,9 @@ export function KeyEditView({
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetLimitEntry[]>(
+    Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
+  );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -274,6 +352,10 @@ export function KeyEditView({
         values.duration = null;
       }
 
+      // Include multi-window budget limits (filter out incomplete entries)
+      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -421,6 +503,22 @@ export function KeyEditView({
           <Select.Option value="weekly">Weekly</Select.Option>
           <Select.Option value="monthly">Monthly</Select.Option>
         </Select>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Budget Windows{" "}
+            <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <BudgetWindowsEditor
+          value={budgetLimits}
+          onChange={setBudgetLimits}
+        />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
