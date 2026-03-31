@@ -158,8 +158,16 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret_str(api_key)
+        # OpenRouter: when the router/proxy already set custom_llm_provider,
+        # the model may still carry LiteLLM's "openrouter/" routing prefix.
+        # Native IDs like "openrouter/auto" must stay intact for the API; IDs
+        # like "openrouter/anthropic/claude-3.5-sonnet" must become
+        # "anthropic/claude-3.5-sonnet" (OpenRouter expects provider/model).
+        if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+            remainder = model[len("openrouter/") :]
+            if "/" in remainder:
+                return remainder, custom_llm_provider, dynamic_api_key, api_base
+            return model, custom_llm_provider, dynamic_api_key, api_base
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
