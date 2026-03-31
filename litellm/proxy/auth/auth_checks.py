@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
+
 import asyncio
 import re
 import time
@@ -71,6 +72,10 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
+from litellm.proxy._types import SpendUpdateQueueItem
+
+# [Budget Reset Fix]
+# Persistence handled via batched SpendUpdateQueue to follow project performance guidelines.
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -414,9 +419,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -840,10 +845,14 @@ async def get_default_end_user_budget(
         return None
 
 
+# (removed _persist_end_user_budget_id - now handled via batched SpendUpdateQueue)
+
+
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
     user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
     parent_otel_span: Optional[Span] = None,
 ) -> LiteLLM_EndUserTable:
     """
@@ -853,13 +862,17 @@ async def _apply_default_budget_to_end_user(
         end_user_obj: The end user object to potentially apply default budget to
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving data
+        proxy_logging_obj: Optional proxy logging object for persisting budget_id
         parent_otel_span: Optional OpenTelemetry span for tracing
 
     Returns:
         Updated end user object with default budget applied if applicable
     """
-    # If end user already has a budget assigned, no need to apply default
-    if end_user_obj.litellm_budget_table is not None:
+    # If end user already has a budget assigned or a budget_id set, no need to apply default
+    if (
+        end_user_obj.litellm_budget_table is not None
+        or end_user_obj.budget_id is not None
+    ):
         return end_user_obj
 
     # If no default budget configured, return as-is
@@ -876,9 +889,26 @@ async def _apply_default_budget_to_end_user(
     if default_budget is not None:
         # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
+        end_user_obj.budget_id = litellm.max_end_user_budget_id
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
         )
+
+        # Persist budget_id to DB via SpendUpdateQueue to avoid direct DB writes in the auth path.
+        # This routes the update through the existing batching mechanism.
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.END_USER,
+                    entity_id=end_user_obj.user_id,
+                    budget_id=litellm.max_end_user_budget_id,
+                )
+            )
+        else:
+            verbose_proxy_logger.warning(
+                "LiteLLM Budget Reset Fix: proxy_logging_obj is None; "
+                "budget_id for end user will not be persisted to DB."
+            )
 
     return end_user_obj
 
@@ -952,12 +982,30 @@ async def get_end_user_object(
         return_obj = LiteLLM_EndUserTable(**cached_user_obj)
 
         # Apply default budget if needed
-        return_obj = await _apply_default_budget_to_end_user(
-            end_user_obj=return_obj,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-        )
+        # Track if the budget was newly applied so we can update the cache
+        _initial_budget_id = return_obj.budget_id
+        try:
+            return_obj = await _apply_default_budget_to_end_user(
+                end_user_obj=return_obj,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                parent_otel_span=parent_otel_span,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "LiteLLM Budget Reset Fix: Error applying default budget to end user in cache path: {}".format(
+                    str(e)
+                )
+            )
+
+        # Synchronization: If a default budget was newly applied above during the
+        # auth-check, we update the cache immediately so subsequent requests
+        # recognize the budget_id without triggering another DB write task.
+        if _initial_budget_id != return_obj.budget_id:
+            await user_api_key_cache.async_set_cache(
+                key=_key, value=return_obj.model_dump()
+            )
 
         # Check budget limits
         _check_end_user_budget(end_user_obj=return_obj, route=route)
@@ -982,6 +1030,7 @@ async def get_end_user_object(
             end_user_obj=_response,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
             parent_otel_span=parent_otel_span,
         )
 

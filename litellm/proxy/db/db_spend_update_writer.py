@@ -1113,18 +1113,34 @@ class DBSpendUpdateWriter:
         end_user_list_transactions = db_spend_update_transactions[
             "end_user_list_transactions"
         ]
-        verbose_proxy_logger.debug(
-            "End-User Spend transactions: {}".format(end_user_list_transactions)
+        end_user_budget_updates = db_spend_update_transactions.get(
+            "end_user_budget_updates"
         )
-        if (
+        verbose_proxy_logger.debug(
+            "End-User Spend transactions: {}. End-User Budget updates: {}".format(
+                end_user_list_transactions, end_user_budget_updates
+            )
+        )
+
+        # [Budget Reset Fix]
+        # Ensure we commit the update if either (a) there's a spend increment
+        # or (b) there's a budget_id update (even with 0 spend).
+        has_spend = (
             end_user_list_transactions is not None
             and len(end_user_list_transactions.keys()) > 0
-        ):
+        )
+        has_budget_updates = (
+            end_user_budget_updates is not None
+            and len(end_user_budget_updates.keys()) > 0
+        )
+
+        if has_spend or has_budget_updates:
             await ProxyUpdateSpend.update_end_user_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
-                end_user_list_transactions=end_user_list_transactions,
+                end_user_list_transactions=end_user_list_transactions or {},
+                end_user_budget_updates=end_user_budget_updates,
             )
         ### UPDATE KEY TABLE ###
         key_list_transactions = db_spend_update_transactions["key_list_transactions"]
@@ -1615,14 +1631,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_read_input_tokens"
-                                    ] = transaction.get("cache_read_input_tokens", 0)
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
+                                    )
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_creation_input_tokens"
-                                    ] = transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:

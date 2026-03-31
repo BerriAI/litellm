@@ -1,9 +1,9 @@
 """
 CUSTOMER MANAGEMENT
 
-All /customer management endpoints 
+All /customer management endpoints
 
-/customer/new   
+/customer/new
 /customer/info
 /customer/update
 /customer/delete
@@ -351,6 +351,9 @@ async def new_end_user(
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
             new_end_user_obj["budget_id"] = data.budget_id
+        elif litellm.max_end_user_budget_id is not None:
+            # Proactively assign default budget_id for ResetBudgetJob visibility
+            new_end_user_obj["budget_id"] = litellm.max_end_user_budget_id
 
         _user_data = data.dict(exclude_none=True)
 
@@ -626,9 +629,9 @@ async def update_end_user(
                     )
                 )
 
-                update_end_user_table_data[
-                    "budget_id"
-                ] = budget_table_data_record.budget_id
+                update_end_user_table_data["budget_id"] = (
+                    budget_table_data_record.budget_id
+                )
             else:
                 ## Update existing budget ##
                 budget_table_data_record = (

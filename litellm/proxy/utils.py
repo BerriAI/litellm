@@ -1898,9 +1898,9 @@ class ProxyLogging:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details[
-                    "call_type"
-                ] = normalized_call_type
+                litellm_logging_obj.model_call_details["call_type"] = (
+                    normalized_call_type
+                )
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
@@ -2498,8 +2498,7 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(
-                f"""
+            ret = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -2511,8 +2510,7 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """
-            )
+                """)
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -2521,8 +2519,7 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw(
-                        """
+                    await self.db.execute_raw("""
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -2532,8 +2529,7 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """
-                    )
+                        """)
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -4639,7 +4635,11 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
         end_user_list_transactions: Dict[str, float],
+        end_user_budget_updates: Optional[Dict[str, str]] = None,
     ):
+        if end_user_list_transactions is None:
+            end_user_list_transactions = {}
+
         for i in range(n_retry_times + 1):
             start_time = time.time()
             try:
@@ -4647,21 +4647,43 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
-                            if litellm.max_end_user_budget is not None:
-                                pass
+                        all_user_ids = set(end_user_list_transactions.keys())
+                        if end_user_budget_updates is not None:
+                            all_user_ids.update(end_user_budget_updates.keys())
+                        for end_user_id in all_user_ids:
+                            response_cost = end_user_list_transactions.get(
+                                end_user_id, 0.0
+                            )
+                            create_data = {
+                                "user_id": end_user_id,
+                                "spend": response_cost,
+                                "blocked": False,
+                            }
+                            if litellm.max_end_user_budget_id is not None:
+                                # Proactively assign default budget_id during creation for ResetBudgetJob visibility
+                                create_data["budget_id"] = (
+                                    litellm.max_end_user_budget_id
+                                )
+                            update_data: Dict[str, Any] = {}
+                            if response_cost != 0.0:
+                                update_data["spend"] = {"increment": response_cost}
+
+                            # [Budget Reset Fix]
+                            # If we have a pending budget_id update for this user (scheduled from the auth path),
+                            # apply it now during the batched spend update.
+                            if (
+                                end_user_budget_updates is not None
+                                and end_user_id in end_user_budget_updates
+                            ):
+                                update_data["budget_id"] = end_user_budget_updates[
+                                    end_user_id
+                                ]
+
                             batcher.litellm_endusertable.upsert(
                                 where={"user_id": end_user_id},
                                 data={
-                                    "create": {
-                                        "user_id": end_user_id,
-                                        "spend": response_cost,
-                                        "blocked": False,
-                                    },
-                                    "update": {"spend": {"increment": response_cost}},
+                                    "create": create_data,
+                                    "update": update_data,
                                 },
                             )
 
