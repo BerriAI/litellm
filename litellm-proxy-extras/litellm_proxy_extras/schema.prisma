@@ -17,8 +17,9 @@ model LiteLLM_BudgetTable {
   tpm_limit     BigInt?
   rpm_limit     BigInt?
   model_max_budget Json?
-  budget_duration String? 
+  budget_duration String?
   budget_reset_at DateTime?
+  allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -140,6 +141,7 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    default_team_member_models String[] @default([]) // default allowed_models for newly added team members; empty = no per-member restriction
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
@@ -321,11 +323,12 @@ model LiteLLM_MCPServerTable {
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
-  approval_status       String?   @default("active")
-  submitted_by          String?
-  submitted_at          DateTime?
-  reviewed_at           DateTime?
-  review_notes          String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
 
   @@index([approval_status])
 }
