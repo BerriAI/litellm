@@ -19,7 +19,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    apply_embedded_bedrock_region_from_model_path,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -562,6 +565,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             modelId = model
 
         modelId = modelId.replace("invoke/", "", 1)
+        modelId = apply_embedded_bedrock_region_from_model_path(
+            modelId, optional_params
+        )
         if provider == "llama" and "llama/" in modelId:
             modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
         elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:

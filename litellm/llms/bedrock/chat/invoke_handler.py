@@ -56,7 +56,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Delta,
+)
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -67,7 +71,12 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
+from ..common_utils import (
+    BedrockError,
+    ModelResponseIterator,
+    apply_embedded_bedrock_region_from_model_path,
+    get_bedrock_tool_name,
+)
 
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
@@ -1188,6 +1197,9 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
+        modelId = apply_embedded_bedrock_region_from_model_path(
+            modelId, optional_params
+        )
         if provider == "llama" and "llama/" in modelId:
             modelId = self._get_model_id_for_llama_like_model(modelId)
 
@@ -1448,7 +1460,7 @@ class AWSEventStreamDecoder:
         ######### /bedrock/invoke nova mappings ###############
         elif "contentBlockDelta" in chunk_data:
             # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
-            _chunk_data = chunk_data.get("contentBlockDelta", None)
+            _chunk_data = chunk_data["contentBlockDelta"]
             return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
