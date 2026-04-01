@@ -3429,6 +3429,14 @@ class PrometheusLogger(CustomLogger):
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import app
 
+        # Security warning for metrics endpoint (fixes #24530)
+        if not litellm.require_auth_for_metrics_endpoint:
+            verbose_proxy_logger.warning(
+                "⚠️  SECURITY WARNING: /metrics endpoint is exposed without authentication. "
+                "This may leak multi-tenant PII including team aliases, user emails, client IPs, and user agents. "
+                "Set 'require_auth_for_metrics_endpoint: true' in litellm_settings to enable authentication."
+            )
+
         # Create metrics ASGI app
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             from prometheus_client import CollectorRegistry, multiprocess
