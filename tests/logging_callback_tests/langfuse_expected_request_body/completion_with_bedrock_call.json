@@ -62,7 +62,7 @@
                     "input": 10,
                     "output": 10,
                     "unit": "TOKENS",
-                    "totalCost": 6e-05
+                    "totalCost": 6.599999999999999e-05
                 },
                 "usageDetails": {
                     "input": 10,
