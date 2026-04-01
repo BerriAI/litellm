@@ -1134,7 +1134,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
-                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                        # Usage-only final chunks are valid and needed to surface
+                        # finish_reason/usage to downstream translators.
+                        or chunk.get("usage") is not None
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
