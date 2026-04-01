@@ -939,6 +939,13 @@ def responses_api_bridge_check(
     reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+
+    # Global flag: route ALL OpenAI chat completions through Responses API
+    if litellm.route_all_chat_openai_to_responses and custom_llm_provider == "openai":
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
+        return model_info, model
+
     try:
         model_info = cast(
             dict,
