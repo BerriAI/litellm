@@ -763,7 +763,7 @@ def _transform_request_body(  # noqa: PLR0915
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
-        
+
         if service_tier := optional_params.pop("service_tier", None):
             if isinstance(service_tier, str):
                 if service_tier.lower() == "default":
