@@ -2744,6 +2744,73 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
 
 
 @pytest.mark.asyncio
+async def test_get_config_callbacks_email_and_slack_values_are_not_decrypted_again(
+    client_no_auth,
+):
+    """
+    Test that /get/config/callbacks returns already-decrypted email/slack values as-is.
+
+    decrypt_value_helper is called with return_original_value=True, so for already-plaintext
+    values (DB mode: decrypted by _update_config_from_db) it returns the original value
+    unchanged. For encrypted values (YAML mode) it properly decrypts them.
+    """
+    mock_config_data = {
+        "litellm_settings": {},
+        "environment_variables": {
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/test/webhook",
+            "SMTP_HOST": "10.16.68.20",
+            "SMTP_PORT": "587",
+            "SMTP_USERNAME": "smtp-user",
+            "SMTP_PASSWORD": "smtp-password",
+            "SMTP_SENDER_EMAIL": "alerts@example.com",
+            "TEST_EMAIL_ADDRESS": "ops@example.com",
+            "EMAIL_LOGO_URL": "https://example.com/logo.png",
+            "EMAIL_SUPPORT_CONTACT": "support@example.com",
+        },
+        "general_settings": {"alerting": ["slack"]},
+    }
+
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+
+    # Simulate return_original_value=True behaviour: return the value as-is (already plaintext)
+    def fake_decrypt(value, key, return_original_value=False, **kwargs):
+        return value
+
+    with patch.object(
+        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+    ), patch(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        side_effect=fake_decrypt,
+    ) as decrypt_mock:
+        response = client_no_auth.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    result = response.json()
+    alerts = result["alerts"]
+
+    slack_alert = next((alert for alert in alerts if alert["name"] == "slack"), None)
+    assert slack_alert is not None
+    assert slack_alert["variables"] == {
+        "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/test/webhook"
+    }
+
+    email_alert = next((alert for alert in alerts if alert["name"] == "email"), None)
+    assert email_alert is not None
+    assert email_alert["variables"] == {
+        "SMTP_HOST": "10.16.68.20",
+        "SMTP_PORT": "587",
+        "SMTP_USERNAME": "smtp-user",
+        "SMTP_PASSWORD": "smtp-password",
+        "SMTP_SENDER_EMAIL": "alerts@example.com",
+        "TEST_EMAIL_ADDRESS": "ops@example.com",
+        "EMAIL_LOGO_URL": "https://example.com/logo.png",
+        "EMAIL_SUPPORT_CONTACT": "support@example.com",
+    }
+    # decrypt_value_helper is called once per SMTP var + once for SLACK_WEBHOOK_URL
+    assert decrypt_mock.call_count == len(mock_config_data["environment_variables"])
+
+
+@pytest.mark.asyncio
 async def test_update_config_success_callback_normalization():
     """
     Ensure success_callback values are normalized to lowercase when updating config.

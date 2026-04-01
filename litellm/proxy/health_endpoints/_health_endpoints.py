@@ -438,6 +438,22 @@ async def health_services_endpoint(  # noqa: PLR0915
                     },
                 )
         if service == "email":
+            from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+
+            # TEST_EMAIL_ADDRESS is stored encrypted in the DB when the proxy
+            # is running in DB mode.  Calling get_config() ensures the value is
+            # freshly decrypted and available both in the returned config dict
+            # and in os.environ.  For YAML / env-var deployments the call is a
+            # cheap no-op and os.getenv() still works as the fallback.
+            if store_model_in_db and prisma_client is not None:
+                _fresh_config = await proxy_config.get_config()
+                _env_vars = _fresh_config.get("environment_variables", {})
+                _test_email_address = _env_vars.get(
+                    "TEST_EMAIL_ADDRESS"
+                ) or os.getenv("TEST_EMAIL_ADDRESS")
+            else:
+                _test_email_address = os.getenv("TEST_EMAIL_ADDRESS")
+
             webhook_event = WebhookEvent(
                 event="key_created",
                 event_group=Litellm_EntityType.KEY,
@@ -447,7 +463,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 spend=0,
                 max_budget=0,
                 user_id=user_api_key_dict.user_id,
-                user_email=os.getenv("TEST_EMAIL_ADDRESS"),
+                user_email=_test_email_address,
                 team_id=user_api_key_dict.team_id,
             )
 
