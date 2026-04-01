@@ -1088,3 +1088,136 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+# ---------------------------------------------------------------------------
+# Tests for base64 truncation in StandardLoggingPayload.response field
+# ---------------------------------------------------------------------------
+
+
+def test_standard_logging_payload_response_base64_truncated():
+    """
+    StandardLoggingPayload.response must have long base64 data-URIs truncated,
+    mirroring the truncation already applied to the .messages field.
+    Regression test for the Vertex image generation memory leak where a
+    ~173MB data_uri string was forwarded to every logging callback unchanged.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import StandardLoggingPayloadStatus
+
+    b64_payload = "A" * 200  # well above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    data_uri = f"data:image/png;base64,{b64_payload}"
+
+    # Simulate a Vertex image generation response dict
+    init_response_obj = {
+        "id": "test-resp-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "images": [
+                        {"image_url": {"url": data_uri, "detail": "auto"}, "type": "image_url"}
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "model": "gemini-2.0-flash",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+    }
+
+    logging_obj = Logging(
+        model="gemini-2.0-flash",
+        messages=[{"role": "user", "content": "generate an image"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-truncate-response",
+        function_id="test-func-truncate-response",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "custom_llm_provider": "vertex_ai",
+        "api_base": "https://generativelanguage.googleapis.com",
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj=init_response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    # The full base64 payload must NOT appear in the serialized response
+    import json
+
+    response_str = json.dumps(payload.get("response") if isinstance(payload, dict) else payload.response)
+    assert b64_payload not in response_str, (
+        "Full base64 payload found in StandardLoggingPayload.response — "
+        "image data is leaking into logging callbacks"
+    )
+    assert "base64_data truncated" in response_str
+
+
+def test_standard_logging_payload_response_short_base64_preserved():
+    """Short base64 data-URIs (under threshold) must NOT be truncated."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    short_b64 = "AAAA"  # well below threshold
+    data_uri = f"data:image/png;base64,{short_b64}"
+
+    init_response_obj = {
+        "id": "test-resp-short",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": data_uri},
+                "finish_reason": "stop",
+            }
+        ],
+        "model": "gpt-4o",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+    }
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-short-b64",
+        function_id="test-func-short-b64",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "custom_llm_provider": "openai",
+        "api_base": "https://api.openai.com",
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj=init_response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    import json
+
+    response_str = json.dumps(payload.get("response") if isinstance(payload, dict) else payload.response)
+    assert short_b64 in response_str, "Short base64 must not be truncated"

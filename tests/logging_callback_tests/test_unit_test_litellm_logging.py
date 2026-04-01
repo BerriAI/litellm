@@ -125,3 +125,54 @@ def test_remove_internal_litellm_callbacks():
     assert "string_callback" in filtered
     assert _PROXY_MaxBudgetLimiter not in filtered
     assert _PROXY_CacheControlCheck not in filtered
+
+
+# ---------------------------------------------------------------------------
+# Tests for base64 truncation in post_call / model_call_details
+# ---------------------------------------------------------------------------
+
+
+def test_post_call_truncates_base64_in_original_response():
+    """
+    post_call must truncate long base64 data-URIs before storing the raw
+    response text in model_call_details["original_response"].
+    Regression test: a ~297MB httpx response body was previously stored
+    verbatim and forwarded to every logging callback.
+    """
+    b64_payload = "B" * 200  # above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    raw_json = (
+        '{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png",'
+        f'"data":"data:image/png;base64,{b64_payload}"}}}}],"role":"model"}}],'
+        '"usageMetadata":{"promptTokenCount":10}}'
+    )
+
+    logging_obj = setup_logging()
+    logging_obj.post_call(
+        original_response=raw_json,
+        input=[{"role": "user", "content": "generate"}],
+        api_key="",
+    )
+
+    stored = logging_obj.model_call_details["original_response"]
+    assert b64_payload not in stored, (
+        "Full base64 payload found in model_call_details['original_response'] — "
+        "raw response body is leaking into logging callbacks"
+    )
+    assert "base64_data truncated" in stored
+
+
+def test_post_call_preserves_non_base64_response():
+    """post_call must not alter plain text responses."""
+    plain = '{"choices":[{"message":{"content":"Hello world"}}]}'
+    logging_obj = setup_logging()
+    logging_obj.post_call(original_response=plain, input=[], api_key="")
+    assert logging_obj.model_call_details["original_response"] == plain
+
+
+def test_post_call_handles_non_string_original_response():
+    """post_call must not crash when original_response is not a str/list/dict."""
+    logging_obj = setup_logging()
+    sentinel = object()
+    logging_obj.post_call(original_response=sentinel, input=[], api_key="")
+    # Should be stored unchanged
+    assert logging_obj.model_call_details["original_response"] is sentinel

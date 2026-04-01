@@ -851,13 +851,21 @@ class LLMCachingHandler:
                         )
                     )
                 else:
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache(
-                            result.model_dump_json(),
-                            dynamic_cache_object=self.dual_cache,
-                            **new_kwargs,
+                    # Defer model_dump_json() into the task body so the large
+                    # serialized string is created (and freed) during execution
+                    # rather than being held while the task waits in the queue.
+                    async def _cache_result(
+                        _result=result,
+                        _dual_cache=self.dual_cache,
+                        _kwargs=new_kwargs,
+                    ):
+                        await litellm.cache.async_add_cache(
+                            _result.model_dump_json(),
+                            dynamic_cache_object=_dual_cache,
+                            **_kwargs,
                         )
-                    )
+
+                    asyncio.create_task(_cache_result())
             else:
                 asyncio.create_task(litellm.cache.async_add_cache(result, **new_kwargs))
 
