@@ -481,6 +481,13 @@ async def common_checks(  # noqa: PLR0915
         with tracer.trace("litellm.proxy.auth.common_checks.team_multi_budget_check"):
             await _team_multi_budget_check(team_object=team_object)
 
+        # 3.2. Multi-window budget check for key
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.virtual_key_multi_budget_check"
+        ):
+            if valid_token is not None:
+                await _virtual_key_multi_budget_check(valid_token=valid_token)
+
         # 3.0.5. If team is over soft budget (alert only, doesn't block)
         with tracer.trace("litellm.proxy.auth.common_checks.team_soft_budget_check"):
             await _team_soft_budget_check(
@@ -2943,7 +2950,7 @@ async def _virtual_key_multi_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     for i, window in enumerate(valid_token.budget_limits):
-        w: dict = window if isinstance(window, dict) else window  # type: ignore[assignment]
+        w: dict = window if isinstance(window, dict) else window.model_dump()
         counter_key = f"spend:key:{valid_token.token}:window:{i}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
@@ -3163,7 +3170,7 @@ async def _team_multi_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     for i, window in enumerate(team_object.budget_limits):
-        w: dict = window if isinstance(window, dict) else window  # type: ignore[assignment]
+        w: dict = window if isinstance(window, dict) else window.model_dump()
         counter_key = f"spend:team:{team_object.team_id}:window:{i}"
         window_spend = await get_current_spend(
             counter_key=counter_key,

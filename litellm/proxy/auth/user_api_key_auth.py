@@ -32,7 +32,6 @@ from litellm.proxy.auth.auth_checks import (
     _is_user_proxy_admin,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
-    _virtual_key_multi_budget_check,
     _virtual_key_soft_budget_check,
     can_key_call_model,
     common_checks,
@@ -1357,10 +1356,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             valid_token=valid_token,
                             proxy_logging_obj=proxy_logging_obj,
                             user_obj=user_obj,
-                        )
-                        # Check 4.1 Multi-window budget check
-                        await _virtual_key_multi_budget_check(
-                            valid_token=valid_token,
                         )
 
                     # Check 5. Max Budget Alert Check
