@@ -242,3 +242,96 @@ curl http://localhost:4000/mcp-rest/tools/call \
 | `client_secret` | Yes | OAuth2 client secret. Supports `os.environ/VAR_NAME` |
 | `token_url` | Yes | Token endpoint URL |
 | `scopes` | No | List of scopes to request |
+
+## Debugging OAuth
+
+When the LiteLLM proxy is hosted remotely and you cannot access server logs, enable **debug headers** to get masked authentication diagnostics in the HTTP response.
+
+### Enable Debug Mode
+
+Add the `x-litellm-mcp-debug: true` header to your MCP client request.
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport http litellm_proxy http://proxy.example.com/atlassian_mcp/mcp \
+  --header "x-litellm-api-key: Bearer sk-..." \
+  --header "x-litellm-mcp-debug: true"
+```
+
+**curl:**
+
+```bash
+curl -X POST http://localhost:4000/atlassian_mcp/mcp \
+  -H "Content-Type: application/json" \
+  -H "x-litellm-api-key: Bearer sk-..." \
+  -H "x-litellm-mcp-debug: true" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+### Reading the Debug Response Headers
+
+The response includes these headers (all sensitive values are masked):
+
+| Header | Description |
+|--------|-------------|
+| `x-mcp-debug-inbound-auth` | Which inbound auth headers were present. |
+| `x-mcp-debug-oauth2-token` | The OAuth2 token (masked). Shows `SAME_AS_LITELLM_KEY` if the LiteLLM key is leaking. |
+| `x-mcp-debug-auth-resolution` | Which auth method was used: `oauth2-passthrough`, `m2m-client-credentials`, `per-request-header`, `static-token`, or `no-auth`. |
+| `x-mcp-debug-outbound-url` | The upstream MCP server URL. |
+| `x-mcp-debug-server-auth-type` | The `auth_type` configured on the server. |
+
+**Example — healthy OAuth2 passthrough:**
+
+```
+x-mcp-debug-inbound-auth: x-litellm-api-key=Bearer****1234; authorization=Bearer****ef01
+x-mcp-debug-oauth2-token: Bearer****ef01
+x-mcp-debug-auth-resolution: oauth2-passthrough
+x-mcp-debug-outbound-url: https://mcp.atlassian.com/v1/mcp
+x-mcp-debug-server-auth-type: oauth2
+```
+
+**Example — LiteLLM key leaking (misconfigured):**
+
+```
+x-mcp-debug-inbound-auth: authorization=Bearer****1234
+x-mcp-debug-oauth2-token: Bearer****1234 (SAME_AS_LITELLM_KEY - likely misconfigured)
+x-mcp-debug-auth-resolution: oauth2-passthrough
+x-mcp-debug-outbound-url: https://mcp.atlassian.com/v1/mcp
+x-mcp-debug-server-auth-type: oauth2
+```
+
+### Common Issues
+
+#### LiteLLM API key leaking to the MCP server
+
+**Symptom:** `x-mcp-debug-oauth2-token` shows `SAME_AS_LITELLM_KEY`.
+
+The `Authorization` header carries the LiteLLM API key instead of an OAuth2 token. The OAuth2 flow never ran because the client already had an `Authorization` header set.
+
+**Fix:** Move the LiteLLM key to `x-litellm-api-key`:
+
+```bash
+# WRONG — blocks OAuth2 discovery
+claude mcp add --transport http my_server http://proxy/mcp/server \
+    --header "Authorization: Bearer sk-..."
+
+# CORRECT — LiteLLM key in dedicated header, Authorization free for OAuth2
+claude mcp add --transport http my_server http://proxy/mcp/server \
+    --header "x-litellm-api-key: Bearer sk-..."
+```
+
+#### No OAuth2 token present
+
+**Symptom:** `x-mcp-debug-oauth2-token` shows `(none)` and `x-mcp-debug-auth-resolution` shows `no-auth`.
+
+Check that:
+1. The `Authorization` header is NOT set as a static header in the client config.
+2. The MCP server in LiteLLM config has `auth_type: oauth2`.
+3. The `.well-known/oauth-protected-resource` endpoint returns valid metadata.
+
+#### M2M token used instead of user token
+
+**Symptom:** `x-mcp-debug-auth-resolution` shows `m2m-client-credentials`.
+
+The server has `client_id`/`client_secret`/`token_url` configured so LiteLLM is fetching a machine-to-machine token instead of using the per-user OAuth2 token. To use per-user tokens, remove the client credentials from the server config.

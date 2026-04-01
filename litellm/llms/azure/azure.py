@@ -901,7 +901,20 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             if response.json()["status"] == "failed":
                 error_data = response.json()
-                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+                # Preserve Azure error details (e.g. content_policy_violation,
+                # inner_error, content_filter_results) as structured body so
+                # exception_type() can route them correctly.
+                _error_body = error_data.get("error", error_data)
+                _error_msg = (
+                    _error_body.get("message", "Image generation failed")
+                    if isinstance(_error_body, dict)
+                    else json.dumps(error_data)
+                )
+                raise AzureOpenAIError(
+                    status_code=400,
+                    message=_error_msg,
+                    body=error_data,
+                )
 
             result = response.json()["result"]
             return httpx.Response(
@@ -999,7 +1012,20 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             if response.json()["status"] == "failed":
                 error_data = response.json()
-                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+                # Preserve Azure error details (e.g. content_policy_violation,
+                # inner_error, content_filter_results) as structured body so
+                # exception_type() can route them correctly.
+                _error_body = error_data.get("error", error_data)
+                _error_msg = (
+                    _error_body.get("message", "Image generation failed")
+                    if isinstance(_error_body, dict)
+                    else json.dumps(error_data)
+                )
+                raise AzureOpenAIError(
+                    status_code=400,
+                    message=_error_msg,
+                    body=error_data,
+                )
 
             result = response.json()["result"]
             return httpx.Response(

@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
@@ -177,7 +178,7 @@ class SharedHealthCheckManager:
             cache_key = self.get_health_check_cache_key()
             await self.redis_cache.async_set_cache(
                 cache_key,
-                json.dumps(cache_data),
+                safe_dumps(cache_data),
                 ttl=self.health_check_ttl,
             )
             

@@ -330,6 +330,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[dict] = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.

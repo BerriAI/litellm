@@ -1,5 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import {
   emitLocalStorageChange,
   getLocalStorageItem,
@@ -27,6 +28,7 @@ interface UserDropdownProps {
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
+  const disableUsageIndicator = useDisableUsageIndicator();
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
 
   useEffect(() => {
@@ -127,6 +129,23 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
             }
           }}
           aria-label="Toggle hide all prompts"
+        />
+      </Space>
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Text type="secondary">Hide Usage Indicator</Text>
+        <Switch
+          size="small"
+          checked={disableUsageIndicator}
+          onChange={(checked) => {
+            if (checked) {
+              setLocalStorageItem("disableUsageIndicator", "true");
+              emitLocalStorageChange("disableUsageIndicator");
+            } else {
+              removeLocalStorageItem("disableUsageIndicator");
+              emitLocalStorageChange("disableUsageIndicator");
+            }
+          }}
+          aria-label="Toggle hide usage indicator"
         />
       </Space>
     </Space>

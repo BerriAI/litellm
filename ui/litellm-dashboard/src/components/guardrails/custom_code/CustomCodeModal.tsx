@@ -233,6 +233,45 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
         structured_messages: [],
         model: "gpt-4"
       }
+    },
+    pre_mcp_call: {
+      name: "Pre MCP (MCP tool as OpenAI tool)",
+      data: {
+        texts: [
+          "Tool: read_wiki_structure\nArguments: {\"repoName\": \"BerriAI/litellm\"}"
+        ],
+        images: [],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "read_wiki_structure",
+              description: "Read the structure of a GitHub repository (MCP tool passed as OpenAI tool)",
+              parameters: {
+                type: "object",
+                properties: {
+                  repoName: { type: "string", description: "Repository name, e.g. BerriAI/litellm" }
+                },
+                required: ["repoName"]
+              }
+            }
+          }
+        ],
+        tool_calls: [
+          {
+            id: "call_mcp_001",
+            type: "function",
+            function: {
+              name: "read_wiki_structure",
+              arguments: "{\"repoName\": \"BerriAI/litellm\"}"
+            }
+          }
+        ],
+        structured_messages: [
+          { role: "user", content: "Tool: read_wiki_structure\nArguments: {\"repoName\": \"BerriAI/litellm\"}" }
+        ],
+        model: "mcp-tool-call"
+      }
     }
   };
   
@@ -599,6 +638,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                         </button>
                         <button
                           type="button"
+                          onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
+                          className="px-2 py-1 text-xs rounded border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                        >
+                          Pre MCP
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
                           className="px-2 py-1 text-xs rounded border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
                         >
@@ -610,7 +656,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div><strong>texts</strong>: Message content (always)</div>
                         <div><strong>images</strong>: Base64 images (vision)</div>
-                        <div><strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span></div>
+                        <div><strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>, MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span></div>
                         <div><strong>tool_calls</strong>: LLM tool calls <span className="text-green-600">(post_call)</span></div>
                         <div><strong>structured_messages</strong>: Full messages <span className="text-orange-600">(pre_call)</span></div>
                         <div><strong>model</strong>: Model name (always)</div>

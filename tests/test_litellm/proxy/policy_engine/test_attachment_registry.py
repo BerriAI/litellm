@@ -192,6 +192,139 @@ class TestGetAttachedPolicies:
         assert "strict-policy" not in registry.get_attached_policies(context_wrong_team)
 
 
+class TestTagBasedAttachments:
+    """Test tag-based policy attachment matching."""
+
+    def test_tag_matching_and_wildcards(self):
+        """Test tag matching: exact match, wildcard match, and no-match cases."""
+        registry = AttachmentRegistry()
+        registry.load_attachments([
+            {"policy": "hipaa-policy", "tags": ["healthcare"]},
+            {"policy": "health-policy", "tags": ["health-*"]},
+        ])
+
+        # Exact tag match
+        context = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        attached = registry.get_attached_policies(context)
+        assert "hipaa-policy" in attached
+        assert "health-policy" not in attached  # "healthcare" doesn't match "health-*"
+
+        # Wildcard tag match
+        context_wildcard = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["health-prod"],
+        )
+        attached_wildcard = registry.get_attached_policies(context_wildcard)
+        assert "health-policy" in attached_wildcard
+        assert "hipaa-policy" not in attached_wildcard
+
+        # No match — wrong tag
+        context_no_match = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=["finance"],
+        )
+        assert registry.get_attached_policies(context_no_match) == []
+
+        # No match — no tags on context
+        context_no_tags = PolicyMatchContext(
+            team_alias="team", key_alias="key", model="gpt-4",
+            tags=None,
+        )
+        assert registry.get_attached_policies(context_no_tags) == []
+
+    def test_tag_combined_with_team(self):
+        """Test attachment with both tags and teams requires BOTH to match (AND logic)."""
+        registry = AttachmentRegistry()
+        registry.load_attachments([
+            {"policy": "strict-policy", "teams": ["team-a"], "tags": ["healthcare"]},
+        ])
+
+        # Match — both team and tag match
+        context = PolicyMatchContext(
+            team_alias="team-a", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        assert "strict-policy" in registry.get_attached_policies(context)
+
+        # No match — tag matches but team doesn't
+        context_wrong_team = PolicyMatchContext(
+            team_alias="team-b", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        assert "strict-policy" not in registry.get_attached_policies(context_wrong_team)
+
+        # No match — team matches but tag doesn't
+        context_wrong_tag = PolicyMatchContext(
+            team_alias="team-a", key_alias="key", model="gpt-4",
+            tags=["finance"],
+        )
+        assert "strict-policy" not in registry.get_attached_policies(context_wrong_tag)
+
+
+class TestMatchAttribution:
+    """Test get_attached_policies_with_reasons — the attribution logic that
+    powers response headers and the Policy Simulator UI."""
+
+    def test_reasons_for_global_tag_team_attachments(self):
+        """Test that match reasons correctly describe WHY each policy matched."""
+        registry = AttachmentRegistry()
+        registry.load_attachments([
+            {"policy": "global-baseline", "scope": "*"},
+            {"policy": "hipaa-policy", "tags": ["healthcare"]},
+            {"policy": "team-policy", "teams": ["health-team"]},
+        ])
+
+        context = PolicyMatchContext(
+            team_alias="health-team", key_alias="key", model="gpt-4",
+            tags=["healthcare"],
+        )
+        results = registry.get_attached_policies_with_reasons(context)
+        reasons = {r["policy_name"]: r["matched_via"] for r in results}
+
+        assert reasons["global-baseline"] == "scope:*"
+        assert "tag:healthcare" in reasons["hipaa-policy"]
+        assert "team:health-team" in reasons["team-policy"]
+
+    def test_tags_only_attachment_matches_any_team_key_model(self):
+        """Test the primary use case: tags-only attachment with no team/key/model
+        constraint matches any request that carries the tag."""
+        registry = AttachmentRegistry()
+        registry.load_attachments([
+            {"policy": "hipaa-guardrails", "tags": ["healthcare"]},
+        ])
+
+        # Should match regardless of team/key/model
+        context = PolicyMatchContext(
+            team_alias="random-team", key_alias="random-key", model="claude-3",
+            tags=["healthcare"],
+        )
+        attached = registry.get_attached_policies(context)
+        assert "hipaa-guardrails" in attached
+
+        # Should not match without the tag
+        context_no_tag = PolicyMatchContext(
+            team_alias="random-team", key_alias="random-key", model="claude-3",
+        )
+        assert registry.get_attached_policies(context_no_tag) == []
+
+    def test_attachment_with_no_scope_matches_everything(self):
+        """Test that an attachment with no scope/teams/keys/models/tags
+        matches everything because teams/keys/models default to ['*']."""
+        registry = AttachmentRegistry()
+        registry.load_attachments([
+            {"policy": "catch-all"},
+        ])
+
+        context = PolicyMatchContext(
+            team_alias="any-team", key_alias="any-key", model="gpt-4",
+        )
+        attached = registry.get_attached_policies(context)
+        assert "catch-all" in attached
+
+
 class TestAttachmentRegistrySingleton:
     """Test global singleton behavior."""
 

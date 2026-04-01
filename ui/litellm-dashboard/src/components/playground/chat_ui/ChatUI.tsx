@@ -229,6 +229,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  const [mockTestFallbacks, setMockTestFallbacks] = useState<boolean>(false);
 
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
@@ -982,6 +983,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             handleMCPEvent,
+            mockTestFallbacks,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -1401,6 +1403,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             onTemperatureChange={setTemperature}
                             onMaxTokensChange={setMaxTokens}
                             onUseAdvancedParamsChange={setUseAdvancedParams}
+                            mockTestFallbacks={mockTestFallbacks}
+                            onMockTestFallbacksChange={setMockTestFallbacks}
                           />
                         }
                         title="Model Settings"
@@ -1412,6 +1416,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           size="small"
                           icon={<SettingOutlined />}
                           className="text-gray-500 hover:text-gray-700"
+                          aria-label="Model Settings"
+                          data-testid="model-settings-button"
                         />
                       </Popover>
                     ) : (
@@ -2390,7 +2396,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       </Card>
       <Modal
         title="Generated Code"
-        visible={isGetCodeModalVisible}
+        open={isGetCodeModalVisible}
         onCancel={() => setIsGetCodeModalVisible(false)}
         footer={null}
         width={800}

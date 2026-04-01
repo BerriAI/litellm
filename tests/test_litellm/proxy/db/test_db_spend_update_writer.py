@@ -757,6 +757,45 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
 
 
 @pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_agent_transaction_calls_common_helper_once():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-common-helper",
+        "agent_id": "agent-abc",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 12,
+        "completion_tokens": 6,
+        "spend": 0.25,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+    original_common_helper = (
+        writer._common_add_spend_log_transaction_to_daily_transaction
+    )
+    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(
+        wraps=original_common_helper
+    )
+
+    await writer.add_spend_log_transaction_to_daily_agent_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    assert (
+        writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_agent_transaction_skips_when_agent_id_missing():
     """
     Do not queue agent spend updates when agent_id is None.

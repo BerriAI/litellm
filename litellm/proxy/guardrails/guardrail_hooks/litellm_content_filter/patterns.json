@@ -367,6 +367,43 @@
       "pattern": "\\b\\d{1,2}\\.\\d{3}\\.\\d{3}-[\\dXx]\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian RG identity card numbers (common pattern for SP, RJ, MG states)"
+    },
+    {
+      "name": "au_tfn",
+      "display_name": "TFN (Australian Tax File Number)",
+      "pattern": "\\b\\d{8,9}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Tax File Numbers (8-9 digits) only when near TFN/tax file context to avoid false positives on arbitrary numbers",
+      "keyword_pattern": "\\b(?:TFN|T\\.F\\.N\\.|tax\\s*file\\s*(?:number|no\\.?)|tax\\s*file\\s*#?|ATO\\s*number)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "au_abn",
+      "display_name": "ABN (Australian Business Number)",
+      "pattern": "\\b\\d{2}\\s?\\d{3}\\s?\\d{3}\\s?\\d{3}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Business Numbers (11 digits, optional spaces: XX XXX XXX XXX)"
+    },
+    {
+      "name": "au_medicare",
+      "display_name": "Medicare Number (Australia)",
+      "pattern": "\\b(?:\\d{4}\\s?\\d{5}\\s?\\d{1}|\\d{11})\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Medicare numbers (formatted XXXX XXXXX X or 11 consecutive digits)"
+    },
+    {
+      "name": "iban",
+      "display_name": "IBAN (International Bank Account Number)",
+      "pattern": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects IBANs (2 letter country code + 2 check digits + 4 char bank code + 7 digit base + optional 0-16 alphanumeric)"
+    },
+    {
+      "name": "street_address",
+      "display_name": "Street Address",
+      "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
+      "category": "PII Patterns",
+      "description": "Detects street addresses (number + street name + street type)"
     }
   ]
 }

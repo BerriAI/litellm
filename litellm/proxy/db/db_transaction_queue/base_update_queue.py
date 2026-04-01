@@ -10,14 +10,18 @@ from litellm._service_logger import ServiceLogging
 service_logger_obj = (
     ServiceLogging()
 )  # used for tracking metrics for In memory buffer, redis buffer, pod lock manager
-from litellm.constants import MAX_IN_MEMORY_QUEUE_FLUSH_COUNT, MAX_SIZE_IN_MEMORY_QUEUE
+from litellm.constants import (
+    LITELLM_ASYNCIO_QUEUE_MAXSIZE,
+    MAX_IN_MEMORY_QUEUE_FLUSH_COUNT,
+    MAX_SIZE_IN_MEMORY_QUEUE,
+)
 
 
 class BaseUpdateQueue:
     """Base class for in memory buffer for database transactions"""
 
     def __init__(self):
-        self.update_queue = asyncio.Queue()
+        self.update_queue = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
         self.MAX_SIZE_IN_MEMORY_QUEUE = MAX_SIZE_IN_MEMORY_QUEUE
 
     async def add_update(self, update):

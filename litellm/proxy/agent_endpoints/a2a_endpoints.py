@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -54,14 +54,21 @@ async def _handle_stream_message(
     agent_id: Optional[str] = None,
     metadata: Optional[dict] = None,
     proxy_server_request: Optional[dict] = None,
+    *,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    request_data: Optional[dict] = None,
+    proxy_logging_obj: Optional[Any] = None,
 ) -> StreamingResponse:
-    """Handle message/stream method via SDK functions."""
+    """Handle message/stream method via SDK functions.
+
+    When user_api_key_dict, request_data, and proxy_logging_obj are provided,
+    uses common_request_processing.async_streaming_data_generator with NDJSON
+    serializers so proxy hooks and cost injection apply.
+    """
     from litellm.a2a_protocol import asend_message_streaming
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
 
-    # Check is handled in invoke_agent_a2a, but if called directly:
     if not A2A_SDK_AVAILABLE:
-        # Return a streaming response that yields an error
         async def _error_stream():
             yield json.dumps(
                 {
@@ -78,29 +85,82 @@ async def _handle_stream_message(
 
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
 
+    use_proxy_hooks = (
+        user_api_key_dict is not None
+        and request_data is not None
+        and proxy_logging_obj is not None
+    )
+
     async def stream_response():
         try:
             a2a_request = SendStreamingMessageRequest(
                 id=request_id,
                 params=MessageSendParams(**params),
             )
-            async for chunk in asend_message_streaming(
+            a2a_stream = asend_message_streaming(
                 request=a2a_request,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 agent_id=agent_id,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
-            ):
-                # Chunk may be dict or object depending on bridge vs standard path
-                if hasattr(chunk, "model_dump"):
-                    yield json.dumps(
-                        chunk.model_dump(mode="json", exclude_none=True)
+            )
+
+            if use_proxy_hooks and user_api_key_dict is not None and request_data is not None and proxy_logging_obj is not None:
+                from litellm.proxy.common_request_processing import (
+                    ProxyBaseLLMRequestProcessing,
+                )
+
+                def _ndjson_chunk(chunk: Any) -> str:
+                    if hasattr(chunk, "model_dump"):
+                        obj = chunk.model_dump(mode="json", exclude_none=True)
+                    else:
+                        obj = chunk
+                    return json.dumps(obj) + "\n"
+
+                def _ndjson_error(proxy_exc: Any) -> str:
+                    return json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {
+                                "code": -32603,
+                                "message": getattr(
+                                    proxy_exc, "message", f"Streaming error: {proxy_exc!s}"
+                                ),
+                            },
+                        }
                     ) + "\n"
-                else:
-                    yield json.dumps(chunk) + "\n"
+
+                async for line in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                    response=a2a_stream,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                    serialize_chunk=_ndjson_chunk,
+                    serialize_error=_ndjson_error,
+                ):
+                    yield line
+            else:
+                async for chunk in a2a_stream:
+                    if hasattr(chunk, "model_dump"):
+                        yield json.dumps(
+                            chunk.model_dump(mode="json", exclude_none=True)
+                        ) + "\n"
+                    else:
+                        yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
+            if use_proxy_hooks and proxy_logging_obj is not None and user_api_key_dict is not None and request_data is not None:
+                transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                )
+                if transformed_exception is not None:
+                    e = transformed_exception
+            if isinstance(e, HTTPException):
+                raise
             yield json.dumps(
                 {
                     "jsonrpc": "2.0",
@@ -323,8 +383,18 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
+
+            response = await proxy_logging_obj.post_call_success_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                response=response,
+            )
             return JSONResponse(
-                content=response.model_dump(mode="json", exclude_none=True)
+                content=(
+                    response.model_dump(mode="json", exclude_none=True)  # type: ignore
+                    if hasattr(response, "model_dump")
+                    else response
+                )
             )
 
         elif method == "message/stream":
@@ -336,6 +406,9 @@ async def invoke_agent_a2a(
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+                proxy_logging_obj=proxy_logging_obj,
             )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")

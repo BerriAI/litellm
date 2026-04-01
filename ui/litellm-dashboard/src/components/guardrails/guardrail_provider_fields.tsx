@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin } from "antd";
-import { TextInput } from "@tremor/react";
+import { Form, Select, Spin, Input } from "antd";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -195,9 +194,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
             />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <TextInput placeholder={field.description} type="password" defaultValue={fieldValue || ""} />
+            <Input.Password placeholder={field.description} defaultValue={fieldValue || ""} />
           ) : (
-            <TextInput placeholder={field.description} type="text" defaultValue={fieldValue || ""} />
+            <Input placeholder={field.description} defaultValue={fieldValue || ""} />
           )}
         </Form.Item>
       );

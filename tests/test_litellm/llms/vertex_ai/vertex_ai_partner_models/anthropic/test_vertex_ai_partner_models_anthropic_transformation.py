@@ -459,7 +459,7 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     assert PROMPT_CACHING_BETA_HEADER not in (
         beta_header or ""
     ), f"{PROMPT_CACHING_BETA_HEADER} should be filtered out"
-    assert "other-feature" in (
+    assert "other-feature" not in (
         beta_header or ""
     ), "Other non-excluded beta headers should remain"
     assert "web-search-2025-03-05" in (

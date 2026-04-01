@@ -275,7 +275,6 @@ LLM_CONFIG_NAMES = (
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
-    "PerplexityResponsesConfig",
     "AzureOpenAIO1Config",
     "IBMWatsonXAIConfig",
     "IBMWatsonXChatConfig",

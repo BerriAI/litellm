@@ -394,6 +394,14 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
             _metadata["applied_policies"]
         )
 
+    if "policy_sources" in _metadata:
+        sources = _metadata["policy_sources"]
+        if isinstance(sources, dict) and sources:
+            # Use ';' as delimiter — matched_via reasons may contain commas
+            headers["x-litellm-policy-sources"] = "; ".join(
+                f"{name}={reason}" for name, reason in sources.items()
+            )
+
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
 
@@ -438,6 +446,27 @@ def add_policy_to_applied_policies_header(
     else:
         _metadata["applied_policies"] = [policy_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
+
+
+def add_policy_sources_to_metadata(
+    request_data: Dict, policy_sources: Dict[str, str]
+):
+    """
+    Store policy match reasons in metadata for x-litellm-policy-sources header.
+
+    Args:
+        request_data: The request data dict
+        policy_sources: Map of policy_name -> matched_via reason
+    """
+    if not policy_sources:
+        return
+    _metadata = request_data.get("metadata", None) or {}
+    existing = _metadata.get("policy_sources", {})
+    if not isinstance(existing, dict):
+        existing = {}
+    existing.update(policy_sources)
+    _metadata["policy_sources"] = existing
     request_data["metadata"] = _metadata
 
 

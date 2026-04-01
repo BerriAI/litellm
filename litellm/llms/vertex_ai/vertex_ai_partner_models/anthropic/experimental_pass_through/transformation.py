@@ -1,8 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -104,12 +101,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
-        # Filter out unsupported beta headers for Vertex AI
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="vertex_ai",
-        )
         
         return headers, api_base
 

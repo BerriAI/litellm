@@ -1134,7 +1134,7 @@ def test_anthropic_custom_headers():
         try:
             resp = completion(
                 model="claude-3-5-sonnet-20240620",
-                headers={"anthropic-beta": "structured-output-2024-03-01"},
+                headers={"anthropic-beta": "computer-use-2025-01-24"},
                 messages=[
                     {"role": "user", "content": "What is the capital of France?"}
                 ],
@@ -1146,7 +1146,7 @@ def test_anthropic_custom_headers():
 
         mock_post.assert_called_once()
         headers = mock_post.call_args[1]["headers"]
-        assert "structured-output-2024-03-01" in headers["anthropic-beta"]
+        assert "computer-use-2025-01-24" in headers["anthropic-beta"]
 
 
 @pytest.mark.parametrize(

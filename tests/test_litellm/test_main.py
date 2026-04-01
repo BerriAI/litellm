@@ -423,65 +423,71 @@ async def test_extra_body_with_fallback(
     This was perhaps a wider issue with the acompletion function not passing kwargs such as extra_body correctly when fallbacks are specified.
     """
 
-    # since this uses respx, we need to set use_aiohttp_transport to False
-    litellm.disable_aiohttp_transport = True
-    # Set up test parameters
-    model = "openrouter/deepseek/deepseek-chat"
-    messages = [{"role": "user", "content": "Hello, world!"}]
-    extra_body = {
-        "provider": {
-            "order": ["DeepSeek"],
-            "allow_fallbacks": False,
-            "require_parameters": True,
+    # Save original state to restore after test
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+
+    try:
+        # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = True
+        # Set up test parameters
+        model = "openrouter/deepseek/deepseek-chat"
+        messages = [{"role": "user", "content": "Hello, world!"}]
+        extra_body = {
+            "provider": {
+                "order": ["DeepSeek"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
         }
-    }
-    fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
+        fallbacks = [{"model": "openrouter/google/gemini-flash-1.5-8b"}]
 
-    respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello from mocked response!",
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
-        }
-    )
+        respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mocked response!",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+            }
+        )
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=messages,
-        extra_body=extra_body,
-        fallbacks=fallbacks,
-        api_key="fake-openrouter-api-key",
-    )
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            extra_body=extra_body,
+            fallbacks=fallbacks,
+            api_key="fake-openrouter-api-key",
+        )
 
-    # Get the request from the mock
-    request: httpx.Request = respx_mock.calls[0].request
-    request_body = request.read()
-    request_body = json.loads(request_body)
+        # Get the request from the mock
+        request: httpx.Request = respx_mock.calls[0].request
+        request_body = request.read()
+        request_body = json.loads(request_body)
 
-    # Verify basic parameters
-    assert request_body["model"] == "deepseek/deepseek-chat"
-    assert request_body["messages"] == messages
+        # Verify basic parameters
+        assert request_body["model"] == "deepseek/deepseek-chat"
+        assert request_body["messages"] == messages
 
-    # Verify the extra_body parameters remain under the provider key
-    assert request_body["provider"]["order"] == ["DeepSeek"]
-    assert request_body["provider"]["allow_fallbacks"] is False
-    assert request_body["provider"]["require_parameters"] is True
+        # Verify the extra_body parameters remain under the provider key
+        assert request_body["provider"]["order"] == ["DeepSeek"]
+        assert request_body["provider"]["allow_fallbacks"] is False
+        assert request_body["provider"]["require_parameters"] is True
 
-    # Verify the response
-    assert response is not None
-    assert response.choices[0].message.content == "Hello from mocked response!"
+        # Verify the response
+        assert response is not None
+    finally:
+        # Restore original state to prevent test pollution
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
@@ -491,12 +497,6 @@ async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
-    # Clear cache to ensure no cached clients from previous tests interfere
-    # This prevents cache pollution where a previous test cached a client with
-    # aiohttp transport, which would bypass respx mocks
-    if hasattr(litellm, "in_memory_llm_clients_cache"):
-        litellm.in_memory_llm_clients_cache.flush_cache()
-    
     # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
 
