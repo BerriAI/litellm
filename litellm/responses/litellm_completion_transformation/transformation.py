@@ -185,8 +185,9 @@ class LiteLLMCompletionResponsesConfig:
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high"}
-                reasoning_effort = reasoning_param.get("effort")
+                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
+                # Preserve the full dict structure for reasoning_effort
+                reasoning_effort = reasoning_param
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
