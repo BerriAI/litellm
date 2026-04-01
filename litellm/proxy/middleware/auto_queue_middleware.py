@@ -1,7 +1,9 @@
 """litellm/proxy/middleware/auto_queue_middleware.py"""
 import asyncio
 import heapq
+import itertools
 import json
+import logging
 import os
 import signal
 import time
@@ -11,8 +13,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import redis.asyncio as aioredis
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+try:
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _HAS_LITELLM_INTERNALS = True
+except Exception:  # noqa: BLE001 – optional at import time
+    _HAS_LITELLM_INTERNALS = False
+
+logger = logging.getLogger("litellm.proxy.middleware.auto_queue")
+
 # -- Configuration ------------------------------------------------------------
 
+AUTOQ_ENABLED = os.environ.get("AUTOQ_ENABLED", "false").lower() in ("1", "true", "yes")
 DEFAULT_MAX_CONCURRENT = int(os.environ.get("AUTOQ_DEFAULT_MAX_CONCURRENT", "20"))
 SCALE_UP_THRESHOLD = int(os.environ.get("AUTOQ_SCALE_UP_THRESHOLD", "20"))
 SCALE_DOWN_STEP = int(os.environ.get("AUTOQ_SCALE_DOWN_STEP", "1"))
@@ -23,6 +36,7 @@ REDIS_HOST = os.environ.get("AUTOQ_REDIS_HOST", os.environ.get("REDIS_HOST", "lo
 REDIS_PORT = int(os.environ.get("AUTOQ_REDIS_PORT", os.environ.get("REDIS_PORT", "6379")))
 REDIS_DB = int(os.environ.get("AUTOQ_REDIS_DB", "3"))
 ACTIVE_KEY_TTL = 600  # seconds
+_KEY_TTL = 86400  # 24 hours for limit/success/ceiling keys
 
 
 # -- Lua Scripts ---------------------------------------------------------------
@@ -41,21 +55,44 @@ return 0
 _LUA_RELEASE = """
 local active = tonumber(redis.call('GET', KEYS[1])) or 0
 if active > 0 then
-    redis.call('DECR', KEYS[1])
+    local new = redis.call('DECR', KEYS[1])
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+    return math.max(0, new)
 end
-return math.max(0, active - 1)
+return 0
+"""
+
+_LUA_RELEASE_AND_TRANSFER = """
+-- Atomically release a slot and, if waiters exist, immediately re-acquire
+-- for the next waiter so no new arrival can steal it.
+local active = tonumber(redis.call('GET', KEYS[1])) or 0
+if active <= 0 then
+    return 0
+end
+local has_waiters = tonumber(ARGV[1])
+if has_waiters == 1 then
+    -- Transfer: keep active count the same (release + acquire cancel out)
+    return 1
+end
+-- No waiters: release normally
+local new = redis.call('DECR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+return 0
 """
 
 _LUA_SCALE_UP = """
 local count = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
 local threshold = tonumber(ARGV[1])
 local ceiling = tonumber(redis.call('GET', KEYS[3])) or tonumber(ARGV[2])
 if tonumber(count) >= threshold then
     local current = tonumber(redis.call('GET', KEYS[2])) or tonumber(ARGV[3])
     if current < ceiling then
         redis.call('SET', KEYS[2], current + 1)
+        redis.call('EXPIRE', KEYS[2], tonumber(ARGV[4]))
     end
     redis.call('SET', KEYS[1], 0)
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
 end
 return 0
 """
@@ -68,7 +105,9 @@ if current - step >= 1 then
 else
     redis.call('SET', KEYS[1], 1)
 end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
 redis.call('SET', KEYS[2], 0)
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
 return tonumber(redis.call('GET', KEYS[1]))
 """
 
@@ -93,6 +132,7 @@ class AutoQueueRedis:
         self.scale_down_step = scale_down_step
         self._acquire_script = redis.register_script(_LUA_ACQUIRE)
         self._release_script = redis.register_script(_LUA_RELEASE)
+        self._release_transfer_script = redis.register_script(_LUA_RELEASE_AND_TRANSFER)
         self._scale_up_script = redis.register_script(_LUA_SCALE_UP)
         self._scale_down_script = redis.register_script(_LUA_SCALE_DOWN)
 
@@ -106,8 +146,21 @@ class AutoQueueRedis:
     async def release(self, model: str) -> int:
         result = await self._release_script(
             keys=[f"autoq:active:{model}"],
+            args=[ACTIVE_KEY_TTL],
         )
         return int(result)
+
+    async def release_and_transfer(self, model: str, has_waiters: bool) -> bool:
+        """Atomically release a slot and re-acquire for a waiter if one exists.
+
+        Returns True if a slot was transferred (caller should wake next waiter).
+        Returns False if the slot was simply released.
+        """
+        result = await self._release_transfer_script(
+            keys=[f"autoq:active:{model}"],
+            args=[1 if has_waiters else 0, ACTIVE_KEY_TTL],
+        )
+        return bool(result)
 
     async def on_success(self, model: str) -> None:
         await self._scale_up_script(
@@ -116,13 +169,13 @@ class AutoQueueRedis:
                 f"autoq:limit:{model}",
                 f"autoq:ceiling:{model}",
             ],
-            args=[self.scale_up_threshold, self.ceiling, self.default_max_concurrent],
+            args=[self.scale_up_threshold, self.ceiling, self.default_max_concurrent, _KEY_TTL],
         )
 
     async def on_429(self, model: str) -> None:
         await self._scale_down_script(
             keys=[f"autoq:limit:{model}", f"autoq:success:{model}"],
-            args=[self.default_max_concurrent, self.scale_down_step],
+            args=[self.default_max_concurrent, self.scale_down_step, _KEY_TTL],
         )
 
     async def get_model_info(self, model: str) -> dict:
@@ -140,6 +193,9 @@ class AutoQueueRedis:
 
 
 # -- In-Memory Priority Queue -------------------------------------------------
+
+_id_counter = itertools.count()
+
 
 @dataclass(order=True)
 class _QueueEntry:
@@ -227,8 +283,12 @@ async def _buffer_body(receive: Receive) -> bytes:
     return body
 
 
-def _replay_receive(body: bytes) -> Receive:
-    """Create a receive callable that replays the buffered body once."""
+def _replay_receive(body: bytes, disconnect_event: Optional[asyncio.Event] = None) -> Receive:
+    """Create a receive callable that replays the buffered body once.
+
+    If *disconnect_event* is provided, the post-body ``receive()`` will return
+    ``http.disconnect`` promptly when the event fires instead of sleeping.
+    """
     sent = False
 
     async def receive() -> dict:
@@ -237,6 +297,9 @@ def _replay_receive(body: bytes) -> Receive:
             sent = True
             return {"type": "http.request", "body": body, "more_body": False}
         # After body is consumed, wait for disconnect
+        if disconnect_event is not None:
+            await disconnect_event.wait()
+            return {"type": "http.disconnect"}
         await asyncio.sleep(3600)
         return {"type": "http.disconnect"}
 
@@ -257,10 +320,9 @@ def _get_key_config(scope: Scope) -> Tuple[int, int]:
     """Extract queue_timeout and priority from LiteLLM's key cache. Best-effort."""
     timeout = DEFAULT_TIMEOUT
     priority = 10
+    if not _HAS_LITELLM_INTERNALS:
+        return timeout, priority
     try:
-        from litellm.proxy.proxy_server import user_api_key_cache
-        from litellm.proxy._types import hash_token
-
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
         if auth.startswith("Bearer "):
@@ -272,26 +334,32 @@ def _get_key_config(scope: Scope) -> Tuple[int, int]:
                 timeout = meta.get("queue_timeout_seconds", timeout)
                 priority = meta.get("queue_priority", priority)
     except Exception:
-        pass  # Fall back to defaults if LiteLLM internals aren't available
+        logger.debug("Failed to read key config from cache", exc_info=True)
     return timeout, priority
 
 
 # -- ASGI Middleware -----------------------------------------------------------
 
 class AutoQueueMiddleware:
-    """ASGI middleware providing per-model concurrency control and request queuing."""
+    """ASGI middleware providing per-model concurrency control and request queuing.
+
+    Gated behind the ``AUTOQ_ENABLED`` environment variable (default: disabled).
+    When disabled the middleware is a transparent passthrough.
+    """
 
     def __init__(
         self,
         app: ASGIApp,
         aqr: Optional[AutoQueueRedis] = None,
         max_queue_depth: int = MAX_QUEUE_DEPTH,
+        enabled: Optional[bool] = None,
     ):
         self.app = app
         self._aqr = aqr  # injected in tests; created lazily in production
         self._max_queue_depth = max_queue_depth
         self._queues: Dict[str, ModelQueue] = {}
         self._shutting_down = False
+        self._enabled = enabled if enabled is not None else AUTOQ_ENABLED
 
     def _ensure_aqr(self) -> AutoQueueRedis:
         """Lazy-init Redis connection on first use (production path)."""
@@ -306,9 +374,8 @@ class AutoQueueMiddleware:
         return self._queues[model]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # Handle /queue/status
-        if scope["type"] == "http" and scope.get("path") == "/queue/status" and scope.get("method") == "GET":
-            await self._handle_status(scope, receive, send)
+        if not self._enabled:
+            await self.app(scope, receive, send)
             return
 
         if not _should_queue(scope):
@@ -325,7 +392,6 @@ class AutoQueueMiddleware:
             await self.app(scope, _replay_receive(body), send)
             return
 
-        # Pass through with replayed body (queuing added in Task 4)
         await self._process_request(scope, body, model, send, original_receive=receive)
 
     async def _process_request(
@@ -334,7 +400,7 @@ class AutoQueueMiddleware:
     ) -> None:
         """Acquire slot (or queue), forward request, release slot, auto-scale."""
         aqr = self._ensure_aqr()
-        request_id = f"{model}-{time.monotonic_ns()}"
+        request_id = f"{model}-{next(_id_counter)}-{time.monotonic_ns()}"
         queue = self._get_queue(model)
 
         # Try to acquire a slot
@@ -358,7 +424,7 @@ class AutoQueueMiddleware:
             disconnected = False
             queue.add(request_id, event, priority)
 
-            async def _watch_disconnect():
+            async def _watch_disconnect() -> None:
                 nonlocal disconnected
                 if original_receive is None:
                     return
@@ -389,10 +455,24 @@ class AutoQueueMiddleware:
             if disconnected:
                 return
 
-            # Slot was pre-acquired for us by release_and_wake_next()
+            # Slot was pre-acquired for us by release_and_transfer()
 
         # Slot acquired -- forward request and intercept response status
         response_status = 0
+        disconnect_event = asyncio.Event()
+
+        async def _watch_client_disconnect() -> None:
+            """Detect client disconnect during active request processing."""
+            if original_receive is None:
+                return
+            try:
+                msg = await original_receive()
+                if msg.get("type") == "http.disconnect":
+                    disconnect_event.set()
+            except Exception:
+                pass
+
+        client_disconnect_task = asyncio.create_task(_watch_client_disconnect())
 
         async def send_wrapper(message: dict) -> None:
             nonlocal response_status
@@ -401,10 +481,12 @@ class AutoQueueMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, _replay_receive(body), send_wrapper)
+            await self.app(scope, _replay_receive(body, disconnect_event), send_wrapper)
         finally:
-            # Release slot and wake next queued request
-            await aqr.release(model)
+            client_disconnect_task.cancel()
+
+            # Atomically release slot and transfer to next waiter if one exists
+            transferred = await aqr.release_and_transfer(model, has_waiters=queue.depth > 0)
 
             # Auto-scale based on response
             if response_status == 429:
@@ -412,12 +494,8 @@ class AutoQueueMiddleware:
             elif 200 <= response_status < 400:
                 await aqr.on_success(model)
 
-            # Try to acquire for next waiter, then wake them
-            if queue.depth > 0:
-                re_acquired = await aqr.try_acquire(model)
-                if re_acquired:
-                    queue.wake_next()
-                # If re_acquired fails, waiter stays queued until another release
+            if transferred:
+                queue.wake_next()
 
     def shutdown(self) -> None:
         """Trigger graceful shutdown -- reject new requests, wake all queued."""

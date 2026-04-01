@@ -1,12 +1,26 @@
 """tests/test_litellm/proxy/middleware/test_auto_queue_middleware.py"""
 import asyncio
+import json
 import os
 
 import fakeredis.aioredis
 import pytest
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.testclient import TestClient
 
-from litellm.proxy.middleware.auto_queue_middleware import AutoQueueRedis
+from litellm.proxy.middleware.auto_queue_middleware import (
+    AutoQueueMiddleware,
+    AutoQueueRedis,
+    ModelQueue,
+)
+
+
+# -- Fixtures -----------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
@@ -65,6 +79,36 @@ async def test_get_model_info_defaults(aqr):
     assert info == {"active": 0, "limit": 5, "queued": 0, "ceiling": 20}
 
 
+# -- release_and_transfer ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_release_and_transfer_with_waiters(aqr):
+    """When waiters exist, slot is transferred (active count unchanged)."""
+    await aqr.try_acquire("gpt-4")
+    transferred = await aqr.release_and_transfer("gpt-4", has_waiters=True)
+    assert transferred is True
+    info = await aqr.get_model_info("gpt-4")
+    assert info["active"] == 1  # stayed the same -- transferred, not released
+
+
+@pytest.mark.asyncio
+async def test_release_and_transfer_without_waiters(aqr):
+    """Without waiters, slot is released normally."""
+    await aqr.try_acquire("gpt-4")
+    transferred = await aqr.release_and_transfer("gpt-4", has_waiters=False)
+    assert transferred is False
+    info = await aqr.get_model_info("gpt-4")
+    assert info["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_release_and_transfer_no_active_slots(aqr):
+    """When no active slots, nothing happens."""
+    transferred = await aqr.release_and_transfer("gpt-4", has_waiters=True)
+    assert transferred is False
+
+
 # -- Auto-scale ---------------------------------------------------------------
 
 
@@ -116,9 +160,6 @@ async def test_scale_down_resets_success_counter(aqr):
     assert info["limit"] == 5
 
 
-from litellm.proxy.middleware.auto_queue_middleware import ModelQueue
-
-
 # -- In-memory priority queue --------------------------------------------------
 
 
@@ -127,8 +168,7 @@ def queue():
     return ModelQueue(max_depth=3)
 
 
-@pytest.mark.asyncio
-async def test_queue_add_and_wake(queue):
+def test_queue_add_and_wake(queue):
     event = asyncio.Event()
     queue.add("req-1", event, priority=10)
     assert queue.depth == 1
@@ -138,8 +178,7 @@ async def test_queue_add_and_wake(queue):
     assert queue.depth == 0
 
 
-@pytest.mark.asyncio
-async def test_queue_priority_ordering(queue):
+def test_queue_priority_ordering(queue):
     low = asyncio.Event()
     high = asyncio.Event()
     queue.add("req-low", low, priority=10)
@@ -149,8 +188,7 @@ async def test_queue_priority_ordering(queue):
     assert not low.is_set()
 
 
-@pytest.mark.asyncio
-async def test_queue_fifo_within_same_priority(queue):
+def test_queue_fifo_within_same_priority(queue):
     first = asyncio.Event()
     second = asyncio.Event()
     queue.add("req-1", first, priority=10)
@@ -160,15 +198,13 @@ async def test_queue_fifo_within_same_priority(queue):
     assert not second.is_set()
 
 
-@pytest.mark.asyncio
-async def test_queue_max_depth_exceeded(queue):
+def test_queue_max_depth_exceeded(queue):
     for i in range(3):
         queue.add(f"req-{i}", asyncio.Event(), priority=10)
     assert queue.is_full is True
 
 
-@pytest.mark.asyncio
-async def test_queue_remove_by_id(queue):
+def test_queue_remove_by_id(queue):
     event = asyncio.Event()
     queue.add("req-1", event, priority=10)
     queue.remove("req-1")
@@ -176,8 +212,7 @@ async def test_queue_remove_by_id(queue):
     assert queue.wake_next() is False
 
 
-@pytest.mark.asyncio
-async def test_queue_wake_all_sets_all_events(queue):
+def test_queue_wake_all_sets_all_events(queue):
     events = [asyncio.Event() for _ in range(3)]
     for i, e in enumerate(events):
         queue.add(f"req-{i}", e, priority=10)
@@ -186,18 +221,8 @@ async def test_queue_wake_all_sets_all_events(queue):
     assert queue.depth == 0
 
 
-import json
-
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from starlette.testclient import TestClient
-
-from litellm.proxy.middleware.auto_queue_middleware import AutoQueueMiddleware
-
-
 # -- Middleware helpers --------------------------------------------------------
+
 
 @pytest_asyncio.fixture
 async def aqr_for_middleware(redis):
@@ -224,7 +249,7 @@ def _make_echo_app(aqr_instance):
         Route("/v1/chat/completions", echo, methods=["POST"]),
         Route("/health", health),
     ])
-    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance)
+    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance, enabled=True)
     return app
 
 
@@ -249,14 +274,36 @@ async def test_body_is_replayed_to_downstream(aqr_for_middleware):
 
 
 @pytest.mark.asyncio
-async def test_queue_status_endpoint(aqr_for_middleware):
-    client = TestClient(_make_echo_app(aqr_for_middleware))
-    resp = client.get("/queue/status")
+async def test_non_json_body_passes_through(aqr_for_middleware):
+    """Non-JSON request bodies should pass through without queuing."""
+    client = TestClient(_make_echo_app(aqr_for_middleware), raise_server_exceptions=False)
+    resp = client.post(
+        "/v1/chat/completions",
+        content=b"not json at all",
+        headers={"content-type": "text/plain"},
+    )
+    # The middleware passes non-JSON through without queuing.
+    # The downstream echo handler fails to parse -> 500, but the point is
+    # that the middleware did not block or queue it.
+    assert resp.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_disabled_middleware_passes_through(redis):
+    """When disabled, the middleware is a transparent passthrough."""
+    aqr = AutoQueueRedis(redis=redis, default_max_concurrent=1)
+
+    async def handler(request: Request):
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])])
+    app.add_middleware(AutoQueueMiddleware, aqr=aqr, enabled=False)
+    client = TestClient(app)
+    resp = client.post("/v1/chat/completions", json={"model": "gpt-4", "messages": []})
     assert resp.status_code == 200
-    assert "models" in resp.json()
-
-
-import time
+    # Should not have touched Redis
+    active = int(await redis.get("autoq:active:gpt-4") or 0)
+    assert active == 0
 
 
 # -- Full flow -----------------------------------------------------------------
@@ -272,7 +319,7 @@ def _make_slow_app(aqr_instance, delay: float = 0.1, status: int = 200):
     app = Starlette(routes=[
         Route("/v1/chat/completions", handler, methods=["POST"]),
     ])
-    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance)
+    app.add_middleware(AutoQueueMiddleware, aqr=aqr_instance, enabled=True)
     return app
 
 
@@ -322,9 +369,7 @@ async def test_queue_full_returns_503(redis):
     app = Starlette(routes=[
         Route("/v1/chat/completions", slow_handler, methods=["POST"]),
     ])
-    mw = AutoQueueMiddleware(app, aqr=aqr, max_queue_depth=1)
-
-    from httpx import ASGITransport, AsyncClient
+    mw = AutoQueueMiddleware(app, aqr=aqr, max_queue_depth=1, enabled=True)
 
     async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
         # Fill the slot
@@ -356,10 +401,9 @@ async def test_shutdown_rejects_new_requests(redis, aqr_for_middleware):
     inner_app = Starlette(routes=[
         Route("/v1/chat/completions", lambda r: JSONResponse({"ok": True}), methods=["POST"]),
     ])
-    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware)
+    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware, enabled=True)
     mw._shutting_down = True
 
-    from httpx import ASGITransport, AsyncClient
     async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
         # Fill the only slots so the next request tries to queue
         await redis.set("autoq:active:gpt-4", 2)  # at limit
@@ -373,7 +417,7 @@ async def test_shutdown_wakes_all_queued(redis, aqr_for_middleware):
     inner_app = Starlette(routes=[
         Route("/v1/chat/completions", lambda r: JSONResponse({"ok": True}), methods=["POST"]),
     ])
-    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware)
+    mw = AutoQueueMiddleware(inner_app, aqr=aqr_for_middleware, enabled=True)
     q = mw._get_queue("gpt-4")
     event = asyncio.Event()
     q.add("req-1", event, priority=10)
@@ -403,9 +447,7 @@ async def test_concurrent_requests_queued_and_served(redis):
     inner = Starlette(routes=[
         Route("/v1/chat/completions", ordered_handler, methods=["POST"]),
     ])
-    mw = AutoQueueMiddleware(inner, aqr=aqr)
-
-    from httpx import ASGITransport, AsyncClient
+    mw = AutoQueueMiddleware(inner, aqr=aqr, enabled=True)
 
     async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
         tasks = [
@@ -440,9 +482,7 @@ async def test_queue_status_reflects_active_requests(redis):
     inner = Starlette(routes=[
         Route("/v1/chat/completions", blocking_handler, methods=["POST"]),
     ])
-    mw = AutoQueueMiddleware(inner, aqr=aqr)
-
-    from httpx import ASGITransport, AsyncClient
+    mw = AutoQueueMiddleware(inner, aqr=aqr, enabled=True)
 
     async with AsyncClient(transport=ASGITransport(app=mw), base_url="http://test") as client:
         # Start a request that blocks
@@ -451,12 +491,34 @@ async def test_queue_status_reflects_active_requests(redis):
         )
         await asyncio.sleep(0.05)
 
-        # Check status
-        status_resp = await client.get("/queue/status")
-        assert status_resp.status_code == 200
-        models = status_resp.json()["models"]
-        assert "gpt-4" in models
-        assert models["gpt-4"]["active"] == 1
+        # Verify active count via Redis directly (status endpoint removed from middleware)
+        active = int(await redis.get("autoq:active:gpt-4") or 0)
+        assert active == 1
 
         hold.set()
         await task
+
+
+# -- Slot transfer race condition regression -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slot_transfer_prevents_stealing(redis):
+    """Verify that release_and_transfer atomically holds the slot for the waiter."""
+    aqr = AutoQueueRedis(redis=redis, default_max_concurrent=1, ceiling=5,
+                          scale_up_threshold=100, scale_down_step=1)
+
+    # Acquire a slot
+    assert await aqr.try_acquire("gpt-4") is True
+
+    # Transfer to a waiter
+    transferred = await aqr.release_and_transfer("gpt-4", has_waiters=True)
+    assert transferred is True
+
+    # Active count should still be 1 (transferred, not released)
+    info = await aqr.get_model_info("gpt-4")
+    assert info["active"] == 1
+
+    # A new arrival should NOT be able to steal the slot
+    stolen = await aqr.try_acquire("gpt-4")
+    assert stolen is False  # slot is held for the waiter
