@@ -18,13 +18,12 @@ class PrometheusAuthMiddleware:
     """
     Middleware to authenticate requests to the metrics endpoint.
 
-    By default, auth is not run on the metrics endpoint.
+    By default, auth IS RUN on the metrics endpoint (secure by default).
 
-    Enabled by setting the following in proxy_config.yaml:
-
+    To disable auth (not recommended for production):
     ```yaml
     litellm_settings:
-        require_auth_for_metrics_endpoint: true
+        require_auth_for_metrics_endpoint: false
     ```
     """
 
