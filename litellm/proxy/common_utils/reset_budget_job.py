@@ -573,7 +573,7 @@ class ResetBudgetJob:
                     continue
                 windows: list = raw if isinstance(raw, list) else json.loads(raw)
                 changed = False
-                for i, window in enumerate(windows):
+                for window in windows:
                     reset_at_str = window.get("reset_at")
                     if not reset_at_str:
                         continue
@@ -581,8 +581,10 @@ class ResetBudgetJob:
                         reset_at_str.replace("Z", "+00:00")
                     ).replace(tzinfo=None)
                     if reset_at <= now:
-                        # Reset this window's counter
-                        counter_key = f"spend:key:{key.token}:window:{i}"
+                        # Reset this window's counter (keyed by duration, not index)
+                        counter_key = (
+                            f"spend:key:{key.token}:window:{window['budget_duration']}"
+                        )
                         spend_counter_cache.in_memory_cache.set_cache(
                             key=counter_key, value=0.0
                         )
@@ -622,7 +624,7 @@ class ResetBudgetJob:
                     continue
                 windows = raw if isinstance(raw, list) else json.loads(raw)
                 changed = False
-                for i, window in enumerate(windows):
+                for window in windows:
                     reset_at_str = window.get("reset_at")
                     if not reset_at_str:
                         continue
@@ -630,7 +632,7 @@ class ResetBudgetJob:
                         reset_at_str.replace("Z", "+00:00")
                     ).replace(tzinfo=None)
                     if reset_at <= now:
-                        counter_key = f"spend:team:{team.team_id}:window:{i}"
+                        counter_key = f"spend:team:{team.team_id}:window:{window['budget_duration']}"
                         spend_counter_cache.in_memory_cache.set_cache(
                             key=counter_key, value=0.0
                         )
