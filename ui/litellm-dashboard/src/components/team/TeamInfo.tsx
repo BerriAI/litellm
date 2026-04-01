@@ -20,7 +20,7 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { EditOutlined, InfoCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button, Form, Input, Select, Switch, Tabs, Tooltip } from "antd";
+import { Button, Collapse, Form, Input, Select, Switch, Tabs, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -873,26 +873,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item
-                      label={
-                        <span>
-                          Default Member Models{" "}
-                          <Tooltip title="Optional. If set, newly added members default to these models instead of all team models. Leave empty if team-level model restrictions are sufficient.">
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="default_team_member_models"
-                    >
-                      <Select
-                        mode="multiple"
-                        placeholder="Leave empty to use team models for all members"
-                        value={form.getFieldValue("default_team_member_models") || []}
-                        onChange={(values) => form.setFieldValue("default_team_member_models", values)}
-                        options={(form.getFieldValue("models") || info.models || []).map((m: string) => ({ label: m, value: m }))}
-                      />
-                    </Form.Item>
-
                     <Form.Item label="Max Budget (USD)" name="max_budget">
                       <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                     </Form.Item>
@@ -909,44 +889,81 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Input placeholder="example1@test.com, example2@test.com" />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Team Member Budget (USD)"
-                      name="team_member_budget"
-                      tooltip="This is the individual budget for a user in the team."
-                    >
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
-                    </Form.Item>
-
-                    <Form.Item label="Team Member Budget Duration" name="team_member_budget_duration">
-                      <DurationSelect
-                        onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
-                        value={form.getFieldValue("team_member_budget_duration")}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member Key Duration (eg: 1d, 1mo)"
-                      name="team_member_key_duration"
-                      tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
-                    >
-                      <TextInput placeholder="e.g., 30d" />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member TPM Limit"
-                      name="team_member_tpm_limit"
-                      tooltip="Default tokens per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
-                    >
-                      <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 1000" />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member RPM Limit"
-                      name="team_member_rpm_limit"
-                      tooltip="Default requests per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
-                    >
-                      <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
-                    </Form.Item>
+                    <Collapse
+                      ghost
+                      className="mt-4 mb-4 border border-gray-200 rounded-lg"
+                      items={[{
+                        key: "member-settings",
+                        label: <span className="font-medium text-gray-700">Team Member Settings</span>,
+                        children: (
+                          <div className="pt-2">
+                            <p className="text-xs text-gray-500 mb-4">
+                              Optional defaults applied when members join this team. All fields can be overridden per member.
+                            </p>
+                            <Form.Item
+                              label={
+                                <span>
+                                  Default Model Access{" "}
+                                  <Tooltip title="Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.">
+                                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                  </Tooltip>
+                                </span>
+                              }
+                              name="default_team_member_models"
+                            >
+                              <Form.Item noStyle shouldUpdate={(prev, cur) => prev.models !== cur.models}>
+                                {({ getFieldValue }) => {
+                                  const teamModels = getFieldValue("models") || info.models || [];
+                                  return (
+                                    <Select
+                                      mode="multiple"
+                                      placeholder="Leave empty — all team models accessible to every member"
+                                      value={form.getFieldValue("default_team_member_models") || []}
+                                      onChange={(values) => form.setFieldValue("default_team_member_models", values)}
+                                      options={teamModels.map((m: string) => ({ label: m, value: m }))}
+                                    />
+                                  );
+                                }}
+                              </Form.Item>
+                            </Form.Item>
+                            <Form.Item
+                              label="Default Budget (USD)"
+                              name="team_member_budget"
+                              tooltip="Default spend budget for each member in this team."
+                            >
+                              <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                            </Form.Item>
+                            <Form.Item label="Default Budget Duration" name="team_member_budget_duration">
+                              <DurationSelect
+                                onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
+                                value={form.getFieldValue("team_member_budget_duration")}
+                              />
+                            </Form.Item>
+                            <Form.Item
+                              label="Default Key Duration (eg: 1d, 1mo)"
+                              name="team_member_key_duration"
+                              tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
+                            >
+                              <TextInput placeholder="e.g., 30d" />
+                            </Form.Item>
+                            <Form.Item
+                              label="Default TPM Limit"
+                              name="team_member_tpm_limit"
+                              tooltip="Default tokens per minute limit for each member. Can be overridden per member."
+                            >
+                              <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 1000" />
+                            </Form.Item>
+                            <Form.Item
+                              label="Default RPM Limit"
+                              name="team_member_rpm_limit"
+                              tooltip="Default requests per minute limit for each member. Can be overridden per member."
+                            >
+                              <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
+                            </Form.Item>
+                          </div>
+                        ),
+                      }]}
+                    />
 
                     <Form.Item label="Reset Budget" name="budget_duration">
                       <Select placeholder="n/a">
