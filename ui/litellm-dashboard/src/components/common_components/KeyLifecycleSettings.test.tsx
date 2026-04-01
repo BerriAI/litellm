@@ -328,7 +328,7 @@ describe("KeyLifecycleSettings", () => {
 
       expect(
         screen.getByText(
-          "When rotation occurs, you'll receive a notification with the new key. The old key will be deactivated after a brief grace period."
+          "When rotation occurs, a notification with the new key will be sent to the configured email (or the key owner if none set). The old key will be deactivated after a brief grace period."
         )
       ).toBeInTheDocument();
     });
@@ -338,7 +338,7 @@ describe("KeyLifecycleSettings", () => {
 
       expect(
         screen.queryByText(
-          "When rotation occurs, you'll receive a notification with the new key. The old key will be deactivated after a brief grace period."
+          "When rotation occurs, a notification with the new key will be sent to the configured email (or the key owner if none set). The old key will be deactivated after a brief grace period."
         )
       ).not.toBeInTheDocument();
     });
