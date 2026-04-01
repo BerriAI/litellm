@@ -17,6 +17,7 @@ import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_mod
 
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
+    _resolve_os_environ_variables,
     get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
@@ -336,6 +337,70 @@ async def test_health_services_endpoint_sqs(status, error_message):
         assert result["status"] == status
         assert result["message"] == error_message
         mock_instance.async_health_check.assert_awaited_once()
+
+
+def test_resolve_os_environ_variables_should_use_secret_manager_get_secret():
+    params = {
+        "api_key": "os.environ/TEST_API_KEY",
+        "api_base": "https://example.com",
+    }
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret",
+        return_value="resolved-secret-value",
+    ) as mock_get_secret:
+        result = _resolve_os_environ_variables(params)
+
+    assert result == {
+        "api_key": "resolved-secret-value",
+        "api_base": "https://example.com",
+    }
+    mock_get_secret.assert_called_once_with("os.environ/TEST_API_KEY")
+
+
+def test_resolve_os_environ_variables_should_resolve_nested_dicts_and_lists():
+    params = {
+        "api_key": "os.environ/ROOT_SECRET",
+        "headers": {
+            "Authorization": "os.environ/AUTH_SECRET",
+            "static": "value",
+        },
+        "fallbacks": [
+            "os.environ/FALLBACK_SECRET",
+            {
+                "nested_list_key": "os.environ/NESTED_LIST_SECRET",
+            },
+            ["os.environ/DEEP_LIST_SECRET", "plain-value"],
+        ],
+    }
+
+    resolved_values = {
+        "os.environ/ROOT_SECRET": "root-secret",
+        "os.environ/AUTH_SECRET": "auth-secret",
+        "os.environ/FALLBACK_SECRET": "fallback-secret",
+        "os.environ/NESTED_LIST_SECRET": "nested-list-secret",
+        "os.environ/DEEP_LIST_SECRET": "deep-list-secret",
+    }
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret",
+        side_effect=lambda secret_name: resolved_values[secret_name],
+    ) as mock_get_secret:
+        result = _resolve_os_environ_variables(params)
+
+    assert result == {
+        "api_key": "root-secret",
+        "headers": {
+            "Authorization": "auth-secret",
+            "static": "value",
+        },
+        "fallbacks": [
+            "fallback-secret",
+            {"nested_list_key": "nested-list-secret"},
+            ["deep-list-secret", "plain-value"],
+        ],
+    }
+    assert mock_get_secret.call_count == 5
 
 
 @pytest.mark.asyncio
