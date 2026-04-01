@@ -9,6 +9,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     remove_custom_field_from_tools,
+    strip_unsupported_file_api_betas_for_bedrock_invoke,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -142,10 +143,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        # Filter out beta headers that Bedrock Invoke doesn't support
-        # Uses centralized configuration from anthropic_beta_headers_config.json
-        beta_list = list(beta_set)
-        _anthropic_request["anthropic_beta"] = beta_list
+        # Filter out beta headers that Bedrock Invoke doesn't support (see
+        # strip_unsupported_file_api_betas_for_bedrock_invoke; full JSON-based filtering
+        # is applied on other provider paths).
+        beta_list = strip_unsupported_file_api_betas_for_bedrock_invoke(list(beta_set))
+        if beta_list:
+            _anthropic_request["anthropic_beta"] = beta_list
+        else:
+            _anthropic_request.pop("anthropic_beta", None)
 
         return _anthropic_request
 

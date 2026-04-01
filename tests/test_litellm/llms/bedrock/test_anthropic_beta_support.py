@@ -14,7 +14,10 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    strip_unsupported_file_api_betas_for_bedrock_invoke,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
@@ -63,6 +66,39 @@ class TestAnthropicBetaHeaderSupport:
         assert "anthropic_beta" in result
         # Beta flags are stored as sets, so order may vary
         assert set(result["anthropic_beta"]) == {"context-1m-2025-08-07", "computer-use-2024-10-22"}
+
+    def test_invoke_omits_file_api_betas_for_openai_style_file_url(self):
+        """Bedrock returns invalid beta flag if Files API betas are sent; URL docs work without them."""
+        config = AmazonAnthropicClaudeConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's this file about?"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                        },
+                    },
+                ],
+            }
+        ]
+        result = config.transform_request(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        betas = result.get("anthropic_beta", [])
+        assert "files-api-2025-04-14" not in betas
+        assert "code-execution-2025-05-22" not in betas
+
+    def test_strip_unsupported_file_api_betas_helper(self):
+        assert strip_unsupported_file_api_betas_for_bedrock_invoke(
+            ["context-1m-2025-08-07", "files-api-2025-04-14", "code-execution-2025-05-22"]
+        ) == ["context-1m-2025-08-07"]
 
     def test_converse_transformation_anthropic_beta(self):
         """Test that Converse API transformation includes anthropic_beta in additionalModelRequestFields."""
@@ -125,10 +161,13 @@ class TestAnthropicBetaHeaderSupport:
         
         additional_fields = result["additionalModelRequestFields"]
         betas = additional_fields["anthropic_beta"]
-        
-        # Should contain both user-provided and auto-added beta headers
+
+        # Should contain user header plus computer-use beta for this model (Haiku 4.5 uses 2025-01-24)
         assert "context-1m-2025-08-07" in betas
-        assert "computer-use-2024-10-22" in betas
+        assert (
+            "computer-use-2024-10-22" in betas
+            or "computer-use-2025-01-24" in betas
+        )
         assert len(betas) == 2  # No duplicates
 
     def test_no_anthropic_beta_headers(self):
