@@ -1220,7 +1220,7 @@ def test_anthropic_thinking_param(model, expected_thinking):
 
 def test_bedrock_invoke_anthropic_max_tokens():
     passed_params = {
-        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "functions": None,
         "function_call": None,
         "temperature": 0.8,

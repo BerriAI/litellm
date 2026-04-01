@@ -6,7 +6,7 @@ model_list:
 
   - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
-      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      model: "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
       aws_region_name: "us-east-1"
 
   - model_name: bedrock-claude-sonnet-4

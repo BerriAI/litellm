@@ -1992,7 +1992,7 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
             }
         ],
@@ -2006,12 +2006,12 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
         kwargs=kwargs,
         model="special-bedrock-model",
-        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert (
         result["endpoint"]
-        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
-    ), f"Expected '/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke', got '{result['endpoint']}'"
+        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke"
+    ), f"Expected '/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke', got '{result['endpoint']}'"
 
     # Test Case 2: Bedrock invoke-with-response-stream endpoint
     kwargs = {
@@ -2021,11 +2021,11 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
         kwargs=kwargs,
         model="special-bedrock-model",
-        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert (
         result["endpoint"]
-        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
+        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream"
     ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
 
     # Test Case 3: Bedrock converse endpoint
@@ -2139,7 +2139,7 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
             {
                 "model_name": "bedrock-claude-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     "aws_access_key_id": "test-access-key",
                     "aws_secret_access_key": "test-secret-key",
                     "aws_region_name": "us-east-1",
