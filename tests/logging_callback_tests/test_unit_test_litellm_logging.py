@@ -176,3 +176,27 @@ def test_post_call_handles_non_string_original_response():
     logging_obj.post_call(original_response=sentinel, input=[], api_key="")
     # Should be stored unchanged
     assert logging_obj.model_call_details["original_response"] is sentinel
+
+
+def test_post_call_truncates_base64_in_error_logs():
+    """
+    litellm.error_logs["POST_CALL"] must also receive the truncated version.
+    Previously, locals() was captured BEFORE truncation, so the full ~297MB
+    string persisted in the global error_logs dict indefinitely.
+    """
+    import litellm as _litellm
+
+    b64_payload = "C" * 200
+    raw_json = f'{{"data":"data:image/png;base64,{b64_payload}"}}'
+
+    logging_obj = setup_logging()
+    logging_obj.post_call(original_response=raw_json, input=[], api_key="")
+
+    error_log_response = _litellm.error_logs.get("POST_CALL", {}).get(
+        "original_response", ""
+    )
+    assert b64_payload not in error_log_response, (
+        "Full base64 payload found in litellm.error_logs['POST_CALL'] — "
+        "global dict is keeping the large string alive and preventing GC"
+    )
+    assert "base64_data truncated" in error_log_response

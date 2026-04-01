@@ -1175,15 +1175,17 @@ class Logging(LiteLLMLoggingBaseClass):
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         # Log the exact result from the LLM API, for streaming - log the type of response received
-        litellm.error_logs["POST_CALL"] = locals()
+        # Truncate base64 data-URIs before storing anywhere (including error_logs) so that
+        # large image/audio responses don't persist in memory via the global error_logs dict.
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response)
+        if isinstance(original_response, (str, list, dict)):
+            original_response = truncate_base64_in_messages(original_response)
+        litellm.error_logs["POST_CALL"] = locals()
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
-            self.model_call_details["original_response"] = truncate_base64_in_messages(
-                original_response
-            ) if isinstance(original_response, (str, list, dict)) else original_response
+            self.model_call_details["original_response"] = original_response
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
