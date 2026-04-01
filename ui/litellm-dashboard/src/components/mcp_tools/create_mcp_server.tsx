@@ -94,6 +94,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
+      // codeql[js/clear-text-storage-of-sensitive-data]
       window.sessionStorage.setItem(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
