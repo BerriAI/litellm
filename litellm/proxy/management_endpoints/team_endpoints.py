@@ -229,7 +229,7 @@ class TeamMemberBudgetHandler:
                 updated_kv["metadata"] = {}
             updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
 
-        else:  # budget does not exist
+        else:  # budget does not exist — newly creating the template
             updated_kv = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=team_table,
                 new_team_data_json=updated_kv,
@@ -240,25 +240,26 @@ class TeamMemberBudgetHandler:
                 team_member_budget_duration=team_member_budget_duration,
             )
 
-        # Wire up any existing members whose budget_id is null so they
-        # immediately see the template budget (and its budget_reset_at).
-        # This handles members who were added before the team's budget
-        # duration was ever configured.
-        if team_table.team_id is not None:
-            final_budget_id: Optional[str] = (
-                updated_kv.get("metadata", {}).get("team_member_budget_id")
-            )
-            if final_budget_id is not None:
-                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+            # Wire up existing members whose budget_id is null to the
+            # newly-created template budget so they immediately inherit the
+            # reset schedule. Only do this on creation (not on every update)
+            # to avoid silently constraining members who were intentionally
+            # left unlimited.
+            if team_table.team_id is not None:
+                new_budget_id: Optional[str] = (
+                    updated_kv.get("metadata", {}).get("team_member_budget_id")
+                )
+                if new_budget_id is not None:
+                    from litellm.proxy.proxy_server import prisma_client as _prisma_client
 
-                if _prisma_client is not None:
-                    await _prisma_client.db.litellm_teammembership.update_many(
-                        where={
-                            "team_id": team_table.team_id,
-                            "budget_id": None,
-                        },
-                        data={"budget_id": final_budget_id},
-                    )
+                    if _prisma_client is not None:
+                        await _prisma_client.db.litellm_teammembership.update_many(
+                            where={
+                                "team_id": team_table.team_id,
+                                "budget_id": None,
+                            },
+                            data={"budget_id": new_budget_id},
+                        )
 
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)

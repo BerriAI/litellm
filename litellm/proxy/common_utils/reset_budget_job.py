@@ -602,9 +602,13 @@ class ResetBudgetJob:
                     budget.budget_reset_at = anchor
                 else:
                     # Normal roll-forward: advance from the previous reset time.
-                    budget.budget_reset_at = budget.budget_reset_at + timedelta(
-                        seconds=duration_s
-                    )
+                    # Use a while loop so proxies that were down for multiple
+                    # periods catch up in one pass rather than firing the
+                    # spend-zero operation repeatedly over many scheduler ticks.
+                    while budget.budget_reset_at <= current_time:
+                        budget.budget_reset_at = budget.budget_reset_at + timedelta(
+                            seconds=duration_s
+                        )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error resetting budget_reset_at for budget: %s. Item: %s", e, budget

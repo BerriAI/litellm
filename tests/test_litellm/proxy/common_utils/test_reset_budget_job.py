@@ -689,6 +689,38 @@ async def test_reset_budget_reset_at_date_none_reset_at_already_past():
 
 
 @pytest.mark.asyncio
+async def test_reset_budget_reset_at_date_multi_period_catchup():
+    """
+    When budget_reset_at is non-null but multiple periods have elapsed (e.g.
+    the proxy was down for 3 weeks and the period is 7 days), the while loop
+    must advance the timestamp all the way to the next future date in a single
+    call rather than requiring the scheduler to fire 3 times.
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+    # reset_at is 22 days in the past; 7d period → 3 full periods have elapsed
+    previous_reset = now - timedelta(days=22)
+
+    budget = LiteLLM_BudgetTableFull(
+        budget_id="b-multi",
+        budget_duration="7d",
+        budget_reset_at=previous_reset,
+        created_at=now - timedelta(days=30),
+    )
+
+    result = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
+
+    assert result.budget_reset_at > now, "reset must be in the future after catch-up"
+    # Should be previous_reset + 28d (4 periods) = now + 6d
+    expected = previous_reset + timedelta(days=28)
+    assert result.budget_reset_at == expected, (
+        f"Expected {expected}, got {result.budget_reset_at}. "
+        "Multi-period catch-up must advance through all elapsed periods in one call."
+    )
+
+
+@pytest.mark.asyncio
 async def test_reset_budget_at_startup_advances_expired_budget_reset_at(
     reset_budget_job, mock_prisma_client
 ):
