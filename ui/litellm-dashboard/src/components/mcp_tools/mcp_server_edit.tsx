@@ -521,6 +521,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         restValues.transport = "http";
       }
 
+      // Map UI-only oauth_flow_type ("m2m"/"interactive") to the backend field
+      // oauth2_flow ("client_credentials"/"authorization_code"), then remove the
+      // UI-only key so it isn't forwarded as an unknown field.
+      if (restValues.oauth_flow_type) {
+        restValues.oauth2_flow =
+          restValues.oauth_flow_type === OAUTH_FLOW.M2M
+            ? "client_credentials"
+            : "authorization_code";
+        delete restValues.oauth_flow_type;
+      }
+
       // Prepare the payload with cost configuration and permission fields
       const mcpInfoServerName =
         restValues.server_name ||

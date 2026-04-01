@@ -6,6 +6,7 @@ import CreateMCPServer from "./create_mcp_server";
 
 vi.mock("../networking", () => ({
   createMCPServer: vi.fn(),
+  registerMCPServer: vi.fn(),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
@@ -416,5 +417,188 @@ describe("CreateMCPServer", () => {
 
       expect(onBackToDiscovery).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // oauth_flow_type → oauth2_flow mapping
+  // ---------------------------------------------------------------------------
+  //
+  // The UI form uses a UI-only field "oauth_flow_type" with values "m2m" /
+  // "interactive".  The backend expects "oauth2_flow" with values
+  // "client_credentials" / "authorization_code".  The submit handler must map
+  // the UI field to the backend field and remove oauth_flow_type from the
+  // payload entirely.
+
+  describe("oauth_flow_type → oauth2_flow mapping", () => {
+    /** Helper: select HTTP transport and OAuth2 auth type so OAuthFormFields renders. */
+    async function selectOAuth2Auth() {
+      render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument()
+      );
+      await selectAntOption("Authentication", "OAuth2");
+      // OAuthFormFields appears once OAuth2 is selected
+      await waitFor(() =>
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument()
+      );
+    }
+
+    it(
+      "should send oauth2_flow: 'authorization_code' for Interactive OAuth and omit oauth_flow_type",
+      { timeout: 15000 },
+      async () => {
+        await selectOAuth2Auth();
+
+        const user = userEvent.setup({ delay: null });
+
+        // Select Interactive (PKCE) flow
+        await selectAntOption("OAuth Flow Type", "Interactive");
+
+        // Fill required top-level fields
+        const nameInput = getServerNameInput();
+        await user.type(nameInput, "OAuth_Interactive_Server");
+
+        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+        await user.type(urlInput, "https://interactive.example.com/mcp");
+
+        vi.mocked(networking.createMCPServer).mockResolvedValue({
+          server_id: "oauth-server-1",
+          alias: "OAuth_Interactive_Server",
+          url: "https://interactive.example.com/mcp",
+          transport: "http",
+          auth_type: "oauth2",
+        });
+
+        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
+
+        await waitFor(() => {
+          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+        });
+
+        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+        // Must use backend field name with correct value
+        expect(payload.oauth2_flow).toBe("authorization_code");
+        // Must NOT forward the UI-only field
+        expect(payload.oauth_flow_type).toBeUndefined();
+      }
+    );
+
+    it(
+      "should send oauth2_flow: 'client_credentials' for M2M OAuth and omit oauth_flow_type",
+      { timeout: 15000 },
+      async () => {
+        await selectOAuth2Auth();
+
+        const user = userEvent.setup({ delay: null });
+
+        // Select M2M flow — this causes Client ID / Client Secret / Token URL fields to appear
+        await selectAntOption("OAuth Flow Type", "Machine-to-Machine");
+
+        await waitFor(() =>
+          expect(screen.getByPlaceholderText(/Enter OAuth client ID/i)).toBeInTheDocument()
+        );
+
+        // Fill required M2M OAuth fields
+        const clientIdInput = screen.getByPlaceholderText(/Enter OAuth client ID/i);
+        await user.type(clientIdInput, "my-client-id");
+
+        const clientSecretInput = screen.getByPlaceholderText(/Enter OAuth client secret/i);
+        await user.type(clientSecretInput, "my-client-secret");
+
+        const tokenUrlInput = screen.getByPlaceholderText("https://auth.example.com/oauth/token");
+        await user.type(tokenUrlInput, "https://auth.example.com/oauth/token");
+
+        // Fill required top-level fields
+        const nameInput = getServerNameInput();
+        await user.type(nameInput, "OAuth_M2M_Server");
+
+        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+        await user.type(urlInput, "https://m2m.example.com/mcp");
+
+        vi.mocked(networking.createMCPServer).mockResolvedValue({
+          server_id: "oauth-m2m-1",
+          alias: "OAuth_M2M_Server",
+          url: "https://m2m.example.com/mcp",
+          transport: "http",
+          auth_type: "oauth2",
+        });
+
+        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
+
+        await waitFor(() => {
+          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+        });
+
+        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+        // Must use backend field name with correct value
+        expect(payload.oauth2_flow).toBe("client_credentials");
+        // Must NOT forward the UI-only field
+        expect(payload.oauth_flow_type).toBeUndefined();
+      }
+    );
+
+    it(
+      "should use registerMCPServer for non-admin with oauth2_flow mapped correctly",
+      { timeout: 15000 },
+      async () => {
+        // Re-mock to also include registerMCPServer
+        vi.mocked(networking as any).registerMCPServer = vi.fn().mockResolvedValue({
+          server_id: "pending-oauth-1",
+          alias: "OAuth_Submission",
+          approval_status: "pending_review",
+        });
+
+        render(
+          <CreateMCPServer
+            {...defaultProps}
+            userRole="Internal User"
+          />
+        );
+
+        // Non-admin sees the submission form
+        await waitFor(() =>
+          expect(screen.getByText("Submit MCP Server for Review")).toBeInTheDocument()
+        );
+
+        await selectAntOption("Transport Type", "Streamable HTTP");
+        await waitFor(() =>
+          expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument()
+        );
+        await selectAntOption("Authentication", "OAuth2");
+        await waitFor(() =>
+          expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument()
+        );
+
+        // Select Interactive flow
+        await selectAntOption("OAuth Flow Type", "Interactive");
+
+        const user = userEvent.setup({ delay: null });
+        const nameInput = getServerNameInput();
+        await user.type(nameInput, "OAuth_Submission_Server");
+
+        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+        await user.type(urlInput, "https://interactive.example.com/mcp");
+
+        const submitButton = screen.getByRole("button", { name: "Submit for Review" });
+        await act(async () => {
+          fireEvent.click(submitButton);
+        });
+
+        await waitFor(() => {
+          expect((networking as any).registerMCPServer).toHaveBeenCalledTimes(1);
+        });
+
+        const [, payload] = (networking as any).registerMCPServer.mock.calls[0];
+        expect(payload.oauth2_flow).toBe("authorization_code");
+        expect(payload.oauth_flow_type).toBeUndefined();
+      }
+    );
   });
 });

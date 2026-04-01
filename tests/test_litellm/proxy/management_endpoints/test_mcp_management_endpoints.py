@@ -1417,8 +1417,12 @@ class TestTemporaryMCPSessionEndpoints:
         assert response.credentials is None
 
     @pytest.mark.asyncio
-    async def test_add_session_mcp_server_rejects_non_admins(self):
+    async def test_add_session_mcp_server_allows_non_admins(self):
+        """Non-admin users can create ephemeral session servers so they can run the
+        auth test before submitting an MCP for review.  The session endpoint writes
+        nothing to the database, so there is no meaningful security concern."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            TEMPORARY_MCP_SERVER_TTL_SECONDS,
             add_session_mcp_server,
         )
 
@@ -1430,19 +1434,36 @@ class TestTemporaryMCPSessionEndpoints:
         )
         non_admin = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="non-admin-user",
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
-            MagicMock(),
-        ):
-            with pytest.raises(Exception) as exc_info:
-                await add_session_mcp_server(
-                    payload=payload,
-                    user_api_key_dict=non_admin,
-                )
+        built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+        mock_manager.build_mcp_server_from_table = AsyncMock(return_value=built_server)
 
-        assert "permission" in str(exc_info.value)
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
+                MagicMock(),
+            ) as cache_mock,
+        ):
+            # Should NOT raise — non-admins are now permitted
+            response = await add_session_mcp_server(
+                payload=payload,
+                user_api_key_dict=non_admin,
+            )
+
+        cache_mock.assert_called_once()
+        assert response is not None
 
     @pytest.mark.asyncio
     async def test_mcp_authorize_proxies_to_discoverable_endpoint(self):
@@ -2277,6 +2298,91 @@ class TestMCPApprovalWorkflow:
             )
         assert result is not None
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
+    @pytest.mark.asyncio
+    async def test_register_mcp_server_rejects_proxy_admin(self):
+        """PROXY_ADMIN users must use POST /v1/mcp/server, not the submission endpoint."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            register_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+        )
+        admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            team_id="team-123",
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await register_mcp_server(payload=payload, user_api_key_dict=admin)
+        assert exc_info.value.status_code == 403
+        assert "/v1/mcp/server" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_add_mcp_server_sets_active_status_and_clears_submission_fields(self):
+        """Admin direct-create always sets approval_status=active and clears submitted_by/submitted_at,
+        regardless of what the caller provides in the payload."""
+        from litellm.proxy._types import MCPApprovalStatus
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="My Server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.sse,
+            # Caller tries to sneak in submission fields — should be overridden.
+            approval_status="pending_review",
+            submitted_by="attacker",
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        created_record = generate_mock_mcp_server_db_record(
+            alias="My Server",
+            url="https://example.com/mcp",
+        )
+        created_record.approval_status = MCPApprovalStatus.active
+        created_record.submitted_by = None
+        created_record.submitted_at = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(return_value=created_record),
+            ) as mock_create,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await add_mcp_server(
+                payload=payload,
+                user_api_key_dict=admin,
+            )
+
+        call_payload = mock_create.call_args[0][1]
+        assert call_payload.approval_status == MCPApprovalStatus.active
+        assert call_payload.submitted_by is None
+        assert call_payload.submitted_at is None
+        assert result is not None
 
 
 class TestValidateMCPRequiredFields:

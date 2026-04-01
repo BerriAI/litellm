@@ -1288,15 +1288,9 @@ if MCP_AVAILABLE:
         # Validate and normalize payload fields (alias/server name rules)
         validate_and_normalize_mcp_server_payload(payload)
 
-        # Restrict to proxy admins similar to the persistent create endpoint
-        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "User does not have permission to create temporary mcp servers. You can only create temporary mcp servers if you are a PROXY_ADMIN."
-                },
-            )
-
+        # Session servers are ephemeral (in-memory, ~5 min TTL, no DB write) so
+        # any authenticated user may create one.  This lets non-admin users run
+        # the OAuth auth-test before submitting a server for review.
         created_by = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         payload_with_credentials = _inherit_credentials_from_existing_server(payload)
         temp_record = _build_temporary_mcp_server_record(
