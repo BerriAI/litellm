@@ -139,8 +139,8 @@ class TestBedrockGovCloudSupport:
         """Test that GovCloud models have correct pricing that differs from base models"""
         from litellm import model_cost
         
-        # Test Claude 3.5 Sonnet pricing
-        base_model = "anthropic.claude-haiku-4-5-20251001-v1:0"
+        # Claude Haiku 4.5 commercial list pricing is under the us.* inference profile id
+        base_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         gov_east_model = "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0"
         gov_west_model = "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0"
         
@@ -452,9 +452,12 @@ class TestBedrockGovCloudSupport:
         # Test usage object
         usage = Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)
         
+        # Commercial list pricing uses the us.* inference profile id; GovCloud keys use anthropic.* + region
+        haiku_us_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        haiku_anthropic_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
         # Test base model with standard region
         base_prompt_cost, base_completion_cost = cost_per_token(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model=haiku_us_id,
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
@@ -463,7 +466,7 @@ class TestBedrockGovCloudSupport:
         
         # Test gov models with gov regions
         gov_east_prompt_cost, gov_east_completion_cost = cost_per_token(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model=haiku_anthropic_id,
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
@@ -471,7 +474,7 @@ class TestBedrockGovCloudSupport:
         )
         
         gov_west_prompt_cost, gov_west_completion_cost = cost_per_token(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model=haiku_anthropic_id,
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
