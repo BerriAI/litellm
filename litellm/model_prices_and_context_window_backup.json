@@ -15977,6 +15977,21 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-lite-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "gemini/veo-3.1-fast-generate-001": {
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
