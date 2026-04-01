@@ -1,0 +1,6 @@
+# Override aiobotocore's strict botocore pin (<1.40.62) so it can coexist
+# with boto3==1.42.80 (which requires botocore>=1.42.80).
+# No aioboto3/aiobotocore release yet supports botocore 1.42.x.
+# pip's lenient resolver handles this (Docker builds), but uv's strict
+# resolver rejects it — this override bridges the gap for CI.
+botocore>=1.42.80,<1.43.0
