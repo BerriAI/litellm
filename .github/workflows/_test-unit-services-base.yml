@@ -37,6 +37,11 @@ on:
         required: false
         type: boolean
         default: false
+      artifact-name:
+        description: "Unique name for the coverage artifact (must be unique per run)"
+        required: false
+        type: string
+        default: "run"
     secrets:
       REDIS_HOST:
         required: false
@@ -173,7 +178,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: coverage-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: coverage-${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
           retention-days: 1
 
