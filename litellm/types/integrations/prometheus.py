@@ -351,14 +351,15 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.TEAM.value,
-        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        # Security: Removed PII labels (fixes #24530)
+        # UserAPIKeyLabelNames.TEAM_ALIAS.value,  # Contains company names and employee emails
         UserAPIKeyLabelNames.USER.value,
-        UserAPIKeyLabelNames.USER_EMAIL.value,
+        # UserAPIKeyLabelNames.USER_EMAIL.value,  # Contains email addresses
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
-        UserAPIKeyLabelNames.CLIENT_IP.value,
-        UserAPIKeyLabelNames.USER_AGENT.value,
+        # UserAPIKeyLabelNames.CLIENT_IP.value,  # Contains client IP addresses
+        # UserAPIKeyLabelNames.USER_AGENT.value,  # Contains workflow IDs and infrastructure info
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
