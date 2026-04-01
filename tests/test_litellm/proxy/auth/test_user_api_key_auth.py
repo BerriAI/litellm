@@ -54,6 +54,9 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
         "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
     ) as mock_can_key, patch(
         "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
     ):
         await _run_post_custom_auth_checks(
             valid_token=valid_token,
