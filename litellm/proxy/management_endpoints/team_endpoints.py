@@ -240,6 +240,26 @@ class TeamMemberBudgetHandler:
                 team_member_budget_duration=team_member_budget_duration,
             )
 
+        # Wire up any existing members whose budget_id is null so they
+        # immediately see the template budget (and its budget_reset_at).
+        # This handles members who were added before the team's budget
+        # duration was ever configured.
+        if team_table.team_id is not None:
+            final_budget_id: Optional[str] = (
+                updated_kv.get("metadata", {}).get("team_member_budget_id")
+            )
+            if final_budget_id is not None:
+                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
+                if _prisma_client is not None:
+                    await _prisma_client.db.litellm_teammembership.update_many(
+                        where={
+                            "team_id": team_table.team_id,
+                            "budget_id": None,
+                        },
+                        data={"budget_id": final_budget_id},
+                    )
+
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
         return updated_kv
@@ -2435,6 +2455,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            budget_duration=data.budget_duration,
         )
 
     ### update team member role

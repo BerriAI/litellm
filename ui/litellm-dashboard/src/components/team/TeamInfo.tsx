@@ -56,6 +56,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -65,6 +66,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
   };
 }
 
@@ -365,6 +367,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        budget_duration: values.budget_duration || null,
       };
       message.destroy(); // Remove all existing toasts
 
@@ -1305,6 +1308,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               step: 1,
               min: 0,
               placeholder: "Requests per minute limit for this member in this team",
+            },
+            {
+              name: "budget_duration",
+              label: (
+                <span>
+                  Budget Reset Period{" "}
+                  <Tooltip title="How often this member's individual spend resets. Leave unset to inherit from team settings.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "select" as const,
+              options: [
+                { label: "No reset (unlimited)", value: "" },
+                { label: "Daily", value: "24h" },
+                { label: "Weekly", value: "7d" },
+                { label: "Monthly", value: "30d" },
+              ],
             },
           ],
         }}

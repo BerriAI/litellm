@@ -18,10 +18,13 @@ from litellm.proxy.utils import ProxyLogging
 
 # Mock classes for testing
 class MockLiteLLMTeamMembership:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+
     async def update_many(
         self, where: Dict[str, Any], data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        # Mock the update_many method for litellm_teammembership
+        self.update_many_calls.append({"where": where, "data": data})
         return {"count": 1}
 
 
@@ -38,6 +41,10 @@ class MockLiteLLMVerificationToken:
 
 class MockDB:
     def __init__(self):
+        self.litellm_teammembership = MockLiteLLMTeamMembership()
+        self.litellm_verificationtoken = MockLiteLLMVerificationToken()
+
+    def reset(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
 
@@ -444,6 +451,101 @@ def test_reset_budget_for_keys_linked_to_budgets_empty(
     assert len(calls) == 0
 
 
+def test_reset_budget_for_team_members_resets_spend(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that reset_budget_for_litellm_team_members resets spend to 0
+    for all team memberships linked to the expired budgets.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "1mo",
+            "budget_reset_at": now,
+            "budget_id": "team-member-budget-1",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_litellm_team_members(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_teammembership.update_many_calls
+    assert len(calls) == 1
+
+    call = calls[0]
+    # spend must be zeroed out for the matching budget IDs
+    assert call["where"]["budget_id"] == {"in": ["team-member-budget-1"]}
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_team_members_preserves_total_spend(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that reset_budget_for_litellm_team_members only resets the current-period
+    spend and does NOT reset total_spend. total_spend must accumulate across all
+    budget periods to give a lifetime view of member usage.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 50.0,
+            "budget_duration": "1mo",
+            "budget_reset_at": now,
+            "budget_id": "team-member-budget-2",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    budgets_to_reset = [test_budget]
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_litellm_team_members(
+            budgets_to_reset=budgets_to_reset
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_teammembership.update_many_calls
+    assert len(calls) == 1
+
+    call = calls[0]
+    # total_spend must NOT be present in the reset data — it must never be zeroed
+    assert "total_spend" not in call["data"], (
+        "total_spend should not be reset during a budget period reset; "
+        "it must accumulate across all periods"
+    )
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_team_members_empty_budgets(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Test that reset_budget_for_litellm_team_members does nothing when given
+    an empty list of budgets (e.g. no budget periods have expired).
+    """
+    asyncio.run(
+        reset_budget_job.reset_budget_for_litellm_team_members(budgets_to_reset=[])
+    )
+
+    calls = mock_prisma_client.db.litellm_teammembership.update_many_calls
+    assert len(calls) == 0
+
+
 def test_budget_table_reset_also_resets_linked_keys(
     reset_budget_job, mock_prisma_client
 ):
@@ -479,3 +581,153 @@ def test_budget_table_reset_also_resets_linked_keys(
     )
     assert calls[0]["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
     assert calls[0]["data"]["spend"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for _reset_budget_reset_at_date
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reset_budget_reset_at_date_normal_rollforward():
+    """
+    When budget_reset_at is set and has expired, roll it forward by one
+    duration interval from the PREVIOUS reset time (not from now).
+    This ensures periods stay aligned regardless of when the job runs.
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+    previous_reset = now - timedelta(days=1)  # expired yesterday
+
+    budget = LiteLLM_BudgetTableFull(
+        budget_id="b1",
+        budget_duration="7d",
+        budget_reset_at=previous_reset,
+        created_at=now - timedelta(days=30),
+    )
+
+    result = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
+
+    expected = previous_reset + timedelta(days=7)
+    assert result.budget_reset_at == expected, (
+        "budget_reset_at should advance by exactly one duration from the previous reset"
+    )
+    assert result.budget_reset_at > now, "new reset must be in the future"
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_reset_at_date_none_reset_at_not_yet_expired():
+    """
+    When budget_reset_at is None but created_at + duration is still in the
+    future, anchor to created_at + duration (the original planned reset time).
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+    created_at = now - timedelta(days=3)  # created 3 days ago
+    # duration is 7d → first reset would be created_at + 7d = 4 days from now
+
+    budget = LiteLLM_BudgetTableFull(
+        budget_id="b2",
+        budget_duration="7d",
+        budget_reset_at=None,
+        created_at=created_at,
+    )
+
+    result = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
+
+    expected = created_at + timedelta(days=7)
+    assert result.budget_reset_at == expected
+    assert result.budget_reset_at > now
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_reset_at_date_none_reset_at_already_past():
+    """
+    Regression: when budget_reset_at is None AND created_at + duration is
+    already in the past (old budget that was never given a reset time), the
+    new reset_at must be computed by advancing from created_at in duration
+    steps until it's in the future — NOT set to current_time + duration.
+
+    Setting it to current_time + duration was the bug: it made the reset
+    display show "proxy start time + duration" because this path runs at
+    startup via the ResetBudgetJob scheduler.
+    """
+    from litellm.proxy._types import LiteLLM_BudgetTableFull
+
+    now = datetime.now(timezone.utc)
+    # Budget was created 30 days ago with a 7-day duration → 4 full periods
+    # have elapsed; created_at + 7d, +14d, +21d, +28d are all in the past.
+    created_at = now - timedelta(days=30)
+
+    budget = LiteLLM_BudgetTableFull(
+        budget_id="b3",
+        budget_duration="7d",
+        budget_reset_at=None,
+        created_at=created_at,
+    )
+
+    result = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
+
+    assert result.budget_reset_at is not None
+    assert result.budget_reset_at > now, "reset must be in the future"
+
+    # Must be anchored to created_at, not to `now`.
+    # The correct next reset is created_at + N*7d where N is the smallest
+    # integer that puts it past `now`.  For 30 days elapsed: N=5 → +35d.
+    expected = created_at + timedelta(days=35)
+    assert result.budget_reset_at == expected, (
+        f"Expected {expected}, got {result.budget_reset_at}. "
+        "reset_at must be anchored to created_at, not proxy-start time."
+    )
+
+    # Verify it is NOT simply now + duration (the old buggy behaviour).
+    buggy_value = now + timedelta(days=7)
+    assert result.budget_reset_at != pytest.approx(buggy_value, abs=timedelta(minutes=1)), (
+        "reset_at must not be set to current_time + duration (proxy-start-time bug)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_at_startup_advances_expired_budget_reset_at(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Regression: on proxy restart, any budget whose budget_reset_at has just
+    expired (e.g. budget created 24 h ago, reset_at = proxy_start_time) must be
+    advanced by the immediate reset_budget() call that now runs at startup.
+
+    Without the startup call, a budget that expired at the exact moment the proxy
+    restarted would show a past timestamp in the UI for up to ~10 minutes (the
+    first scheduled interval), even if the user checked 50 minutes later.
+    """
+    now = datetime.now(timezone.utc)
+    proxy_start_time = now  # simulated proxy start time
+
+    # Budget was created 24 h ago; reset_at is exactly now (proxy_start_time)
+    expired_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 10.0,
+            "budget_duration": "24h",
+            "budget_reset_at": proxy_start_time,  # expired right now
+            "budget_id": "template-budget-1",
+            "created_at": proxy_start_time - timedelta(hours=24),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [expired_budget]
+
+    # Simulate what the startup asyncio.create_task fires
+    await reset_budget_job.reset_budget_for_litellm_budget_table()
+
+    # The budget should have been advanced in DB
+    updated_budgets = mock_prisma_client.updated_data.get("budget", [])
+    assert len(updated_budgets) == 1, "Expected the expired budget to be updated"
+
+    updated = updated_budgets[0]
+    assert updated.budget_reset_at > proxy_start_time, (
+        "After startup reset, budget_reset_at must be in the future, "
+        "not equal to proxy start time"
+    )

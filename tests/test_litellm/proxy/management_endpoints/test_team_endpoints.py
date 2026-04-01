@@ -1662,6 +1662,67 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_wires_up_null_budget_members():
+    """
+    Regression test: when team_member_budget_duration is set (create or update path),
+    existing team members whose budget_id is null must be assigned the template
+    budget so that their 'Next Budget Reset' column reflects the new reset time.
+
+    Previously, members added before the team's budget duration was configured had
+    budget_id=null. Changing the duration created/updated the template but left
+    those memberships disconnected — they never showed a reset date.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "template-budget-abc"}
+    team_table.team_id = "team-xyz"
+
+    updated_kv: dict = {"team_id": "team-xyz"}
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "template-budget-abc"
+
+    mock_db = MagicMock()
+    mock_db.litellm_teammembership.update_many = AsyncMock(return_value={"count": 2})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = mock_db
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+            new_callable=AsyncMock,
+            return_value=mock_budget_response,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.prisma_client",
+            mock_prisma,
+        ),
+    ):
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user,
+            updated_kv=updated_kv,
+            team_member_budget_duration="7d",
+        )
+
+    # update_many must have been called to wire up members with no budget
+    mock_db.litellm_teammembership.update_many.assert_awaited_once()
+    call_kwargs = mock_db.litellm_teammembership.update_many.call_args.kwargs
+    assert call_kwargs["where"]["team_id"] == "team-xyz"
+    assert call_kwargs["where"]["budget_id"] is None
+    assert call_kwargs["data"]["budget_id"] == "template-budget-abc"
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration():
     """
     Test that team/update endpoint properly handles team_member_budget_duration.
