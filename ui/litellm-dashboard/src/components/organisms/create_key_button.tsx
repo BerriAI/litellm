@@ -28,6 +28,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -153,83 +154,6 @@ export const fetchUserModels = async (
   }
 };
 
-const BUDGET_WINDOW_OPTIONS = [
-  { value: "1h",  label: "Hourly",  resetHint: "Resets every hour" },
-  { value: "24h", label: "Daily",   resetHint: "Resets daily at midnight UTC" },
-  { value: "7d",  label: "Weekly",  resetHint: "Resets every Sunday at midnight UTC" },
-  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
-];
-
-function BudgetWindowsEditor({
-  value,
-  onChange,
-}: {
-  value: Array<{ budget_duration: string; max_budget: number | null }>;
-  onChange: (v: Array<{ budget_duration: string; max_budget: number | null }>) => void;
-}) {
-  const addWindow = () => {
-    onChange([...value, { budget_duration: "24h", max_budget: null }]);
-  };
-
-  const removeWindow = (idx: number) => {
-    onChange(value.filter((_, i) => i !== idx));
-  };
-
-  const updateWindow = (idx: number, field: string, fieldValue: any) => {
-    const updated = value.map((w, i) => (i === idx ? { ...w, [field]: fieldValue } : w));
-    onChange(updated);
-  };
-
-  return (
-    <div>
-      {value.map((window, idx) => {
-        const hint = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHint;
-        return (
-          <div key={idx} style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Select
-                value={window.budget_duration}
-                onChange={(v) => updateWindow(idx, "budget_duration", v)}
-                style={{ width: 130 }}
-                options={BUDGET_WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-              <InputNumber
-                step={0.01}
-                min={0}
-                precision={2}
-                value={window.max_budget ?? undefined}
-                onChange={(v) => updateWindow(idx, "max_budget", v ?? null)}
-                placeholder="Max spend ($)"
-                style={{ width: 160 }}
-                prefix="$"
-              />
-              <Button2
-                type="text"
-                danger
-                size="small"
-                onClick={() => removeWindow(idx)}
-                style={{ padding: "0 4px" }}
-              >
-                ✕
-              </Button2>
-            </div>
-            {hint && (
-              <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>
-                ↻ {hint}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <Button2
-        size="small"
-        onClick={(e) => { e.preventDefault(); addWindow(); }}
-      >
-        + Add Budget Window
-      </Button2>
-    </div>
-  );
-}
 
 /**
  * ─────────────────────────────────────────────────────────────────────────
@@ -279,7 +203,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
-  const [budgetLimits, setBudgetLimits] = useState<Array<{ budget_duration: string; max_budget: number | null }>>([]);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
