@@ -193,6 +193,7 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+force_params: Optional[Dict[str, Any]] = None  # force override request params globally
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
