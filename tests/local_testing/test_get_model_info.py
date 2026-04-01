@@ -128,7 +128,7 @@ def test_get_model_info_bedrock_region():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
-    assert info["litellm_provider"] == "bedrock"
+    assert info["litellm_provider"] == "bedrock_converse"
 
 
 @pytest.mark.parametrize(

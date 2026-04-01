@@ -2060,7 +2060,7 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             "aws_region_name": "us-east-1",
         }
 
