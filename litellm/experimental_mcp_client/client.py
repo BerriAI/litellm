@@ -140,7 +140,9 @@ class MCPSigV4Auth(httpx.Auth):
         import boto3
         from botocore.credentials import Credentials
 
-        session_name = aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        session_name = (
+            aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        )
 
         sts_kwargs: dict = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
