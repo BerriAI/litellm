@@ -1292,7 +1292,14 @@ if MCP_AVAILABLE:
         # any authenticated user may create one.  This lets non-admin users run
         # the OAuth auth-test before submitting a server for review.
         created_by = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
-        payload_with_credentials = _inherit_credentials_from_existing_server(payload)
+        # Only proxy admins may inherit credentials from an existing permanent
+        # server.  Allowing non-admins to do so would let any key holder supply
+        # a known server_id and silently acquire that server's stored secrets
+        # (OAuth client_secret, AWS keys, etc.) into their session cache entry.
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            payload_with_credentials = _inherit_credentials_from_existing_server(payload)
+        else:
+            payload_with_credentials = payload
         temp_record = _build_temporary_mcp_server_record(
             payload_with_credentials,
             created_by,

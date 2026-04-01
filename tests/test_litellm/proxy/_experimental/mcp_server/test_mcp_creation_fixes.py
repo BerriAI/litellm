@@ -368,3 +368,75 @@ async def test_add_session_mcp_server_created_by_reflects_non_admin_user_id():
     args, _ = mock_manager.build_mcp_server_from_table.call_args
     temp_record = args[0]
     assert temp_record.created_by == "non-admin-123"
+
+
+@pytest.mark.asyncio
+async def test_add_session_mcp_server_non_admin_does_not_inherit_credentials():
+    """Non-admin callers must NOT inherit credentials from an existing permanent
+    server.  Before the fix, _inherit_credentials_from_existing_server ran
+    unconditionally, so any key holder who knew a server_id could cause the
+    proxy to silently copy that server's OAuth / AWS secrets into their session
+    cache entry.
+    """
+    try:
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_session_mcp_server,
+        )
+    except ImportError:
+        pytest.skip("MCP management endpoints not available")
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    # Payload deliberately omits credentials — non-admin is trying to inherit
+    # them from the permanent server "srv-with-secrets".
+    payload = NewMCPServerRequest(
+        alias="Hijack Attempt",
+        server_id="srv-with-secrets",
+        url="https://internal.example.com/mcp",
+        transport=MCPTransport.http,
+    )
+    non_admin = _make_internal_user_auth(user_id="attacker-456")
+
+    built_server = MCPServer(
+        server_id="srv-with-secrets",
+        name="Hijack Attempt",
+        url="https://internal.example.com/mcp",
+        transport=MCPTransport.http,
+    )
+
+    # The permanent server has sensitive credentials stored.
+    existing_server = MagicMock()
+    existing_server.authentication_token = "super-secret-token"
+    existing_server.client_secret = "oauth-client-secret"
+    existing_server.aws_secret_access_key = "aws-secret"
+
+    mock_manager = MagicMock()
+    mock_manager.get_mcp_server_by_id.return_value = existing_server
+    mock_manager.build_mcp_server_from_table = AsyncMock(return_value=built_server)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
+            MagicMock(),
+        ),
+    ):
+        await add_session_mcp_server(
+            payload=payload,
+            user_api_key_dict=non_admin,
+        )
+
+    # The temp record passed to build_mcp_server_from_table must NOT contain
+    # any credentials inherited from the permanent server.
+    args, _ = mock_manager.build_mcp_server_from_table.call_args
+    temp_record = args[0]
+    assert temp_record.credentials is None, (
+        "Non-admin session server must not inherit credentials from permanent server"
+    )

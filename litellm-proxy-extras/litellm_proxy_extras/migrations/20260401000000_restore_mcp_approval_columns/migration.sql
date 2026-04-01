@@ -12,9 +12,11 @@ ALTER TABLE "LiteLLM_MCPServerTable"
   ADD COLUMN IF NOT EXISTS "review_notes"     TEXT;
 
 -- Back-fill existing rows: anything already in the table is implicitly active.
+-- Also normalise the old "approved" default written by a prior schema version
+-- that used @default("approved") instead of @default("active").
 UPDATE "LiteLLM_MCPServerTable"
   SET "approval_status" = 'active'
-  WHERE "approval_status" IS NULL;
+  WHERE "approval_status" IS NULL OR "approval_status" = 'approved';
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "LiteLLM_MCPServerTable_approval_status_idx"
