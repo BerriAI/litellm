@@ -37,6 +37,93 @@ vi.mock("./mcp_tool_configuration", () => ({
   default: () => <div data-testid="mcp-tool-config" />,
 }));
 
+// ---------------------------------------------------------------------------
+// oauth_flow_type → oauth2_flow mapping (edit path)
+// ---------------------------------------------------------------------------
+
+describe("MCPServerEdit oauth_flow_type mapping", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const httpOAuthBase = {
+    server_id: "srv-oauth",
+    server_name: "OAuthServer",
+    alias: "oauth-srv",
+    description: "OAuth server",
+    transport: "http" as const,
+    url: "https://example.com/mcp",
+    auth_type: "oauth2",
+    command: null,
+    args: null,
+    env: null,
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [] as string[],
+    authorization_url: "https://auth.example.com/authorize",
+  };
+
+  it("sends oauth2_flow: client_credentials for M2M server (token_url present)", async () => {
+    const mcpServer = { ...httpOAuthBase, token_url: "https://auth.example.com/token" };
+
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...mcpServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("client_credentials");
+    expect(payload).not.toHaveProperty("oauth_flow_type");
+  });
+
+  it("sends oauth2_flow: authorization_code for interactive server (no token_url)", async () => {
+    const mcpServer = { ...httpOAuthBase, token_url: undefined };
+
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...mcpServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.oauth2_flow).toBe("authorization_code");
+    expect(payload).not.toHaveProperty("oauth_flow_type");
+  });
+});
+
 describe("MCPServerEdit (stdio)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
