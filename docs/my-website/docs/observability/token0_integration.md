@@ -81,7 +81,7 @@ Token0 applies up to 7 optimizations per image, in order:
 
 ## Benchmarks
 
-Benchmarked on 7 Ollama vision models across real-world images (photos, receipts, invoices, screenshots):
+Benchmarked on 5 Ollama vision models across real-world images (photos, receipts, invoices, screenshots):
 
 | Model | Direct Tokens | Token0 Tokens | Savings |
 |---|---|---|---|

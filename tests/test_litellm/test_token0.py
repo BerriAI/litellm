@@ -5,7 +5,7 @@ Token0 is installed separately: pip install token0
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 
 def _make_image_message(url: str = "data:image/jpeg;base64,/9j/fake") -> dict:
@@ -76,7 +76,6 @@ async def test_token0_hook_text_only_passthrough():
 async def test_token0_hook_attaches_stats_metadata():
     """Hook must attach token0 stats to data['metadata']['token0']."""
     from token0.litellm_hook import Token0Hook
-    from token0.optimization.message_optimizer import optimize_messages
 
     hook = Token0Hook()
     messages = [_make_image_message()]
@@ -121,11 +120,22 @@ async def test_token0_hook_remote_url_passthrough():
     ]
     data = {"messages": messages, "model": "gpt-4o"}
 
-    result = await hook.async_pre_call_hook(
-        user_api_key_dict={}, cache=None, data=data, call_type="completion"
-    )
+    mock_stats = {
+        "tokens_before": 0,
+        "tokens_after": 0,
+        "tokens_saved": 0,
+        "optimizations": [],
+        "recommended_model": None,
+    }
 
-    # Remote URL must be preserved unchanged
+    with patch(
+        "token0.litellm_hook.optimize_messages",
+        return_value=(messages, mock_stats),
+    ):
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict={}, cache=None, data=data, call_type="completion"
+        )
+
     content = result["messages"][0]["content"]
     image_parts = [p for p in content if p.get("type") == "image_url"]
     assert image_parts[0]["image_url"]["url"] == remote_url
