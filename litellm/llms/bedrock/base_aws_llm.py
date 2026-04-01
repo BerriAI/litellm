@@ -27,10 +27,6 @@ from litellm.constants import (
     BEDROCK_MAX_POLICY_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.llms.bedrock.common_utils import (
-    split_embedded_bedrock_region_prefix,
-    strip_bedrock_routing_prefix,
-)
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
@@ -493,6 +489,11 @@ class BaseAWSLLM:
             else:
                 aws_region_name = self._get_aws_region_from_model_arn(model)
             if aws_region_name is None and model is not None:
+                from litellm.llms.bedrock.common_utils import (
+                    split_embedded_bedrock_region_prefix,
+                    strip_bedrock_routing_prefix,
+                )
+
                 _stripped = strip_bedrock_routing_prefix(model)
                 _embedded, _ = split_embedded_bedrock_region_prefix(_stripped)
                 if _embedded is not None:
