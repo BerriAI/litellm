@@ -2798,6 +2798,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
     auto_rotate: Optional[bool] = None,
     rotation_interval: Optional[str] = None,
+    key_rotation_email: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
 ):
@@ -2927,6 +2928,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             auto_rotate=auto_rotate or False,
             rotation_interval=rotation_interval,
         )
+
+        if key_rotation_email is not None:
+            key_data["key_rotation_email"] = key_rotation_email
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True

@@ -158,7 +158,8 @@ class BaseEmailLogger(CustomLogger):
         """
         email_params = await self._get_email_params(
             user_id=send_key_rotated_email_event.user_id,
-            user_email=send_key_rotated_email_event.user_email,
+            user_email=send_key_rotated_email_event.key_rotation_email
+            or send_key_rotated_email_event.user_email,
             email_event=EmailEvent.virtual_key_rotated,
             event_message=send_key_rotated_email_event.event_message,
         )

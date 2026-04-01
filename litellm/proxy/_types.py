@@ -955,6 +955,10 @@ class GenerateKeyRequest(KeyRequestBase):
         default=None,
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
+    key_rotation_email: Optional[str] = Field(
+        default=None,
+        description="Email to notify when key is rotated. Overrides key owner email. Useful for service accounts.",
+    )
     organization_id: Optional[str] = None
     project_id: Optional[str] = None
 
@@ -1009,6 +1013,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    key_rotation_email: Optional[str] = None
     organization_id: Optional[str] = None
 
     @model_validator(mode="after")
@@ -2361,6 +2366,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+    key_rotation_email: Optional[str] = (
+        None  # Override email for rotation notifications
+    )
     router_settings: Optional[dict] = None
     model_config = ConfigDict(protected_namespaces=())
 

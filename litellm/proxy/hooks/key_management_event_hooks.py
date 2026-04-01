@@ -178,6 +178,9 @@ class KeyManagementEventHooks:
             await KeyManagementEventHooks._send_key_rotated_email(
                 response=response.model_dump(exclude_none=True),
                 existing_key_alias=existing_key_row.key_alias,
+                key_rotation_email=getattr(
+                    existing_key_row, "key_rotation_email", None
+                ),
             )
         except Exception as e:
             verbose_proxy_logger.warning(f"Failed to send key rotated email: {e}")
@@ -364,10 +367,10 @@ class KeyManagementEventHooks:
                         if key.key_alias is not None:
                             team_id = getattr(key, "team_id", None)
                             if team_id not in team_settings_cache:
-                                team_settings_cache[
-                                    team_id
-                                ] = await KeyManagementEventHooks._get_secret_manager_optional_params(
-                                    team_id
+                                team_settings_cache[team_id] = (
+                                    await KeyManagementEventHooks._get_secret_manager_optional_params(
+                                        team_id
+                                    )
                                 )
                             optional_params = team_settings_cache[team_id]
                             await litellm.secret_manager_client.async_delete_secret(
@@ -542,7 +545,9 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_rotated_email(
-        response: dict, existing_key_alias: Optional[str]
+        response: dict,
+        existing_key_alias: Optional[str],
+        key_rotation_email: Optional[str] = None,
     ):
         """
         Send key rotated email if email sending is enabled.
@@ -589,6 +594,7 @@ class KeyManagementEventHooks:
             user_id=response.get("user_id", None),
             team_id=response.get("team_id", "Default Team"),
             key_alias=response.get("key_alias", existing_key_alias),
+            key_rotation_email=key_rotation_email,
         )
 
         ##########################
