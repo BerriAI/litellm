@@ -1,4 +1,4 @@
-FROM python:3.13-alpine
+FROM python:3.13-alpine@sha256:bb1f2fdb1065c85468775c9d680dcd344f6442a2d1181ef7916b60a623f11d40
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ RUN apk update && \
     apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo
 
 RUN python -m venv ${HOME}/venv
-RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip==26.0.1
 
 COPY docker/build_from_pip/requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
