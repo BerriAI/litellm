@@ -1257,7 +1257,7 @@ def test_base_aws_llm_get_credentials():
 def test_bedrock_completion_test_2():
     litellm.set_verbose = True
     data = {
-        "model": "bedrock/anthropic.claude-3-opus-20240229-v1:0",
+        "model": "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
         "messages": [
             {
                 "role": "system",
@@ -1564,7 +1564,7 @@ def test_bedrock_completion_test_4(modify_params):
     litellm.modify_params = modify_params
 
     data = {
-        "model": "anthropic.claude-3-opus-20240229-v1:0",
+        "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
         "messages": [
             {
                 "role": "user",
@@ -1889,9 +1889,9 @@ def test_bedrock_base_model_helper():
 
     assert (
         BedrockModelInfo.get_base_model(
-            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+            "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
         )
-        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        == "anthropic.claude-haiku-4-5-20251001-v1:0"
     )
 
 
@@ -1984,7 +1984,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
     "model, expected_supports_tool_call",
     [
         ("bedrock/us.amazon.nova-pro-v1:0", True),
-        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", True),
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
@@ -2008,7 +2008,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2027,7 +2027,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        bedrock_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         litellm.model_cost.pop(bedrock_model, None)
         model = f"bedrock/{bedrock_model}"
 
@@ -2044,7 +2044,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def get_base_completion_call_args_with_thinking(self) -> dict:

@@ -313,7 +313,7 @@ def test_cost_azure_embedding():
 
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
-    model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    model = "anthropic.claude-haiku-4-5-20251001-v1:0"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     response = litellm.completion(
         model=model, messages=messages, mock_response="hello cool one"
@@ -321,7 +321,7 @@ def test_cost_bedrock_pricing_actual_calls():
 
     print("response", response)
     cost = litellm.completion_cost(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
@@ -2478,7 +2478,7 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     "response_model, custom_llm_provider",
     [
         ("azure_ai/Meta-Llama-3.1-70B-Instruct", "azure_ai"),
-        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock"),
     ],
 )
 def test_completion_cost_model_response_cost(response_model, custom_llm_provider):

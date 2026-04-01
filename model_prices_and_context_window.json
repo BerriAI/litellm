@@ -28302,7 +28302,7 @@
         "cache_read_input_token_cost": 3e-07,
         "cache_creation_input_token_cost": 3.75e-06
     },
-    "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,

@@ -41,8 +41,8 @@ class TestBedrockGovCloudSupport:
         from litellm import model_cost
         
         # Test Claude models in GovCloud
-        assert "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0" in model_cost
-        assert "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0" in model_cost
+        assert "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0" in model_cost
+        assert "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0" in model_cost
         assert "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0" in model_cost
         assert "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0" in model_cost
         assert "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0" in model_cost
@@ -61,7 +61,7 @@ class TestBedrockGovCloudSupport:
     def test_govcloud_model_routing(self):
         """Test that GovCloud models are routed correctly"""
         # Test Claude model routing
-        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0")
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0")
         assert route == "converse"
         
         route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0")
@@ -81,8 +81,8 @@ class TestBedrockGovCloudSupport:
     def test_base_model_extraction(self):
         """Test that base model names are correctly extracted from GovCloud models"""
         # Test GovCloud model extraction
-        base_model = BedrockModelInfo.get_base_model("bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0")
-        assert base_model == "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        base_model = BedrockModelInfo.get_base_model("bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0")
+        assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
         
         base_model = BedrockModelInfo.get_base_model("bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0")
         assert base_model == "meta.llama3-8b-instruct-v1:0"
@@ -125,7 +125,7 @@ class TestBedrockGovCloudSupport:
         from litellm import model_cost
         
         # Check a specific GovCloud model has all required properties
-        govcloud_model = model_cost["bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0"]
+        govcloud_model = model_cost["bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0"]
         
         assert "max_tokens" in govcloud_model
         assert "max_input_tokens" in govcloud_model
@@ -140,9 +140,9 @@ class TestBedrockGovCloudSupport:
         from litellm import model_cost
         
         # Test Claude 3.5 Sonnet pricing
-        base_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-        gov_east_model = "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0"
-        gov_west_model = "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        base_model = "anthropic.claude-haiku-4-5-20251001-v1:0"
+        gov_east_model = "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0"
+        gov_west_model = "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0"
         
         # Verify base model pricing
         base_pricing = model_cost[base_model]
@@ -202,7 +202,7 @@ class TestBedrockGovCloudSupport:
             id="test-base",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
@@ -214,7 +214,7 @@ class TestBedrockGovCloudSupport:
             id="test-gov",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",  # Same base model name
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",  # Same base model name
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
@@ -226,7 +226,7 @@ class TestBedrockGovCloudSupport:
             id="test-gov-west",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",  # Same base model name
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",  # Same base model name
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
@@ -238,21 +238,21 @@ class TestBedrockGovCloudSupport:
         
         # Calculate costs using the standard Bedrock format with region parameter
         base_cost = completion_cost(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=base_model_response,
             messages=messages,
             region_name="us-east-1",  # Standard region
         )
         
         gov_east_cost = completion_cost(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_model_response,
             messages=messages,
             region_name="us-gov-east-1",  # Gov region
         )
         
         gov_west_cost = completion_cost(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_west_model_response,
             messages=messages,
             region_name="us-gov-west-1",  # Gov region
@@ -278,7 +278,7 @@ class TestBedrockGovCloudSupport:
             id="test-large",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="A longer response", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
@@ -286,7 +286,7 @@ class TestBedrockGovCloudSupport:
         large_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
         
         large_base_cost = completion_cost(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_response,
             messages=messages,
             region_name="us-east-1",
@@ -297,7 +297,7 @@ class TestBedrockGovCloudSupport:
             id="test-large-gov",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="A longer response", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
@@ -305,7 +305,7 @@ class TestBedrockGovCloudSupport:
         large_gov_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-east-1"}
         
         large_gov_cost = completion_cost(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_gov_response,
             messages=messages,
             region_name="us-gov-east-1",
@@ -373,21 +373,21 @@ class TestBedrockGovCloudSupport:
         
         # Test base model completion
         base_result = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-east-1"
         )
         
         # Test gov-east model completion
         gov_east_result = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-east-1"
         )
         
         # Test gov-west model completion
         gov_west_result = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-west-1"
         )
@@ -454,7 +454,7 @@ class TestBedrockGovCloudSupport:
         
         # Test base model with standard region
         base_prompt_cost, base_completion_cost = cost_per_token(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
@@ -463,7 +463,7 @@ class TestBedrockGovCloudSupport:
         
         # Test gov models with gov regions
         gov_east_prompt_cost, gov_east_completion_cost = cost_per_token(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
@@ -471,7 +471,7 @@ class TestBedrockGovCloudSupport:
         )
         
         gov_west_prompt_cost, gov_west_completion_cost = cost_per_token(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             prompt_tokens=20,
             completion_tokens=10,
             custom_llm_provider="bedrock",
@@ -517,7 +517,7 @@ class TestBedrockGovCloudSupport:
         assert abs(gov_west_total_cost - base_total_cost * 1.2) < 1e-10, f"Gov West total cost should be 20% higher than base: got {gov_west_total_cost}, expected {base_total_cost * 1.2}"
 
     @pytest.mark.parametrize("model_name", [
-        "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0",
         "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0",
         "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0",
         "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0",

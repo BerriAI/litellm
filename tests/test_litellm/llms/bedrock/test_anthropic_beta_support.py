@@ -53,7 +53,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
         
         result = config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},
@@ -70,7 +70,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}
         
         result = config._transform_request_helper(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
@@ -89,7 +89,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": "output-128k-2025-02-19"}
         
         result = config.transform_anthropic_messages_request(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             anthropic_messages_optional_request_params={"max_tokens": 100},
             litellm_params={},
@@ -116,7 +116,7 @@ class TestAnthropicBetaHeaderSupport:
         ]
         
         result = config._transform_request_helper(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             system_content_blocks=[],
             optional_params={"tools": tools},
             messages=[{"role": "user", "content": "Test"}],
@@ -137,7 +137,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {}
         
         result = config._transform_request_helper(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
@@ -163,7 +163,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": ",".join(supported_features)}
         
         result = config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},
@@ -358,7 +358,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": "context-1m-2025-08-07"}
         
         result = config._transform_request_helper(
-            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
@@ -378,7 +378,7 @@ class TestAnthropicBetaHeaderSupport:
         
         # Model with 'us.' cross-region prefix
         result = config._transform_request_helper(
-            model="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
