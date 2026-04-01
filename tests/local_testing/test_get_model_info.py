@@ -131,6 +131,50 @@ def test_get_model_info_bedrock_region():
     assert info["litellm_provider"] == "bedrock"
 
 
+def test_get_model_info_glm_5_bedrock_converse(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model = "zai.glm-5"
+    assert model in litellm.BEDROCK_CONVERSE_MODELS
+    assert model in litellm.bedrock_converse_models
+
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "bedrock_converse"
+    assert info["max_input_tokens"] == 200000
+    assert info["max_output_tokens"] == 128000
+    assert info["supports_reasoning"] is True
+    assert info["supports_function_calling"] is True
+
+    regional_model = "bedrock/us-east-1/zai.glm-5"
+    regional_info = litellm.get_model_info(regional_model)
+    assert regional_info["key"] == regional_model
+    assert regional_info["litellm_provider"] == "bedrock"
+
+
+def test_get_model_info_minimax_m25_bedrock_converse(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+
+    model = "minimax.minimax-m2.5"
+    assert model in litellm.BEDROCK_CONVERSE_MODELS
+    assert model in litellm.bedrock_converse_models
+
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "bedrock_converse"
+    assert info["max_input_tokens"] == 196608
+    assert info["max_output_tokens"] == 65536
+    assert info["supports_reasoning"] is True
+    assert info["supports_function_calling"] is True
+
+    regional_model = "bedrock/us-east-1/minimax.minimax-m2.5"
+    regional_info = litellm.get_model_info(regional_model)
+    assert regional_info["key"] == regional_model
+    assert regional_info["litellm_provider"] == "bedrock"
+
+
 @pytest.mark.parametrize(
     "model",
     [
