@@ -16,6 +16,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -77,88 +78,6 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   return "default";
 };
 
-interface BudgetLimitEntry {
-  budget_duration: string;
-  max_budget: number | null;
-}
-
-const BUDGET_WINDOW_OPTIONS = [
-  { value: "1h",  label: "Hourly",  resetHint: "Resets every hour" },
-  { value: "24h", label: "Daily",   resetHint: "Resets daily at midnight UTC" },
-  { value: "7d",  label: "Weekly",  resetHint: "Resets every Sunday at midnight UTC" },
-  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
-];
-
-function BudgetWindowsEditor({
-  value,
-  onChange,
-}: {
-  value: BudgetLimitEntry[];
-  onChange: (v: BudgetLimitEntry[]) => void;
-}) {
-  const addWindow = () => {
-    onChange([...value, { budget_duration: "24h", max_budget: null }]);
-  };
-
-  const removeWindow = (idx: number) => {
-    onChange(value.filter((_, i) => i !== idx));
-  };
-
-  const updateWindow = (idx: number, field: keyof BudgetLimitEntry, fieldValue: any) => {
-    const updated = value.map((w, i) => (i === idx ? { ...w, [field]: fieldValue } : w));
-    onChange(updated);
-  };
-
-  return (
-    <div>
-      {value.map((window, idx) => {
-        const hint = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHint;
-        return (
-          <div key={idx} style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Select
-                value={window.budget_duration}
-                onChange={(v) => updateWindow(idx, "budget_duration", v)}
-                style={{ width: 130 }}
-                options={BUDGET_WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-              <InputNumber
-                step={0.01}
-                min={0}
-                precision={2}
-                value={window.max_budget ?? undefined}
-                onChange={(v) => updateWindow(idx, "max_budget", v ?? null)}
-                placeholder="Max spend ($)"
-                style={{ width: 160 }}
-                prefix="$"
-              />
-              <AntButton
-                type="text"
-                danger
-                size="small"
-                onClick={() => removeWindow(idx)}
-                style={{ padding: "0 4px" }}
-              >
-                ✕
-              </AntButton>
-            </div>
-            {hint && (
-              <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>
-                ↻ {hint}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <AntButton
-        size="small"
-        onClick={(e) => { e.preventDefault(); addWindow(); }}
-      >
-        + Add Budget Window
-      </AntButton>
-    </div>
-  );
-}
 
 export function KeyEditView({
   keyData,
@@ -186,7 +105,7 @@ export function KeyEditView({
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
-  const [budgetLimits, setBudgetLimits] = useState<BudgetLimitEntry[]>(
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
   );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
