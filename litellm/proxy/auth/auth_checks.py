@@ -2942,16 +2942,22 @@ async def _virtual_key_multi_budget_check(
     """
     Raises BudgetExceededError if any budget window in valid_token.budget_limits is exceeded.
 
-    Each window has its own Redis counter keyed by spend:key:{token}:window:{i}.
+    Each window has its own Redis counter keyed by spend:key:{token}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a key update.
+
+    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
+    per-window spend resets to zero within the current window period. This is an acceptable
+    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
     """
     if not valid_token.budget_limits:
         return
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    for i, window in enumerate(valid_token.budget_limits):
+    for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:key:{valid_token.token}:window:{i}"
+        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -3162,16 +3168,18 @@ async def _team_multi_budget_check(
     """
     Raises BudgetExceededError if any budget window in team_object.budget_limits is exceeded.
 
-    Each window has its own Redis counter keyed by spend:team:{team_id}:window:{i}.
+    Each window has its own Redis counter keyed by spend:team:{team_id}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a team update.
     """
     if team_object is None or not team_object.budget_limits:
         return
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    for i, window in enumerate(team_object.budget_limits):
+    for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:team:{team_object.team_id}:window:{i}"
+        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
