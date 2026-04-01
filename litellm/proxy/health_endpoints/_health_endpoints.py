@@ -37,10 +37,45 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-from litellm.secret_managers.main import get_secret, get_secret_bool
 
 #### Health ENDPOINTS ####
+
+
+def get_secret(
+    secret_name: str, default_value: Optional[Union[str, bool]] = None
+) -> Optional[Union[str, bool]]:
+    # Import lazily to avoid proxy startup cycles involving secret manager setup.
+    from litellm.secret_managers.main import get_secret as _get_secret
+
+    return _get_secret(secret_name=secret_name, default_value=default_value)
+
+
+def get_secret_bool(
+    secret_name: str, default_value: Optional[bool] = None
+) -> Optional[bool]:
+    # Import lazily to avoid proxy startup cycles involving secret manager setup.
+    from litellm.secret_managers.main import get_secret_bool as _get_secret_bool
+
+    return _get_secret_bool(secret_name=secret_name, default_value=default_value)
+
+
+def decrypt_value_helper(
+    value: str,
+    key: str,
+    exception_type: Literal["debug", "error"] = "error",
+    return_original_value: bool = False,
+) -> Optional[str]:
+    # Import lazily so this module does not participate in proxy import cycles.
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper as _decrypt_value_helper,
+    )
+
+    return _decrypt_value_helper(
+        value=value,
+        key=key,
+        exception_type=exception_type,
+        return_original_value=return_original_value,
+    )
 
 
 def _resolve_os_environ_variables(params: dict) -> dict:
