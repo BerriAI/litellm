@@ -1792,9 +1792,14 @@ async def increment_spend_counters(
             if isinstance(key_budget_limits, str):
                 key_budget_limits = json.loads(key_budget_limits)
             if isinstance(key_budget_limits, list):
-                for i in range(len(key_budget_limits)):
+                for window in key_budget_limits:
+                    duration = (
+                        window["budget_duration"]
+                        if isinstance(window, dict)
+                        else window.budget_duration
+                    )
                     await spend_counter_cache.async_increment_cache(
-                        key=f"spend:key:{hashed_token}:window:{i}",
+                        key=f"spend:key:{hashed_token}:window:{duration}",
                         value=response_cost,
                     )
 
@@ -1814,9 +1819,14 @@ async def increment_spend_counters(
             if isinstance(team_budget_limits, str):
                 team_budget_limits = json.loads(team_budget_limits)
             if isinstance(team_budget_limits, list):
-                for i in range(len(team_budget_limits)):
+                for window in team_budget_limits:
+                    duration = (
+                        window["budget_duration"]
+                        if isinstance(window, dict)
+                        else window.budget_duration
+                    )
                     await spend_counter_cache.async_increment_cache(
-                        key=f"spend:team:{team_id}:window:{i}",
+                        key=f"spend:team:{team_id}:window:{duration}",
                         value=response_cost,
                     )
 
