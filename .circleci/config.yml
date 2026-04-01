@@ -431,6 +431,10 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
+          name: Setup litellm-proxy-extras from local source
+          command: |
+            pip install --force-reinstall --no-deps -e litellm-proxy-extras/
+      - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
