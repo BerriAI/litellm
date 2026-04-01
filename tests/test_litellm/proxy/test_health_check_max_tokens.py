@@ -7,14 +7,14 @@ from unittest.mock import AsyncMock, patch, MagicMock
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default():
     """
-    Test that max_tokens defaults to 1 for non-wildcard models.
+    Test that max_tokens defaults to 16 for non-wildcard models.
     """
     model_info = {}
     litellm_params = {"model": "gpt-4"}
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 1
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
