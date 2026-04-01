@@ -70,7 +70,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -106,7 +106,7 @@ def test_completion_bedrock_guardrails(streaming):
     try:
         if streaming is False:
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -134,7 +134,7 @@ def test_completion_bedrock_guardrails(streaming):
         else:
             litellm.set_verbose = True
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -196,7 +196,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -741,7 +741,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -907,7 +907,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
@@ -1150,8 +1150,8 @@ def test_bedrock_cross_region_inference(model):
     "model, expected_base_model",
     [
         (
-            "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
         ),
     ],
 )
@@ -2060,7 +2060,7 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             "aws_region_name": "us-east-1",
         }
 
@@ -2908,7 +2908,7 @@ def test_bedrock_application_inference_profile():
     ) as mock_post2:
         try:
             resp = completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
