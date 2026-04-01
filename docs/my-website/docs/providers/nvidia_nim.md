@@ -15,8 +15,8 @@ https://docs.api.nvidia.com/nim/reference/
 | Description | Nvidia NIM is a platform that provides a simple API for deploying and using AI models. LiteLLM supports all models from [Nvidia NIM](https://developer.nvidia.com/nim/) |
 | Provider Route on LiteLLM | `nvidia_nim/` |
 | Provider Doc | [Nvidia NIM Docs ↗](https://developer.nvidia.com/nim/) |
-| API Endpoint for Provider | https://integrate.api.nvidia.com/v1/ |
-| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/responses`, `/embeddings` |
+| API Endpoint for Provider | https://integrate.api.nvidia.com/v1/ (chat/embeddings), https://ai.api.nvidia.com/v1/ (rerank) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/responses`, `/embeddings`, `/rerank` |
 
 ## API Key
 ```python

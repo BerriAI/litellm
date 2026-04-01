@@ -14,7 +14,7 @@ async def create_invitation_for_user(
     Create an invitation for the user to onboard to LiteLLM Admin UI.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,

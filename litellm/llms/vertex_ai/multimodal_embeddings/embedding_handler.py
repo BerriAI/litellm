@@ -46,7 +46,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding=False,
+        aembedding: Optional[bool] = False,
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
@@ -147,13 +147,13 @@ class VertexMultimodalEmbedding(VertexLLM):
         optional_params: dict,
         litellm_params: dict,
         data: dict,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: LiteLLMLoggingObj,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
         api_key: Optional[str] = None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         if client is None:
             _params = {}
             if timeout is not None:

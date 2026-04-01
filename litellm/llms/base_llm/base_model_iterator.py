@@ -13,6 +13,50 @@ from litellm.types.utils import (
 )
 
 
+def convert_model_response_to_streaming(
+    model_response: ModelResponse,
+) -> ModelResponseStream:
+    """
+    Convert a ModelResponse to ModelResponseStream.
+
+    This function transforms a standard completion response into a streaming chunk format
+    by converting 'message' fields to 'delta' fields.
+
+    Args:
+        model_response: The ModelResponse to convert
+
+    Returns:
+        ModelResponseStream: A streaming chunk version of the response
+
+    Raises:
+        ValueError: If the conversion fails
+    """
+    try:
+        streaming_choices: List[StreamingChoices] = []
+        for choice in model_response.choices:
+            streaming_choices.append(
+                StreamingChoices(
+                    index=choice.index,
+                    delta=Delta(
+                        **cast(Choices, choice).message.model_dump(),
+                    ),
+                    finish_reason=choice.finish_reason,
+                )
+            )
+        processed_chunk = ModelResponseStream(
+            id=model_response.id,
+            object="chat.completion.chunk",
+            created=model_response.created,
+            model=model_response.model,
+            choices=streaming_choices,
+        )
+        return processed_chunk
+    except Exception as e:
+        raise ValueError(
+            f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}"
+        )
+
+
 class BaseModelResponseIterator:
     def __init__(
         self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
@@ -81,26 +125,36 @@ class BaseModelResponseIterator:
             )
 
     def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = self.response_iterator.__next__()
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-            # chunk is a str at this point
-            return self._handle_string_chunk(str_line=str_line)
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
+
+                # Skip empty lines (common in SSE streams between events).
+                # Only apply to str chunks — non-string objects (e.g. Pydantic
+                # BaseModel events from the Responses API) must pass through.
+                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                    continue
+
+                # chunk is a str at this point
+                return self._handle_string_chunk(str_line=str_line)
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
     # Async iterator
     def __aiter__(self):
@@ -108,30 +162,39 @@ class BaseModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
+        while True:
+            try:
+                chunk = await self.async_response_iterator.__anext__()
 
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
 
-            # chunk is a str at this point
-            chunk = self._handle_string_chunk(str_line=str_line)
+                # Skip empty lines (common in SSE streams between events).
+                # Only apply to str chunks — non-string objects (e.g. Pydantic
+                # BaseModel events from the Responses API) must pass through.
+                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                    continue
 
-            return chunk
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                # chunk is a str at this point
+                chunk = self._handle_string_chunk(str_line=str_line)
+
+                return chunk
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
@@ -147,28 +210,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         return self
 
     def _chunk_parser(self, chunk_data: ModelResponse) -> ModelResponseStream:
-        try:
-            streaming_choices: List[StreamingChoices] = []
-            for choice in chunk_data.choices:
-                streaming_choices.append(
-                    StreamingChoices(
-                        index=choice.index,
-                        delta=Delta(
-                            **cast(Choices, choice).message.model_dump(),
-                        ),
-                        finish_reason=choice.finish_reason,
-                    )
-                )
-            processed_chunk = ModelResponseStream(
-                id=chunk_data.id,
-                object="chat.completion",
-                created=chunk_data.created,
-                model=chunk_data.model,
-                choices=streaming_choices,
-            )
-            return processed_chunk
-        except Exception as e:
-            raise ValueError(f"Failed to decode chunk: {chunk_data}. Error: {e}")
+        return convert_model_response_to_streaming(chunk_data)
 
     def __next__(self):
         if self.is_done:

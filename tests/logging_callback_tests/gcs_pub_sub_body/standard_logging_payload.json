@@ -61,7 +61,8 @@
             "content": "hi",
             "role": "assistant",
             "tool_calls": null,
-            "function_call": null
+            "function_call": null,
+            "provider_specific_fields": null
           }
         }
       ],

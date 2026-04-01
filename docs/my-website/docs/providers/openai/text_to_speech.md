@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # OpenAI - Text-to-speech
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input text |
+| Supported Models | tts-1, tts-1-hd, gpt-4o-mini-tts | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
@@ -34,7 +46,7 @@ os.environ["OPENAI_API_KEY"] = "sk-.."
 
 async def test_async_speech(): 
     speech_file_path = Path(__file__).parent / "speech.mp3"
-    response = await litellm.aspeech(
+    response = await aspeech(
             model="openai/tts-1",
             voice="alloy",
             input="the quick brown fox jumped over the lazy dogs",

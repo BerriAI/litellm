@@ -11,12 +11,12 @@ import TabItem from '@theme/TabItem';
 |----------|---------------|---------------|
 | Anthropic (Claude) | `vertex_ai/claude-*` | [Vertex AI - Anthropic Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude) |
 | DeepSeek | `vertex_ai/deepseek-ai/{MODEL}` | [Vertex AI - DeepSeek Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/deepseek) |
+| ZAI (GLM) | `vertex_ai/zai-org/{MODEL}` | [Vertex AI - GLM Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/zaiorg/glm-47) |
 | Meta/Llama | `vertex_ai/meta/{MODEL}` | [Vertex AI - Meta Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama) |
 | Mistral | `vertex_ai/mistral-*` | [Vertex AI - Mistral Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral) |
 | AI21 (Jamba) | `vertex_ai/jamba-*` | [Vertex AI - AI21 Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/ai21) |
 | Qwen | `vertex_ai/qwen/*` | [Vertex AI - Qwen Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/qwen) |
 | OpenAI (GPT-OSS) | `vertex_ai/openai/gpt-oss-*` | [Vertex AI - GPT-OSS Models](https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/) |
-| Model Garden | `vertex_ai/openai/{MODEL_ID}` or `vertex_ai/{MODEL_ID}` | [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 
 ## Vertex AI - Anthropic (Claude)
 
@@ -227,6 +227,79 @@ ModelResponse(
 |------------------|------------------------------|
 | vertex_ai/deepseek-ai/deepseek-r1-0528-maas | `completion('vertex_ai/deepseek-ai/deepseek-r1-0528-maas', messages)` |
 
+## VertexAI ZAI (GLM)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/zai-org/{MODEL}` |
+| Vertex Documentation | [Vertex AI - GLM Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/zaiorg/glm-47) |
+
+**LiteLLM Supports all Vertex AI GLM Models.** Ensure you use the `vertex_ai/zai-org/` prefix for all Vertex AI GLM models.
+
+| Model Name | Usage |
+|------------|-------|
+| vertex_ai/zai-org/glm-4.7-maas | `completion('vertex_ai/zai-org/glm-4.7-maas', messages)` |
+
+#### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+response = completion(
+    model="vertex_ai/zai-org/glm-4.7-maas",
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_project="your-vertex-project",
+    # vertex_location routes to "global"
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+  - model_name: glm-4.7
+    litellm_params:
+      model: vertex_ai/zai-org/glm-4.7-maas
+      vertex_project: "my-project"
+      # vertex_location routes to "global"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "glm-4.7",
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
 
 ## VertexAI Meta/Llama API
  
@@ -792,113 +865,4 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```
 
 </TabItem>
-</Tabs>
-
-## Model Garden
-
-:::tip
-
-All OpenAI compatible models from Vertex Model Garden are supported. 
-
-:::
-
-#### Using Model Garden
-
-**Almost all Vertex Model Garden models are OpenAI compatible.**
-
-<Tabs>
-
-<TabItem value="openai" label="OpenAI Compatible Models">
-
-| Property | Details |
-|----------|---------|
-| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [Model Garden LiteLLM Inference](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/use-cases/model_garden_litellm_inference.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
-| Supported Operations | `/chat/completions`, `/embeddings` |
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/openai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="Proxy">
-
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: llama3-1-8b-instruct
-      litellm_params:
-        model: vertex_ai/openai/5464397967697903616
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-
-
-
-</TabItem>
-
-</Tabs>
-
-</TabItem>
-
-<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
 </Tabs>

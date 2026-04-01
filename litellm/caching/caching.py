@@ -78,6 +78,8 @@ class Cache:
             "text_completion",
             "arerank",
             "rerank",
+            "responses",
+            "aresponses",
         ],
         # s3 Bucket, boto3 configuration
         azure_account_url: Optional[str] = None,
@@ -106,6 +108,7 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        qdrant_semantic_cache_vector_size: Optional[int] = None,
         # GCP IAM authentication parameters
         gcp_service_account: Optional[str] = None,
         gcp_ssl_ca_certs: Optional[str] = None,
@@ -163,6 +166,14 @@ class Cache:
             None. Cache is set as a litellm param
         """
         if type == LiteLLMCacheType.REDIS:
+            # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
+            if not redis_startup_nodes:
+                _env_cluster_nodes = litellm.get_secret("REDIS_CLUSTER_NODES")
+                if _env_cluster_nodes is not None and isinstance(
+                    _env_cluster_nodes, str
+                ):
+                    redis_startup_nodes = json.loads(_env_cluster_nodes)
+
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
                 cluster_kwargs = {
@@ -205,6 +216,7 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
+                vector_size=qdrant_semantic_cache_vector_size,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()
@@ -796,6 +808,8 @@ def enable_cache(
         "text_completion",
         "arerank",
         "rerank",
+        "responses",
+        "aresponses",
     ],
     **kwargs,
 ):
@@ -854,6 +868,8 @@ def update_cache(
         "text_completion",
         "arerank",
         "rerank",
+        "responses",
+        "aresponses",
     ],
     **kwargs,
 ):

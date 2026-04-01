@@ -125,3 +125,66 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: DATABASE_URL
+
+  - it: should use default service account for helm hooks when serviceAccount.create is true
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        hooks:
+          helm:
+            enabled: true
+      serviceAccount:
+        create: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: should use migrationJob.serviceAccountName override for helm hooks when serviceAccount.create is true
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        serviceAccountName: migration-sa
+        hooks:
+          helm:
+            enabled: true
+      serviceAccount:
+        create: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: migration-sa
+
+  - it: should use chart service account when helm hooks are disabled
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        hooks:
+          helm:
+            enabled: false
+      serviceAccount:
+        create: true
+        name: my-custom-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-custom-sa
+
+  - it: should use pre-existing service account when helm hooks are enabled but serviceAccount.create is false
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        hooks:
+          helm:
+            enabled: true
+      serviceAccount:
+        create: false
+        name: pre-existing-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: pre-existing-sa

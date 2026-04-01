@@ -1,44 +1,22 @@
 import React, { useEffect } from "react";
-import {
-  Button,
-  TextInput,
-  Grid,
-  Col,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-} from "@tremor/react";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  message,
-} from "antd";
-import { budgetUpdateCall } from "../networking";
+import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
+import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "./budget_panel";
 import NotificationsManager from "../molecules/notifications_manager";
 
-interface BudgetModalProps {
+interface EditBudgetModalProps {
   isModalVisible: boolean;
-  accessToken: string | null;
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  setBudgetList: React.Dispatch<React.SetStateAction<any[]>>;
-  existingBudget: budgetItem
-  handleUpdateCall: () => void
+  existingBudget: budgetItem;
 }
-const EditBudgetModal: React.FC<BudgetModalProps> = ({
+const EditBudgetModal: React.FC<EditBudgetModalProps> = ({
   isModalVisible,
-  accessToken,
   setIsModalVisible,
-  setBudgetList,
   existingBudget,
-  handleUpdateCall
 }) => {
-  console.log("existingBudget", existingBudget)
   const [form] = Form.useForm();
+  const updateBudget = useUpdateBudget();
 
   useEffect(() => {
     form.setFieldsValue(existingBudget);
@@ -54,30 +32,23 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: Record<string, any>) => {
-    if (accessToken == null || accessToken == undefined) {
-      return;
-    }
+  const handleUpdate = async (formValues: Record<string, any>) => {
     try {
       NotificationsManager.info("Making API Call");
-      setIsModalVisible(true);
-      const response = await budgetUpdateCall(accessToken, formValues);
-      setBudgetList((prevData) =>
-        prevData ? [...prevData, response] : [response]
-      ); // Check if prevData is null
+      await updateBudget.mutateAsync(formValues);
       NotificationsManager.success("Budget Updated");
       form.resetFields();
-      handleUpdateCall();
+      setIsModalVisible(false);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
+      console.error("Error updating the budget:", error);
+      NotificationsManager.fromBackend(`Error updating the budget: ${error}`);
     }
   };
 
   return (
     <Modal
       title="Edit Budget"
-      visible={isModalVisible}
+      open={isModalVisible}
       width={800}
       footer={null}
       onOk={handleOk}
@@ -85,7 +56,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
     >
       <Form
         form={form}
-        onFinish={handleCreate}
+        onFinish={handleUpdate}
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
@@ -95,28 +66,14 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
           <Form.Item
             label="Budget ID"
             name="budget_id"
-            rules={[
-              {
-                required: true,
-                message: "Please input a human-friendly name for the budget",
-              },
-            ]}
-            help="A human-friendly name for the budget"
+            help="Budget ID cannot be changed after creation"
           >
-            <TextInput placeholder="" />
+            <TextInput placeholder="" disabled={true} />
           </Form.Item>
-          <Form.Item
-            label="Max Tokens per minute"
-            name="tpm_limit"
-            help="Default is model limit."
-          >
+          <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
           </Form.Item>
-          <Form.Item
-            label="Max Requests per minute"
-            name="rpm_limit"
-            help="Default is model limit."
-          >
+          <Form.Item label="Max Requests per minute" name="rpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
           </Form.Item>
 
@@ -128,11 +85,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
-              <Form.Item
-                className="mt-8"
-                label="Reset Budget"
-                name="budget_duration"
-              >
+              <Form.Item className="mt-8" label="Reset Budget" name="budget_duration">
                 <Select defaultValue={null} placeholder="n/a">
                   <Select.Option value="24h">daily</Select.Option>
                   <Select.Option value="7d">weekly</Select.Option>

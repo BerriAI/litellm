@@ -103,6 +103,24 @@ class TmpFunction:
         )
 
 
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
+    assert env_vars == [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    ]
+
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
+    assert alias_env_vars == env_vars
+
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
+    assert missing_env_vars == []
+
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
+    assert none_env_vars == []
+
+
 @pytest.mark.asyncio
 async def test_async_chat_openai_stream():
     try:
@@ -160,7 +178,7 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 mock_response="Exception: content_filter_policy",
                 stream=True,
@@ -195,7 +213,7 @@ def test_async_custom_handler_stream():
         async def test_1():
             nonlocal complete_streaming_response
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3", messages=messages, stream=True
+                model="azure/gpt-4.1-mini", messages=messages, stream=True
             )
             async for chunk in response:
                 complete_streaming_response += (
@@ -239,7 +257,7 @@ def test_azure_completion_stream():
         complete_streaming_response = ""
 
         response = litellm.completion(
-            model="azure/chatgpt-v-3", messages=messages, stream=True
+            model="azure/gpt-4.1-mini", messages=messages, stream=True
         )
         for chunk in response:
             complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
@@ -392,7 +410,7 @@ async def test_async_custom_handler_embedding_optional_param():
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
-        model="azure/azure-embedding-model", input=["hello world"], user="John"
+        model="text-embedding-ada-002", input=["hello world"], user="John"
     )
     await asyncio.sleep(1)  # success callback is async
     assert customHandler_optional_params.user == "John"
@@ -472,6 +490,7 @@ async def test_cost_tracking_with_caching():
     assert response_cost_2 == 0
 
 
+@pytest.mark.flaky(retries=3, delay=3)
 def test_redis_cache_completion_stream():
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set
     import random
@@ -504,6 +523,7 @@ def test_redis_cache_completion_stream():
             temperature=0.2,
             stream=True,
             caching=True,
+            mock_response="In the stillness of numbers, the world turns quietly.",
         )
         response_1_content = ""
         response_1_id = None
@@ -513,7 +533,7 @@ def test_redis_cache_completion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(1)  # sleep for 0.1 seconds allow set cache to occur
+        time.sleep(1)  # sleep for cache write to propagate
         response2 = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -535,9 +555,9 @@ def test_redis_cache_completion_stream():
         assert (
             response_1_id == response_2_id
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-        # assert (
-        #     response_1_content == response_2_content
-        # ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        assert (
+            response_1_content == response_2_content
+        ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None

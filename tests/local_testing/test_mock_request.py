@@ -155,15 +155,14 @@ def test_router_mock_request_with_mock_timeout_with_fallbacks():
                 },
             },
             {
-                "model_name": "azure-gpt",
+                "model_name": "gpt-4.1-nano",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "model": "gpt-4.1-nano",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
         ],
-        fallbacks=[{"gpt-3.5-turbo": ["azure-gpt"]}],
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4.1-nano"]}],
     )
     response = router.completion(
         model="gpt-3.5-turbo",
@@ -176,5 +175,5 @@ def test_router_mock_request_with_mock_timeout_with_fallbacks():
     end_time = time.time()
     assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
     assert (
-        "gpt-3.5-turbo-0125" in response.model
-    ), "Model should be azure gpt-3.5-turbo-0125"
+        "gpt-4.1-nano" in response.model
+    ), "Model should be gpt-4.1-nano"

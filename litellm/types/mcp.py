@@ -15,6 +15,7 @@ else:
     MCPImageContent = Any
     MCPTextContent = Any
 
+
 class MCPTransport(str, enum.Enum):
     sse = "sse"
     http = "http"
@@ -26,17 +27,23 @@ class MCPSpecVersion(str, enum.Enum):
     mar_2025 = "2025-03-26"
     jun_2025 = "2025-06-18"
 
+
 class MCPAuth(str, enum.Enum):
     none = "none"
     api_key = "api_key"
     bearer_token = "bearer_token"
     basic = "basic"
     authorization = "authorization"
+    oauth2 = "oauth2"
+    aws_sigv4 = "aws_sigv4"
+    token = "token"
 
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
+MCPSpecVersionType = Literal[
+    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025
+]
 MCPAuthType = Optional[
     Literal[
         MCPAuth.none,
@@ -44,9 +51,65 @@ MCPAuthType = Optional[
         MCPAuth.bearer_token,
         MCPAuth.basic,
         MCPAuth.authorization,
+        MCPAuth.oauth2,
+        MCPAuth.aws_sigv4,
+        MCPAuth.token,
     ]
 ]
 
+
+class MCPPublicServer(BaseModel):
+    """
+    Safe params for public MCP servers
+    """
+
+    server_id: str
+    name: str
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
+    url: Optional[str] = None
+    transport: MCPTransportType
+    spec_path: Optional[str] = None
+    auth_type: Optional[MCPAuthType] = None
+    mcp_info: Optional[Dict[str, Any]] = None
+
+
+class MCPCredentials(TypedDict, total=False):
+    auth_value: Optional[str]
+    """
+    Authentication value
+    """
+
+    client_id: Optional[str]
+    """
+    OAuth 2.0 client identifier used when auth_type is oauth2
+    """
+
+    client_secret: Optional[str]
+    """
+    OAuth 2.0 client secret used when auth_type is oauth2
+    """
+
+    scopes: Optional[List[str]]
+    """
+    OAuth 2.0 scopes to request when exchanging the client credentials
+    """
+
+    # AWS SigV4 fields
+    aws_access_key_id: Optional[str]
+    """AWS access key ID for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_secret_access_key: Optional[str]
+    """AWS secret access key for SigV4 signing. Optional — falls back to boto3 credential chain."""
+
+    aws_session_token: Optional[str]
+    """AWS session token for temporary STS credentials. Optional."""
+
+    aws_region_name: Optional[str]
+    """AWS region for SigV4 signing (e.g., 'us-east-1'). Not a secret — stored unencrypted."""
+
+    aws_service_name: Optional[str]
+    """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
 
 
 class MCPServerCostInfo(TypedDict, total=False):
@@ -82,6 +145,7 @@ class MCPPreCallRequestObject(BaseModel):
     """
     Pydantic object used for MCP pre_call_hook request validation and modification
     """
+
     tool_name: str
     arguments: Dict[str, Any]
     server_name: Optional[str] = None
@@ -93,6 +157,7 @@ class MCPPreCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP pre_call_hook response
     """
+
     should_proceed: bool = True
     modified_arguments: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
@@ -103,6 +168,7 @@ class MCPDuringCallRequestObject(BaseModel):
     """
     Pydantic object used for MCP during_call_hook request
     """
+
     tool_name: str
     arguments: Dict[str, Any]
     server_name: Optional[str] = None
@@ -114,6 +180,7 @@ class MCPDuringCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP during_call_hook response
     """
+
     should_continue: bool = True
     error_message: Optional[str] = None
     hidden_params: HiddenParams = HiddenParams()
@@ -123,5 +190,8 @@ class MCPPostCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP post_call_hook response
     """
-    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
+
+    mcp_tool_call_response: List[
+        Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
+    ]
     hidden_params: HiddenParams

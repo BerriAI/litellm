@@ -2,26 +2,25 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-import uuid
 from typing import Any, Dict, List, Optional, Union
 
+import httpx
+
+from litellm._uuid import uuid
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
+    OptionalRerankParams,
     RerankBilledUnits,
+    RerankRequest,
     RerankResponse,
     RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
     RerankTokens,
-    OptionalRerankParams,
-    RerankRequest,
 )
-
-import httpx
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.secret_managers.main import get_secret_str
 
 
 class HostedVLLMRerankError(BaseLLMException):
@@ -38,12 +37,20 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/rerank"):
-                api_base = f"{api_base}/v1/rerank"
+            # Preserve backward compatibility
+            if api_base.endswith("/v1/rerank"):
+                api_base = api_base.replace("/v1/rerank", "/rerank")
+            elif not api_base.endswith("/rerank"):
+                api_base = f"{api_base}/rerank"
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
@@ -69,19 +76,21 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         """
         Map parameters for Hosted VLLM rerank
         """
         if max_chunks_per_doc is not None:
             raise ValueError("Hosted VLLM does not support max_chunks_per_doc")
-            
-        return OptionalRerankParams(
-            query=query,
-            documents=documents,
-            top_n=top_n,
-            rank_fields=rank_fields,
-            return_documents=return_documents,
+
+        return dict(
+            OptionalRerankParams(
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+            )
         )
 
     def validate_environment(
@@ -89,6 +98,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
@@ -109,14 +119,14 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Hosted VLLM rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
-        
+
         rerank_request = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
@@ -148,17 +158,21 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
                 f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}"
             )
 
-        return RerankResponse(**raw_response_json)
+        return self._transform_response(raw_response_json)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
+        return HostedVLLMRerankError(
+            message=error_message, status_code=status_code, headers=headers
+        )
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
         usage_data = response.get("usage", {})
-        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
+        _billed_units = RerankBilledUnits(
+            total_tokens=usage_data.get("total_tokens", 0)
+        )
         _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
@@ -199,4 +213,4 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             id=response.get("id") or str(uuid.uuid4()),
             results=rerank_results,
             meta=rerank_meta,
-        ) 
+        )

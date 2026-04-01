@@ -8,7 +8,6 @@ import TabItem from '@theme/TabItem';
 # Pre-Requisites
 
 - You must set up a Postgres database (e.g. Supabase, Neon, etc.)
-- To enable team member rate limits, set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` **before starting the proxy server**. Without this, team member rate limits will not be enforced.
 
 
 ## Default Budget for Auto-Generated JWT Teams
@@ -178,3 +177,7 @@ Expect to see this metric on prometheus to track the Remaining Budget for the te
 ```shell
 litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-6ca8-4f47-b804-2b79d07aa99a"} 9.699999999999992e-06
 ```
+
+## See Also
+
+- [Per-model TPM/RPM for teams](./users.md#per-team-model) - Set rate limits per model for all keys in a team

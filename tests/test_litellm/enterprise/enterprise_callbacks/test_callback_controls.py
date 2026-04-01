@@ -22,13 +22,13 @@ class TestEnterpriseCallbackControls:
     @pytest.fixture
     def mock_premium_user(self):
         """Fixture to mock premium user check as True"""
-        with patch.object(EnterpriseCallbackControls, '_premium_user_check', return_value=True):
+        with patch.object(EnterpriseCallbackControls, '_should_allow_dynamic_callback_disabling', return_value=True):
             yield
     
     @pytest.fixture 
     def mock_non_premium_user(self):
         """Fixture to mock premium user check as False"""
-        with patch.object(EnterpriseCallbackControls, '_premium_user_check', return_value=False):
+        with patch.object(EnterpriseCallbackControls, '_should_allow_dynamic_callback_disabling', return_value=False):
             yield
 
     @pytest.fixture
@@ -214,3 +214,47 @@ class TestEnterpriseCallbackControls:
         
         # Test non-disabled callback is not disabled
         assert EnterpriseCallbackControls.is_callback_disabled_dynamically("prometheus", litellm_params, standard_callback_dynamic_params) is False
+
+    def test_admin_can_disable_dynamic_callback_disabling(self, mock_request_headers):
+        """
+        Test that when admin sets allow_dynamic_callback_disabling to False,
+        callbacks cannot be disabled dynamically even for premium users
+        """
+        mock_request_headers.return_value = {X_LITELLM_DISABLE_CALLBACKS: "langfuse"}
+        litellm_params = {"proxy_server_request": {"url": "test"}}
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        
+        # Mock litellm.allow_dynamic_callback_disabling set to False
+        with patch('litellm.allow_dynamic_callback_disabling', False):
+            with patch('litellm.proxy.proxy_server.premium_user', True):
+                result = EnterpriseCallbackControls.is_callback_disabled_dynamically("langfuse", litellm_params, standard_callback_dynamic_params)
+                assert result is False
+
+    def test_admin_can_enable_dynamic_callback_disabling(self, mock_request_headers):
+        """
+        Test that when admin sets allow_dynamic_callback_disabling to True,
+        callbacks can be disabled dynamically for premium users
+        """
+        mock_request_headers.return_value = {X_LITELLM_DISABLE_CALLBACKS: "langfuse"}
+        litellm_params = {"proxy_server_request": {"url": "test"}}
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        
+        # Mock litellm.allow_dynamic_callback_disabling set to True
+        with patch('litellm.allow_dynamic_callback_disabling', True):
+            with patch('litellm.proxy.proxy_server.premium_user', True):
+                result = EnterpriseCallbackControls.is_callback_disabled_dynamically("langfuse", litellm_params, standard_callback_dynamic_params)
+                assert result is True
+
+    def test_default_admin_setting_allows_dynamic_callback_disabling(self, mock_request_headers):
+        """
+        Test that when allow_dynamic_callback_disabling is not set,
+        it defaults to True and allows dynamic callback disabling for premium users
+        """
+        mock_request_headers.return_value = {X_LITELLM_DISABLE_CALLBACKS: "langfuse"}
+        litellm_params = {"proxy_server_request": {"url": "test"}}
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        
+        # litellm.allow_dynamic_callback_disabling should default to True
+        with patch('litellm.proxy.proxy_server.premium_user', True):
+            result = EnterpriseCallbackControls.is_callback_disabled_dynamically("langfuse", litellm_params, standard_callback_dynamic_params)
+            assert result is True

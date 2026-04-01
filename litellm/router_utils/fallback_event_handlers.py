@@ -167,8 +167,8 @@ async def log_success_fallback_event(
     """
     Log a successful fallback event to all registered callbacks.
 
-    This function iterates through all callbacks, initializing _known_custom_logger_compatible_callbacks  if needed,
-    and calls the log_success_fallback_event method on CustomLogger instances.
+    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
+    CustomLogger instances from all callback lists.
 
     Args:
         original_model_group (str): The original model group before fallback.
@@ -177,45 +177,22 @@ async def log_success_fallback_event(
     Note:
         Errors during logging are caught and reported but do not interrupt the process.
     """
-    from litellm.litellm_core_utils.litellm_logging import (
-        _init_custom_logger_compatible_class,
+    # Get deduplicated CustomLogger instances from all callback lists
+    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        CustomLogger
     )
 
-    for _callback in litellm.callbacks:
-        if isinstance(_callback, CustomLogger) or (
-            _callback in litellm._known_custom_logger_compatible_callbacks
-        ):
-            try:
-                _callback_custom_logger: Optional[CustomLogger] = None
-                if _callback in litellm._known_custom_logger_compatible_callbacks:
-                    _callback_custom_logger = _init_custom_logger_compatible_class(
-                        logging_integration=_callback,  # type: ignore
-                        llm_router=None,
-                        internal_usage_cache=None,
-                    )
-                elif isinstance(_callback, CustomLogger):
-                    _callback_custom_logger = _callback
-                else:
-                    verbose_router_logger.exception(
-                        f"{_callback} logger not found / initialized properly"
-                    )
-                    continue
-
-                if _callback_custom_logger is None:
-                    verbose_router_logger.exception(
-                        f"{_callback} logger not found / initialized properly, callback is None"
-                    )
-                    continue
-
-                await _callback_custom_logger.log_success_fallback_event(
-                    original_model_group=original_model_group,
-                    kwargs=kwargs,
-                    original_exception=original_exception,
-                )
-            except Exception as e:
-                verbose_router_logger.error(
-                    f"Error in log_success_fallback_event: {str(e)}"
-                )
+    for _callback_custom_logger in custom_loggers:
+        try:
+            await _callback_custom_logger.log_success_fallback_event(
+                original_model_group=original_model_group,
+                kwargs=kwargs,
+                original_exception=original_exception,
+            )
+        except Exception as e:
+            verbose_router_logger.error(
+                f"Error in log_success_fallback_event: {str(e)}"
+            )
 
 
 async def log_failure_fallback_event(
@@ -224,8 +201,8 @@ async def log_failure_fallback_event(
     """
     Log a failed fallback event to all registered callbacks.
 
-    This function iterates through all callbacks, initializing _known_custom_logger_compatible_callbacks if needed,
-    and calls the log_failure_fallback_event method on CustomLogger instances.
+    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
+    CustomLogger instances from all callback lists.
 
     Args:
         original_model_group (str): The original model group before fallback.
@@ -234,45 +211,22 @@ async def log_failure_fallback_event(
     Note:
         Errors during logging are caught and reported but do not interrupt the process.
     """
-    from litellm.litellm_core_utils.litellm_logging import (
-        _init_custom_logger_compatible_class,
+    # Get deduplicated CustomLogger instances from all callback lists
+    custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        CustomLogger
     )
 
-    for _callback in litellm.callbacks:
-        if isinstance(_callback, CustomLogger) or (
-            _callback in litellm._known_custom_logger_compatible_callbacks
-        ):
-            try:
-                _callback_custom_logger: Optional[CustomLogger] = None
-                if _callback in litellm._known_custom_logger_compatible_callbacks:
-                    _callback_custom_logger = _init_custom_logger_compatible_class(
-                        logging_integration=_callback,  # type: ignore
-                        llm_router=None,
-                        internal_usage_cache=None,
-                    )
-                elif isinstance(_callback, CustomLogger):
-                    _callback_custom_logger = _callback
-                else:
-                    verbose_router_logger.exception(
-                        f"{_callback} logger not found / initialized properly"
-                    )
-                    continue
-
-                if _callback_custom_logger is None:
-                    verbose_router_logger.exception(
-                        f"{_callback} logger not found / initialized properly"
-                    )
-                    continue
-
-                await _callback_custom_logger.log_failure_fallback_event(
-                    original_model_group=original_model_group,
-                    kwargs=kwargs,
-                    original_exception=original_exception,
-                )
-            except Exception as e:
-                verbose_router_logger.error(
-                    f"Error in log_failure_fallback_event: {str(e)}"
-                )
+    for _callback_custom_logger in custom_loggers:
+        try:
+            await _callback_custom_logger.log_failure_fallback_event(
+                original_model_group=original_model_group,
+                kwargs=kwargs,
+                original_exception=original_exception,
+            )
+        except Exception as e:
+            verbose_router_logger.error(
+                f"Error in log_failure_fallback_event: {str(e)}"
+            )
 
 
 def _check_non_standard_fallback_format(fallbacks: Optional[List[Any]]) -> bool:

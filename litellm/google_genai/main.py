@@ -85,7 +85,6 @@ class GenerateContentHelper:
         contents: GenerateContentContentListUnionDict,
         config: Optional[GenerateContentConfigDict] = None,
         custom_llm_provider: Optional[str] = None,
-        stream: bool = False,
         tools: Optional[ToolConfigDict] = None,
         **kwargs,
     ) -> GenerateContentSetupResult:
@@ -97,8 +96,7 @@ class GenerateContentHelper:
             contents: The content to generate from
             config: Optional configuration
             custom_llm_provider: Optional custom LLM provider
-            stream: Whether this is a streaming call
-            local_vars: Local variables from the calling function
+            tools: Optional tools
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -114,7 +112,7 @@ class GenerateContentHelper:
 
         ## MOCK RESPONSE LOGIC (only for non-streaming)
         if (
-            not stream
+            not kwargs.get("stream", False)
             and litellm_params.mock_response
             and isinstance(litellm_params.mock_response, str)
         ):
@@ -131,6 +129,9 @@ class GenerateContentHelper:
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+
+        if litellm_params.custom_llm_provider is None:
+            litellm_params.custom_llm_provider = custom_llm_provider
 
         # get provider config
         generate_content_provider_config: Optional[
@@ -166,12 +167,17 @@ class GenerateContentHelper:
                 model=model,
             )
         )
+        # Extract systemInstruction from kwargs to pass to transform
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
+        )
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
                 contents=contents,
                 tools=tools,
                 generate_content_config_dict=generate_content_config_dict,
+                system_instruction=system_instruction,
             )
         )
 
@@ -179,7 +185,8 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
@@ -289,7 +296,7 @@ def generate_content(
     """
     local_vars = locals()
     try:
-        _is_async = kwargs.pop("agenerate_content", False) is True
+        _is_async = kwargs.pop("agenerate_content", False)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -309,9 +316,13 @@ def generate_content(
             contents=contents,
             config=config,
             custom_llm_provider=custom_llm_provider,
-            stream=False,
             tools=tools,
             **kwargs,
+        )
+
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
         )
 
         # Check if we should use the adapter (when provider config is None)
@@ -321,9 +332,10 @@ def generate_content(
                 model=model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
-                stream=False,
+                tools=tools,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 
@@ -342,8 +354,8 @@ def generate_content(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            stream=False,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
         return response
@@ -391,19 +403,24 @@ async def agenerate_content_stream(
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
-            **{
-                "model": model,
-                "contents": contents,
-                "config": config,
-                "custom_llm_provider": custom_llm_provider,
-                "stream": True,
-                "tools": tools,
-                **kwargs,
-            }
+            model=model,
+            contents=contents,
+            config=config,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            **kwargs,
+        )
+
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get(
+            "system_instruction"
         )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
+            if "stream" in kwargs:
+                kwargs.pop("stream", None)
+
             # Use the adapter to convert to completion format
             return (
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -411,7 +428,9 @@ async def agenerate_content_stream(
                     contents=contents,  # type: ignore
                     config=setup_result.generate_content_config_dict,
                     litellm_params=setup_result.litellm_params,
+                    tools=tools,
                     stream=True,
+                    extra_headers=extra_headers,
                     **kwargs,
                 )
             )
@@ -434,6 +453,7 @@ async def agenerate_content_stream(
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
     except Exception as e:
@@ -479,21 +499,24 @@ def generate_content_stream(
             contents=contents,
             config=config,
             custom_llm_provider=custom_llm_provider,
-            stream=True,
             tools=tools,
             **kwargs,
         )
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
+            if "stream" in kwargs:
+                kwargs.pop("stream", None)
+
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
-                stream=True,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                stream=True,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 

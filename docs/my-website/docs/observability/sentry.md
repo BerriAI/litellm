@@ -61,6 +61,12 @@ print(response)
 
 These options are useful for high-volume applications where sampling a subset of errors and transactions provides sufficient visibility while managing costs.
 
+#### Sentry Environment
+- **SENTRY_ENVIRONMENT**: Specifies the environment name for your Sentry events (e.g., "production", "staging", "development")
+  - Helps organize and filter errors by deployment environment in Sentry dashboard
+  - Example: `os.environ["SENTRY_ENVIRONMENT"] = "staging"`
+  - If not set, Sentry will use 'production' as the default environment
+
 ## Redacting Messages, Response Content from Sentry Logging 
 
 Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to sentry, but request metadata will still be logged.

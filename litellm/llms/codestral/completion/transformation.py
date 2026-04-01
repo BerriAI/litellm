@@ -102,7 +102,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "finish_reason": finish_reason,
             }
 
-        original_chunk = litellm.ModelResponse(**chunk_data_dict, stream=True)
+        original_chunk = litellm.ModelResponseStream(**chunk_data_dict)
         _choices = chunk_data_dict.get("choices", []) or []
         if len(_choices) == 0:
             return {

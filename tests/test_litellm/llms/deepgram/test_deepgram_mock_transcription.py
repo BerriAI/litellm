@@ -277,3 +277,157 @@ class TestDeepgramMockTranscription:
 
             # Verify response
             assert response.text == "Hello, this is a test transcription."
+
+    def test_transcription_response_with_detected_language(self, test_audio_bytes):
+        """Test response transformation when detected_language is present"""
+        # Mock response with detected_language
+        mock_response_data = {
+            "metadata": {
+                "transaction_key": "deprecated",
+                "request_id": "test-request-id",
+                "sha256": "test-sha",
+                "created": "2024-01-01T00:00:00.000Z",
+                "duration": 1.2,
+                "channels": 1,
+                "models": ["nova-2"],
+            },
+            "results": {
+                "channels": [
+                    {
+                        "detected_language": "fr",
+                        "alternatives": [
+                            {
+                                "transcript": "Bonjour le monde",
+                                "confidence": 0.99,
+                                "words": [
+                                    {"word": "Bonjour", "start": 0.0, "end": 0.5, "confidence": 0.99},
+                                    {"word": "le", "start": 0.5, "end": 0.7, "confidence": 0.98},
+                                    {"word": "monde", "start": 0.7, "end": 1.2, "confidence": 0.97},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            return_value=mock_response,
+        ):
+            response: TranscriptionResponse = litellm.transcription(
+                model="deepgram/nova-2",
+                file=test_audio_bytes,
+                api_key="test-api-key",
+                detect_language=True,
+            )
+
+            # Verify that detected_language is used
+            assert response["language"] == "fr"
+            assert response.text == "Bonjour le monde"
+            assert response["task"] == "transcribe"
+            assert response["duration"] == 1.2
+            assert len(response["words"]) == 3
+
+    def test_transcription_response_without_detected_language(self, test_audio_bytes):
+        """Test response transformation when detected_language is not present"""
+        # Mock response without detected_language
+        mock_response_data = {
+            "metadata": {
+                "transaction_key": "deprecated",
+                "request_id": "test-request-id",
+                "sha256": "test-sha",
+                "created": "2024-01-01T00:00:00.000Z",
+                "duration": 0.8,
+                "channels": 1,
+                "models": ["nova-2"],
+            },
+            "results": {
+                "channels": [
+                    {
+                        "alternatives": [
+                            {
+                                "transcript": "Hello world",
+                                "confidence": 0.99,
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            return_value=mock_response,
+        ):
+            response: TranscriptionResponse = litellm.transcription(
+                model="deepgram/nova-2",
+                file=test_audio_bytes,
+                api_key="test-api-key",
+            )
+
+            # Verify that default language "en" is used
+            assert response["language"] == "en"
+            assert response.text == "Hello world"
+            assert response["task"] == "transcribe"
+            assert response["duration"] == 0.8
+
+    def test_transcription_response_with_empty_detected_language(self, test_audio_bytes):
+        """Test response transformation when detected_language is present but None"""
+        # Mock response with None detected_language
+        mock_response_data = {
+            "metadata": {
+                "transaction_key": "deprecated",
+                "request_id": "test-request-id",
+                "sha256": "test-sha",
+                "created": "2024-01-01T00:00:00.000Z",
+                "duration": 1.0,
+                "channels": 1,
+                "models": ["nova-2"],
+            },
+            "results": {
+                "channels": [
+                    {
+                        "detected_language": None,
+                        "alternatives": [
+                            {
+                                "transcript": "Test transcript",
+                                "confidence": 0.99,
+                            }
+                        ]
+                    }
+                ]
+            },
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_response_data
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            return_value=mock_response,
+        ):
+            response: TranscriptionResponse = litellm.transcription(
+                model="deepgram/nova-2",
+                file=test_audio_bytes,
+                api_key="test-api-key",
+                detect_language=True,
+            )
+
+            # Verify that default language "en" is used when detected_language is None
+            assert response["language"] == "en"
+            assert response.text == "Test transcript"
+            assert response["task"] == "transcribe"
+            assert response["duration"] == 1.0

@@ -59,7 +59,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
+        self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
         self.api_base = (
@@ -136,6 +136,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "rerank",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         if (
@@ -315,6 +316,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.types.guardrails import GuardrailEventHooks
@@ -350,6 +352,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         if self.event_hook is None:

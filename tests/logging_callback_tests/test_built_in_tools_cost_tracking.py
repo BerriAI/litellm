@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import pytest
 from dotenv import load_dotenv
 from fastapi import Request
@@ -98,7 +98,7 @@ async def test_openai_web_search_logging_cost_tracking(
 ):
     """Test web search cost tracking with different search context sizes"""
     test_custom_logger = await _setup_web_search_test()
-    import uuid
+    from litellm._uuid import uuid
 
     
 

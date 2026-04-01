@@ -1,14 +1,16 @@
+import logging
 import os
 import sys
 import pytest
 from typing import List, Any, cast
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
 import litellm
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
-from litellm.types.llms.openai import ResponsesAPIResponse, OpenAIMcpServerTool, ToolParam
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse, OpenAIMcpServerTool, ToolParam
 
 
 class MockUserAPIKeyAuth:
@@ -254,6 +256,76 @@ async def test_aresponses_api_with_mcp_mock_integration():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process_tools():
+    """
+    Test that MCP auth headers from secret_fields (e.g. x-mcp-linear_config-authorization)
+    are passed to _process_mcp_tools_without_openai_transform when using the responses API.
+    """
+    from litellm.responses.main import aresponses_api_with_mcp
+
+    captured_process_kwargs = {}
+
+    async def mock_process(**kwargs):
+        captured_process_kwargs.update(kwargs)
+        return ([], {})
+
+    mock_response = ResponsesAPIResponse(
+        **{
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1234567890,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "instructions": None,
+            "max_output_tokens": None,
+            "model": "gpt-4o",
+            "output": [{"type": "message", "id": "msg_1", "status": "completed", "role": "assistant", "content": []}],
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            "user": None,
+            "metadata": {},
+        }
+    )
+
+    mcp_tools = [{"type": "mcp", "server_url": "litellm_proxy"}]
+    secret_fields = {
+        "raw_headers": {"x-mcp-linear_config-authorization": "Bearer linear-token"},
+    }
+
+    with patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    ), patch(
+        "litellm.responses.main.aresponses",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        await aresponses_api_with_mcp(
+            input=[{"role": "user", "type": "message", "content": "hi"}],
+            model="gpt-4o",
+            tools=mcp_tools,
+            secret_fields=secret_fields,
+        )
+
+    assert "mcp_server_auth_headers" in captured_process_kwargs
+    mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
+    assert mcp_server_auth_headers is not None
+    assert "linear_config" in mcp_server_auth_headers
+    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
+
+
+@pytest.mark.asyncio
 async def test_mcp_allowed_tools_filtering():
     """
     Test the allowed_tools filtering functionality for MCP tools.
@@ -286,6 +358,8 @@ async def test_mcp_allowed_tools_filtering():
             'inputSchema': {'type': 'object', 'properties': {}}
         })()
     ]
+
+    allowed_mcp_servers = ["gitmcp"]
     
     # Test Case 1: MCP tool config with allowed_tools specified
     mcp_tool_config_with_allowed_tools = [
@@ -381,8 +455,8 @@ async def test_mcp_allowed_tools_filtering():
     )
     
     # Then deduplicate the filtered tools
-    filtered_tools_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
-        filtered_tools_with_duplicates
+    filtered_tools_deduplicated, _ = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        filtered_tools_with_duplicates, []
     )
     
     # Should only return 1 tool (the duplicate should be removed)
@@ -395,7 +469,7 @@ async def test_mcp_allowed_tools_filtering():
     print("✓ Test Case 3: duplicate tools are properly deduplicated")
     
     # Test Case 3b: Test standalone deduplication method
-    standalone_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(mock_mcp_tools_with_duplicates)
+    standalone_deduplicated, _ = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(mock_mcp_tools_with_duplicates, allowed_mcp_servers)
     
     # Should return 2 unique tools (GitMCP-fetch_litellm_documentation and GitMCP-search_litellm_documentation)
     assert len(standalone_deduplicated) == 2, f"Expected 2 unique tools after standalone deduplication, got {len(standalone_deduplicated)}"
@@ -468,209 +542,242 @@ async def test_mcp_allowed_tools_filtering():
 async def test_streaming_mcp_events_validation():
     """
     Test that MCP streaming events are properly emitted when using streaming with MCP tools.
-    
+
     This test validates:
     1. MCP discovery events are emitted first
     2. Regular streaming response events follow
     3. Tool execution events are emitted when tools are auto-executed
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
-    
-    print("🧪 Testing MCP streaming events...")
-    
+
     # Mock MCP tools that would be returned from the manager
     mock_mcp_tools = [
-        type('MCPTool', (), {
-            'name': 'search_repo',
-            'description': 'Search BerriAI/litellm repository for information',
-            'inputSchema': {
-                "type": "object", 
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"}
+        type(
+            "MCPTool",
+            (),
+            {
+                "name": "search_repo",
+                "description": "Search BerriAI/litellm repository for information",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"}
+                    },
+                    "required": ["query"],
                 },
-                "required": ["query"]
-            }
-        })(),
-        type('MCPTool', (), {
-            'name': 'get_repo_info',
-            'description': 'Get repository information',
-            'inputSchema': {
-                "type": "object", 
-                "properties": {
-                    "repo_name": {"type": "string", "description": "Repository name"}
+            },
+        )(),
+        type(
+            "MCPTool",
+            (),
+            {
+                "name": "get_repo_info",
+                "description": "Get repository information",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name",
+                        }
+                    },
+                    "required": ["repo_name"],
                 },
-                "required": ["repo_name"]
-            }
-        })()
+            },
+        )(),
     ]
-    
-    # Mock the MCP operations
-    with patch.object(LiteLLM_Proxy_MCP_Handler, '_get_mcp_tools_from_manager', new_callable=AsyncMock) as mock_get_tools, \
-         patch.object(LiteLLM_Proxy_MCP_Handler, '_execute_tool_calls', new_callable=AsyncMock) as mock_execute_tools:
-        
+
+    # Build fake streaming chunks that the inner aresponses() call would yield
+    fake_response_obj = MagicMock(spec=ResponsesAPIResponse)
+    fake_response_obj.id = "resp_fake_123"
+    fake_response_obj.output = []
+
+    fake_created_chunk = MagicMock(spec=ResponsesAPIStreamingResponse)
+    fake_created_chunk.type = ResponsesAPIStreamEvents.RESPONSE_CREATED
+    fake_created_chunk.response = fake_response_obj
+
+    fake_in_progress_chunk = MagicMock(spec=ResponsesAPIStreamingResponse)
+    fake_in_progress_chunk.type = ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS
+    fake_in_progress_chunk.response = fake_response_obj
+
+    fake_output_item_added_chunk = MagicMock(spec=ResponsesAPIStreamingResponse)
+    fake_output_item_added_chunk.type = ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    fake_output_item_added_chunk.response = fake_response_obj
+
+    fake_completed_chunk = MagicMock(spec=ResponsesAPIStreamingResponse)
+    fake_completed_chunk.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    fake_completed_chunk.response = fake_response_obj
+
+    # Create a fake async iterator for the inner LLM streaming call
+    class FakeAsyncIterator:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._chunks):
+                raise StopAsyncIteration
+            chunk = self._chunks[self._index]
+            self._index += 1
+            return chunk
+
+    fake_stream = FakeAsyncIterator(
+        [
+            fake_created_chunk,
+            fake_in_progress_chunk,
+            fake_output_item_added_chunk,
+            fake_completed_chunk,
+        ]
+    )
+
+    # Mock the MCP operations and the inner aresponses call
+    with patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "_get_mcp_tools_from_manager",
+        new_callable=AsyncMock,
+    ) as mock_get_tools, patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "_execute_tool_calls",
+        new_callable=AsyncMock,
+    ) as mock_execute_tools, patch(
+        "litellm.responses.main.aresponses",
+        new_callable=AsyncMock,
+        return_value=fake_stream,
+    ):
         # Setup MCP mocks
-        mock_get_tools.return_value = mock_mcp_tools
-        
-        def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
+        mock_get_tools.return_value = (mock_mcp_tools, ["test_server"])
+
+        async def mock_execute_tool_calls_side_effect(
+            tool_server_map, tool_calls, user_api_key_auth, **kwargs
+        ):
             """Mock tool execution with realistic results"""
             results = []
             for tool_call in tool_calls:
                 call_id = None
                 if isinstance(tool_call, dict):
                     call_id = tool_call.get("call_id") or tool_call.get("id")
-                elif hasattr(tool_call, 'call_id'):
+                elif hasattr(tool_call, "call_id"):
                     call_id = tool_call.call_id
-                elif hasattr(tool_call, 'id'):
+                elif hasattr(tool_call, "id"):
                     call_id = tool_call.id
-                
+
                 if call_id:
-                    results.append({
-                        "tool_call_id": call_id,
-                        "result": "LiteLLM is a unified interface for 100+ LLMs that provides consistent OpenAI-format output and includes proxy server capabilities."
-                    })
+                    results.append(
+                        {
+                            "tool_call_id": call_id,
+                            "result": "LiteLLM is a unified interface for 100+ LLMs.",
+                        }
+                    )
             return results
-        
+
         mock_execute_tools.side_effect = mock_execute_tool_calls_side_effect
-        
+
         # Configure MCP tool with streaming and auto-execution
         mcp_tool_config = {
             "type": "mcp",
-            "server_url": "litellm_proxy/mcp/test_server", 
-            "require_approval": "never"  # This enables auto-execution
+            "server_url": "litellm_proxy/mcp/test_server",
+            "require_approval": "never",  # This enables auto-execution
         }
-        
-        print("📞 Making streaming request with MCP tools...")
-        
+
         # Make streaming request with MCP tools
         response = await litellm.aresponses(
-            model="gpt-4o-mini",  # Use cheaper model for testing
+            model="gpt-4o-mini",
             tools=[mcp_tool_config],
             tool_choice="required",
-            input=[{
-                "role": "user",
-                "type": "message", 
-                "content": "What is LiteLLM? Give me a brief overview."
-            }],
-            stream=True
+            input=[
+                {
+                    "role": "user",
+                    "type": "message",
+                    "content": "What is LiteLLM? Give me a brief overview.",
+                }
+            ],
+            stream=True,
         )
-        
-        print(f"📋 Response type: {type(response)}")
-        assert hasattr(response, '__aiter__'), "Response should be async iterable for streaming"
-        
+
+        assert hasattr(
+            response, "__aiter__"
+        ), "Response should be async iterable for streaming"
+
         # Collect all streaming events
         events = []
         event_types = []
         mcp_discovery_events = []
-        mcp_execution_events = []
         regular_events = []
-        
-        print("🔄 Collecting streaming events...")
-        
-        try:
-            async for chunk in response:
-                events.append(chunk)
-                event_type = getattr(chunk, 'type', 'unknown')
-                event_types.append(event_type)
-                
-                # Categorize events
-                if event_type in [
-                    ResponsesAPIStreamEvents.MCP_TOOLS_DISCOVERY_STARTED,
-                    ResponsesAPIStreamEvents.MCP_TOOLS_DISCOVERY_COMPLETED
-                ]:
-                    mcp_discovery_events.append(chunk)
-                elif event_type in [
-                    ResponsesAPIStreamEvents.MCP_TOOL_EXECUTION_STARTED,
-                    ResponsesAPIStreamEvents.MCP_TOOL_EXECUTION_COMPLETED
-                ]:
-                    mcp_execution_events.append(chunk)
-                else:
-                    regular_events.append(chunk)
-                
-                print(f"📦 Event: {event_type}")
-                
-                # Print MCP-specific event details
-                if hasattr(chunk, 'mcp_servers'):
-                    print(f"   🔧 MCP Servers: {chunk.mcp_servers}")
-                elif hasattr(chunk, 'mcp_tools'):
-                    print(f"   🛠️  MCP Tools: {len(chunk.mcp_tools)} tools discovered")
-                elif hasattr(chunk, 'tool_name'):
-                    print(f"   ⚙️  Tool: {chunk.tool_name}")
-                    if hasattr(chunk, 'result'):
-                        print(f"   ✅ Result: {chunk.result[:100]}...")
-                
-        except Exception as e:
-            print(f"❌ Error during streaming: {e}")
-            # Continue with validation of events collected so far
-        
-        print(f"\n📊 Event Summary:")
-        print(f"   Total events: {len(events)}")
-        print(f"   MCP discovery events: {len(mcp_discovery_events)}")
-        print(f"   MCP execution events: {len(mcp_execution_events)}")
-        print(f"   Regular streaming events: {len(regular_events)}")
-        print(f"   Event types: {set(event_types)}")
-        
-        # Validate MCP discovery events
-        if mcp_discovery_events:
-            print("✅ MCP discovery events found!")
-            
-            # Check for discovery started event
-            started_events = [e for e in mcp_discovery_events if e.type == ResponsesAPIStreamEvents.MCP_TOOLS_DISCOVERY_STARTED]
-            if started_events:
-                print(f"   🚀 Discovery started events: {len(started_events)}")
-                started_event = started_events[0]
-                if hasattr(started_event, 'mcp_servers'):
-                    print(f"   📡 MCP servers: {started_event.mcp_servers}")
-            
-            # Check for discovery completed event
-            completed_events = [e for e in mcp_discovery_events if e.type == ResponsesAPIStreamEvents.MCP_TOOLS_DISCOVERY_COMPLETED]
-            if completed_events:
-                print(f"   🏁 Discovery completed events: {len(completed_events)}")
-                completed_event = completed_events[0]
-                if hasattr(completed_event, 'mcp_tools'):
-                    print(f"   🔧 Tools discovered: {len(completed_event.mcp_tools)}")
-        else:
-            print("⚠️  No MCP discovery events found")
-        
-        # Validate MCP execution events (if auto-execution occurred)
-        if mcp_execution_events:
-            print("✅ MCP tool execution events found!")
-            execution_started = [e for e in mcp_execution_events if e.type == ResponsesAPIStreamEvents.MCP_TOOL_EXECUTION_STARTED]
-            execution_completed = [e for e in mcp_execution_events if e.type == ResponsesAPIStreamEvents.MCP_TOOL_EXECUTION_COMPLETED]
-            print(f"   🚀 Execution started events: {len(execution_started)}")
-            print(f"   🏁 Execution completed events: {len(execution_completed)}")
-        
-        # Validate that we got some form of streaming response
+
+        async for chunk in response:
+            events.append(chunk)
+            event_type = getattr(chunk, "type", "unknown")
+            event_types.append(event_type)
+
+            # Categorize events
+            if event_type in [
+                ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS,
+                ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,
+            ]:
+                mcp_discovery_events.append(chunk)
+            else:
+                regular_events.append(chunk)
+
+        # Validate that we got streaming events
         assert len(events) > 0, "Should have received at least some streaming events"
-        
+
+        # Validate MCP discovery events were emitted
+        assert (
+            len(mcp_discovery_events) > 0
+        ), "Should have received MCP discovery events"
+
+        # Check that discovery events come before regular content events
+        first_discovery_idx = next(
+            i
+            for i, e in enumerate(events)
+            if getattr(e, "type", None)
+            in [
+                ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS,
+                ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,
+            ]
+        )
+        # The output_item.added event triggers the transition to MCP discovery,
+        # so discovery events should appear after it in the stream
+        assert first_discovery_idx > 0, "MCP discovery events should follow the initial output_item.added event"
+
         # Verify MCP mocks were called
         assert mock_get_tools.called, "MCP tools should have been fetched"
-        print("✅ MCP tool fetching was called")
-        
-        print("🎉 MCP streaming events validation completed!")
-        return {
-            'total_events': len(events),
-            'mcp_discovery_events': len(mcp_discovery_events),
-            'mcp_execution_events': len(mcp_execution_events),
-            'regular_events': len(regular_events),
-            'event_types': list(set(event_types))
-        }
 
 
 @pytest.mark.asyncio 
-async def test_streaming_responses_api_with_mcp_tools():
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("gpt-4o-mini", id="openai"),
+        pytest.param("claude-haiku-4-5", id="anthropic"),
+    ],
+)
+async def test_streaming_responses_api_with_mcp_tools(
+    model: str, caplog: pytest.LogCaptureFixture
+):
     """
     Test the streaming responses API with MCP tools when using server_url="litellm_proxy"
 
     Under the hood the follow occurs
 
     - MCP: responses called litellm MCP manager.list_tools (MOCKED)
-    - Request 1: Made to gpt-4o with fetched tools (REAL LLM CALL)
+    - Request 1: Made to model under test with fetched tools (REAL LLM CALL)
     - MCP: Execute tool call from request 1 and returns result (MOCKED)
-    - Request 2: Made to gpt-4o with fetched tools and tool results (REAL LLM CALL)
+    - Request 2: Made to model under test with fetched tools and tool results (REAL LLM CALL)
 
     Return the user the result of request 2
     """
+    # Skip test if API keys are not set for the respective models
+    if ("claude" in model.lower() or "anthropic" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY not set, skipping anthropic model test")
+    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set, skipping openai model test")
+    
     from unittest.mock import AsyncMock, patch
     
     print("🧪 Testing basic streaming with MCP tools...")
@@ -691,75 +798,101 @@ async def test_streaming_responses_api_with_mcp_tools():
     ]
     
     # Only mock the MCP-specific operations, let LLM responses be real
-    with patch.object(LiteLLM_Proxy_MCP_Handler, '_get_mcp_tools_from_manager', new_callable=AsyncMock) as mock_get_tools, \
-         patch.object(LiteLLM_Proxy_MCP_Handler, '_execute_tool_calls', new_callable=AsyncMock) as mock_execute_tools:
-        
-        # Setup MCP mocks only
-        mock_get_tools.return_value = mock_mcp_tools
-        
-        # Create a dynamic mock that will match the actual tool call ID from the LLM response
-        def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
-            """Mock function that returns results matching the actual tool call IDs from the LLM"""
-            results = []
-            for tool_call in tool_calls:
-                # Extract call_id from the tool call
-                call_id = None
-                if isinstance(tool_call, dict):
-                    call_id = tool_call.get("call_id") or tool_call.get("id")
-                elif hasattr(tool_call, 'call_id'):
-                    call_id = tool_call.call_id
-                elif hasattr(tool_call, 'id'):
-                    call_id = tool_call.id
-                
-                if call_id:
-                    results.append({
-                        "tool_call_id": call_id,
-                        "result": "LiteLLM is a unified interface for 100+ LLMs that translates inputs to provider-specific completion endpoints and provides consistent OpenAI-format output."
-                    })
-            return results
-        
-        mock_execute_tools.side_effect = mock_execute_tool_calls_side_effect
-        
-        # Make the actual call - LLM responses will be real
-        mcp_tool_config = cast(Any, {
-            "type": "mcp",
-            "server_url": "litellm_proxy", 
-            "require_approval": "never"
-        })
-        response = await litellm.aresponses(
-            model="gpt-4o-mini",
-            tools=[mcp_tool_config],
-            tool_choice="required",
-            input=[
+    with caplog.at_level(logging.ERROR):
+        with patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            '_get_mcp_tools_from_manager',
+            new_callable=AsyncMock,
+        ) as mock_get_tools, patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            '_execute_tool_calls',
+            new_callable=AsyncMock,
+        ) as mock_execute_tools:
+            # Setup MCP mocks only
+            mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
+
+            # Create a dynamic mock that will match the actual tool call ID from the LLM response
+            def mock_execute_tool_calls_side_effect(
+                tool_calls, user_api_key_auth, **kwargs
+            ):
+                """Mock function that returns results matching the actual tool call IDs from the LLM"""
+                results = []
+                for tool_call in tool_calls:
+                    # Extract call_id from the tool call
+                    call_id = None
+                    if isinstance(tool_call, dict):
+                        call_id = tool_call.get("call_id") or tool_call.get("id")
+                    elif hasattr(tool_call, 'call_id'):
+                        call_id = tool_call.call_id
+                    elif hasattr(tool_call, 'id'):
+                        call_id = tool_call.id
+
+                    if call_id:
+                        results.append(
+                            {
+                                "tool_call_id": call_id,
+                                "result": "LiteLLM is a unified interface for 100+ LLMs that translates inputs to provider-specific completion endpoints and provides consistent OpenAI-format output.",
+                            }
+                        )
+                return results
+
+            mock_execute_tools.side_effect = mock_execute_tool_calls_side_effect
+
+            # Make the actual call - LLM responses will be real
+            mcp_tool_config = cast(
+                Any,
                 {
-                    "role": "user",
-                    "type": "message",
-                    "content": "give me a TLDR of what BerriAI/litellm is about"
-                }
-            ],
-            stream=True
-        )
-        
-        print(f"📋 Response type: {type(response)}")
-        assert hasattr(response, '__aiter__'), "Response should be an async streaming response"
-        
-        # Collect streaming chunks
-        chunks = []
-        async for chunk in response:
-            chunks.append(chunk)
-            print(f"📦 Chunk type: {getattr(chunk, 'type', 'unknown')}")
-        
-        print(f"📊 Total chunks received: {len(chunks)}")
-        
-        # Verify MCP mocks were called (may be called multiple times in streaming)
-        assert mock_get_tools.call_count >= 1, f"Expected MCP tools to be fetched at least once, got {mock_get_tools.call_count}"
-        print(f"MCP tools fetched: {len(mock_mcp_tools)}")
-        
-        # Verify we got a response
-        assert response is not None
-        assert len(chunks) > 0, "Should have received streaming chunks"
-        
-        print("Basic streaming responses API with MCP tools test passed!")
+                    "type": "mcp",
+                    "server_url": "litellm_proxy",
+                    "require_approval": "never",
+                },
+            )
+            response = await litellm.aresponses(
+                model=model,
+                tools=[mcp_tool_config],
+                tool_choice="required",
+                input=[
+                    {
+                        "role": "user",
+                        "type": "message",
+                        "content": "give me a TLDR of what BerriAI/litellm is about",
+                    }
+                ],
+                stream=True,
+            )
+
+            print(f"📋 Response type: {type(response)}")
+            assert hasattr(response, '__aiter__'), "Response should be an async streaming response"
+
+            # Collect streaming chunks
+            chunks = []
+            async for chunk in response:
+                chunks.append(chunk)
+                print(f"📦 Chunk type: {getattr(chunk, 'type', 'unknown')}")
+
+            print(f"📊 Total chunks received: {len(chunks)}")
+
+            # Verify MCP mocks were called (may be called multiple times in streaming)
+            assert (
+                mock_get_tools.call_count >= 1
+            ), f"Expected MCP tools to be fetched at least once, got {mock_get_tools.call_count}"
+            print(f"MCP tools fetched: {len(mock_mcp_tools)}")
+
+            # Verify we got a response
+            assert response is not None
+            assert len(chunks) > 0, "Should have received streaming chunks"
+
+            print("Basic streaming responses API with MCP tools test passed!")
+
+    lite_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+    ]
+    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
+        record.getMessage() for record in lite_errors
+    )
 
 
 @pytest.mark.asyncio
@@ -1133,6 +1266,149 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
             'tools_per_call': [len(tools) for tools in llm_call_tools],
             'duplicate_tools_found': False
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-4o-mini"])
+async def test_streaming_mcp_event_order_and_response_id_consistency(
+    model: str, caplog: pytest.LogCaptureFixture
+):
+    """
+    Test that:
+    1. Streaming events are emitted in correct order (response.created, response.in_progress, response.output_item.added before MCP events)
+    2. All response lifecycle events share the same response ID within a cycle
+    """
+    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set, skipping openai model test")
+
+    from unittest.mock import AsyncMock, patch
+
+    mock_mcp_tools = [
+        type('MCPTool', (), {
+            'name': 'get_weather',
+            'description': 'Get weather for a city',
+            'inputSchema': {
+                "type": "object", 
+                "properties": {
+                    "city": {"type": "string", "description": "City name"}
+                },
+                "required": ["city"]
+            }
+        })()
+    ]
+
+    with caplog.at_level(logging.ERROR):
+        with patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            '_get_mcp_tools_from_manager',
+            new_callable=AsyncMock,
+        ) as mock_get_tools, patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            '_execute_tool_calls',
+            new_callable=AsyncMock,
+        ) as mock_execute_tools:
+            mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
+
+            def mock_execute_side_effect(tool_calls, user_api_key_auth, **kwargs):
+                results = []
+                for tool_call in tool_calls:
+                    call_id = None
+                    if isinstance(tool_call, dict):
+                        call_id = tool_call.get("call_id") or tool_call.get("id")
+                    elif hasattr(tool_call, 'call_id'):
+                        call_id = tool_call.call_id
+                    elif hasattr(tool_call, 'id'):
+                        call_id = tool_call.id
+                    if call_id:
+                        results.append({
+                            "tool_call_id": call_id,
+                            "result": "Sunny, 72°F",
+                        })
+                return results
+
+            mock_execute_tools.side_effect = mock_execute_side_effect
+
+            mcp_tool_config = cast(Any, {
+                "type": "mcp",
+                "server_url": "litellm_proxy",
+                "require_approval": "never",
+            })
+
+            response = await litellm.aresponses(
+                model=model,
+                tools=[mcp_tool_config],
+                input=[{
+                    "role": "user",
+                    "type": "message",
+                    "content": "What's the weather in San Francisco?"
+                }],
+                stream=True,
+            )
+
+            events = []
+            async for chunk in response:
+                events.append(chunk)
+
+            assert len(events) > 0, "Should receive streaming events"
+
+            created_idx = next((i for i, e in enumerate(events) if getattr(e, 'type', None) == 'response.created'), None)
+            in_progress_idx = next((i for i, e in enumerate(events) if getattr(e, 'type', None) == 'response.in_progress'), None)
+            output_item_added_idx = next((i for i, e in enumerate(events) if getattr(e, 'type', None) == 'response.output_item.added'), None)
+            mcp_in_progress_idx = next((i for i, e in enumerate(events) if 'mcp_list_tools.in_progress' in str(getattr(e, 'type', ''))), None)
+            completed_idx = next((i for i, e in enumerate(events) if getattr(e, 'type', None) == 'response.completed'), None)
+
+            assert created_idx is not None, "response.created event should be present"
+            assert in_progress_idx is not None, "response.in_progress event should be present"
+            assert output_item_added_idx is not None, "response.output_item.added event should be present"
+
+            assert created_idx < in_progress_idx, "response.created should come before response.in_progress"
+            assert in_progress_idx < output_item_added_idx, "response.in_progress should come before response.output_item.added"
+
+            if mcp_in_progress_idx is not None:
+                assert output_item_added_idx < mcp_in_progress_idx, "response.output_item.added should come before response.mcp_list_tools.in_progress"
+
+            response_ids = []
+            for i, event in enumerate(events):
+                event_type = getattr(event, 'type', None)
+                if hasattr(event, 'response'):
+                    response_obj = getattr(event, 'response', None)
+                    if response_obj and hasattr(response_obj, 'id'):
+                        event_type_value = event_type.value if hasattr(event_type, 'value') else str(event_type)
+                        if any(x in event_type_value for x in ['response.created', 'response.in_progress', 'response.completed']):
+                            response_ids.append((i, event_type_value, response_obj.id))
+
+            assert len(response_ids) >= 2, f"Should have at least 2 response lifecycle events. Found {len(response_ids)}"
+
+            cycles = []
+            current_cycle = []
+            current_id = None
+
+            for idx, event_type, resp_id in response_ids:
+                if current_id is None or resp_id == current_id:
+                    current_cycle.append((idx, event_type, resp_id))
+                    current_id = resp_id
+                else:
+                    if current_cycle:
+                        cycles.append(current_cycle)
+                    current_cycle = [(idx, event_type, resp_id)]
+                    current_id = resp_id
+            if current_cycle:
+                cycles.append(current_cycle)
+
+            for cycle_num, cycle in enumerate(cycles):
+                cycle_ids = set(resp_id for _, _, resp_id in cycle)
+                assert len(cycle_ids) == 1, f"Cycle {cycle_num + 1} should have consistent response ID. Found {len(cycle_ids)} unique IDs"
+
+            assert completed_idx is not None, "response.completed event should be present"
+
+    lite_errors = [
+        record for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and ("LiteLLM" in record.name or "LiteLLM" in record.getMessage())
+    ]
+    assert not lite_errors, "Unexpected LiteLLM errors: " + ", ".join(
+        record.getMessage() for record in lite_errors
+    )
 
 
     

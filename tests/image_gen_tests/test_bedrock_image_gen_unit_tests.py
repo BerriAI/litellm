@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
 )
 
@@ -22,15 +22,15 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm.llms.bedrock.image.cost_calculator import cost_calculator
+from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
 import os
 
 import litellm
-from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
     AmazonStability3Config,
 )
-from litellm.llms.bedrock.image.amazon_stability1_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability1_transformation import (
     AmazonStabilityConfig,
 )
 from litellm.types.llms.bedrock import (
@@ -38,7 +38,7 @@ from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageResponse,
 )
 from unittest.mock import MagicMock, patch
-from litellm.llms.bedrock.image.image_handler import (
+from litellm.llms.bedrock.image_generation.image_handler import (
     BedrockImageGeneration,
     BedrockImagePreparedRequest,
 )
@@ -117,6 +117,20 @@ def test_transform_response_dict_to_openai_response():
     assert len(result.data) == 2
     assert all(hasattr(img, "b64_json") for img in result.data)
     assert [img.b64_json for img in result.data] == response_dict["images"]
+
+
+def test_transform_response_dict_to_openai_response_from_stability_3_models_with_no_null_finish_reason():
+    # Create a mock response
+    response_dict = {"finish_reasons": ["Filter reason: prompt"]}
+    model_response = ImageResponse()
+
+    with pytest.raises(BedrockError) as exc_info:
+        AmazonStability3Config.transform_response_dict_to_openai_response(
+            model_response, response_dict
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == "Filter reason: prompt"
 
 
 def test_amazon_stability_get_supported_openai_params():
@@ -432,6 +446,9 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     # Since we can't mock the actual model lookup, we'll test a simpler nova model instead
     # that we know the current logic can handle
     nova_model = "us.amazon.nova-canvas-v1:0"
+    
+    # Get the provider using the method from the handler
+    bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
     result = handler._get_request_body(
         model=nova_model, prompt=prompt, optional_params=optional_params
@@ -484,7 +501,7 @@ def test_get_request_body_cross_region_inference_profile():
     optional_params = {}
     # Cross-region inference profile format
     model = "us.amazon.nova-canvas-v1:0"
-
+    
     # This should work after the fix - cross-region format should be detected as 'nova'
     result = handler._get_request_body(
         model=model, prompt=prompt, optional_params=optional_params
@@ -508,3 +525,46 @@ def test_backward_compatibility_regular_nova_model():
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
+
+
+def test_amazon_titan_image_gen():
+    """Test Amazon Titan image generation with cost tracking."""
+    from litellm import image_generation
+
+    # Use v2 as v1 has reached end of life
+    model_id = "bedrock/amazon.titan-image-generator-v2:0"
+
+    response = litellm.image_generation(
+        model=model_id,
+        prompt="A serene mountain landscape at sunset with a lake reflection",
+        aws_region_name="us-east-1",
+    )
+
+    print(f"response cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_extract_headers_from_optional_params_with_guardrails():
+    """Test that guardrail parameters are correctly extracted from optional_params and converted to headers"""
+    handler = BedrockImageGeneration()
+    
+    # Test with both guardrail parameters
+    optional_params = {
+        "guardrailIdentifier": "4cf5knqaeq15",
+        "guardrailVersion": "1",
+        "someOtherParam": "value",
+    }
+    
+    headers = handler._extract_headers_from_optional_params(optional_params)
+    
+    # Verify headers are correctly set
+    assert headers["x-amz-bedrock-guardrail-identifier"] == "4cf5knqaeq15"
+    assert headers["x-amz-bedrock-guardrail-version"] == "1"
+    
+    # Verify guardrail params are removed from optional_params
+    assert "guardrailIdentifier" not in optional_params
+    assert "guardrailVersion" not in optional_params
+    
+    # Verify other params remain in optional_params
+    assert optional_params["someOtherParam"] == "value"

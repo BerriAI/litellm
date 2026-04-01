@@ -1,20 +1,15 @@
 import Image from '@theme/IdealImage';
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 
 # PANW Prisma AIRS
 
-LiteLLM supports PANW Prisma AIRS (AI Runtime Security) guardrails via the [Prisma AIRS Scan API](https://pan.dev/prisma-airs/api/airuntimesecurity/scan-sync-request/). This integration provides **Security-as-Code** for AI applications using Palo Alto Networks' AI security platform.
+LiteLLM supports PANW Prisma AIRS (AI Runtime Security) guardrails via the [Prisma AIRS Scan API](https://pan.dev/prisma-airs/api/airuntimesecurity/airuntimesecurityapi/). This integration provides Security-as-Code for AI applications using Palo Alto Networks' AI security platform.
 
-## Features
+- **Prompt injection and malicious URL detection** — real-time scanning before or after LLM calls
+- **Data loss prevention (DLP)** — detect and block sensitive data in prompts and responses
+- **Sensitive content masking** — automatically mask PII, credit cards, SSNs instead of blocking
+- **MCP tool call scanning** — scan tool name and arguments on direct MCP tool invocations
+- **Configurable fail-open / fail-closed** — choose between maximum security or high availability
 
-- ✅ **Real-time prompt injection detection**
-- ✅ **Malicious content filtering** 
-- ✅ **Data loss prevention (DLP)**
-- ✅ **Comprehensive threat detection** for AI models and datasets
-- ✅ **Model-agnostic protection** across public and private models
-- ✅ **Synchronous scanning** with immediate response
-- ✅ **Configurable security profiles**
 
 ## Quick Start
 
@@ -28,7 +23,14 @@ For detailed setup instructions, see the [Prisma AIRS API Overview](https://docs
 
 ### 2. Define Guardrails on your LiteLLM config.yaml
 
-Define your guardrails under the `guardrails` section:
+Set `api_base` to the regional endpoint for your Prisma AIRS deployment profile:
+
+| Region | Endpoint |
+|--------|----------|
+| US | `https://service.api.aisecurity.paloaltonetworks.com` |
+| EU (Germany) | `https://service-de.api.aisecurity.paloaltonetworks.com` |
+| India | `https://service-in.api.aisecurity.paloaltonetworks.com` |
+| Singapore | `https://service-sg.api.aisecurity.paloaltonetworks.com` |
 
 ```yaml
 model_list:
@@ -41,23 +43,17 @@ guardrails:
   - guardrail_name: "panw-prisma-airs-guardrail"
     litellm_params:
       guardrail: panw_prisma_airs
-      mode: "pre_call"                    # Run before LLM call
-      api_key: os.environ/AIRS_API_KEY    # Your PANW API key
-      profile_name: os.environ/AIRS_API_PROFILE_NAME  # Security profile from Strata Cloud Manager
-      api_base: "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request"  # Optional
+      mode: "pre_call"
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: os.environ/PANW_PRISMA_AIRS_PROFILE_NAME
+      api_base: "https://service.api.aisecurity.paloaltonetworks.com"  # US — change to your region
 ```
-
-#### Supported values for `mode`
-
-- `pre_call` Run **before** LLM call, on **input**
-- `post_call` Run **after** LLM call, on **input & output**  
-- `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel with LLM call
 
 ### 3. Start LiteLLM Gateway
 
-```bash title="Set environment variables"
-export AIRS_API_KEY="your-panw-api-key"
-export AIRS_API_PROFILE_NAME="your-security-profile"
+```bash
+export PANW_PRISMA_AIRS_API_KEY="your-panw-api-key"
+export PANW_PRISMA_AIRS_PROFILE_NAME="your-security-profile"
 export OPENAI_API_KEY="sk-proj-..."
 ```
 
@@ -65,15 +61,8 @@ export OPENAI_API_KEY="sk-proj-..."
 litellm --config config.yaml --detailed_debug
 ```
 
-
 ### 4. Test Request
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
-
-<Tabs>
-<TabItem label="Blocked request" value="blocked">
-
-Expect this to fail due to prompt injection attempt:
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -88,132 +77,89 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Expected response on failure:
+Expected response when the guardrail blocks:
 
 ```json
 {
   "error": {
-    "message": {
-      "error": "Violated PANW Prisma AIRS guardrail policy",
-      "panw_response": {
-        "action": "block",
-        "category": "malicious",
-        "profile_id": "03b32734-d06d-4bb7-a8df-ac5147630ce8",
-        "profile_name": "dev-block-all-profile",
-        "prompt_detected": {
-          "dlp": false,
-          "injection": true,
-          "toxic_content": false,
-          "url_cats": false
-        },
-        "report_id": "Rbd251eac-6e67-433b-b3ef-8eb42d2c7d2c",
-        "response_detected": {
-          "dlp": false,
-          "toxic_content": false,
-          "url_cats": false
-        },
-        "scan_id": "bd251eac-6e67-433b-b3ef-8eb42d2c7d2c",
-        "tr_id": "string"
-      }
-    },
-    "type": "None",
-    "param": "None",
-    "code": "400"
+    "message": "Prompt blocked by PANW Prisma AI Security policy (Category: malicious)",
+    "type": "guardrail_violation",
+    "code": "panw_prisma_airs_blocked",
+    "guardrail": "panw-prisma-airs-guardrail",
+    "category": "malicious"
   }
 }
 ```
 
-</TabItem>
-<TabItem label="Successful Call" value="allowed">
+LiteLLM wraps this detail in an endpoint-specific HTTP error envelope. Optional fields that may also appear: `scan_id`, `report_id`, `profile_name`, `profile_id`, `tr_id`, `prompt_detected`.
 
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {"role": "user", "content": "What is the weather like today?"}
-    ],
-    "guardrails": ["panw-prisma-airs-guardrail"]
-  }'
-```
+On success, the guardrail name appears in the `x-litellm-applied-guardrails` response header.
 
-Expected successful response:
+## Configuration
 
-```json
-{
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "content": "I don't have access to real-time weather data, but I can help you find weather information through various weather services or apps...",
-        "role": "assistant",
-        "tool_calls": null,
-        "function_call": null,
-        "annotations": []
-      }
-    }
-  ],
-  "created": 1736028456,
-  "id": "chatcmpl-AqQj8example",
-  "model": "gpt-4o",
-  "object": "chat.completion",
-  "usage": {
-    "completion_tokens": 25,
-    "prompt_tokens": 12,
-    "total_tokens": 37
-  },
-  "x-litellm-panw-scan": {
-    "action": "allow",
-    "category": "benign",
-    "profile_id": "03b32734-d06d-4bb7-a8df-ac5147630ce8",
-    "profile_name": "dev-block-all-profile",
-    "prompt_detected": {
-      "dlp": false,
-      "injection": false,
-      "toxic_content": false,
-      "url_cats": false
-    },
-    "report_id": "Rbd251eac-6e67-433b-b3ef-8eb42d2c7d2c",
-    "response_detected": {
-      "dlp": false,
-      "toxic_content": false,
-      "url_cats": false
-    },
-    "scan_id": "bd251eac-6e67-433b-b3ef-8eb42d2c7d2c",
-    "tr_id": "string"
-  }
-}
-```
+### Supported Modes
 
-</TabItem>
-</Tabs>
+| Mode | Timing | What is scanned |
+|------|--------|-----------------|
+| `pre_call` | Before LLM call | Request input |
+| `during_call` | Parallel with LLM call | Request input |
+| `post_call` | After LLM call | Response output |
+| `pre_mcp_call` | Before MCP tool execution | MCP tool input |
+| `during_mcp_call` | Parallel with MCP tool execution | MCP tool input |
 
-## Configuration Parameters
+
+### Configuration Parameters
 
 | Parameter | Required | Description | Default |
 |-----------|----------|-------------|---------|
 | `api_key` | Yes | Your PANW Prisma AIRS API key from Strata Cloud Manager | - |
-| `profile_name` | Yes | Security profile name configured in Strata Cloud Manager | - |
-| `api_base` | No | Custom API endpoint | `https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request` |
-| `mode` | No | When to run the guardrail | `pre_call` |
+| `profile_name` | No | Security profile name configured in Strata Cloud Manager. Optional if API key has linked profile | - |
+| `app_name` | No | Application identifier for tracking in Prisma AIRS analytics (prefixed with "LiteLLM-") | `LiteLLM` |
+| `api_base` | No | Regional API endpoint. US: `https://service.api.aisecurity.paloaltonetworks.com`, EU: `https://service-de.api.aisecurity.paloaltonetworks.com`, India: `https://service-in.api.aisecurity.paloaltonetworks.com`, Singapore: `https://service-sg.api.aisecurity.paloaltonetworks.com` | US |
+| `mode` | No | When to run the guardrail (see mode table above) | `pre_call` |
+| `fallback_on_error` | No | Action when PANW API is unavailable: `"block"` (fail-closed) or `"allow"` (fail-open). Config errors always block. | `block` |
+| `timeout` | No | PANW API call timeout in seconds (recommended: 1-60) | `10.0` |
+| `violation_message_template` | No | Custom template for blocked requests. Supports `{guardrail_name}`, `{category}`, `{action_type}`, `{default_message}` placeholders. | - |
+| `mask_request_content` | No | Mask sensitive data in prompts instead of blocking | `false` |
+| `mask_response_content` | No | Mask sensitive data in responses instead of blocking | `false` |
+| `mask_on_block` | No | Backwards-compatible flag that enables both request and response masking | `false` |
+| `experimental_use_latest_role_message_only` | No | Anthropic `/v1/messages` only. When unset: scans only latest user message on request side. Set `false` to scan all user/system/developer messages. Non-Anthropic unaffected. | Unset (true for Anthropic) |
 
-## Environment Variables
+Use the regional `api_base` that matches your Prisma AIRS deployment profile region for lower latency and data residency compliance.
+
+### Environment Variables
 
 ```bash
-export AIRS_API_KEY="your-panw-api-key"
-export AIRS_API_PROFILE_NAME="your-security-profile"
-# Optional custom endpoint
-export PANW_API_ENDPOINT="https://custom-endpoint.com/v1/scan/sync/request"
+export PANW_PRISMA_AIRS_API_KEY="your-panw-api-key"
+export PANW_PRISMA_AIRS_PROFILE_NAME="your-security-profile"
+# Optional custom base URL (without /v1/scan/sync/request path)
+export PANW_PRISMA_AIRS_API_BASE="https://custom-endpoint.com"
 ```
 
-## Advanced Configuration
+### Per-Request Metadata Overrides
+
+| Field | Description | Priority |
+|-------|-------------|----------|
+| `profile_name` | PANW AI security profile name | Per-request > config |
+| `profile_id` | PANW AI security profile ID (takes precedence over `profile_name`) | Per-request only |
+| `user_ip` | User IP address for tracking in Prisma AIRS | Per-request only |
+| `app_name` | Application identifier (prefixed with "LiteLLM-") | Per-request > config > "LiteLLM" |
+| `app_user` | Custom user identifier for tracking in Prisma AIRS | `app_user` > `user` > "litellm_user" |
+
+```json
+{
+  "model": "gpt-4",
+  "messages": [...],
+  "metadata": {
+    "profile_name": "dev-allow-all",
+    "profile_id": "uuid-here",
+    "user_ip": "192.168.1.100",
+    "app_name": "MyApp"
+  }
+}
+```
 
 ### Multiple Security Profiles
-
-You can configure different security profiles for different use cases:
 
 ```yaml
 guardrails:
@@ -221,31 +167,128 @@ guardrails:
     litellm_params:
       guardrail: panw_prisma_airs
       mode: "pre_call"
-      api_key: os.environ/AIRS_API_KEY
-      profile_name: "strict-policy"       # High security profile
-      
-  - guardrail_name: "panw-permissive-security"  
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "strict-policy"
+
+  - guardrail_name: "panw-permissive-security"
     litellm_params:
       guardrail: panw_prisma_airs
       mode: "post_call"
-      api_key: os.environ/AIRS_API_KEY
-      profile_name: "permissive-policy"   # Lower security profile
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "permissive-policy"
 ```
 
-## Use Cases
+### Content Masking
 
-From [official Prisma AIRS documentation](https://docs.paloaltonetworks.com/ai-runtime-security/activation-and-onboarding/ai-runtime-security-api-intercept-overview):
+:::warning Important: Masking is Controlled by PANW Security Profile
+The actual masking behavior (what content gets masked and how) is controlled by your PANW Prisma AIRS security profile in Strata Cloud Manager. The LiteLLM flags (`mask_request_content`, `mask_response_content`) only control whether to apply the masked content and allow the request to continue, or block entirely.
+:::
 
-- **Secure AI models in production**: Validate prompt requests and responses to protect deployed AI models
-- **Detect data poisoning**: Identify contaminated training data before fine-tuning
-- **Protect against adversarial input**: Safeguard AI agents from malicious inputs and outputs
-- **Prevent sensitive data leakage**: Use API-based threat detection to block sensitive data leaks
+```yaml
+guardrails:
+  - guardrail_name: "panw-with-masking"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      mode: "post_call"
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "default"
+      mask_request_content: true
+      mask_response_content: true
+```
+
+- `mask_request_content: true` — mask sensitive data in prompts instead of blocking
+- `mask_response_content: true` — mask sensitive data in responses instead of blocking
+- `mask_on_block: true` — backwards-compatible flag that enables both request and response masking
+
+### Fail-Open Configuration
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-high-availability"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "production"
+      fallback_on_error: "allow"
+      timeout: 5.0
+```
+
+**Error Handling Matrix:**
+
+| Error Type | `fallback_on_error="block"` | `fallback_on_error="allow"` |
+|------------|----------------------------|----------------------------|
+| 401 Unauthorized | Block (500) | Block (500) |
+| 403 Forbidden | Block (500) | Block (500) |
+| Profile Error | Block (500) | Block (500) |
+| 429 Rate Limit | Block (500) | Allow (`:unscanned`) |
+| Timeout | Block (500) | Allow (`:unscanned`) |
+| Network Error | Block (500) | Allow (`:unscanned`) |
+| 5xx Server Error | Block (500) | Allow (`:unscanned`) |
+| Content Blocked | Block (400) | Block (400) |
+
+Authentication and configuration errors (401, 403, invalid profile) always block. Only transient errors (429, timeout, network) trigger fail-open.
+
+When fail-open is triggered, the response includes a tracking header: `X-LiteLLM-Applied-Guardrails: panw-airs:unscanned`
+
+### Custom Violation Messages
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-custom-message"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      violation_message_template: "Your request was blocked by our AI Security Policy."
+
+  - guardrail_name: "panw-detailed-message"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      violation_message_template: "{action_type} blocked due to {category} violation. Please contact support."
+```
+
+**Supported Placeholders:** `{guardrail_name}`, `{category}`, `{action_type}`, `{default_message}`
+
+## Behavior and Limitations
+
+### Transaction Tracking
+
+For standard request/response scans, `tr_id` maps to `litellm_call_id`. MCP tool scans use the parent `litellm_call_id` when available; if missing, PANW synthesizes a fallback MCP transaction ID. The real limitation is correlation loss — synthesized MCP `tr_id` values are not grouped with the parent request's prompt/response scans in AIRS dashboards.
+
+By default, LiteLLM generates a UUID for `litellm_call_id`. To provide your own:
+
+```bash
+curl -X POST http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-call-id: my-custom-call-id-789" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "capital of France"}],
+    "guardrails": ["panw-prisma-airs-guardrail"]
+  }'
+```
+
+The `x-litellm-call-id` is also returned in response headers. If you pass `litellm_trace_id` in request metadata (or via the `x-litellm-trace-id` header), it is included in the PANW API payload metadata but does not affect `tr_id` or appear in Prisma AIRS.
+
+### Streaming
+
+- Response masking works on OpenAI chat streaming (`mask_response_content: true`)
+- `/v1/messages` and `/v1/responses` raw streaming blocks instead of masking when violations are detected
+- Request-side masking (`mask_request_content`) is unaffected by endpoint type
+- When `fallback_on_error: "allow"` is set, streaming responses fail open on transient PANW API errors (timeout, 5xx, network) — original chunks are yielded unchanged
+
+## MCP Tool Security
+
+Tool invocations are sent to AIRS as structured `tool_event` payloads containing tool name, ecosystem, and serialized arguments. Tool-event scans always use request mode.
+
+**What is scanned:** LLM-driven `tool_calls` (name + arguments) and MCP request-side invocations when `mcp_tool_name` (or fallback `name`) is present. Response-side OpenAI-compatible `tool_calls` are also scanned when surfaced into `apply_guardrail()`.
+
+**What is not scanned:** Tool definitions in `inputs["tools"]` and post-MCP tool results (no `post_mcp_call` hook exists yet).
 
 
-## Next Steps
+### Current Limitations
 
-- Configure your security policies in [Strata Cloud Manager](https://apps.paloaltonetworks.com/)
-- Review the [Prisma AIRS API documentation](https://pan.dev/prisma-airs/api/airuntimesecurity/scan-sync-request/) for advanced features
-- Set up monitoring and alerting for threat detections in your PANW dashboard
-- Consider implementing both pre_call and post_call guardrails for comprehensive protection
-- Monitor detection events and tune your security profiles based on your application needs
+- **No post-MCP response scanning.** Actual post-MCP tool-result scanning is not supported because there is no `post_mcp_call` hook in the framework. Response-side MCP events are only scanned when they appear as regular `tool_calls` in the LLM response.
+- **Guardrail selection not inherited by MCP sub-calls.** With `default_on: false`, MCP request-side child-call scans can be skipped because the parent request's guardrail selection is not propagated to the synthetic MCP payload. Workaround: use a dedicated guardrail with `mode: pre_mcp_call` and `default_on: true`.
+- **MCP transaction correlation.** MCP tool scans use the parent `litellm_call_id` when available; otherwise a fallback ID is synthesized and will not be grouped with the parent request in AIRS dashboards.

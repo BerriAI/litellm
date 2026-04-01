@@ -39,13 +39,10 @@ from create_mock_standard_logging_payload import create_standard_logging_payload
 
 def test_tpm_rpm_updated():
     test_cache = DualCache()
-    model_list = []
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-mini"
     total_tokens = 50
     standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
@@ -100,23 +97,21 @@ def test_get_available_deployments():
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-3"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "1234"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-3"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-mini"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
@@ -668,13 +663,9 @@ def test_return_potential_deployments():
     """
     Assert deployment at limit is filtered out
     """
-    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
     test_cache = DualCache()
-    model_list = []
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -733,9 +724,9 @@ async def test_tpm_rpm_routing_model_name_checks():
     deployment = {
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
+            "model": "azure/gpt-4.1-mini",
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
             "mock_response": "Hey, how's it going?",
         },
     }
@@ -775,5 +766,5 @@ async def test_tpm_rpm_routing_model_name_checks():
 
         assert (
             standard_logging_payload["hidden_params"]["litellm_model_name"]
-            == "azure/chatgpt-v-3"
+            == "azure/gpt-4.1-mini"
         )

@@ -1,7 +1,8 @@
 """
 Transformation for Calling Google models in their native format.
 """
-from typing import Dict, Literal, Optional, Union
+
+from typing import Any, Dict, Literal, Optional, Union
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -58,22 +59,21 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         Returns:
             Mapped parameters for the provider
         """
-        from litellm.types.google_genai.main import GenerateContentConfigDict
 
-        _generate_content_config_dict = GenerateContentConfigDict()
+        _generate_content_config_dict: Dict = {}
 
         for param, value in generate_content_config_dict.items():
             camel_case_key = self._camel_to_snake(param)
             _generate_content_config_dict[camel_case_key] = value
-        return dict(_generate_content_config_dict)
+        return _generate_content_config_dict
 
     def transform_generate_content_request(
         self,
         model: str,
-        contents: any,
-        tools: Optional[any],
+        contents: Any,
+        tools: Optional[Any],
         generate_content_config_dict: Dict,
-        system_instruction: Optional[any] = None,
+        system_instruction: Optional[Any] = None,
     ) -> dict:
         """
         Transform the generate content request for Vertex AI.

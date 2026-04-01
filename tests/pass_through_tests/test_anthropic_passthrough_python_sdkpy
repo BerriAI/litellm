@@ -13,7 +13,7 @@ client = anthropic.Anthropic(
 def test_anthropic_basic_completion():
     print("making basic completion request to anthropic passthrough")
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-5-20250929",
         max_tokens=1024,
         messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
     )
@@ -29,7 +29,7 @@ def test_anthropic_streaming():
         messages=[
             {"role": "user", "content": "Say 'hello stream test' and nothing else"}
         ],
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-5-20250929",
     ) as stream:
         for text in stream.text_stream:
             collected_output.append(text)

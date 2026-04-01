@@ -15,10 +15,11 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 
 ## Supported Endpoints
 
-LiteLLM supports 2 vertex ai passthrough routes:
+LiteLLM supports 3 vertex ai passthrough routes:
 
 1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
-2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
+2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/) - [See Search Datastores Guide](./vertex_ai_search_datastores.md)
+3. `/vertex_ai/live` → upgrades to the Vertex AI Live API WebSocket (`google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`) - [See Live WebSocket Guide](./vertex_ai_live_websocket.md)
 
 ## How to use
 
@@ -44,7 +45,7 @@ model_list:
     litellm_params:
       model: vertex_ai/gemini-1.0-pro
       vertex_project: adroit-crow-413218
-      vertex_region: us-central1
+      vertex_location: us-central1
       vertex_credentials: /path/to/credentials.json
       use_in_pass_through: true # 👈 KEY CHANGE
 ```
@@ -56,9 +57,9 @@ model_list:
 <TabItem value="yaml" label="Set in config.yaml">
 
 ```yaml
-default_vertex_config: 
+default_vertex_config:
   vertex_project: adroit-crow-413218
-  vertex_region: us-central1
+  vertex_location: us-central1
   vertex_credentials: /path/to/credentials.json
 ```
 </TabItem>
@@ -168,6 +169,50 @@ generateContent();
 
 </TabItem>
 </Tabs>
+
+
+## Vertex AI Live API WebSocket
+
+LiteLLM can now proxy the Vertex AI Live API to help you experiment with streaming audio/text from Gemini Live models without exposing Google credentials to clients.
+
+- Configure default Vertex credentials via `default_vertex_config` or environment variables (see examples above).
+- Connect to `wss://<PROXY_URL>/vertex_ai/live`. LiteLLM will exchange your saved credentials for a short-lived access token and forward messages bidirectionally.
+- Optional query params `vertex_project`, `vertex_location`, and `model` let you override defaults for multi-project setups or global-only models.
+
+```python title="client.py"
+import asyncio
+import json
+
+from websockets.asyncio.client import connect
+
+
+async def main() -> None:
+    headers = {
+        "x-litellm-api-key": "Bearer sk-your-litellm-key",
+        "Content-Type": "application/json",
+    }
+    async with connect(
+        "ws://localhost:4000/vertex_ai/live",
+        additional_headers=headers,
+    ) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "setup": {
+                        "model": "projects/your-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09",
+                        "generation_config": {"response_modalities": ["TEXT"]},
+                    }
+                }
+            )
+        )
+
+        async for message in ws:
+            print("server:", message)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 
 ## Quick Start
@@ -416,3 +461,48 @@ generateContent();
 
 </TabItem>
 </Tabs>
+
+### Using Anthropic Beta Features on Vertex AI
+
+When using Anthropic models via Vertex AI passthrough (e.g., Claude on Vertex), you can enable Anthropic beta features like extended context windows.
+
+The `anthropic-beta` header is automatically forwarded to Vertex AI when calling Anthropic models.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "anthropic-beta: context-1m-2025-08-07" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+### Forwarding Custom Headers with `x-pass-` Prefix
+
+You can forward any custom header to the provider by prefixing it with `x-pass-`. The prefix is stripped before the header is sent to the provider.
+
+For example:
+- `x-pass-anthropic-beta: value` becomes `anthropic-beta: value`
+- `x-pass-custom-header: value` becomes `custom-header: value`
+
+This is useful when you need to send provider-specific headers that aren't in the default allowlist.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-pass-anthropic-beta: context-1m-2025-08-07" \
+  -H "x-pass-custom-feature: enabled" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+:::info
+The `x-pass-` prefix works for all LLM pass-through endpoints, not just Vertex AI.
+:::

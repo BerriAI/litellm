@@ -48,9 +48,8 @@ def get_current_weather(location, unit="fahrenheit"):
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
         "claude-3-haiku-20240307",
-        "gemini/gemini-1.5-pro",
+        "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -159,7 +158,7 @@ def test_aaparallel_function_call(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-4-sonnet-20250514",
         "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
     ],
 )
@@ -334,6 +333,10 @@ def test_parallel_function_call_anthropic_error_msg(
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
     """
+    # Ensure modify_params is False so UnsupportedParamsError is raised
+    # (other tests in this file set it to True and don't reset it)
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = False
     try:
         litellm.set_verbose = True
 
@@ -364,6 +367,8 @@ def test_parallel_function_call_anthropic_error_msg(
         print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 def test_parallel_function_call_stream():
@@ -561,33 +566,6 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        # "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "claude-3-haiku-20240307",
-        "databricks/databricks-claude-3-7-sonnet"
-    ],
-)
-def test_anthropic_function_call_with_no_schema(model):
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
-    """
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in New York",
-            },
-        }
-    ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
-    completion(model=model, messages=messages, tools=tools, tool_choice="auto")
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
@@ -728,17 +706,23 @@ def test_passing_tool_result_as_list(model):
         resp = completion(model=model, messages=messages, tools=tools)
         print(resp)
 
-    if model == "claude-3-5-sonnet-20241022":
+    if model == "claude-sonnet-4-5-20250929":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=1)
-async def test_watsonx_tool_choice(sync_mode):
+async def test_watsonx_tool_choice(sync_mode, monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
     from litellm import acompletion, completion
+
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     litellm.set_verbose = True
     tools = [
@@ -789,7 +773,7 @@ async def test_watsonx_tool_choice(sync_mode):
             mock_completion.assert_called_once()
             print(mock_completion.call_args.kwargs)
             json_data = json.loads(mock_completion.call_args.kwargs["data"])
-            json_data["tool_choice_option"] == "auto"
+            assert json_data["tool_choice_option"] == "auto"
         except Exception as e:
             print(e)
             if "The read operation timed out" in str(e):

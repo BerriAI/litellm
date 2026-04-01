@@ -4,7 +4,7 @@ import pytest_asyncio
 from prometheus_client import REGISTRY
 
 try:
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+    from litellm.integrations.prometheus import PrometheusLogger
 except Exception:
     PrometheusLogger = None
 
@@ -62,9 +62,11 @@ def prometheus_logger():
 
     with patch("litellm.proxy.proxy_server.premium_user", True):
         logger = PrometheusLogger()
+
         # Add the missing async_logging_hook method
         async def async_logging_hook(kwargs, result, call_type):
             return kwargs, result
+
         logger.async_logging_hook = async_logging_hook
         return logger
 
@@ -137,7 +139,7 @@ async def test_prometheus_metric_tracking():
     try:
         from unittest.mock import MagicMock
 
-        from litellm_enterprise.integrations.prometheus import PrometheusLogger
+        from litellm.integrations.prometheus import PrometheusLogger
     except Exception:
         PrometheusLogger = None
     if PrometheusLogger is None:
@@ -166,10 +168,10 @@ async def test_prometheus_metric_tracking():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
+                    "api_version": os.getenv("AZURE_AI_API_VERSION"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "model_info": {"id": "azure-model-id"},
             },
@@ -201,7 +203,6 @@ async def test_prometheus_metric_tracking():
 
     # Verify the mock was called correctly
     mock_prometheus.track_provider_remaining_budget.assert_called()
-
 
 
 class CustomPrometheusLogger(PrometheusLogger):
@@ -238,6 +239,7 @@ class CustomPrometheusLogger(PrometheusLogger):
 async def test_router_cooldown_event_callback():
     # Clear Prometheus registry to avoid duplicate metric registration
     from prometheus_client import REGISTRY
+
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:
         REGISTRY.unregister(collector)
@@ -325,4 +327,3 @@ async def test_router_cooldown_event_callback_no_prometheus():
 
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
-

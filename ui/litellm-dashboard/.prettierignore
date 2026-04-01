@@ -1,0 +1,11 @@
+node_modules
+.next
+.out
+dist
+build
+.coverage
+.vercel
+.turbo
+.next-static
+*.min.js
+coverage/

@@ -18,7 +18,7 @@
     "@docusaurus/plugin-google-gtag": "3.8.1",
     "@docusaurus/plugin-ideal-image": "3.8.1",
     "@docusaurus/preset-classic": "3.8.1",
-    "@docusaurus/theme-mermaid": "^3.8.1",
+    "@docusaurus/theme-mermaid": "3.8.1",
     "@inkeep/cxkit-docusaurus": "^0.5.89",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^1.2.1",
@@ -45,11 +45,43 @@
     ]
   },
   "engines": {
-    "node": ">=16.14"
+    "node": ">=16.14",
+    "npm": ">=8.3.0"
   },
   "overrides": {
-    "webpack-dev-server": ">=5.2.1",
-    "form-data": ">=4.0.4",
-    "mermaid": ">=11.10.0"
+    "gray-matter": "4.0.3",
+    "webpack-dev-server": "5.2.3",
+    "form-data": "4.0.5",
+    "mermaid": "11.12.1",
+    "minimatch": "10.2.4",
+    "serialize-javascript": "7.0.3",
+    "mdast-util-to-hast": "13.2.1",
+    "lodash-es": "4.17.23",
+    "@babel/traverse": "7.28.5",
+    "ws": "8.19.0",
+    "http-proxy-middleware": "3.0.5",
+    "tar-fs": "3.1.1",
+    "webpack-dev-middleware": "5.3.4",
+    "braces": "3.0.3",
+    "webpack": "5.105.3",
+    "serve-static": "2.2.1",
+    "path-to-regexp": "1.9.0",
+    "dompurify": "3.3.2",
+    "svgo": "4.0.1",
+    "schema-utils@3": {
+      "ajv": "6.14.0"
+    },
+    "schema-utils@4": {
+      "ajv": "8.18.0"
+    },
+    "file-loader": {
+      "ajv": "6.14.0"
+    },
+    "null-loader": {
+      "ajv": "6.14.0"
+    },
+    "url-loader": {
+      "ajv": "6.14.0"
+    }
   }
 }

@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ import logging
 load_dotenv()
 
 import pytest
-import uuid
+from litellm._uuid import uuid
 import litellm
 from litellm._logging import verbose_proxy_logger
 
@@ -112,6 +112,7 @@ def prisma_client():
     return prisma_client
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio()
 async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)

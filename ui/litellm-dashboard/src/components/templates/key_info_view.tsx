@@ -1,93 +1,125 @@
-import React, { useEffect, useState } from "react"
-import {
-  Card,
-  Text,
-  Button,
-  Grid,
-  Col,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Title,
-  Badge,
-  TextInput,
-  Select as TremorSelect,
-} from "@tremor/react"
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
-import { keyDeleteCall, keyUpdateCall } from "../networking"
-import { KeyResponse } from "../key_team_helpers/key_list"
-import { Form, Input, InputNumber, Select, Tooltip, Button as AntdButton } from "antd"
-import NotificationManager from "../molecules/notifications_manager"
-import { KeyEditView } from "./key_edit_view"
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal"
-import { rolesWithWriteAccess } from "../../utils/roles"
-import ObjectPermissionsView from "../object_permissions_view"
-import LoggingSettingsView from "../logging_settings_view"
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
-import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils"
-import { CopyIcon, CheckIcon } from "lucide-react"
-import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
-import { parseErrorMessage } from "../shared/errorUtils"
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Form, Modal, Tag } from "antd";
+import { KeyInfoHeader } from "./KeyInfoHeader";
+import { useEffect, useState } from "react";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
+import AutoRotationView from "../common_components/AutoRotationView";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import LoggingSettingsView from "../logging_settings_view";
+import NotificationManager from "../molecules/notifications_manager";
+import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
+import ObjectPermissionsView from "../object_permissions_view";
+import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { parseErrorMessage } from "../shared/errorUtils";
+import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
-  keyId: string
-  onClose: () => void
-  keyData: KeyResponse | undefined
-  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void
-  onDelete?: () => void
-  accessToken: string | null
-  userID: string | null
-  userRole: string | null
-  teams: any[] | null
-  premiumUser: boolean
-  setAccessToken?: (token: string) => void
-  backButtonText?: string
+  keyId: string;
+  onClose: () => void;
+  keyData: KeyResponse | undefined;
+  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
+  onDelete?: () => void;
+  teams: any[] | null;
+  backButtonText?: string;
 }
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/KeyInfoView.tsx
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 export default function KeyInfoView({
-  keyId,
   onClose,
   keyData,
-  accessToken,
-  userID,
-  userRole,
   teams,
   onKeyDataUpdate,
   onDelete,
-  premiumUser,
-  setAccessToken,
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
-  const [isEditing, setIsEditing] = useState(false)
-  const [form] = Form.useForm()
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("")
-  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false)
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
-
+  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const { teams: teamsData } = useTeams();
+  const { data: projects } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const [isEditing, setIsEditing] = useState(false);
+  const [form] = Form.useForm();
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
+  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
+  const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
+  const { mutate: resetKeySpend, isPending: resetSpendLoading } = useResetKeySpend();
   // Add local state to maintain key data and track regeneration
-  const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData)
-  const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null)
-  const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false)
+  const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+  const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
+  const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
+  const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
 
   // Update local state when keyData prop changes (but don't reset to undefined)
   useEffect(() => {
     if (keyData) {
-      setCurrentKeyData(keyData)
+      setCurrentKeyData(keyData);
     }
-  }, [keyData])
+  }, [keyData]);
+
+  // Fetch resolved guardrails for all policies
+  useEffect(() => {
+    const fetchPolicyGuardrails = async () => {
+      const policies = currentKeyData?.metadata?.policies;
+      if (!accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
+        return;
+      }
+
+      setLoadingPolicies(true);
+      const guardrailsMap: Record<string, string[]> = {};
+
+      try {
+        await Promise.all(
+          policies.map(async (policyName: string) => {
+            try {
+              const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
+              guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
+            } catch (error) {
+              console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
+              guardrailsMap[policyName] = [];
+            }
+          })
+        );
+        setPolicyGuardrails(guardrailsMap);
+      } catch (error) {
+        console.error("Failed to fetch policy guardrails:", error);
+      } finally {
+        setLoadingPolicies(false);
+      }
+    };
+
+    fetchPolicyGuardrails();
+  }, [accessToken, currentKeyData?.metadata?.policies]);
 
   // Reset recent regeneration indicator after 5 seconds
   useEffect(() => {
     if (isRecentlyRegenerated) {
       const timer = setTimeout(() => {
-        setIsRecentlyRegenerated(false)
-      }, 5000)
-      return () => clearTimeout(timer)
+        setIsRecentlyRegenerated(false);
+      }, 5000);
+      return () => clearTimeout(timer);
     }
-  }, [isRecentlyRegenerated])
+  }, [isRecentlyRegenerated]);
 
   // Use currentKeyData instead of keyData throughout the component
   if (!currentKeyData) {
@@ -98,70 +130,119 @@ export default function KeyInfoView({
         </Button>
         <Text>Key not found</Text>
       </div>
-    )
+    );
   }
 
   const handleKeyUpdate = async (formValues: Record<string, any>) => {
     try {
-      if (!accessToken) return
+      if (!accessToken) return;
 
-      const currentKey = formValues.token
-      formValues.key = currentKey
+      const currentKey = formValues.token;
+      formValues.key = currentKey;
+
+      // Guard premium features
+      if (!canEditGuardrails) {
+        delete formValues.guardrails;
+        delete formValues.prompts;
+      }
+
+      // Handle max budget empty string
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
           ...currentKeyData.object_permission,
           vector_stores: formValues.vector_stores || [],
-        }
+        };
         // Remove vector_stores from the top level as it should be in object_permission
-        delete formValues.vector_stores
+        delete formValues.vector_stores;
       }
 
       if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] }
+        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] };
         formValues.object_permission = {
           ...currentKeyData.object_permission,
           mcp_servers: servers || [],
           mcp_access_groups: accessGroups || [],
-        }
+        };
         // Remove mcp_servers_and_groups from the top level as it should be in object_permission
-        delete formValues.mcp_servers_and_groups
+        delete formValues.mcp_servers_and_groups;
       }
+
+      // Handle MCP tool permissions
+      if (formValues.mcp_tool_permissions !== undefined) {
+        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          formValues.object_permission = {
+            ...formValues.object_permission,
+            mcp_tool_permissions: mcpToolPermissions,
+          };
+        }
+        delete formValues.mcp_tool_permissions;
+      }
+
+      // Handle agent permissions
+      if (formValues.agents_and_groups !== undefined) {
+        const { agents, accessGroups } = formValues.agents_and_groups || { agents: [], accessGroups: [] };
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          agents: agents || [],
+          agent_access_groups: accessGroups || [],
+        };
+        delete formValues.agents_and_groups;
+      }
+
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+      formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
+      formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
-          const parsedMetadata = JSON.parse(formValues.metadata)
+          const parsedMetadata = JSON.parse(formValues.metadata);
+          // Ensure tags are controlled via dedicated field, not in metadata textarea
+          if ("tags" in parsedMetadata) {
+            delete parsedMetadata["tags"];
+          }
           formValues.metadata = {
             ...parsedMetadata,
+            ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
-                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-                }
-              : {}),
-          }
-        } catch (error) {
-          console.error("Error parsing metadata JSON:", error)
-          NotificationManager.error("Invalid metadata JSON")
-          return
-        }
-      } else {
-        formValues.metadata = {
-          ...(formValues.metadata || {}),
-          ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
-          ...(formValues.disabled_callbacks?.length > 0
-            ? {
                 litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
               }
-            : {}),
+              : {}),
+          };
+        } catch (error) {
+          console.error("Error parsing metadata JSON:", error);
+          NotificationManager.error("Invalid metadata JSON");
+          return;
         }
+      } else {
+        const baseMetadata = formValues.metadata || {};
+        const { tags: _omitTags, ...rest } = baseMetadata;
+        formValues.metadata = {
+          ...rest,
+          ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+          ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
+          ...(formValues.disabled_callbacks?.length > 0
+            ? {
+              litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+            }
+            : {}),
+        };
       }
 
-      delete formValues.logging_settings
+      // tags are merged into metadata; do not send as top-level field
+      if ("tags" in formValues) {
+        delete formValues.tags;
+      }
+      delete formValues.logging_settings;
 
       // Convert budget_duration to API format
       if (formValues.budget_duration) {
@@ -169,257 +250,212 @@ export default function KeyInfoView({
           daily: "24h",
           weekly: "7d",
           monthly: "30d",
-        }
-        formValues.budget_duration = durationMap[formValues.budget_duration]
+        };
+        formValues.budget_duration = durationMap[formValues.budget_duration];
       }
 
-      const newKeyValues = await keyUpdateCall(accessToken, formValues)
+      const newKeyValues = await keyUpdateCall(accessToken, formValues);
 
       // Update local state
-      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined))
+      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined));
 
       if (onKeyDataUpdate) {
-        onKeyDataUpdate(newKeyValues)
+        onKeyDataUpdate(newKeyValues);
       }
-      NotificationManager.success("Key updated successfully")
-      setIsEditing(false)
+      NotificationManager.success("Key updated successfully");
+      setIsEditing(false);
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(parseErrorMessage(error))
-      console.error("Error updating key:", error)
+      NotificationManager.fromBackend(parseErrorMessage(error));
+      console.error("Error updating key:", error);
     }
-  }
+  };
 
   const handleDelete = async () => {
     try {
-      if (!accessToken) return
-      await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id)
-      NotificationManager.success("Key deleted successfully")
+      setDeleteLoading(true);
+      if (!accessToken) return;
+      await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
+      NotificationManager.success("Key deleted successfully");
       if (onDelete) {
-        onDelete()
+        onDelete();
       }
-      onClose()
+      onClose();
     } catch (error) {
-      console.error("Error deleting the key:", error)
-      NotificationManager.fromBackend(error)
+      console.error("Error deleting the key:", error);
+      NotificationManager.fromBackend(error);
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
+      setDeleteConfirmInput("");
     }
-    // Reset the confirmation input
-    setDeleteConfirmInput("")
-  }
-
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text)
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
-    }
-  }
+  };
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
-      if (!prevData) return undefined
+      if (!prevData) return undefined;
       const newData = {
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
         created_at: new Date().toLocaleString(),
-      }
-      return newData
-    })
+      };
+      return newData;
+    });
 
     // Track regeneration timestamp
-    setLastRegeneratedAt(new Date())
-    setIsRecentlyRegenerated(true)
+    setLastRegeneratedAt(new Date());
+    setIsRecentlyRegenerated(true);
 
     if (onKeyDataUpdate) {
       onKeyDataUpdate({
         ...updatedKeyData,
         created_at: new Date().toLocaleString(),
-      })
+      });
     }
-  }
+  };
 
   // Update the formatTimestamp function to use the desired date format
   const formatTimestamp = (timestamp: string | Date) => {
-    const date = new Date(timestamp)
+    const date = new Date(timestamp);
     const dateStr = date.toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
-    })
+    });
     const timeStr = date.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
-    })
-    return `${dateStr} at ${timeStr}`
-  }
+    });
+    return `${dateStr} at ${timeStr}`;
+  };
+
+  const canModifyKey =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+        userID || "",
+      )) ||
+    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+
+  const canResetSpend =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+        userID || "",
+      ));
+
+  const handleResetSpend = () => {
+    resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
+      onSuccess: () => {
+        setCurrentKeyData((prevData) => (prevData ? { ...prevData, spend: 0 } : undefined));
+        if (onKeyDataUpdate) {
+          onKeyDataUpdate({ spend: 0 });
+        }
+        NotificationManager.success("Key spend reset to $0");
+        setIsResetSpendModalOpen(false);
+      },
+      onError: (error) => {
+        NotificationManager.fromBackend(parseErrorMessage(error));
+        console.error("Error resetting key spend:", error);
+      },
+    });
+  };
 
   return (
     <div className="w-full h-screen p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            {backButtonText}
-          </Button>
-          <Title>{currentKeyData.key_alias || "API Key"}</Title>
-
-          <div className="flex items-center cursor-pointer mb-2 space-y-6">
-            <div>
-              <Text className="text-xs text-gray-400 uppercase tracking-wide mt-2">Key ID</Text>
-              <Text className="text-gray-500 font-mono text-sm">{currentKeyData.token_id || currentKeyData.token}</Text>
-            </div>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-              onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
-              className={`ml-2 transition-all duration-200${
-                copiedStates["key-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
-            />
-          </div>
-
-          {/* Add timestamp and regeneration indicator */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <Text className="text-sm text-gray-500">
-              {currentKeyData.updated_at && currentKeyData.updated_at !== currentKeyData.created_at
-                ? `Updated: ${formatTimestamp(currentKeyData.updated_at)}`
-                : `Created: ${formatTimestamp(currentKeyData.created_at)}`}
-            </Text>
-
-            {isRecentlyRegenerated && (
-              <Badge color="green" size="xs" className="animate-pulse">
-                Recently Regenerated
-              </Badge>
-            )}
-
-            {lastRegeneratedAt && (
-              <Badge color="blue" size="xs">
-                Regenerated
-              </Badge>
-            )}
-          </div>
-        </div>
-        {userRole && rolesWithWriteAccess.includes(userRole) && (
-          <div className="flex gap-2">
-            <Tooltip
-              title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
-            >
-              <span className="inline-block">
-                <Button
-                  icon={RefreshIcon}
-                  variant="secondary"
-                  onClick={() => setIsRegenerateModalOpen(true)}
-                  className="flex items-center"
-                  disabled={!premiumUser}
-                >
-                  Regenerate Key
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
-            >
-              Delete Key
-            </Button>
-          </div>
-        )}
-      </div>
+      <KeyInfoHeader
+        data={{
+          keyName: currentKeyData.key_alias || "Virtual Key",
+          keyId: currentKeyData.token_id || currentKeyData.token,
+          userId: currentKeyData.user_id || "",
+          userEmail: currentKeyData.user_email || "",
+          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
+          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+        }}
+        onBack={onClose}
+        onRegenerate={() => setIsRegenerateModalOpen(true)}
+        onDelete={() => setIsDeleteModalOpen(true)}
+        onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
+        canModifyKey={canModifyKey}
+        backButtonText={backButtonText}
+        regenerateDisabled={!premiumUser}
+        regenerateTooltip={
+          !premiumUser
+            ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
+            : undefined
+        }
+      />
 
       {/* Add RegenerateKeyModal */}
       <RegenerateKeyModal
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
-        accessToken={accessToken}
-        premiumUser={premiumUser}
-        setAccessToken={setAccessToken}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
       {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (() => {
-  const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "API Key";
-  const isValid = deleteConfirmInput === keyName;
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900">Delete Key</h3>
-            <button
-              onClick={() => { setIsDeleteModalOpen(false); setDeleteConfirmInput(""); }}
-              className="text-gray-400 hover:text-gray-500 focus:outline-none"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="px-6 py-4">
-            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-              <div className="text-red-500 mt-0.5">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-base font-medium text-red-600">
-                  Warning: You are about to delete this API key.
-                </p>
-                <p className="text-base text-red-600 mt-2">
-                  This action is irreversible and will immediately revoke access for any applications using this key.
-                </p>
-              </div>
-            </div>
-            <p className="text-base text-gray-600 mb-5">
-              Are you sure you want to delete this API key?
-            </p>
-            <div className="mb-5">
-              <label className="block text-base font-medium text-gray-700 mb-2">
-                {`Type `}
-                <span className="underline">{keyName}</span>
-                {` to confirm deletion:`}
-              </label>
-              <input
-                type="text"
-                value={deleteConfirmInput}
-                onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                placeholder="Enter key name exactly"
-                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                autoFocus
-              />
-            </div>
-          </div>
-        </div>
-        <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
-          <button
-            onClick={() => { setIsDeleteModalOpen(false); setDeleteConfirmInput(""); }}
-            className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleDelete}
-            disabled={!isValid}
-            className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? 'bg-red-600 hover:bg-red-700' : 'bg-red-300 cursor-not-allowed'}`}
-          >
-            Delete Key
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-})()}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Key"
+        alertMessage="This action is irreversible and will immediately revoke access for any applications using this key."
+        message="Are you sure you want to delete this Virtual Key?"
+        resourceInformationTitle="Key Information"
+        resourceInformation={[
+          {
+            label: "Key Alias",
+            value: currentKeyData?.key_alias || "-",
+          },
+          {
+            label: "Key ID",
+            value: currentKeyData?.token_id || currentKeyData?.token || "-",
+            code: true,
+          },
+          {
+            label: "Team ID",
+            value: currentKeyData?.team_id || "-",
+            code: true,
+          },
+          {
+            label: "Spend",
+            value: currentKeyData?.spend ? `$${formatNumberWithCommas(currentKeyData.spend, 4)}` : "$0.0000",
+          },
+        ]}
+        onCancel={() => {
+          setIsDeleteModalOpen(false);
+          setDeleteConfirmInput("");
+        }}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+        requiredConfirmation={currentKeyData?.key_alias}
+      />
+
+      {/* Reset Spend Confirmation Modal */}
+      <Modal
+        title="Reset Key Spend"
+        open={isResetSpendModalOpen}
+        onOk={handleResetSpend}
+        onCancel={() => setIsResetSpendModalOpen(false)}
+        okText="Reset"
+        okButtonProps={{ danger: true }}
+        confirmLoading={resetSpendLoading}
+      >
+        <p>
+          Reset spend for <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong> to{" "}
+          <strong>$0</strong>?
+        </p>
+        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
+          preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
+        </p>
+      </Modal>
 
       <TabGroup>
         <TabList className="mb-4">
@@ -475,6 +511,57 @@ export default function KeyInfoView({
                 />
               </Card>
 
+              <Card>
+                <Text className="font-medium mb-3">Guardrails</Text>
+                {Array.isArray(currentKeyData.metadata?.guardrails) && currentKeyData.metadata.guardrails.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {currentKeyData.metadata.guardrails.map((guardrail: string, index: number) => (
+                      <Badge key={index} color="blue">
+                        {guardrail}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No guardrails configured</Text>
+                )}
+                {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
+                  currentKeyData.metadata.disable_global_guardrails === true && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                    </div>
+                  )}
+              </Card>
+
+              <Card>
+                <Text className="font-medium mb-3">Policies</Text>
+                {Array.isArray(currentKeyData.metadata?.policies) && currentKeyData.metadata.policies.length > 0 ? (
+                  <div className="space-y-4">
+                    {currentKeyData.metadata.policies.map((policy: string, index: number) => (
+                      <div key={index} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="purple">{policy}</Badge>
+                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                        </div>
+                        {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
+                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                            <div className="flex flex-wrap gap-1">
+                              {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                                <Badge key={gIndex} color="blue" size="xs">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No policies configured</Text>
+                )}
+              </Card>
+
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
                 disabledCallbacks={
@@ -482,6 +569,15 @@ export default function KeyInfoView({
                     ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)
                     : []
                 }
+                variant="card"
+              />
+
+              <AutoRotationView
+                autoRotate={currentKeyData.auto_rotate}
+                rotationInterval={currentKeyData.rotation_interval}
+                lastRotationAt={currentKeyData.last_rotation_at}
+                keyRotationAt={currentKeyData.key_rotation_at}
+                nextRotationAt={currentKeyData.next_rotation_at}
                 variant="card"
               />
             </Grid>
@@ -492,10 +588,8 @@ export default function KeyInfoView({
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                {!isEditing && canModifyKey && (
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
@@ -532,9 +626,25 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.team_id || "Not Set"}</Text>
                   </div>
 
+                  {enableProjectsUI && (
+                    <div>
+                      <Text className="font-medium">Project</Text>
+                      <Text>
+                        {currentKeyData.project_id
+                          ? (() => {
+                              const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                              return project?.project_alias
+                                ? `${project.project_alias} (${currentKeyData.project_id})`
+                                : currentKeyData.project_id;
+                            })()
+                          : "Not Set"}
+                      </Text>
+                    </div>
+                  )}
+
                   <div>
                     <Text className="font-medium">Organization</Text>
-                    <Text>{currentKeyData.organization_id || "Not Set"}</Text>
+                    <Text>{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</Text>
                   </div>
 
                   <div>
@@ -559,6 +669,16 @@ export default function KeyInfoView({
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
+                  <AutoRotationView
+                    autoRotate={currentKeyData.auto_rotate}
+                    rotationInterval={currentKeyData.rotation_interval}
+                    lastRotationAt={currentKeyData.last_rotation_at}
+                    keyRotationAt={currentKeyData.key_rotation_at}
+                    nextRotationAt={currentKeyData.next_rotation_at}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                  />
+
                   <div>
                     <Text className="font-medium">Spend</Text>
                     <Text>${formatNumberWithCommas(currentKeyData.spend, 4)} USD</Text>
@@ -574,15 +694,68 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Tags</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
+                        ? currentKeyData.metadata.tags.map((tag, index) => (
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {tag}
+                          </span>
+                        ))
+                        : "No tags specified"}
+                    </div>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Prompts</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {prompt}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {prompt}
+                          </span>
+                        ))
                         : "No prompts specified"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Allowed Routes</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
+                        currentKeyData.allowed_routes.map((route, index) => (
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
+                      ) : (
+                        <Tag color="green">All routes allowed</Tag>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Allowed Pass Through Routes</Text>
+                    <Text>
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
+                        currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                        ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
+                        : "No pass through routes specified"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Disable Global Guardrails</Text>
+                    <Text>
+                      {currentKeyData.metadata?.disable_global_guardrails === true ? (
+                        <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
+                      ) : (
+                        <Badge color="green">Disabled - Global guardrails active</Badge>
+                      )}
                     </Text>
                   </div>
 
@@ -628,7 +801,7 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {formatMetadataForDisplay(currentKeyData.metadata)}
+                      {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
 
@@ -656,5 +829,5 @@ export default function KeyInfoView({
         </TabPanels>
       </TabGroup>
     </div>
-  )
+  );
 }

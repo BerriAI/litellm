@@ -11,7 +11,8 @@ else:
 
 class LangfuseOtelConfig(BaseModel):
     otlp_auth_headers: Optional[str] = None
-    protocol: Protocol = "otlp_http" 
+    protocol: Protocol = "otlp_http"
+
 
 class LangfuseSpanAttributes(str, Enum):
     LANGFUSE_ENVIRONMENT = "langfuse.environment"
@@ -23,6 +24,10 @@ class LangfuseSpanAttributes(str, Enum):
     GENERATION_VERSION = "langfuse.generation.version"
     MASK_INPUT = "langfuse.generation.mask_input"
     MASK_OUTPUT = "langfuse.generation.mask_output"
+
+    # ---- Observation input/output ----
+    OBSERVATION_INPUT = "langfuse.observation.input"
+    OBSERVATION_OUTPUT = "langfuse.observation.output"
 
     # ---- Trace-level metadata ----
     TRACE_USER_ID = "user.id"

@@ -36,10 +36,14 @@ class EnterpriseRouteChecks:
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"🚨🚨🚨 DISABLING LLM API ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
+                    detail=f"🚨🚨🚨 DISABLING ADMIN ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
                 )
 
         return get_secret_bool("DISABLE_ADMIN_ENDPOINTS") is True
+
+    # Routes that should remain accessible even when LLM API endpoints are disabled.
+    # These are read-only model listing routes needed by the Admin UI.
+    LLM_API_EXEMPT_ROUTES = ["/models", "/v1/models"]
 
     @staticmethod
     def should_call_route(route: str):
@@ -58,6 +62,7 @@ class EnterpriseRouteChecks:
             )
         elif (
             RouteChecks.is_llm_api_route(route=route)
+            and route not in EnterpriseRouteChecks.LLM_API_EXEMPT_ROUTES
             and EnterpriseRouteChecks.is_llm_api_route_disabled()
         ):
             raise HTTPException(

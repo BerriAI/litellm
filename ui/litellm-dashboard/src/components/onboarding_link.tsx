@@ -1,7 +1,7 @@
 import React from "react";
-import { Modal, message, Typography } from "antd";
+import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text, Button } from "@tremor/react";
+import { Text } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";
 
 export interface InvitationLink {
@@ -19,9 +19,7 @@ export interface InvitationLink {
 
 interface OnboardingProps {
   isInvitationLinkModalVisible: boolean;
-  setIsInvitationLinkModalVisible: React.Dispatch<
-    React.SetStateAction<boolean>
-  >;
+  setIsInvitationLinkModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   baseUrl: string;
   invitationLinkData: InvitationLink | null;
   modalType?: "invitation" | "resetPassword";
@@ -49,10 +47,10 @@ export default function OnboardingModal({
     }
     const baseUrlObj = new URL(baseUrl);
     const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
-    const path = basePath && basePath !== "/" ? `${basePath}/ui` : 'ui';
+    const path = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
     // Get the path from the base URL
     if (invitationLinkData?.has_user_setup_sso) {
-        return new URL(path, baseUrl).toString();
+      return new URL(path, baseUrl).toString();
     }
     let urlPath = `${path}?invitation_id=${invitationLinkData?.id}`;
     if (modalType === "resetPassword") {
@@ -65,7 +63,7 @@ export default function OnboardingModal({
   return (
     <Modal
       title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
-      visible={isInvitationLinkModalVisible}
+      open={isInvitationLinkModalVisible}
       width={800}
       footer={null}
       onOk={handleInvitationOk}
@@ -87,14 +85,9 @@ export default function OnboardingModal({
         </Text>
       </div>
       <div className="flex justify-end mt-5">
-        <CopyToClipboard
-          text={getInvitationUrl()}
-          onCopy={() => NotificationsManager.success("Copied!")}
-        >
-          <Button variant="primary">
-            {modalType === "invitation"
-              ? "Copy invitation link"
-              : "Copy password reset link"}
+        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
+          <Button type="primary">
+            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
           </Button>
         </CopyToClipboard>
       </div>

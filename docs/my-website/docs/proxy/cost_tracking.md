@@ -2,11 +2,17 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 💸 Spend Tracking
+# Spend Tracking
 
 Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+Provider-specific cost tracking (e.g., [Vertex AI PayGo / priority pricing](../providers/vertex.md#paygo--priority-cost-tracking), [Bedrock service tiers](../providers/bedrock.md#usage---service-tier), [Azure base model mapping](./custom_pricing.md#set-base_model-for-cost-tracking-eg-azure-deployments)) is applied automatically when the response includes tier metadata.
+
+:::tip Keep Pricing Data Updated
+[Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
+:::
 
 ### How to Track Spend with LiteLLM
 
@@ -19,7 +25,7 @@ LiteLLM automatically tracks spend for all known models. See our [model cost map
 <Tabs>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
-```python
+```python title="Send Request with Spend Tracking" showLineNumbers
 import openai
 client = openai.OpenAI(
     api_key="sk-1234",
@@ -51,7 +57,7 @@ print(response)
 
 Pass `metadata` as part of the request body
 
-```shell
+```shell title="Curl Request with Spend Tracking" showLineNumbers
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer sk-1234' \
@@ -73,7 +79,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 <TabItem value="langchain" label="Langchain">
 
-```python
+```python title="Langchain with Spend Tracking" showLineNumbers
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
@@ -127,7 +133,7 @@ Expect to see `x-litellm-response-cost` in the response headers with calculated 
 
 The following spend gets tracked in Table `LiteLLM_SpendLogs`
 
-```json
+```json title="Spend Log Entry Format" showLineNumbers
 {
   "api_key": "fe6b0cab4ff5a5a8df823196cc8a450*****",                            # Hash of API Key used
   "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-1234`.
@@ -157,7 +163,7 @@ Use this when you want non-proxy admins to access `/spend` endpoints
 
 :::info
 
-Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Schedule a [meeting with us to get your Enterprise License](https://enterprise.litellm.ai/demo)
 
 :::
 
@@ -165,7 +171,7 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 
 Create Key with with `permissions={"get_spend_routes": true}`
 
-```shell
+```shell title="Generate Key with Spend Route Permissions" showLineNumbers
 curl --location 'http://0.0.0.0:4000/key/generate' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
@@ -212,7 +218,7 @@ curl -X POST \
 
 Assuming you have been issuing keys for end users, and setting their `user_id` on the key, you can check their usage.
 
-```shell title="Total for a user API" showLineNumbers
+```shell title="Get User Spend - API Request" showLineNumbers
 curl -L -X GET 'http://localhost:4000/user/info?user_id=jane_smith' \
 -H 'Authorization: Bearer sk-...'
 ```
@@ -321,6 +327,10 @@ curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&
 See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
 
 ## Custom Tags
+
+:::tip See Full Request Tags Documentation
+For comprehensive documentation on all tag options including `x-litellm-tags` header, request body `tags`, and config-based tags, see the dedicated [Request Tags](./request_tags.md) page.
+:::
 
 Requirements:
 
@@ -718,7 +728,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```shell
 [
   {
-    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "api_key": "example-api-key-123",
     "total_cost": 0.3201286305151999,
     "total_input_tokens": 36.0,
     "total_output_tokens": 1593.0,
@@ -762,7 +772,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```shell
 [
   {
-    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "api_key": "example-api-key-123",
     "total_cost": 0.00013132,
     "total_input_tokens": 105.0,
     "total_output_tokens": 872.0,
@@ -836,14 +846,14 @@ The `/spend/logs` endpoint now supports a `summarize` parameter to control data 
 
 **Get individual transaction logs:**
 
-```bash
+```bash title="Get Individual Transaction Logs" showLineNumbers
 curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
 -H "Authorization: Bearer sk-1234"
 ```
 
 **Get summarized data (default):**
 
-```bash
+```bash title="Get Summarized Spend Data" showLineNumbers
 curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02" \
 -H "Authorization: Bearer sk-1234"
 ```
@@ -1147,7 +1157,7 @@ curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: 
         "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
         "call_type": "acompletion",
         "metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "example-api-key-123",
             "user_api_key_alias": null,
             "spend_logs_metadata": { # 👈 LOGGED CUSTOM METADATA
                 "hello": "world"

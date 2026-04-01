@@ -1,24 +1,4 @@
-import React from "react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Icon,
-  Button,
-  Badge,
-  Text,
-} from "@tremor/react";
-import {
-  PencilAltIcon,
-  TrashIcon,
-  SwitchVerticalIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-} from "@heroicons/react/outline";
-import { Tooltip } from "antd";
+import { ChevronDownIcon, ChevronUpIcon, PencilAltIcon, SwitchVerticalIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
   flexRender,
@@ -27,6 +7,20 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import {
+  Badge,
+  Button,
+  Icon,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  Text,
+} from "@tremor/react";
+import { Tooltip } from "antd";
+import React from "react";
 import { Tag } from "./types";
 
 interface TagTableProps {
@@ -36,15 +30,11 @@ interface TagTableProps {
   onSelectTag: (tagName: string) => void;
 }
 
-const TagTable: React.FC<TagTableProps> = ({
-  data,
-  onEdit,
-  onDelete,
-  onSelectTag,
-}) => {
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created_at", desc: true }
-  ]);
+const DYNAMIC_SPEND_TAG_DESCRIPTION =
+  "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.";
+
+const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag }) => {
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
 
   const columns: ColumnDef<Tag>[] = [
     {
@@ -52,14 +42,20 @@ const TagTable: React.FC<TagTableProps> = ({
       accessorKey: "name",
       cell: ({ row }) => {
         const tag = row.original;
+        const isDynamicSpendTag = tag.description === DYNAMIC_SPEND_TAG_DESCRIPTION;
         return (
           <div className="overflow-hidden">
-            <Tooltip title={tag.name}>
+            <Tooltip
+              title={
+                isDynamicSpendTag ? "You cannot view the information of a dynamically generated spend tag" : tag.name
+              }
+            >
               <Button
                 size="xs"
                 variant="light"
                 className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5"
                 onClick={() => onSelectTag(tag.name)}
+                disabled={isDynamicSpendTag}
               >
                 {tag.name}
               </Button>
@@ -75,15 +71,13 @@ const TagTable: React.FC<TagTableProps> = ({
         const tag = row.original;
         return (
           <Tooltip title={tag.description}>
-            <span className="text-xs">
-              {tag.description || "-"}
-            </span>
+            <span className="text-xs">{tag.description || "-"}</span>
           </Tooltip>
         );
       },
     },
     {
-      header: "Allowed LLMs",
+      header: "Allowed Models",
       accessorKey: "models",
       cell: ({ row }) => {
         const tag = row.original;
@@ -95,16 +89,9 @@ const TagTable: React.FC<TagTableProps> = ({
               </Badge>
             ) : (
               tag?.models?.map((modelId) => (
-                <Badge
-                  key={modelId}
-                  size="xs"
-                  className="mb-1"
-                  color="blue"
-                >
+                <Badge key={modelId} size="xs" className="mb-1" color="blue">
                   <Tooltip title={`ID: ${modelId}`}>
-                    <Text>
-                      {tag.model_info?.[modelId] || modelId}
-                    </Text>
+                    <Text>{tag.model_info?.[modelId] || modelId}</Text>
                   </Tooltip>
                 </Badge>
               ))
@@ -119,32 +106,55 @@ const TagTable: React.FC<TagTableProps> = ({
       sortingFn: "datetime",
       cell: ({ row }) => {
         const tag = row.original;
-        return (
-          <span className="text-xs">
-            {new Date(tag.created_at).toLocaleDateString()}
-          </span>
-        );
+        return <span className="text-xs">{new Date(tag.created_at).toLocaleDateString()}</span>;
       },
     },
     {
       id: "actions",
-      header: "",
+      header: "Actions",
       cell: ({ row }) => {
         const tag = row.original;
+        const isDynamicSpendTag = tag.description === DYNAMIC_SPEND_TAG_DESCRIPTION;
         return (
           <div className="flex space-x-2">
-            <Icon
-              icon={PencilAltIcon}
-              size="sm"
-              onClick={() => onEdit(tag)}
-              className="cursor-pointer"
-            />
-            <Icon
-              icon={TrashIcon}
-              size="sm"
-              onClick={() => onDelete(tag.name)}
-              className="cursor-pointer"
-            />
+            {isDynamicSpendTag ? (
+              <Tooltip title="Dynamically generated spend tags cannot be edited">
+                <Icon
+                  icon={PencilAltIcon}
+                  size="sm"
+                  className="opacity-50 cursor-not-allowed"
+                  aria-label="Edit tag (disabled)"
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title="Edit tag">
+                <Icon
+                  icon={PencilAltIcon}
+                  size="sm"
+                  onClick={() => onEdit(tag)}
+                  className="cursor-pointer hover:text-blue-500"
+                />
+              </Tooltip>
+            )}
+            {isDynamicSpendTag ? (
+              <Tooltip title="Dynamically generated spend tags cannot be deleted">
+                <Icon
+                  icon={TrashIcon}
+                  size="sm"
+                  className="opacity-50 cursor-not-allowed"
+                  aria-label="Delete tag (disabled)"
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title="Delete tag">
+                <Icon
+                  icon={TrashIcon}
+                  size="sm"
+                  onClick={() => onDelete(tag.name)}
+                  className="cursor-pointer hover:text-red-500"
+                />
+              </Tooltip>
+            )}
           </div>
         );
       },
@@ -174,27 +184,20 @@ const TagTable: React.FC<TagTableProps> = ({
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === 'actions'
-                        ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                        : ''
+                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : (
-                          flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )
-                        )}
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
-                      {header.id !== 'actions' && (
+                      {header.id !== "actions" && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
                               asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
                             }[header.column.getIsSorted() as string]
                           ) : (
                             <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
@@ -215,9 +218,9 @@ const TagTable: React.FC<TagTableProps> = ({
                     <TableCell
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                        cell.column.id === 'actions'
-                          ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                          : ''
+                        cell.column.id === "actions"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          : ""
                       }`}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -241,4 +244,4 @@ const TagTable: React.FC<TagTableProps> = ({
   );
 };
 
-export default TagTable; 
+export default TagTable;

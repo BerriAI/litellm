@@ -23,67 +23,6 @@ from litellm import APIConnectionError, Router
 from unittest.mock import ANY
 
 
-async def test_router_init():
-    """
-    1. Initializes clients on the router with 0
-    2. Checks if client is still valid
-    3. Checks if new client was initialized
-    """
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": os.getenv("OPENAI_API_KEY"),
-            },
-            "model_info": {"id": "1234"},
-            "tpm": 100000,
-            "rpm": 10000,
-        },
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "azure/chatgpt-v-3",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-            },
-            "tpm": 100000,
-            "rpm": 10000,
-        },
-    ]
-
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
-    ]
-    client_ttl_time = 2
-    router = Router(
-        model_list=model_list,
-        redis_host=os.environ["REDIS_HOST"],
-        redis_password=os.environ["REDIS_PASSWORD"],
-        redis_port=os.environ["REDIS_PORT"],
-        cache_responses=True,
-        timeout=30,
-        routing_strategy="simple-shuffle",
-        client_ttl=client_ttl_time,
-    )
-    model = "gpt-3.5-turbo"
-    cache_key = f"1234_async_client"
-    ## ASSERT IT EXISTS AT THE START ##
-    assert router.cache.get_cache(key=cache_key) is not None
-    response1 = await router.acompletion(model=model, messages=messages, temperature=1)
-    await asyncio.sleep(client_ttl_time)
-    ## ASSERT IT'S CLEARED FROM CACHE ##
-    assert router.cache.get_cache(key=cache_key, local_only=True) is None
-    ## ASSERT IT EXISTS AFTER RUNNING __GET_CLIENT() ##
-    assert (
-        router._get_client(
-            deployment=model_list[0], client_type="async", kwargs={"stream": False}
-        )
-        is not None
-    )
-
-
 @pytest.mark.skip(
     reason="This test is not relevant to the current codebase. The default Azure AD workflow is used."
 )
@@ -132,9 +71,7 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
 
 @patch("azure.identity.get_bearer_token_provider")
 @patch("azure.identity.ClientSecretCredential")
-@patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_azure_service_principal_with_secret_with_environment_variables(
-    mocked_os_lib: MagicMock,
     mocked_credential: MagicMock,
     mocked_get_bearer_token_provider: MagicMock,
     monkeypatch,
@@ -146,22 +83,19 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     To allow for local testing without real credentials, first must mock Azure SDK authentication functions
     and environment variables.
     """
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
     litellm.enable_azure_ad_token_refresh = True
     # mock the token provider function
     mocked_func_generating_token = MagicMock(return_value="test_token")
     mocked_get_bearer_token_provider.return_value = mocked_func_generating_token
 
-    # mock the environment variables with mocked credentials
-    environment_variables_expected_to_use = {
-        "AZURE_CLIENT_ID": "test_client_id",
-        "AZURE_CLIENT_SECRET": "test_client_secret",
-        "AZURE_TENANT_ID": "test_tenant_id",
-    }
-    mocked_environ = PropertyMock(return_value=environment_variables_expected_to_use)
-    # Because of the way mock attributes are stored you can’t directly attach a PropertyMock to a mock object.
-    # https://docs.python.org/3.11/library/unittest.mock.html#unittest.mock.PropertyMock
-    type(mocked_os_lib).environ = mocked_environ
+    # set environment variables with mocked credentials using monkeypatch
+    # so both common_utils._resolve_env_var and get_azure_ad_token_provider see them
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test_client_id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test_client_secret")
+    monkeypatch.setenv("AZURE_TENANT_ID", "test_tenant_id")
 
     # define the model list
     model_list = [
@@ -235,9 +169,9 @@ async def test_audio_speech_router():
         {
             "model_name": "tts",
             "litellm_params": {
-                "model": "azure/azure-tts",
-                "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+                "model": "azure/tts",
+                "api_base": os.getenv("AZURE_TTS_API_BASE"),
+                "api_key": os.getenv("AZURE_TTS_API_KEY"),
             },
         },
     ]

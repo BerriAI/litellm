@@ -103,10 +103,15 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         # FeatherlessAI is openai compatible, set to custom_openai and use FeatherlessAI's endpoint
         api_base = (
             api_base
+            or get_secret_str("FEATHERLESS_AI_API_BASE")
             or get_secret_str("FEATHERLESS_API_BASE")
             or "https://api.featherless.ai/v1"
         )
-        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_API_KEY")
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("FEATHERLESS_AI_API_KEY")
+            or get_secret_str("FEATHERLESS_API_KEY")
+        )
         return api_base, dynamic_api_key
 
     def validate_environment(

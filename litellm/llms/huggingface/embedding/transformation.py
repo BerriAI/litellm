@@ -268,7 +268,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 # check if the model has a registered custom prompt
                 model_prompt_details = litellm.custom_prompt_dict[model]
                 prompt = custom_prompt(
-                    role_dict=model_prompt_details.get("roles", None),
+                    role_dict=model_prompt_details.get("roles") or {},
                     initial_prompt_value=model_prompt_details.get(
                         "initial_prompt_value", ""
                     ),

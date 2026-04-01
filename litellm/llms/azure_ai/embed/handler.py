@@ -58,7 +58,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         data: ImageEmbeddingRequest,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
@@ -138,7 +138,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         input: List,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
@@ -210,6 +210,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session=None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text
@@ -275,6 +276,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                     else None
                 ),
                 aembedding=aembedding,
+                shared_session=shared_session,
             )
 
             text_embedding_responses = response.data

@@ -11,7 +11,7 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
     - [Github releases](https://github.com/BerriAI/litellm/releases)
     - [litellm docker containers](https://github.com/BerriAI/litellm/pkgs/container/litellm)
     - [litellm database docker container](https://github.com/BerriAI/litellm/pkgs/container/litellm-database)
-- [ ] Ensure you're following **ALL** [best practices for production](./proxy/production_setup.md)
+- [ ] Ensure you're following **ALL** [best practices for production](./proxy/prod.md)
 - [ ] Locust - Ensure you're Locust instance can create 1K+ requests per second
     - 👉 You can use our **[maintained locust instance here](https://locust-load-tester-production.up.railway.app/)**
     - If you're self hosting locust
@@ -27,14 +27,18 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
 
 **Use this config for testing:**
 
-**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `aiohttp_openai/` provider for load testing.
+**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `openai/` provider for load testing.
+
+:::tip Setting Up a Fake OpenAI Endpoint
+You can use our hosted fake endpoint or self-host your own using [github.com/BerriAI/example_openai_endpoint](https://github.com/BerriAI/example_openai_endpoint).
+:::
 
 ```yaml
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: aiohttp_openai/any
-      api_base: https://your-fake-openai-endpoint.com/chat/completions
+      model: openai/any
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/  # or your self-hosted endpoint
       api_key: "test"
 ```
 
@@ -58,7 +62,7 @@ litellm provides a hosted `fake-openai-endpoint` you can load test against
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: aiohttp_openai/fake
+      model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 

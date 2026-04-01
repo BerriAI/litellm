@@ -1,23 +1,38 @@
+import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Badge, Button } from "@tremor/react";
+import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
-import { Tooltip } from "antd";
+import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TimeCell } from "./time_cell";
-import { Button, Badge } from "@tremor/react";
-import { Eye, EyeOff} from "lucide-react"
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+
+/** API sort field mapping for /spend/logs/ui endpoint */
+export const LOGS_SORT_FIELD_MAP = {
+  startTime: "startTime",
+  spend: "spend",
+  total_tokens: "total_tokens",
+  request_duration_ms: "request_duration_ms",
+} as const;
+
+export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
+
+export interface LogsSortProps {
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}
 
 // Helper to get the appropriate logo URL
-const getLogoUrl = (
-  row: LogEntry,
-  provider: string
-) => {
+const getLogoUrl = (row: LogEntry, provider: string) => {
   // Check if mcp_tool_call_metadata exists and contains mcp_server_logo_url
   if (row.metadata?.mcp_tool_call_metadata?.mcp_server_logo_url) {
     return row.metadata.mcp_tool_call_metadata.mcp_server_logo_url;
   }
   // Fall back to default provider logo
-  return provider ? getProviderLogoAndName(provider).logo : '';
+  return provider ? getProviderLogoAndName(provider).logo : "";
 };
 
 export type LogEntry = {
@@ -47,63 +62,110 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
-  duration?: number;
+  completionStartTime?: string;
+  request_duration_ms?: number;
+  session_total_count?: number;
+  session_total_spend?: number;
+  mcp_tool_call_count?: number;
+  mcp_tool_call_spend?: number;
+  session_llm_count?: number;
+  session_mcp_count?: number;
+  session_agent_count?: number;
   onKeyHashClick?: (keyHash: string) => void;
   onSessionClick?: (sessionId: string) => void;
 };
 
-export const columns: ColumnDef<LogEntry>[] = [
+const SortableHeader = ({
+  label,
+  field,
+  sortBy,
+  sortOrder,
+  onSortChange,
+}: {
+  label: string;
+  field: LogsSortField;
+  sortBy: LogsSortField;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: LogsSortField, sortOrder: "asc" | "desc") => void;
+}) => (
+  <div className="flex items-center gap-1">
+    <span>{label}</span>
+    <TableHeaderSortDropdown
+      sortState={sortBy === field ? sortOrder : false}
+      onSortChange={(newState) => {
+        if (newState === false) {
+          onSortChange("startTime", "desc");
+        } else {
+          onSortChange(field, newState);
+        }
+      }}
+    />
+  </div>
+);
+
+export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] => [
   {
-    id: "expander",
-    header: () => null,
-    cell: ({ row }) => {
-      // Convert the cell function to a React component to properly use hooks
-      const ExpanderCell = () => {
-        const [localExpanded, setLocalExpanded] = React.useState(row.getIsExpanded());
-
-        // Memoize the toggle handler to prevent unnecessary re-renders
-        const toggleHandler = React.useCallback(() => {
-          setLocalExpanded((prev) => !prev);
-          row.getToggleExpandedHandler()();
-        }, [row]);
-
-        return row.getCanExpand() ? (
-          <button
-            onClick={toggleHandler}
-            style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
-          >
-            <svg
-              className={`w-4 h-4 transform transition-transform duration-75 ${
-                localExpanded ? 'rotate-90' : ''
-              }`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
-          </button>
-        ) : (
-          <span className="w-6 h-6 flex items-center justify-center">●</span>
-        );
-      };
-
-      // Return the component
-      return <ExpanderCell />;
-    },
-  },
-  {
-    header: "Time",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Time"
+            field="startTime"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Time",
     accessorKey: "startTime",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
+  },
+  {
+    header: "Type",
+    id: "type",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const sessionCount = row.session_total_count || 1;
+      const isMcp = MCP_CALL_TYPES.includes(row.call_type);
+      const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+      const sessionLlmCount = row.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
+      const sessionAgentCount = row.session_agent_count ?? (isAgent ? sessionCount : 0);
+      const sessionMcpCount = row.session_mcp_count ?? (isMcp ? sessionCount : 0);
+
+      if (isMcp) return <McpBadge />;
+      if (isAgent && sessionCount <= 1) return <AgentBadge />;
+      if (sessionCount <= 1) return <LlmBadge />;
+
+      // Multi-call session — show total count, plus Agent/MCP indicators when mixed.
+      const sessionTypeBadge = (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-[11px] font-medium whitespace-nowrap">
+          <SparkleIcon />
+          <span>{sessionCount}</span>
+          {sessionAgentCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <AgentIcon size={10} />
+            </>
+          )}
+          {sessionMcpCount > 0 && (
+            <>
+              <span className="text-blue-300">·</span>
+              <WrenchIcon />
+            </>
+          )}
+        </span>
+      );
+
+      const tooltipParts = [
+        sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
+        sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
+        sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+      ].filter(Boolean);
+      return (
+        <Tooltip title={tooltipParts.join(" • ")}>
+          {sessionTypeBadge}
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Status",
@@ -111,13 +173,13 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => {
       const status = info.getValue() || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
-      
+
       return (
-        <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-          isSuccess 
-            ? 'bg-green-100 text-green-800' 
-            : 'bg-red-100 text-red-800'
-        }`}>
+        <span
+          className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
+            isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+          }`}
+        >
           {isSuccess ? "Success" : "Failure"}
         </span>
       );
@@ -131,45 +193,102 @@ export const columns: ColumnDef<LogEntry>[] = [
       const onSessionClick = info.row.original.onSessionClick;
       return (
         <Tooltip title={String(info.getValue() || "")}>
-        <Button 
-          size="xs"
-          variant="light"
-          className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal text-xs max-w-[15ch] truncate block"
-          onClick={() => onSessionClick?.(value)}
-        >
-          {String(info.getValue() || "")}
-        </Button>
-      </Tooltip>
+          <Button
+            size="xs"
+            variant="light"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal text-xs max-w-[15ch] truncate block"
+            onClick={() => onSessionClick?.(value)}
+          >
+            {String(info.getValue() || "")}
+          </Button>
+        </Tooltip>
       );
     },
   },
-  
+
   {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
-        <span className="font-mono text-xs max-w-[15ch] truncate block">
-          {String(info.getValue() || "")}
-        </span>
+        <span className="font-mono text-xs max-w-[15ch] truncate block">{String(info.getValue() || "")}</span>
       </Tooltip>
     ),
   },
   {
-    header: "Cost",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Cost"
+            field="spend"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Cost",
     accessorKey: "spend",
-    cell: (info: any) => (
-      <span>${formatNumberWithCommas(info.getValue() || 0, 6)}</span>
-    ),
+    cell: (info: any) => {
+      const row = info.row.original;
+      const mcpCount = row.mcp_tool_call_count || 0;
+      const mcpSpend = row.mcp_tool_call_spend || 0;
+
+      return (
+        <div className="flex flex-col">
+          <Tooltip title={`$${String(info.getValue() || 0)}`}>
+            <span>{getSpendString(info.getValue() || 0)}</span>
+          </Tooltip>
+          {mcpCount > 0 && mcpSpend > 0 && (
+            <span className="text-[10px] text-amber-600">
+              incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
+            </span>
+          )}
+        </div>
+      );
+    },
   },
   {
-    header: "Duration (s)",
-    accessorKey: "duration",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Duration (s)"
+            field="request_duration_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Duration (s)",
+    accessorKey: "request_duration_ms",
+    cell: (info: any) => {
+      const ms = info.getValue();
+      if (ms == null) return <span>-</span>;
+      const seconds = (ms / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ms}ms`}>
+          <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
+  },
+  {
+    header: "TTFT (s)",
+    accessorKey: "completionStartTime",
+    cell: (info: any) => {
+      const row = info.row.original;
+      const completionStartTime = info.getValue();
+      if (!completionStartTime) return <span>-</span>;
+      // For non-streaming, completionStartTime == endTime so TTFT is not meaningful
+      if (completionStartTime === row.endTime) return <span>-</span>;
+      const ttftMs = new Date(completionStartTime).getTime() - new Date(row.startTime).getTime();
+      if (ttftMs <= 0) return <span>-</span>;
+      const ttftSeconds = (ttftMs / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ttftMs}ms`}>
+          <span className="max-w-[15ch] truncate block">{ttftSeconds}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Team Name",
@@ -189,7 +308,7 @@ export const columns: ColumnDef<LogEntry>[] = [
 
       return (
         <Tooltip title={value}>
-          <span 
+          <span
             className="font-mono max-w-[15ch] truncate block cursor-pointer hover:text-blue-600"
             onClick={() => onKeyHashClick?.(value)}
           >
@@ -224,21 +343,29 @@ export const columns: ColumnDef<LogEntry>[] = [
               className="w-4 h-4"
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
+                target.style.display = "none";
               }}
             />
           )}
           <Tooltip title={modelName}>
-            <span className="max-w-[15ch] truncate block">
-              {modelName}
-            </span>
+            <span className="max-w-[15ch] truncate block">{modelName}</span>
           </Tooltip>
         </div>
       );
     },
   },
   {
-    header: "Tokens",
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Tokens"
+            field="total_tokens"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Tokens",
     accessorKey: "total_tokens",
     cell: (info: any) => {
       const row = info.row.original;
@@ -246,8 +373,7 @@ export const columns: ColumnDef<LogEntry>[] = [
         <span className="text-sm">
           {String(row.total_tokens || "0")}
           <span className="text-gray-400 text-xs ml-1">
-            ({String(row.prompt_tokens || "0")}+
-            {String(row.completion_tokens || "0")})
+            ({String(row.prompt_tokens || "0")}+{String(row.completion_tokens || "0")})
           </span>
         </span>
       );
@@ -278,14 +404,14 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => {
       const tags = info.getValue();
       if (!tags || Object.keys(tags).length === 0) return "-";
-      
+
       const tagEntries = Object.entries(tags);
       const firstTag = tagEntries[0];
       const remainingTags = tagEntries.slice(1);
-      
+
       return (
         <div className="flex flex-wrap gap-1">
-          <Tooltip 
+          <Tooltip
             title={
               <div className="flex flex-col gap-1">
                 {tagEntries.map(([key, value]) => (
@@ -307,6 +433,9 @@ export const columns: ColumnDef<LogEntry>[] = [
   },
 ];
 
+/** Default columns without sort (for backward compatibility) */
+export const columns = createColumns();
+
 const formatMessage = (message: any): string => {
   if (!message) return "N/A";
   if (typeof message === "string") return message;
@@ -321,28 +450,38 @@ const formatMessage = (message: any): string => {
 
 // Add this new component for displaying request/response with copy buttons
 export const RequestResponsePanel = ({ request, response }: { request: any; response: any }) => {
-  const requestStr = typeof request === 'object' ? JSON.stringify(request, null, 2) : String(request || '{}');
-  const responseStr = typeof response === 'object' ? JSON.stringify(response, null, 2) : String(response || '{}');
-  
+  const requestStr = typeof request === "object" ? JSON.stringify(request, null, 2) : String(request || "{}");
+  const responseStr = typeof response === "object" ? JSON.stringify(response, null, 2) : String(response || "{}");
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
     } catch (err) {
-      console.error('Failed to copy text: ', err);
+      console.error("Failed to copy text: ", err);
     }
   };
-  
+
   return (
     <div className="grid grid-cols-2 gap-4 mt-4">
       <div className="rounded-lg border border-gray-200 bg-gray-50">
         <div className="flex justify-between items-center p-3 border-b border-gray-200">
           <h3 className="text-sm font-medium">Request</h3>
-          <button 
+          <button
             onClick={() => copyToClipboard(requestStr)}
             className="p-1 hover:bg-gray-200 rounded"
             title="Copy request"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
@@ -350,16 +489,26 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
         </div>
         <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
       </div>
-      
+
       <div className="rounded-lg border border-gray-200 bg-gray-50">
         <div className="flex justify-between items-center p-3 border-b border-gray-200">
           <h3 className="text-sm font-medium">Response</h3>
-          <button 
+          <button
             onClick={() => copyToClipboard(responseStr)}
             className="p-1 hover:bg-gray-200 rounded"
             title="Copy response"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
@@ -382,16 +531,11 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
 
   return (
     <div>
-      <button 
-        onClick={() => setIsExpanded(!isExpanded)} 
-        className="text-blue-500 hover:text-blue-700 text-xs"
-      >
-        {isExpanded ? 'Hide JSON' : 'Show JSON'} ({Object.keys(jsonData).length} fields)
+      <button onClick={() => setIsExpanded(!isExpanded)} className="text-blue-500 hover:text-blue-700 text-xs">
+        {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
       </button>
       {isExpanded && (
-        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">
-          {jsonString}
-        </pre>
+        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
       )}
     </div>
   );
@@ -407,20 +551,15 @@ export type AuditLogEntry = {
   object_id: string;
   before_value: Record<string, any>;
   updated_values: Record<string, any>;
-}
-
+};
 
 const getActionBadge = (action: string) => {
   return (
-    <Badge 
-      color="gray"
-      className="flex items-center gap-1"
-    >
+    <Badge color="gray" className="flex items-center gap-1">
       <span className="whitespace-nowrap text-xs">{action}</span>
     </Badge>
-
-  )
-}
+  );
+};
 
 export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
   {
@@ -443,20 +582,13 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
             className="w-6 h-6 flex items-center justify-center focus:outline-none"
           >
             <svg
-              className={`w-4 h-4 transform transition-transform ${
-                localExpanded ? 'rotate-90' : ''
-              }`}
+              className={`w-4 h-4 transform transition-transform ${localExpanded ? "rotate-90" : ""}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
               xmlns="http://www.w3.org/2000/svg"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 5l7 7-7 7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </button>
         ) : (
@@ -515,7 +647,9 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
           <div className="font-medium">{changedBy}</div>
           {apiKey && ( // Only show API key if it exists
             <Tooltip title={apiKey}>
-              <div className="text-xs text-muted-foreground max-w-[15ch] truncate"> {/* Apply max-width and truncate */}
+              <div className="text-xs text-muted-foreground max-w-[15ch] truncate">
+                {" "}
+                {/* Apply max-width and truncate */}
                 {apiKey}
               </div>
             </Tooltip>
@@ -546,10 +680,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
 
         return (
           <Tooltip title={copied ? "Copied!" : String(objectId)}>
-            <span
-              className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600"
-              onClick={handleCopy}
-            >
+            <span className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600" onClick={handleCopy}>
               {String(objectId)}
             </span>
           </Tooltip>
@@ -558,4 +689,4 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
       return <ObjectIdDisplay />;
     },
   },
-]
+];

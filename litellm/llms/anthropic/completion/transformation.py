@@ -291,7 +291,7 @@ class AnthropicTextCompletionResponseIterator(BaseModelResponseIterator):
             _chunk_text = chunk.get("completion", None)
             if _chunk_text is not None and isinstance(_chunk_text, str):
                 text = _chunk_text
-            finish_reason = chunk.get("stop_reason", None)
+            finish_reason = chunk.get("stop_reason") or ""
             if finish_reason is not None:
                 is_finished = True
             returned_chunk = GenericStreamingChunk(

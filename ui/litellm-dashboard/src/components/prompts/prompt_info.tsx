@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react";
 import {
   Card,
   Title,
@@ -11,101 +11,114 @@ import {
   TabList,
   TabPanel,
   TabPanels,
-} from "@tremor/react"
-import { Button, message, Tooltip, Modal } from "antd"
-import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline"
-import { getPromptInfo, PromptInfoResponse, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking"
-import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
-import { CheckIcon, CopyIcon } from "lucide-react"
-import NotificationsManager from "../molecules/notifications_manager"
+} from "@tremor/react";
+import { Button, Modal } from "antd";
+import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
+import { getPromptInfo, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
+import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
+import { 
+  extractModel, 
+  extractTemplateVariables, 
+  getBasePromptId, 
+  getCurrentVersion 
+} from "./prompt_utils";
 
 export interface PromptInfoProps {
-  promptId: string
-  onClose: () => void
-  accessToken: string | null
-  isAdmin: boolean
-  onDelete?: () => void
+  promptId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  isAdmin: boolean;
+  onDelete?: () => void;
+  onEdit?: (promptData: any) => void;
 }
 
-const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete }) => {
-  const [promptData, setPromptData] = useState<PromptSpec | null>(null)
-  const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null)
-  const [rawApiResponse, setRawApiResponse] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
+const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete, onEdit }) => {
+  const [promptData, setPromptData] = useState<PromptSpec | null>(null);
+  const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
+  const [rawApiResponse, setRawApiResponse] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const fetchPromptInfo = async () => {
     try {
-      setLoading(true)
-      if (!accessToken) return
-      const response = await getPromptInfo(accessToken, promptId)
-      setPromptData(response.prompt_spec)
-      setPromptTemplate(response.raw_prompt_template)
-      setRawApiResponse(response) // Store the raw response for the Raw JSON tab
+      setLoading(true);
+      if (!accessToken) return;
+      const response = await getPromptInfo(accessToken, promptId);
+      setPromptData(response.prompt_spec);
+      setPromptTemplate(response.raw_prompt_template);
+      setRawApiResponse(response); // Store the raw response for the Raw JSON tab
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load prompt information")
-      console.error("Error fetching prompt info:", error)
+      NotificationsManager.fromBackend("Failed to load prompt information");
+      console.error("Error fetching prompt info:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchPromptInfo()
-  }, [promptId, accessToken])
+    fetchPromptInfo();
+  }, [promptId, accessToken]);
 
   if (loading) {
-    return <div className="p-4">Loading...</div>
+    return <div className="p-4">Loading...</div>;
   }
 
   if (!promptData) {
-    return <div className="p-4">Prompt not found</div>
+    return <div className="p-4">Prompt not found</div>;
   }
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
-    if (!dateString) return "-"
-    const date = new Date(dateString)
-    return date.toLocaleString()
-  }
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
 
   const copyToClipboard = async (text: string | null | undefined, key: string) => {
-    const success = await utilCopyToClipboard(text)
+    const success = await utilCopyToClipboard(text);
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
     }
-  }
+  };
 
   const handleDeleteClick = () => {
-    setShowDeleteConfirm(true)
-  }
+    setShowDeleteConfirm(true);
+  };
 
   const handleDeleteConfirm = async () => {
-    if (!accessToken || !promptData) return
+    if (!accessToken || !promptData) return;
 
-    setIsDeleting(true)
+    setIsDeleting(true);
     try {
-      await deletePromptCall(accessToken, promptData.prompt_id)
-      NotificationsManager.success(`Prompt "${promptData.prompt_id}" deleted successfully`)
-      onDelete?.() // Call the callback to refresh the parent component
-      onClose() // Close the info view
+      await deletePromptCall(accessToken, basePromptId);
+      NotificationsManager.success(`Prompt "${basePromptId}" deleted successfully`);
+      onDelete?.(); // Call the callback to refresh the parent component
+      onClose(); // Close the info view
     } catch (error) {
-      console.error("Error deleting prompt:", error)
-      NotificationsManager.fromBackend("Failed to delete prompt")
+      console.error("Error deleting prompt:", error);
+      NotificationsManager.fromBackend("Failed to delete prompt");
     } finally {
-      setIsDeleting(false)
-      setShowDeleteConfirm(false)
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
     }
-  }
+  };
 
   const handleDeleteCancel = () => {
-    setShowDeleteConfirm(false)
-  }
+    setShowDeleteConfirm(false);
+  };
+
+  // Use utility functions to extract prompt data
+  const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
+  const basePromptId = getBasePromptId(promptData);
+  const currentVersion = getCurrentVersion(promptData);
 
   return (
     <div className="p-4">
@@ -117,12 +130,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
           <div>
             <Title>Prompt Details</Title>
             <div className="flex items-center cursor-pointer">
-              <Text className="text-gray-500 font-mono">{promptData.prompt_id}</Text>
+              <Text className="text-gray-500 font-mono">{basePromptId}</Text>
               <Button
                 type="text"
                 size="small"
                 icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                onClick={() => copyToClipboard(promptData.prompt_id, "prompt-id")}
+                onClick={() => copyToClipboard(basePromptId, "prompt-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
                   copiedStates["prompt-id"]
                     ? "text-green-600 bg-green-50 border-green-200"
@@ -131,6 +144,22 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               />
             </div>
           </div>
+          <div className="flex gap-2">
+            <PromptCodeSnippets
+              promptId={basePromptId}
+              model={promptModel}
+              promptVariables={extractTemplateVariables(promptTemplate?.content)}
+              accessToken={accessToken}
+              version={currentVersion}
+            />
+            <TremorButton
+              icon={PencilIcon}
+              variant="primary"
+              onClick={() => onEdit?.(rawApiResponse)}
+              className="flex items-center"
+            >
+              Prompt Studio
+            </TremorButton>
           {isAdmin && (
             <TremorButton
               icon={TrashIcon}
@@ -141,6 +170,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               Delete Prompt
             </TremorButton>
           )}
+          </div>
         </div>
       </div>
 
@@ -159,7 +189,17 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               <Card>
                 <Text>Prompt ID</Text>
                 <div className="mt-2">
-                  <Title className="font-mono text-sm">{promptData.prompt_id}</Title>
+                  <Title className="font-mono text-sm">{basePromptId}</Title>
+                </div>
+              </Card>
+
+              <Card>
+                <Text>Version</Text>
+                <div className="mt-2">
+                  <Title>{currentVersion}</Title>
+                  <Badge color="blue" className="mt-1">
+                    v{currentVersion}
+                  </Badge>
                 </div>
               </Card>
 
@@ -242,7 +282,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               </Card>
             </TabPanel>
           )}
-          
+
           {/* Details Panel (only for admins) */}
           {isAdmin && (
             <TabPanel>
@@ -251,9 +291,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 <div className="space-y-4">
                   <div>
                     <Text className="font-medium">Prompt ID</Text>
-                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{promptData.prompt_id}</div>
+                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{basePromptId}</div>
                   </div>
-                  
+
                   <div>
                     <Text className="font-medium">Prompt Type</Text>
                     <div>{promptData.prompt_info?.prompt_type || "-"}</div>
@@ -263,7 +303,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                     <Text className="font-medium">Created At</Text>
                     <div>{formatDate(promptData.created_at)}</div>
                   </div>
-                  
+
                   <div>
                     <Text className="font-medium">Last Updated</Text>
                     <div>{formatDate(promptData.updated_at)}</div>
@@ -310,7 +350,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                   {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
                 </Button>
               </div>
-              
+
               <div className="p-4 bg-gray-50 rounded-md border overflow-auto">
                 <pre className="text-xs text-gray-800 whitespace-pre-wrap">
                   {JSON.stringify(rawApiResponse, null, 2)}
@@ -320,7 +360,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
           </TabPanel>
         </TabPanels>
       </TabGroup>
-      
+
       {/* Delete Confirmation Modal */}
       <Modal
         title="Delete Prompt"
@@ -331,11 +371,13 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
         okText="Delete"
         okButtonProps={{ danger: true }}
       >
-        <p>Are you sure you want to delete prompt: <strong>{promptData?.prompt_id}</strong>?</p>
+        <p>
+          Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
+        </p>
         <p>This action cannot be undone.</p>
       </Modal>
     </div>
-  )
-}
+  );
+};
 
-export default PromptInfoView
+export default PromptInfoView;

@@ -1,12 +1,12 @@
-import React, { useCallback, useState, useRef } from "react"
-import { DateRangePicker, DateRangePickerValue, Text } from "@tremor/react"
+import React, { useCallback, useState, useRef } from "react";
+import { DateRangePicker, DateRangePickerValue, Text } from "@tremor/react";
 
 interface UsageDatePickerProps {
-  value: DateRangePickerValue
-  onValueChange: (value: DateRangePickerValue) => void
-  label?: string
-  className?: string
-  showTimeRange?: boolean
+  value: DateRangePickerValue;
+  onValueChange: (value: DateRangePickerValue) => void;
+  label?: string;
+  className?: string;
+  showTimeRange?: boolean;
 }
 
 /**
@@ -19,58 +19,58 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
   className = "",
   showTimeRange = true,
 }) => {
-  const [showSelectedFeedback, setShowSelectedFeedback] = useState(false)
-  const datePickerRef = useRef<HTMLDivElement>(null)
+  const [showSelectedFeedback, setShowSelectedFeedback] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement>(null);
 
   // This only triggers AFTER user has actually made a selection
   const handleDateChange = useCallback(
     (newValue: DateRangePickerValue) => {
       // Show "Selected" feedback ONLY after actual selection is made
-      setShowSelectedFeedback(true)
+      setShowSelectedFeedback(true);
 
       // Hide the feedback after a short time
-      setTimeout(() => setShowSelectedFeedback(false), 1500)
+      setTimeout(() => setShowSelectedFeedback(false), 1500);
 
       // Update parent immediately
-      onValueChange(newValue)
+      onValueChange(newValue);
 
       // Do heavy processing in background
       requestIdleCallback(
         () => {
           if (newValue.from) {
-            const adjustedValue = { ...newValue }
-            const adjustedStartTime = new Date(newValue.from)
-            let adjustedEndTime: Date
+            const adjustedValue = { ...newValue };
+            const adjustedStartTime = new Date(newValue.from);
+            let adjustedEndTime: Date;
 
             if (newValue.to) {
-              adjustedEndTime = new Date(newValue.to)
+              adjustedEndTime = new Date(newValue.to);
             } else {
-              adjustedEndTime = new Date(newValue.from)
+              adjustedEndTime = new Date(newValue.from);
             }
 
-            const isSameDay = adjustedStartTime.toDateString() === adjustedEndTime.toDateString()
+            const isSameDay = adjustedStartTime.toDateString() === adjustedEndTime.toDateString();
 
             if (isSameDay) {
-              adjustedStartTime.setHours(0, 0, 0, 0)
-              adjustedEndTime.setHours(23, 59, 59, 999)
+              adjustedStartTime.setHours(0, 0, 0, 0);
+              adjustedEndTime.setHours(23, 59, 59, 999);
             } else {
-              adjustedStartTime.setHours(0, 0, 0, 0)
-              adjustedEndTime.setHours(23, 59, 59, 999)
+              adjustedStartTime.setHours(0, 0, 0, 0);
+              adjustedEndTime.setHours(23, 59, 59, 999);
             }
 
-            adjustedValue.from = adjustedStartTime
-            adjustedValue.to = adjustedEndTime
-            onValueChange(adjustedValue)
+            adjustedValue.from = adjustedStartTime;
+            adjustedValue.to = adjustedEndTime;
+            onValueChange(adjustedValue);
           }
         },
         { timeout: 100 },
-      )
+      );
     },
     [onValueChange],
-  )
+  );
 
   const formatTimeRange = useCallback((from: Date | undefined, to: Date | undefined) => {
-    if (!from || !to) return ""
+    if (!from || !to) return "";
 
     const formatDateTime = (date: Date) => {
       return date.toLocaleString("en-US", {
@@ -80,33 +80,33 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
         minute: "2-digit",
         hour12: true,
         timeZoneName: "short",
-      })
-    }
+      });
+    };
 
-    const isSameDay = from.toDateString() === to.toDateString()
+    const isSameDay = from.toDateString() === to.toDateString();
 
     if (isSameDay) {
       const dateStr = from.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",
-      })
+      });
       const startTime = from.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
-      })
+      });
       const endTime = to.toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
         timeZoneName: "short",
-      })
-      return `${dateStr}: ${startTime} - ${endTime}`
+      });
+      return `${dateStr}: ${startTime} - ${endTime}`;
     } else {
-      return `${formatDateTime(from)} - ${formatDateTime(to)}`
+      return `${formatDateTime(from)} - ${formatDateTime(to)}`;
     }
-  }, [])
+  }, []);
 
   return (
     <div className={className}>
@@ -150,7 +150,7 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
         <Text className="mt-2 text-xs text-gray-500">{formatTimeRange(value.from, value.to)}</Text>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default UsageDatePicker
+export default UsageDatePicker;

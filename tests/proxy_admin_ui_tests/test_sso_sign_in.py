@@ -60,7 +60,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
     """
     Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER_VIEW_ONLY' role
     """
-    import uuid
+    from litellm._uuid import uuid
     import litellm
 
     litellm._turn_on_debug()
@@ -82,6 +82,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
         mock_sso_result.provider = "google"
+        mock_sso_result.user_role = None  # Explicitly set to None so it doesn't return a MagicMock
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )
@@ -133,7 +134,7 @@ async def test_auth_callback_new_user_with_sso_default(
 
     Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER' role
     """
-    import uuid
+    from litellm._uuid import uuid
 
     # Generate a unique user ID
     unique_user_id = str(uuid.uuid4())

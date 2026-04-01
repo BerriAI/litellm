@@ -1,11 +1,12 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -92,9 +93,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -180,7 +181,10 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                optional_params["think"] = True
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = value in {"low", "medium", "high"}
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
@@ -219,7 +223,9 @@ class OllamaConfig(BaseConfig):
             or get_secret_str("OLLAMA_API_KEY")
         )
 
-    def get_model_info(self, model: str) -> ModelInfoBase:
+    def get_model_info(
+        self, model: str, api_base: Optional[str] = None
+    ) -> ModelInfoBase:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
@@ -227,7 +233,9 @@ class OllamaConfig(BaseConfig):
         """
         if model.startswith("ollama/") or model.startswith("ollama_chat/"):
             model = model.split("/", 1)[1]
-        api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+        api_base = (
+            api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+        )
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
@@ -238,8 +246,21 @@ class OllamaConfig(BaseConfig):
                 headers=headers,
             )
         except Exception as e:
-            raise Exception(
-                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+            verbose_logger.debug(
+                "OllamaError: Could not get model info for %s from %s. Error: %s",
+                model,
+                api_base,
+                e,
+            )
+            return ModelInfoBase(
+                key=model,
+                litellm_provider="ollama",
+                mode="chat",
+                input_cost_per_token=0.0,
+                output_cost_per_token=0.0,
+                max_tokens=None,
+                max_input_tokens=None,
+                max_output_tokens=None,
             )
 
         model_info = response.json()
@@ -412,6 +433,7 @@ class OllamaConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         images = optional_params.pop("images", None)
+        think = optional_params.pop("think", None)
         data = {
             "model": model,
             "prompt": ollama_prompt,
@@ -425,6 +447,8 @@ class OllamaConfig(BaseConfig):
             data["images"] = [
                 _convert_image(convert_to_ollama_image(image)) for image in images
             ]
+        if think is not None:
+            data["think"] = think
 
         return data
 
@@ -571,6 +595,18 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     ]
                 )
             else:
-                raise Exception(f"Unable to parse ollama chunk - {chunk}")
+                # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
+                # and chunk["response"] is falsy (None or empty string),
+                # but Ollama is just starting to stream, so it should be processed as a normal dict
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=""),
+                        )
+                    ]
+                )
+                # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
+            verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
             raise e

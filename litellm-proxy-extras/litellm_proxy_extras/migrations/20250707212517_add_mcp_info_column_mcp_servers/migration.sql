@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "mcp_info" JSONB DEFAULT '{}';
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "mcp_info" JSONB DEFAULT '{}';
 

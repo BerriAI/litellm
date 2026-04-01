@@ -67,6 +67,6 @@ response = completion("command-nightly", messages, logger_fn=my_custom_logging_f
 
 ## Still Seeing Issues? 
 
-Text us @ +17708783106 or Join the [Discord](https://discord.com/invite/wuPM9dRgDw). 
+Join the [Discord](https://discord.com/invite/wuPM9dRgDw). 
 
 We promise to help you in `lite`ning speed ❤️

@@ -9,13 +9,32 @@ Use this to health check all LLMs defined in your config.yaml
 | `/health/readiness` | **Load balancer health checks** | Ready to accept traffic - includes DB connection status |
 | `/health` | **Model health monitoring** | Comprehensive LLM model health - makes actual API calls |
 | `/health/services` | **Service debugging** | Check specific integrations (datadog, langfuse, etc.) |
+| `/health/shared-status` | **Multi-pod coordination** | Monitor shared health check state across pods |
 
 ## Summary 
 
 The proxy exposes: 
 * a /health endpoint which returns the health of the LLM APIs  
 * a /health/readiness endpoint for returning if the proxy is ready to accept requests 
-* a /health/liveliness endpoint for returning if the proxy is alive 
+* a /health/liveliness endpoint for returning if the proxy is alive
+* a /health/shared-status endpoint for monitoring shared health check coordination across pods
+
+## Shared Health Check State
+
+When running multiple LiteLLM proxy pods, you can enable shared health check state to coordinate health checks across pods and avoid duplicate API calls. This is especially beneficial for expensive models like Gemini 2.5-pro.
+
+**Key Benefits:**
+- Reduces duplicate health checks across pods
+- Saves costs on expensive model API calls
+- Reduces monitoring noise and logging
+- Improves resource efficiency
+
+**Requirements:**
+- Redis for shared state coordination
+- Background health checks enabled
+- Multiple proxy pods
+
+For detailed configuration and usage, see [Shared Health Check State](./shared_health_check.md). 
 
 ## `/health`
 #### Request
@@ -87,6 +106,13 @@ model_list:
       mode: image_generation # 👈 ADD THIS
 ```
 
+#### Custom Health Check Prompt
+
+By default, health checks use the prompt `"test from litellm"`. You can customize this prompt globally by setting an environment variable, or per-model via config:
+
+```bash
+DEFAULT_HEALTH_CHECK_PROMPT="this is a test prompt"
+```
 
 ### Text Completion Models 
 
@@ -194,6 +220,20 @@ model_list:
       mode: realtime
 ```
 
+### OCR Models 
+
+To run OCR health checks, specify the mode as "ocr" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: mistral/mistral-ocr-latest
+    litellm_params:
+      model: mistral/mistral-ocr-latest
+      api_key: os.environ/MISTRAL_API_KEY
+    model_info:
+      mode: ocr
+```
+
 ### Wildcard Routes
 
 For wildcard routes, you can specify a `health_check_model` in your config.yaml. This model will be used for health checks for that wildcard route.
@@ -274,6 +314,89 @@ general_settings:
   health_check_details: False
 ```
 
+## Health Check Driven Routing
+
+By default, background health checks are observability-only — they populate the `/health` endpoint but don't affect routing. Unhealthy deployments still receive traffic until request failures trigger cooldown.
+
+With `enable_health_check_routing: true`, the router **excludes deployments that failed their last background health check** before selecting a candidate. This gives you proactive failover instead of reactive cooldown.
+
+### How it works
+
+1. Background health checks run on their configured interval
+2. After each cycle, every deployment is marked healthy or unhealthy
+3. On each incoming request, the router filters out unhealthy deployments **before** cooldown filtering and load balancing
+4. If all deployments are unhealthy, the filter is bypassed (safety net — never causes a total outage)
+5. If health state is stale (older than `health_check_staleness_threshold`), it is ignored
+
+### Quick start
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY_SECONDARY
+
+general_settings:
+  background_health_checks: true
+  health_check_interval: 60
+  enable_health_check_routing: true
+```
+
+### Configuration
+
+| Setting | Where | Default | Description |
+|---------|-------|---------|-------------|
+| `enable_health_check_routing` | `general_settings` | `false` | Enable/disable health-check-driven routing |
+| `health_check_staleness_threshold` | `general_settings` | `health_check_interval * 2` | Seconds before health state is considered stale and ignored |
+| `background_health_checks` | `general_settings` | `false` | Must be `true` for health check routing to work |
+| `health_check_interval` | `general_settings` | `300` | Seconds between health check cycles |
+
+### Interaction with cooldown
+
+Health check filtering and cooldown are **additive**. A deployment can be excluded by either mechanism:
+
+- **Health check filter** — proactive, runs on the configured interval, excludes deployments that failed the last check
+- **Cooldown** — reactive, triggered by request failures, excludes deployments for a short TTL
+
+This means request failures still provide fast detection between health check intervals.
+
+### Staleness
+
+If a health check result is older than `health_check_staleness_threshold`, it is ignored and the deployment is treated as eligible. This prevents stale data from permanently excluding a deployment if the health check loop stops or slows down.
+
+The default staleness threshold is `health_check_interval * 2`. For a 60s interval, health state expires after 120s.
+
+### Example: custom staleness
+
+```yaml
+general_settings:
+  background_health_checks: true
+  health_check_interval: 30
+  enable_health_check_routing: true
+  health_check_staleness_threshold: 90  # ignore health state older than 90s
+```
+
+### Debugging
+
+Run the proxy with `--detailed_debug` and look for:
+
+```
+health_check_routing_state_updated healthy=3 unhealthy=1
+```
+
+This is logged after each health check cycle when routing state is written.
+
+If the safety net triggers (all deployments unhealthy), you'll see:
+
+```
+All deployments marked unhealthy by health checks, bypassing health filter
+```
+
 ## Health Check Timeout
 
 The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
@@ -288,6 +411,22 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
+```
+
+## Health Check Max Tokens
+
+By default, health checks use `max_tokens=1` to minimize cost and latency. For wildcard models, the default is `max_tokens=10`.
+
+You can override this per-model by setting `health_check_max_tokens` in the `model_info` section of your config.yaml.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_max_tokens: 5 # 👈 OVERRIDE HEALTH CHECK MAX TOKENS
 ```
 
 ## `/health/readiness`

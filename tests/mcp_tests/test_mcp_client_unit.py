@@ -5,14 +5,28 @@ import base64
 import os
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 # Add the project root to the path
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
 from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+
+
+def test_mcp_client_uses_configurable_default_timeout():
+    """MCPClient should use MCP_CLIENT_TIMEOUT constant when no timeout is passed."""
+    with patch(
+        "litellm.experimental_mcp_client.client.MCP_CLIENT_TIMEOUT", 120.0
+    ):
+        # Client reads constant at runtime when timeout is None
+        client = MCPClient(
+            server_url="http://example.com",
+            transport_type=MCPTransport.sse,
+        )
+        assert client.timeout == 120.0
 
 
 class TestMCPClientUnitTests:
@@ -44,7 +58,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Basic auth
@@ -55,7 +68,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": f"Basic {expected_encoded}",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # API key
@@ -65,7 +77,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "X-API-Key": "api_key_123",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Custom authorization header
@@ -77,19 +88,39 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Token custom_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
+
+        # OAuth2
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="oauth2-access-token-xyz",
+        )
+        headers = client._get_auth_headers()
+        assert headers == {
+            "Authorization": "Bearer oauth2-access-token-xyz",
+        }
+
+        # OAuth2 with extra_headers (per-user flow overrides auth_value)
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="static-server-token",
+            extra_headers={"Authorization": "Bearer per-user-token"},
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer per-user-token"
 
         # No auth
         client = MCPClient("http://example.com")
         headers = client._get_auth_headers()
-        assert headers == {"MCP-Protocol-Version": "2025-06-18"}
+        assert headers == {}
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
-    async def test_connect(self, mock_session_class, mock_transport):
-        """Test connecting to MCP server with authentication."""
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_run_with_session(self, mock_session_class, mock_transport):
+        """Test run_with_session establishes session with auth headers."""
         # Setup mocks
         mock_transport_ctx = AsyncMock()
         mock_transport.return_value = mock_transport_ctx
@@ -106,22 +137,23 @@ class TestMCPClientUnitTests:
             auth_type=MCPAuth.bearer_token,
             auth_value="test_token",
         )
-        await client.connect()
+
+        async def _operation(session):
+            return "ok"
+
+        await client.run_with_session(_operation)
 
         # Verify transport was created with auth headers
         call_args = mock_transport.call_args
-        assert call_args[1]["headers"] == {
-            "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
-        }
+        http_client = call_args[1]["http_client"]
+        assert http_client.headers.get("Authorization") == "Bearer test_token"
 
         # Verify session was initialized
         mock_session_instance.initialize.assert_called_once()
-        assert client._session == mock_session_instance
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
     async def test_list_tools(self, mock_session_class, mock_transport):
         """Test listing tools from the server."""
         # Setup mocks
@@ -158,8 +190,8 @@ class TestMCPClientUnitTests:
         mock_session_instance.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
     async def test_call_tool(self, mock_session_class, mock_transport):
         """Test calling a tool."""
         from mcp.types import CallToolRequestParams
@@ -185,7 +217,7 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"}
+            name="test_tool", arguments={"arg1": "value1"},progress_callback=ANY
         )
 
 

@@ -1,16 +1,21 @@
-import React, { useState, useCallback, useEffect } from "react";
-import { Button, Input, Select } from "antd";
 import { FilterIcon } from "@heroicons/react/outline";
+import { Button, Input, Select } from "antd";
 import debounce from "lodash/debounce";
+import React, { useCallback, useEffect, useState } from "react";
+
+export interface FilterOptionCustomComponentProps {
+  value?: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}
 
 export interface FilterOption {
   name: string;
   label?: string;
   isSearchable?: boolean;
-  searchFn?: (
-    searchText: string
-  ) => Promise<Array<{ label: string; value: string }>>;
+  searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
   options?: Array<{ label: string; value: string }>;
+  customComponent?: React.ComponentType<FilterOptionCustomComponentProps>;
 }
 
 interface FilterValues {
@@ -62,32 +67,35 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
         setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
       }
     }, 300),
-    []
+    [],
   );
 
   // Load initial options for searchable filters
-  const loadInitialOptions = useCallback(async (option: FilterOption) => {
-    if (!option.isSearchable || !option.searchFn || initialOptionsLoaded[option.name]) return;
+  const loadInitialOptions = useCallback(
+    async (option: FilterOption) => {
+      if (!option.isSearchable || !option.searchFn || initialOptionsLoaded[option.name]) return;
 
-    setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
-    setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
-    
-    try {
-      // Load initial options with empty search to get some default results
-      const results = await option.searchFn("");
-      setSearchOptionsMap((prev) => ({ ...prev, [option.name]: results }));
-    } catch (error) {
-      console.error("Error loading initial options:", error);
-      setSearchOptionsMap((prev) => ({ ...prev, [option.name]: [] }));
-    } finally {
-      setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
-    }
-  }, [initialOptionsLoaded]);
+      setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
+      setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
+
+      try {
+        // Load initial options with empty search to get some default results
+        const results = await option.searchFn("");
+        setSearchOptionsMap((prev) => ({ ...prev, [option.name]: results }));
+      } catch (error) {
+        console.error("Error loading initial options:", error);
+        setSearchOptionsMap((prev) => ({ ...prev, [option.name]: [] }));
+      } finally {
+        setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
+      }
+    },
+    [initialOptionsLoaded],
+  );
 
   // Load initial options when filters are shown
   useEffect(() => {
     if (showFilters) {
-      options.forEach(option => {
+      options.forEach((option) => {
         if (option.isSearchable && !initialOptionsLoaded[option.name]) {
           loadInitialOptions(option);
         }
@@ -128,8 +136,10 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Key Alias",
     "User ID",
     "End User",
+    "Error Code",
+    "Error Message",
     "Key Hash",
-    "Model"
+    "Model",
   ];
 
   return (
@@ -148,16 +158,12 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
           {orderedFilters.map((filterName) => {
-            const option = options.find(
-              (opt) => opt.label === filterName || opt.name === filterName
-            );
+            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
             if (!option) return null;
 
             return (
               <div key={option.name} className="flex flex-col gap-2">
-                <label className="text-sm text-gray-600">
-                  {option.label || option.name}
-                </label>
+                <label className="text-sm text-gray-600">{option.label || option.name}</label>
                 {option.isSearchable ? (
                   <Select
                     showSearch
@@ -165,7 +171,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     placeholder={`Search ${option.label || option.name}...`}
                     value={tempValues[option.name] || undefined}
                     onChange={(value) => handleFilterChange(option.name, value)}
-                    onDropdownVisibleChange={(open) => handleDropdownVisibleChange(open, option)}
+                    onOpenChange={(open) => handleDropdownVisibleChange(open, option)}
                     onSearch={(value) => {
                       setSearchInputValueMap((prev) => ({
                         ...prev,
@@ -195,14 +201,23 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                       </Select.Option>
                     ))}
                   </Select>
+                ) : option.customComponent ? (
+                  (() => {
+                    const CustomComponent = option.customComponent;
+                    return (
+                      <CustomComponent
+                        value={tempValues[option.name] || undefined}
+                        onChange={(value) => handleFilterChange(option.name, value ?? "")}
+                        placeholder={`Select ${option.label || option.name}...`}
+                      />
+                    );
+                  })()
                 ) : (
                   <Input
                     className="w-full"
                     placeholder={`Enter ${option.label || option.name}...`}
                     value={tempValues[option.name] || ""}
-                    onChange={(e) =>
-                      handleFilterChange(option.name, e.target.value)
-                    }
+                    onChange={(e) => handleFilterChange(option.name, e.target.value)}
                     allowClear
                   />
                 )}

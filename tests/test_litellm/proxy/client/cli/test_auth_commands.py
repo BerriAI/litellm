@@ -159,13 +159,13 @@ class TestTokenUtilities:
             'user_id': 'test-user'
         }
         
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=token_data):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=token_data):
             result = get_stored_api_key()
             assert result == 'test-api-key-123'
 
     def test_get_stored_api_key_no_token(self):
         """Test getting stored API key when no token exists"""
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=None):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=None):
             result = get_stored_api_key()
             assert result is None
 
@@ -175,7 +175,7 @@ class TestTokenUtilities:
             'user_id': 'test-user'
         }
         
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=token_data):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=token_data):
             result = get_stored_api_key()
             assert result is None
 
@@ -188,29 +188,32 @@ class TestLoginCommand:
         self.runner = CliRunner()
 
     def test_login_success(self):
-        """Test successful login flow"""
+        """Test successful login flow with single team (JWT generated immediately)"""
         mock_context = Mock()
         mock_context.obj = {"base_url": "https://test.example.com"}
         
-        # Mock the requests for successful authentication
+        # Mock the requests for successful authentication with single team
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "status": "ready",
-            "key": "sk-test-api-key-123"
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"]
         }
         
         with patch('webbrowser.open') as mock_browser, \
              patch('requests.get', return_value=mock_response) as mock_get, \
              patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
              patch('litellm.proxy.client.cli.interface.show_commands') as mock_show_commands, \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
             assert result.exit_code == 0
             assert "✅ Login successful!" in result.output
-            assert "API Key: sk-test-api-key-123" in result.output
+            assert "Automatically assigned to team: team-1" in result.output
             
             # Verify browser was opened with correct URL
             mock_browser.assert_called_once()
@@ -218,11 +221,11 @@ class TestLoginCommand:
             assert "https://test.example.com/sso/key/generate" in call_args
             assert "sk-test-uuid-123" in call_args
             
-            # Verify token was saved
+            # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert saved_data['key'] == 'sk-test-api-key-123'
-            assert saved_data['user_id'] == 'cli-user'
+            assert saved_data['key'] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+            assert saved_data['user_id'] == 'test-user-123'
             
             # Verify commands were shown
             mock_show_commands.assert_called_once()
@@ -240,7 +243,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep') as mock_sleep, \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             # Mock time.sleep to avoid actual delays in tests
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -260,7 +263,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -276,7 +279,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=requests.RequestException("Connection failed")), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -290,7 +293,7 @@ class TestLoginCommand:
         
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=KeyboardInterrupt), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -313,7 +316,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -327,7 +330,7 @@ class TestLoginCommand:
         
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=ValueError("Invalid value")), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -435,3 +438,124 @@ class TestWhoamiCommand:
             assert "✅ Authenticated" in result.output
             # Should calculate age based on timestamp=0
             assert "Token age:" in result.output
+
+
+class TestCLIKeyRegenerationFlow:
+    """Test the end-to-end CLI key regeneration flow from CLI perspective"""
+
+    def setup_method(self):
+        """Setup for each test"""
+        self.runner = CliRunner()
+
+    def test_login_with_team_selection_flow(self):
+        """Test complete login flow when user has multiple teams - should prompt for selection"""
+        mock_context = Mock()
+        mock_context.obj = {"base_url": "https://test.example.com"}
+        
+        # Mock first response - requires team selection
+        mock_first_response = Mock()
+        mock_first_response.status_code = 200
+        mock_first_response.json.return_value = {
+            "status": "ready",
+            "requires_team_selection": True,
+            "user_id": "test-user-456",
+            "teams": ["team-alpha", "team-beta", "team-gamma"],
+            # New richer response with team details including aliases
+            "team_details": [
+                {"team_id": "team-alpha", "team_alias": "Alpha Team"},
+                {"team_id": "team-beta", "team_alias": "Beta Team"},
+                {"team_id": "team-gamma", "team_alias": "Gamma Team"},
+            ],
+        }
+        
+        # Mock second response after team selection - JWT with selected team
+        mock_second_response = Mock()
+        mock_second_response.status_code = 200
+        mock_second_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt",
+            "user_id": "test-user-456",
+            "team_id": "team-beta",
+            "teams": ["team-alpha", "team-beta", "team-gamma"]
+        }
+        
+        # Simulate user selecting team #2 (team-beta)
+        with patch('webbrowser.open') as mock_browser, \
+             patch('requests.get', side_effect=[mock_first_response, mock_second_response]) as mock_get, \
+             patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
+             patch('litellm.proxy.client.cli.interface.show_commands') as mock_show_commands, \
+             patch('litellm._uuid.uuid.uuid4', return_value='session-uuid-456'), \
+             patch('click.prompt', return_value='2'):  # User selects index 2
+            
+            result = self.runner.invoke(login, obj=mock_context.obj)
+            
+            assert result.exit_code == 0
+            assert "✅ Login successful!" in result.output
+            assert "team-beta" in result.output
+            # Ensure we surface the human-readable team alias to the user
+            assert "Beta Team" in result.output
+            
+            # Verify browser was opened
+            mock_browser.assert_called_once()
+            call_args = mock_browser.call_args[0][0]
+            assert "https://test.example.com/sso/key/generate" in call_args
+            
+            # Verify two polling requests were made
+            assert mock_get.call_count == 2
+            
+            # First poll should be without team_id
+            first_poll_url = mock_get.call_args_list[0][0][0]
+            assert "sk-session-uuid-456" in first_poll_url
+            assert "team_id=" not in first_poll_url
+            
+            # Second poll should include team_id=team-beta
+            second_poll_url = mock_get.call_args_list[1][0][0]
+            assert "team_id=team-beta" in second_poll_url
+            
+            # Verify JWT was saved
+            mock_save.assert_called_once()
+            saved_data = mock_save.call_args[0][0]
+            assert saved_data['key'] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
+            assert saved_data['user_id'] == 'test-user-456'
+            
+            mock_show_commands.assert_called_once()
+
+    def test_login_without_teams_flow(self):
+        """Test complete login flow when user has no teams - JWT generated without team"""
+        mock_context = Mock()
+        mock_context.obj = {"base_url": "https://test.example.com"}
+        
+        # Mock response with no teams
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt",
+            "user_id": "test-user-solo",
+            "team_id": None,
+            "teams": []
+        }
+        
+        with patch('webbrowser.open') as mock_browser, \
+             patch('requests.get', return_value=mock_response), \
+             patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
+             patch('litellm.proxy.client.cli.interface.show_commands'), \
+             patch('litellm._uuid.uuid.uuid4', return_value='session-uuid-solo'):
+            
+            result = self.runner.invoke(login, obj=mock_context.obj)
+            
+            assert result.exit_code == 0
+            assert "✅ Login successful!" in result.output
+            
+            # Verify browser was opened
+            mock_browser.assert_called_once()
+            call_args = mock_browser.call_args[0][0]
+            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "source=litellm-cli" in call_args
+            assert "key=sk-session-uuid-solo" in call_args
+            
+            # Verify JWT was saved
+            mock_save.assert_called_once()
+            saved_data = mock_save.call_args[0][0]
+            assert saved_data['key'] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
+            assert saved_data['user_id'] == 'test-user-solo'

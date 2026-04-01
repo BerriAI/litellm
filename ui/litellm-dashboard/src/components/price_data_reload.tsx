@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Button, Popconfirm, message, Modal, InputNumber, Space, Typography, Tag, Card } from "antd";
-import { ReloadOutlined, ClockCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { reloadModelCostMap, scheduleModelCostMapReload, cancelModelCostMapReload, getModelCostMapReloadStatus } from "./networking";
+import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
+import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
+import {
+  reloadModelCostMap,
+  scheduleModelCostMapReload,
+  cancelModelCostMapReload,
+  getModelCostMapReloadStatus,
+  getModelCostMapSource,
+} from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Text } = Typography;
@@ -13,6 +19,13 @@ interface ReloadStatus {
   next_run: string | null;
 }
 
+interface CostMapSourceInfo {
+  source: "local" | "remote";
+  url: string | null;
+  is_env_forced: boolean;
+  fallback_reason: string | null;
+  model_count: number;
+}
 
 interface PriceDataReloadProps {
   accessToken: string;
@@ -40,22 +53,26 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [hours, setHours] = useState<number>(6);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
+  const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
+  const [loadingSource, setLoadingSource] = useState(false);
 
   // Fetch status on component mount and periodically
   useEffect(() => {
     fetchReloadStatus();
-    
+    fetchSourceInfo();
+
     // Refresh status every 30 seconds to keep it up to date
     const interval = setInterval(() => {
       fetchReloadStatus();
+      fetchSourceInfo();
     }, 30000);
-    
+
     return () => clearInterval(interval);
   }, [accessToken]);
 
   const fetchReloadStatus = async () => {
     if (!accessToken) return;
-    
+
     setLoadingStatus(true);
     try {
       console.log("Fetching reload status...");
@@ -69,10 +86,24 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         scheduled: false,
         interval_hours: null,
         last_run: null,
-        next_run: null
+        next_run: null,
       });
     } finally {
       setLoadingStatus(false);
+    }
+  };
+
+  const fetchSourceInfo = async () => {
+    if (!accessToken) return;
+
+    setLoadingSource(true);
+    try {
+      const info = await getModelCostMapSource(accessToken);
+      setSourceInfo(info);
+    } catch (error) {
+      console.error("Failed to fetch cost map source info:", error);
+    } finally {
+      setLoadingSource(false);
     }
   };
 
@@ -81,18 +112,17 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       NotificationsManager.fromBackend("No access token available");
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const response = await reloadModelCostMap(accessToken);
 
       if (response.status === "success") {
-        NotificationsManager.success(
-          `Price data reloaded successfully! ${response.models_count || 0} models updated.`
-        );
+        NotificationsManager.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
         onReloadSuccess?.();
-        // Refresh status after successful reload
+        // Refresh status and source info after successful reload
         await fetchReloadStatus();
+        await fetchSourceInfo();
       } else {
         NotificationsManager.fromBackend("Failed to reload price data");
       }
@@ -113,11 +143,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       NotificationsManager.fromBackend("Hours must be greater than 0");
       return;
     }
-    
+
     setIsScheduling(true);
     try {
       const response = await scheduleModelCostMapReload(accessToken, hours);
-      
+
       if (response.status === "success") {
         NotificationsManager.success(`Periodic reload scheduled for every ${hours} hours`);
         setShowScheduleModal(false);
@@ -138,11 +168,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       NotificationsManager.fromBackend("No access token available");
       return;
     }
-    
+
     setIsCancelling(true);
     try {
       const response = await cancelModelCostMapReload(accessToken);
-      
+
       if (response.status === "success") {
         NotificationsManager.success("Periodic reload cancelled successfully");
         await fetchReloadStatus();
@@ -167,15 +197,15 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   };
 
   const getStatusText = () => {
-    if (!reloadStatus?.scheduled) return 'Not scheduled';
-    if (!reloadStatus.last_run) return 'Ready';
-    return 'Active';
+    if (!reloadStatus?.scheduled) return "Not scheduled";
+    if (!reloadStatus.last_run) return "Ready";
+    return "Active";
   };
 
   const getStatusColor = () => {
-    if (!reloadStatus?.scheduled) return 'default';
-    if (!reloadStatus.last_run) return 'processing';
-    return 'success';
+    if (!reloadStatus?.scheduled) return "default";
+    if (!reloadStatus.last_run) return "processing";
+    return "success";
   };
 
   return (
@@ -189,7 +219,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
           onConfirm={handleHardRefresh}
           okText="Yes"
           cancelText="No"
-          okButtonProps={{ 
+          okButtonProps={{
             style: {
               backgroundColor: "#6366f1",
               borderColor: "#6366f1",
@@ -282,17 +312,118 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         )}
       </Space>
 
-      {/* Status Card */}
-      {reloadStatus && (
-        <Card 
-          size="small" 
-          style={{ 
-            backgroundColor: '#f8f9fa', 
-            border: '1px solid #e9ecef',
-            borderRadius: 8
+      {/* Cost Map Source Info Card */}
+      {sourceInfo && (
+        <Card
+          size="small"
+          style={{
+            backgroundColor: sourceInfo.source === "remote" ? "#f0f7ff" : "#fff8f0",
+            border: `1px solid ${sourceInfo.source === "remote" ? "#bae0ff" : "#ffd591"}`,
+            borderRadius: 8,
+            marginBottom: 12,
           }}
         >
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
+            {/* Header row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {sourceInfo.source === "remote" ? (
+                <CloudOutlined style={{ color: "#1677ff", fontSize: 16 }} />
+              ) : (
+                <DatabaseOutlined style={{ color: "#fa8c16", fontSize: 16 }} />
+              )}
+              <Text strong style={{ fontSize: "13px" }}>
+                Pricing Data Source
+              </Text>
+              <Tag
+                color={sourceInfo.source === "remote" ? "blue" : "orange"}
+                style={{ marginLeft: "auto", fontWeight: 600, textTransform: "uppercase", fontSize: "11px" }}
+              >
+                {sourceInfo.source === "remote" ? "Remote" : "Local"}
+              </Tag>
+            </div>
+
+            <Divider style={{ margin: "6px 0" }} />
+
+            {/* Model count */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Text type="secondary" style={{ fontSize: "12px" }}>
+                Models loaded:
+              </Text>
+              <Text strong style={{ fontSize: "12px" }}>
+                {sourceInfo.model_count.toLocaleString()}
+              </Text>
+            </div>
+
+            {/* URL (when remote or attempted) */}
+            {sourceInfo.url && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <Text type="secondary" style={{ fontSize: "12px", whiteSpace: "nowrap" }}>
+                  {sourceInfo.source === "remote" ? "Loaded from:" : "Attempted URL:"}
+                </Text>
+                <Tooltip title={sourceInfo.url}>
+                  <Text
+                    style={{
+                      fontSize: "11px",
+                      maxWidth: 240,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      display: "block",
+                      color: "#1677ff",
+                      cursor: "default",
+                    }}
+                  >
+                    {sourceInfo.url}
+                  </Text>
+                </Tooltip>
+              </div>
+            )}
+
+            {/* Env forced notice */}
+            {sourceInfo.is_env_forced && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <InfoCircleOutlined style={{ color: "#fa8c16", fontSize: 12 }} />
+                <Text type="secondary" style={{ fontSize: "11px" }}>
+                  Local mode forced via <code>LITELLM_LOCAL_MODEL_COST_MAP=True</code>
+                </Text>
+              </div>
+            )}
+
+            {/* Fallback reason */}
+            {sourceInfo.fallback_reason && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 6,
+                  backgroundColor: "#fff7e6",
+                  border: "1px solid #ffd591",
+                  borderRadius: 4,
+                  padding: "4px 8px",
+                  marginTop: 2,
+                }}
+              >
+                <WarningOutlined style={{ color: "#fa8c16", fontSize: 12, marginTop: 2 }} />
+                <Text style={{ fontSize: "11px", color: "#614700" }}>
+                  Fell back to local: {sourceInfo.fallback_reason}
+                </Text>
+              </div>
+            )}
+          </Space>
+        </Card>
+      )}
+
+      {/* Reload Schedule Status Card */}
+      {reloadStatus && (
+        <Card
+          size="small"
+          style={{
+            backgroundColor: "#f8f9fa",
+            border: "1px solid #e9ecef",
+            borderRadius: 8,
+          }}
+        >
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
             {reloadStatus.scheduled ? (
               <div>
                 <Tag color="green" icon={<ClockCircleOutlined />}>
@@ -302,22 +433,28 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
             ) : (
               <Text type="secondary">No periodic reload scheduled</Text>
             )}
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text type="secondary" style={{ fontSize: '12px' }}>Last run:</Text>
-              <Text style={{ fontSize: '12px' }}>{formatDateTime(reloadStatus.last_run)}</Text>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Text type="secondary" style={{ fontSize: "12px" }}>
+                Last run:
+              </Text>
+              <Text style={{ fontSize: "12px" }}>{formatDateTime(reloadStatus.last_run)}</Text>
             </div>
-            
+
             {reloadStatus.scheduled && (
               <>
                 {reloadStatus.next_run && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text type="secondary" style={{ fontSize: '12px' }}>Next run:</Text>
-                    <Text style={{ fontSize: '12px' }}>{formatDateTime(reloadStatus.next_run)}</Text>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text type="secondary" style={{ fontSize: "12px" }}>
+                      Next run:
+                    </Text>
+                    <Text style={{ fontSize: "12px" }}>{formatDateTime(reloadStatus.next_run)}</Text>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>Status:</Text>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text type="secondary" style={{ fontSize: "12px" }}>
+                    Status:
+                  </Text>
                   <Tag color={getStatusColor()}>{getStatusText()}</Tag>
                 </div>
               </>
@@ -353,7 +490,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
             value={hours}
             onChange={(value) => setHours(value || 6)}
             addonAfter="hours"
-            style={{ width: '100%' }}
+            style={{ width: "100%" }}
           />
         </div>
         <div>
@@ -366,4 +503,4 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   );
 };
 
-export default PriceDataReload; 
+export default PriceDataReload;

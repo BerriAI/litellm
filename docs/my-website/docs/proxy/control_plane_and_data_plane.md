@@ -163,6 +163,10 @@ DISABLE_LLM_API_ENDPOINTS=true
 - `/config/*` - Configuration updates
 - All other administrative endpoints
 
+### `LITELLM_UI_API_DOC_BASE_URL`
+
+Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy.
+
 
 ## Usage Patterns
 

@@ -22,5 +22,13 @@
         "@ant-design/icons": "^5.0.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0"
+    },
+    "overrides": {
+        "glob": "13.0.0",
+        "minimatch": "10.1.1",
+        "@isaacs/brace-expansion": "5.0.0",
+        "@babel/traverse": "7.28.5",
+        "ws": "8.18.3",
+        "braces": "3.0.3"
     }
 }

@@ -15,6 +15,7 @@ class OCIVendors(Enum):
     """
 
     COHERE = "COHERE"
+    GEMINI = "GEMINI"
     GENERIC = "GENERIC"
 
 
@@ -34,11 +35,18 @@ class OCITextContentPart(OCIContentPart):
     text: str
 
 
+class OCIImageUrl(BaseModel):
+    """ImageUrl object for OCI API. See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/generative_ai_inference/models/oci.generative_ai_inference.models.ImageUrl.html"""
+
+    url: str
+    detail: Optional[Literal["AUTO", "HIGH", "LOW"]] = None
+
+
 class OCIImageContentPart(OCIContentPart):
     """Image content part for the OCI API."""
 
     type: Literal["IMAGE"] = "IMAGE"
-    imageUrl: str
+    imageUrl: OCIImageUrl
 
 
 OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
@@ -94,13 +102,15 @@ class OCIChatRequestPayload(BaseModel):
     seed: Optional[int] = None
     frequencyPenalty: Optional[float] = None
     presencePenalty: Optional[float] = None
+    responseFormat: Optional[Dict[str, Any]] = None
 
 
 class OCIServingMode(BaseModel):
     """Defines the serving mode and the model to be used."""
 
     servingType: str
-    modelId: str
+    endpointId: Optional[str] = None
+    modelId: Optional[str] = None
 
 
 class OCICompletionPayload(BaseModel):
@@ -108,7 +118,7 @@ class OCICompletionPayload(BaseModel):
 
     compartmentId: str
     servingMode: OCIServingMode
-    chatRequest: OCIChatRequestPayload
+    chatRequest: Union[OCIChatRequestPayload, CohereChatRequest]
 
 
 # --- API Response Models (Non-streaming) ---
@@ -117,19 +127,19 @@ class OCICompletionPayload(BaseModel):
 class OCICompletionTokenDetails(BaseModel):
     """Completion token details in the OCI response."""
 
-    acceptedPredictionTokens: int
-    reasoningTokens: int
+    acceptedPredictionTokens: Optional[int] = None
+    reasoningTokens: Optional[int] = None
 
 
 class OCIPromptTokensDetails(BaseModel):
     """Prompt token details in the OCI response."""
 
-    cachedTokens: int
+    cachedTokens: Optional[int] = None
 
 
 class OCIResponseUsage(BaseModel):
     """Token usage in the OCI response."""
-    
+
     promptTokens: int
     completionTokens: int
     totalTokens: int
@@ -181,3 +191,206 @@ class OCIStreamChunk(BaseModel):
     message: Optional[OCIStreamDelta] = None
     pad: Optional[str] = None
     index: Optional[int] = None
+
+
+# --- Cohere-Specific Models ---
+
+
+class CohereStreamChunk(BaseModel):
+    """Model for a single SSE event chunk from OCI Cohere API."""
+
+    apiFormat: str
+    text: Optional[str] = None
+    chatHistory: Optional[List[CohereMessage]] = None
+    finishReason: Optional[str] = None
+    pad: Optional[str] = None
+    index: Optional[int] = None
+
+
+class CohereMessage(BaseModel):
+    """Base model for Cohere messages."""
+
+    role: str
+    message: Optional[str] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
+
+
+class CohereUserMessage(CohereMessage):
+    """User message in Cohere chat."""
+
+    role: Literal["USER"] = "USER"
+
+
+class CohereChatBotMessage(CohereMessage):
+    """Chatbot message in Cohere chat."""
+
+    role: Literal["CHATBOT"] = "CHATBOT"
+
+
+class CohereSystemMessage(CohereMessage):
+    """System message in Cohere chat."""
+
+    role: Literal["SYSTEM"] = "SYSTEM"
+
+
+class CohereToolMessage(CohereMessage):
+    """Tool message in Cohere chat."""
+
+    role: Literal["TOOL"] = "TOOL"
+    toolCallId: str
+
+
+class CohereParameterDefinition(BaseModel):
+    """Parameter definition for Cohere tools."""
+
+    description: str
+    type: str
+    isRequired: bool = False
+
+
+class CohereTool(BaseModel):
+    """Tool definition for Cohere."""
+
+    name: str
+    description: str
+    parameterDefinitions: Dict[str, CohereParameterDefinition]
+
+
+class CohereToolCall(BaseModel):
+    """Tool call made by Cohere model."""
+
+    name: str
+    parameters: Dict[str, Any]
+
+
+class CohereToolResult(BaseModel):
+    """Result of a tool call."""
+
+    callId: str
+    result: str
+
+
+class CohereResponseFormat(BaseModel):
+    """Response format for Cohere."""
+
+    type: str
+
+
+class CohereResponseTextFormat(CohereResponseFormat):
+    """Text response format for Cohere."""
+
+    type: Literal["text"] = "text"
+
+
+class CohereResponseJSONSchemaFormat(CohereResponseFormat):
+    """JSON schema response format for Cohere."""
+
+    type: Literal["json_schema"] = "json_schema"
+    jsonSchema: Dict[str, Any]
+
+
+class CohereChatRequest(BaseModel):
+    """Cohere chat request model."""
+
+    # Required fields
+    message: str
+    apiFormat: Literal["COHERE"] = "COHERE"
+
+    # Optional fields
+    chatHistory: Optional[List[CohereMessage]] = None
+    maxTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    topK: Optional[int] = None
+    frequencyPenalty: Optional[float] = None
+    presencePenalty: Optional[float] = None
+    stopSequences: Optional[List[str]] = None
+    seed: Optional[int] = None
+    tools: Optional[List[CohereTool]] = None
+    toolChoice: Optional[Union[str, Dict[str, Any]]] = None
+    responseFormat: Optional[
+        Union[
+            CohereResponseTextFormat,
+            CohereResponseJSONSchemaFormat,
+            CohereResponseFormat,
+        ]
+    ] = None
+    preambleOverride: Optional[str] = None
+    documents: Optional[List[Dict[str, Any]]] = None
+    searchQueriesOnly: Optional[bool] = None
+    searchEntryPoint: Optional[str] = None
+    grounding: Optional[Dict[str, Any]] = None
+    isEcho: Optional[bool] = None
+    isSearchQueriesOnly: Optional[bool] = None
+    isRawPrompting: Optional[bool] = None
+    isForceSingleStep: Optional[bool] = None
+    promptTruncation: Optional[str] = None
+    safetyMode: Optional[str] = None
+    citationQuality: Optional[str] = None
+    maxInputTokens: Optional[int] = None
+    isStream: Optional[bool] = None
+    streamOptions: Optional[Dict[str, Any]] = None
+
+
+class CohereUsage(BaseModel):
+    """Usage information for Cohere response."""
+
+    promptTokens: int
+    completionTokens: int
+    totalTokens: int
+    promptTokensDetails: Optional[Dict[str, Any]] = None
+    completionTokensDetails: Optional[Dict[str, Any]] = None
+
+
+class CohereCitation(BaseModel):
+    """Citation in Cohere response."""
+
+    start: int
+    end: int
+    text: str
+    document_ids: List[str]
+
+
+class CohereSearchQuery(BaseModel):
+    """Search query generated by Cohere."""
+
+    text: str
+    generation_id: str
+
+
+class CohereChatResponse(BaseModel):
+    """Cohere chat response model."""
+
+    # Required fields
+    text: str
+    apiFormat: Literal["COHERE"] = "COHERE"
+    finishReason: Literal[
+        "COMPLETE", "ERROR_TOXIC", "ERROR_LIMIT", "ERROR", "USER_CANCEL", "MAX_TOKENS"
+    ]
+
+    # Optional fields
+    chatHistory: Optional[List[CohereMessage]] = None
+    citations: Optional[List[CohereCitation]] = None
+    documents: Optional[List[Dict[str, Any]]] = None
+    errorMessage: Optional[str] = None
+    isSearchRequired: Optional[bool] = None
+    prompt: Optional[str] = None
+    searchQueries: Optional[List[CohereSearchQuery]] = None
+    toolCalls: Optional[List[CohereToolCall]] = None
+    usage: Optional[CohereUsage] = None
+
+
+class CohereChatDetails(BaseModel):
+    """Chat details for Cohere request."""
+
+    compartmentId: str
+    servingMode: OCIServingMode
+    chatRequest: CohereChatRequest
+
+
+class CohereChatResult(BaseModel):
+    """Complete Cohere chat result."""
+
+    modelId: str
+    modelVersion: str
+    chatResponse: CohereChatResponse

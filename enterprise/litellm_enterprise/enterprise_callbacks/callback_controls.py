@@ -40,7 +40,7 @@ class EnterpriseCallbackControls:
                     #########################################################
                     # premium user check
                     #########################################################
-                    if not EnterpriseCallbackControls._premium_user_check():
+                    if not EnterpriseCallbackControls._should_allow_dynamic_callback_disabling():
                         return False
                     #########################################################
                     if isinstance(callback, str):
@@ -84,8 +84,15 @@ class EnterpriseCallbackControls:
         return None
     
     @staticmethod
-    def _premium_user_check():
+    def _should_allow_dynamic_callback_disabling():
+        import litellm
         from litellm.proxy.proxy_server import premium_user
+
+        # Check if admin has disabled this feature
+        if litellm.allow_dynamic_callback_disabling is not True:
+            verbose_logger.debug("Dynamic callback disabling is disabled by admin via litellm.allow_dynamic_callback_disabling")
+            return False
+        
         if premium_user:
             return True
         verbose_logger.warning(f"Disabling callbacks using request headers is an enterprise feature. {CommonProxyErrors.not_premium_user.value}")

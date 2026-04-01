@@ -83,7 +83,7 @@ async def test_team_logging():
             await config_update(session)
 
             # 2. Call /chat/completions with a specific trace id
-            import uuid
+            from litellm._uuid import uuid
 
             _trace_id = f"trace-{uuid.uuid4()}"
             _request_metadata = {

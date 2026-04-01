@@ -11,18 +11,24 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-import uuid
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
+)
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import (
+    _set_object_metadata_field,
+    _user_has_admin_view,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
@@ -32,29 +38,35 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
+from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
 
-def handle_nested_budget_structure_in_organization_update_request(raw_data: dict) -> dict:
+def handle_nested_budget_structure_in_organization_update_request(
+    raw_data: dict,
+) -> dict:
     """
     Transform organization update request to handle UI payload format.
-    
+
     The UI sends nested budget data in 'litellm_budget_table', but our
     model expects flat budget fields at the top level.
     """
     transformed_data = raw_data.copy()
-    
+
     # Handle nested budget structure from UI
-    if 'litellm_budget_table' in transformed_data:
-        budget_data = transformed_data.pop('litellm_budget_table', {})
+    if "litellm_budget_table" in transformed_data:
+        budget_data = transformed_data.pop("litellm_budget_table", {})
         if budget_data:
             # Extract valid budget fields and merge into top level
             budget_fields = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
                 if key in budget_fields and value is not None:
                     transformed_data[key] = value
-    
+
     return transformed_data
 
 
@@ -84,6 +96,8 @@ async def new_organization(
     - max_budget: *Optional[float]* - Max budget for org
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
+    - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
     - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
     - model_max_budget: *Optional[dict]* - Max budget for a specific model
@@ -157,6 +171,22 @@ async def new_organization(
             status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
         )
 
+    # Validate budget values are not negative
+    if data.max_budget is not None and data.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+            },
+        )
+    if data.soft_budget is not None and data.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+            },
+        )
+
     user_object_correct_type: Optional[LiteLLM_UserTable] = None
 
     if user_api_key_dict.user_id is not None:
@@ -224,6 +254,15 @@ async def new_organization(
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
     )
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=organization_row,
+                field_name=field,
+                value=getattr(data, field),
+            )
+
     new_organization_row = prisma_client.jsonify_object(
         organization_row.json(exclude_none=True)
     )
@@ -233,10 +272,103 @@ async def new_organization(
     response = await prisma_client.db.litellm_organizationtable.create(
         data={
             **new_organization_row,  # type: ignore
-        }
+        },
+        include={"litellm_budget_table": True},
     )
 
     return response
+
+
+@router.get(
+    "/organization/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["organization management"],
+)
+async def get_organization_daily_activity(
+    organization_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_organization_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily activity for specific organizations or all accessible organizations.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # Parse comma-separated ids
+    org_ids_list = organization_ids.split(",") if organization_ids else None
+    exclude_org_ids_list: Optional[List[str]] = None
+    if exclude_organization_ids:
+        exclude_org_ids_list = (
+            exclude_organization_ids.split(",") if exclude_organization_ids else None
+        )
+
+    # Restrict non-proxy-admins to only organizations where they are org_admin
+    if not _user_has_admin_view(user_api_key_dict):
+        memberships = await prisma_client.db.litellm_organizationmembership.find_many(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        admin_org_ids = [
+            m.organization_id
+            for m in memberships
+            if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ]
+        if org_ids_list is None:
+            # Default to orgs where user is org_admin
+            org_ids_list = admin_org_ids
+        else:
+            # Ensure user is org_admin for all requested orgs
+            for org_id in org_ids_list:
+                if org_id not in admin_org_ids:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "User is not org_admin for Organization= {}.".format(
+                                org_id
+                            )
+                        },
+                    )
+
+    # Fetch organization aliases for metadata
+    where_condition = {}
+    if org_ids_list:
+        where_condition["organization_id"] = {"in": list(org_ids_list)}
+    org_aliases = await prisma_client.db.litellm_organizationtable.find_many(
+        where=where_condition
+    )
+    org_alias_metadata = {
+        o.organization_id: {"organization_alias": o.organization_alias}
+        for o in org_aliases
+    }
+
+    # Query daily activity for organizations
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=org_ids_list,
+        entity_metadata_field=org_alias_metadata,
+        exclude_entity_ids=exclude_org_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )
 
 
 async def _set_object_permission(
@@ -294,17 +426,32 @@ async def update_organization(
 
     # Transform UI payload to expected format
     raw_data = await request.json()
-    raw_data_with_flat_budget_fields = handle_nested_budget_structure_in_organization_update_request(raw_data)
-    
+    raw_data_with_flat_budget_fields = (
+        handle_nested_budget_structure_in_organization_update_request(raw_data)
+    )
+
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
-    
+
+    # Validate budget values are not negative
+    if data.max_budget is not None and data.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+            },
+        )
+    if data.soft_budget is not None and data.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+            },
+        )
+
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
-    updated_organization_row = prisma_client.jsonify_object(
-        data.model_dump(exclude_none=True)
-    )
     existing_organization_row = (
         await prisma_client.db.litellm_organizationtable.find_unique(
             where={"organization_id": data.organization_id},
@@ -316,6 +463,19 @@ async def update_organization(
             f"Organization not found for organization_id={data.organization_id}"
         )
 
+    updated_organization_row_json = data.model_dump(exclude_none=True)
+    # Merge metadata from existing organization with updated metadata
+    if updated_organization_row_json.get("metadata") is not None:
+        existing_metadata = existing_organization_row.metadata or {}
+        updated_metadata = updated_organization_row_json.get("metadata", {})
+        merged_metadata = _update_dictionary(
+            existing_dict=existing_metadata.copy(), new_dict=updated_metadata
+        )
+        updated_organization_row_json["metadata"] = merged_metadata
+
+    updated_organization_row = prisma_client.jsonify_object(
+        updated_organization_row_json
+    )
     if data.object_permission is not None:
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
@@ -323,18 +483,20 @@ async def update_organization(
         )
 
     # Handle budget updates if budget fields are provided
-    budget_fields = {k: v for k, v in data.model_dump().items() 
-                    if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None}
-    
+    budget_fields = {
+        k: v
+        for k, v in data.model_dump().items()
+        if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
+    }
+
     if budget_fields and existing_organization_row.budget_id:
         await update_budget(
             budget_obj=BudgetNewRequest(
-                budget_id=existing_organization_row.budget_id,
-                **budget_fields
+                budget_id=existing_organization_row.budget_id, **budget_fields
             ),
             user_api_key_dict=user_api_key_dict,
         )
-    
+
     # Remove budget fields from organization update data
     for field in LiteLLM_BudgetTable.model_fields.keys():
         updated_organization_row.pop(field, None)
@@ -442,11 +604,33 @@ async def delete_organization(
     response_model=List[LiteLLM_OrganizationTableWithMembers],
 )
 async def list_organization(
+    org_id: Optional[str] = fastapi.Query(
+        default=None, description="Filter organizations by exact organization_id match"
+    ),
+    org_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter organizations by partial organization_alias match. Supports case-insensitive search.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    Get a list of organizations with optional filtering.
+
+    Parameters:
+        org_id: Optional[str]
+            Filter organizations by exact organization_id match
+        org_alias: Optional[str]
+            Filter organizations by partial organization_alias match (case-insensitive)
+
+    Example:
     ```
-    curl --location --request GET 'http://0.0.0.0:4000/organization/list' \
+    curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+
+    Example with org_id:
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000' \
         --header 'Authorization: Bearer sk-1234'
     ```
     """
@@ -461,28 +645,68 @@ async def list_organization(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    # if proxy admin - get all orgs
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    # Build where conditions based on provided filters
+    where_conditions: Dict[str, Any] = {}
+
+    if org_id:
+        where_conditions["organization_id"] = org_id
+
+    if org_alias:
+        where_conditions["organization_alias"] = {
+            "contains": org_alias,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    # if proxy admin or admin viewer - get all orgs (with optional filters)
+    if _user_has_admin_view(user_api_key_dict):
         response = await prisma_client.db.litellm_organizationtable.find_many(
-            include={"litellm_budget_table": True, "members": True, "teams": True}
+            where=where_conditions if where_conditions else None,
+            include={"litellm_budget_table": True, "members": True, "teams": True},
         )
-    # if internal user - get orgs they are a member of
+    # if internal user - get orgs they are a member of (with optional filters)
     else:
         org_memberships = (
             await prisma_client.db.litellm_organizationmembership.find_many(
                 where={"user_id": user_api_key_dict.user_id}
             )
         )
-        org_objects = await prisma_client.db.litellm_organizationtable.find_many(
-            where={
-                "organization_id": {
-                    "in": [membership.organization_id for membership in org_memberships]
-                }
-            },
-            include={"litellm_budget_table": True, "members": True, "teams": True},
-        )
+        membership_org_ids = [
+            membership.organization_id for membership in org_memberships
+        ]
 
-        response = org_objects
+        # Combine membership filter with provided filters
+        if membership_org_ids:
+            if org_id:
+                # If org_id is provided, ensure user is a member of that org
+                if org_id not in membership_org_ids:
+                    # User is not a member of the requested org, return empty list
+                    response = []
+                else:
+                    where_conditions["organization_id"] = org_id
+                    response = (
+                        await prisma_client.db.litellm_organizationtable.find_many(
+                            where=where_conditions,
+                            include={
+                                "litellm_budget_table": True,
+                                "members": True,
+                                "teams": True,
+                            },
+                        )
+                    )
+            else:
+                # Filter by membership and any additional filters
+                where_conditions["organization_id"] = {"in": membership_org_ids}
+                response = await prisma_client.db.litellm_organizationtable.find_many(
+                    where=where_conditions,
+                    include={
+                        "litellm_budget_table": True,
+                        "members": True,
+                        "teams": True,
+                    },
+                )
+        else:
+            # User is not a member of any orgs
+            response = []
 
     return response
 
@@ -508,7 +732,11 @@ async def info_organization(organization_id: str):
         where={"organization_id": organization_id},
         include={
             "litellm_budget_table": True,
-            "members": True,
+            "members": {
+                "include": {
+                    "user": True,
+                }
+            },
             "teams": True,
             "object_permission": True,
         },

@@ -52,7 +52,7 @@ async def test_router_auto_router():
             {
                 "model_name": "litellm-claude-35",
                 "litellm_params": {
-                    "model": "claude-3-5-sonnet-latest",
+                    "model": "claude-sonnet-4-5-20250929",
                 },
                 "model_info": {"id": "claude-id"},
             },
@@ -89,7 +89,7 @@ async def test_router_auto_router():
     assert response._hidden_params["model_id"] == "openai-id"
 
 
-    # this goes to claude-3-5-sonnet-latest
+    # this goes to claude-sonnet-4-5-20250929
     # these are the utterances in the router.json file
     response = await router.acompletion(
         model="auto_router1",

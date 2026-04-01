@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 import { Text } from "@tremor/react";
 import LoggingSettings from "../team/LoggingSettings";
 
@@ -15,7 +15,7 @@ export function PremiumLoggingSettings({
   onChange,
   premiumUser = false,
   disabledCallbacks = [],
-  onDisabledCallbacksChange
+  onDisabledCallbacksChange,
 }: PremiumLoggingSettingsProps) {
   if (!premiumUser) {
     return (
@@ -30,7 +30,12 @@ export function PremiumLoggingSettings({
         </div>
         <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
           <Text className="text-sm text-yellow-800">
-            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for all free users. Get a trial key <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">here</a>.
+            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for
+            all free users. Get a trial key{" "}
+            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
+              here
+            </a>
+            .
           </Text>
         </div>
       </div>
@@ -47,4 +52,4 @@ export function PremiumLoggingSettings({
   );
 }
 
-export default PremiumLoggingSettings; 
+export default PremiumLoggingSettings;

@@ -1,0 +1,7 @@
+# js-yaml CVE-2025-64718
+# This vulnerability is not applicable because we've forced js-yaml to version 4.1.1
+# via npm overrides in package.json. Trivy incorrectly reports this based on
+# dependency requirements in the lockfile, but the actual installed version is 4.1.1.
+# Verified with: npm list js-yaml
+CVE-2025-64718
+

@@ -1,13 +1,13 @@
 "use client";
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { modelHubCall } from "@/components/networking";
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
 
-export default function PublicModelHubTable() {
+function PublicModelHubTableContent() {
   const searchParams = useSearchParams()!;
   const key = searchParams.get("key");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  console.log("PublicModelHubTable accessToken:", accessToken);
 
   useEffect(() => {
     if (!key) {
@@ -15,11 +15,16 @@ export default function PublicModelHubTable() {
     }
     setAccessToken(key);
   }, [key]);
-  /**
-   * populate navbar
-   *
-   */
+
   return (
-    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null}/>
+    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />
   );
-} 
+}
+
+export default function PublicModelHubTable() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+      <PublicModelHubTableContent />
+    </Suspense>
+  );
+}
