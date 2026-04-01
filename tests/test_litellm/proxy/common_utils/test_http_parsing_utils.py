@@ -835,3 +835,103 @@ def test_safe_get_request_headers_state_unavailable():
 
     result = _safe_get_request_headers(mock_request)
     assert result == {"content-type": "application/json"}
+
+
+# ---------------------------------------------------------------------------
+# Tests for UploadFile filtering in _read_request_body (memory-leak fix)
+# ---------------------------------------------------------------------------
+
+
+def _make_upload_file_mock(filename: str = "img.png") -> MagicMock:
+    """Return a mock that passes isinstance(..., UploadFile) checks."""
+    from fastapi import UploadFile
+
+    upload = MagicMock(spec=UploadFile)
+    upload.filename = filename
+    return upload
+
+
+@pytest.mark.asyncio
+async def test_form_data_excludes_upload_files_from_parsed_body():
+    """
+    UploadFile objects in multipart form data must NOT be cached in
+    request.scope["parsed_body"].  Storing them would keep the underlying
+    SpooledTemporaryFile alive for longer than necessary (memory leak).
+    """
+    from fastapi import UploadFile
+
+    mock_request = MagicMock()
+    image_upload = _make_upload_file_mock("image.png")
+    mask_upload = _make_upload_file_mock("mask.png")
+
+    form_data = {
+        "prompt": "make it ghibli",
+        "model": "gpt-image-1",
+        "size": "1024x1024",
+        "image": image_upload,
+        "mask": mask_upload,
+    }
+    mock_request.form = AsyncMock(return_value=form_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    result = await _read_request_body(mock_request)
+
+    # Text fields must be present
+    assert result["prompt"] == "make it ghibli"
+    assert result["model"] == "gpt-image-1"
+    assert result["size"] == "1024x1024"
+
+    # UploadFile objects must be absent from the returned dict …
+    assert "image" not in result
+    assert "mask" not in result
+
+    # … and also absent from the scope cache
+    _, cached = mock_request.scope["parsed_body"]
+    assert not any(isinstance(v, UploadFile) for v in cached.values())
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_only_upload_files_returns_empty_dict():
+    """
+    If the form contains nothing but file fields, the parsed body should be
+    an empty dict rather than one filled with UploadFile references.
+    """
+    from fastapi import UploadFile
+
+    mock_request = MagicMock()
+    form_data = {
+        "image[]": _make_upload_file_mock("a.png"),
+    }
+    mock_request.form = AsyncMock(return_value=form_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    result = await _read_request_body(mock_request)
+
+    assert result == {}
+    _, cached = mock_request.scope["parsed_body"]
+    assert not any(isinstance(v, UploadFile) for v in cached.values())
+
+
+@pytest.mark.asyncio
+async def test_form_data_upload_file_not_in_scope_cache():
+    """
+    Verify scope cache key list does not contain UploadFile field names,
+    so a subsequent call to _safe_get_request_parsed_body never returns them.
+    """
+    mock_request = MagicMock()
+    image_upload = _make_upload_file_mock()
+    form_data = {
+        "prompt": "hello",
+        "image": image_upload,
+    }
+    mock_request.form = AsyncMock(return_value=form_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    await _read_request_body(mock_request)
+
+    accepted_keys, _ = mock_request.scope["parsed_body"]
+    assert "prompt" in accepted_keys
+    assert "image" not in accepted_keys

@@ -38,7 +38,14 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         content_type = _request_headers.get("content-type", "")
 
         if "form" in content_type:
-            parsed_body = dict(await request.form())
+            form_data = await request.form()
+            # Exclude UploadFile entries — binary file fields (image, mask, etc.) are
+            # handled directly by endpoint parameters and must not be cached in
+            # request.scope["parsed_body"], which would keep SpooledTemporaryFile
+            # objects alive beyond their useful lifetime and cause memory leaks.
+            parsed_body = {
+                k: v for k, v in form_data.items() if not isinstance(v, UploadFile)
+            }
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
