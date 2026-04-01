@@ -3520,9 +3520,16 @@ def test_vertex_ai_service_tier_streaming():
         logging_obj=MagicMock(),
         response_headers={"x-gemini-service-tier": "FLEX"},
     )
+    # Undefined when usageMetadata is missing
     result = iterator.chunk_parser(chunk)
 
-    assert result.service_tier == "flex"
+    # But definitely set when usageMetadata is present
+    chunk_with_usage = {
+        "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}
+    }
+    result_with_usage = iterator.chunk_parser(chunk_with_usage)
+    assert result_with_usage.service_tier == "flex"
 
 
 def test_vertex_ai_service_tier_non_streaming():

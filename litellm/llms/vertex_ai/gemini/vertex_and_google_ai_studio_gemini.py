@@ -3168,12 +3168,12 @@ class ModelResponseIterator:
                         "provider_specific_fields", {}
                     )["traffic_type"] = traffic_type
 
-            service_tier = self.response_headers.get("x-gemini-service-tier")
-            if service_tier:
-                if service_tier.lower() == "standard":
-                    setattr(model_response, "service_tier", "default")
-                else:
-                    setattr(model_response, "service_tier", service_tier.lower())
+                service_tier = self.response_headers.get("x-gemini-service-tier")
+                if service_tier:
+                    if service_tier.lower() == "standard":
+                        setattr(model_response, "service_tier", "default")
+                    else:
+                        setattr(model_response, "service_tier", service_tier.lower())
 
             setattr(model_response, "usage", usage)  # type: ignore
 
