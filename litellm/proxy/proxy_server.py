@@ -9314,7 +9314,7 @@ async def _add_access_group_models_to_team_models(
     # Second pass: resolve deployments for each eligible team
     for team_object in eligible_teams:
         model_names: Set[str] = set()
-        for ag_id in team_object.access_group_ids:
+        for ag_id in team_object.access_group_ids or [] :
             model_names.update(ag_model_map.get(ag_id, []))
 
         for model_name in model_names:
