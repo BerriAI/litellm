@@ -112,11 +112,6 @@ class _ProxyDBLogger(CustomLogger):
                     _litellm_logging_obj, "litellm_trace_id", None
                 )
 
-        actual_start_time = (
-            _litellm_logging_obj.start_time
-            if _litellm_logging_obj is not None
-            else datetime.now()
-        )
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -125,7 +120,7 @@ class _ProxyDBLogger(CustomLogger):
             team_id=user_api_key_dict.team_id,
             kwargs=request_data,
             completion_response=original_exception,
-            start_time=actual_start_time,
+            start_time=datetime.now(),
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
         )
