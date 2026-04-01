@@ -92,7 +92,7 @@ def test_non_http_scopes_not_counted():
 
     mw = InFlightRequestsMiddleware(_InnerApp())
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         mw({"type": "lifespan"}, None, None)  # type: ignore[arg-type]
     )
     assert get_in_flight_requests() == 0

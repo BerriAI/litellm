@@ -39,7 +39,7 @@ commands:
             # conflicts with transitive dep pins like openai<2 and pydantic>=2.11.5)
             pip install "pytest-mock==3.12.0" "pytest==7.3.1" "pytest-retry==1.6.3" \
               "pytest-asyncio==0.21.1" "respx==0.22.0" "hypercorn==0.17.3" \
-              "pydantic==2.11.0" "mcp==1.25.0" "requests-mock>=1.12.1" \
+              "pydantic==2.12.5" "mcp==1.26.0" "requests-mock>=1.12.1" \
               "responses==0.25.7" "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" \
               "pytest-cov==5.0.0" "semantic_router==0.1.10" "fastapi-offline==1.7.3" \
               "a2a" "parameterized>=0.9.0"
@@ -150,16 +150,16 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-asyncio==0.21.1" "pytest-cov==5.0.0" \
-              "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.43.0" pyarrow \
-              "boto3==1.36.0" "aioboto3==13.4.0" langchain lunary==0.2.5 \
-              "azure-identity==1.16.1" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
+              "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.133.0" pyarrow \
+              "boto3==1.42.80" langchain lunary==0.2.5 \
+              "azure-identity==1.25.3" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
               traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
               "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
-              "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
-              "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
-              python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
-              "diskcache==5.6.1" "Pillow==10.3.0" "jsonschema==4.22.0" \
-              "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" "websockets==13.1.0"
+              "gunicorn==23.0.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
+              "apscheduler==3.11.2" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
+              python-multipart prometheus-client==0.20.0 "pydantic==2.12.5" \
+              "diskcache==5.6.1" "Pillow==12.1.1" "jsonschema==4.23.0" \
+              "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" "websockets==15.0.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
             pip uninstall posthog -y
@@ -245,16 +245,16 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1" "pytest-retry==1.6.3" "pytest-asyncio==0.21.1" "pytest-cov==5.0.0" \
-              "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.43.0" pyarrow \
-              "boto3==1.36.0" "aioboto3==13.4.0" langchain lunary==0.2.5 \
-              "azure-identity==1.16.1" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
+              "mypy==1.18.2" "google-generativeai==0.3.2" "google-cloud-aiplatform==1.133.0" pyarrow \
+              "boto3==1.42.80" langchain lunary==0.2.5 \
+              "azure-identity==1.25.3" "langfuse==2.59.7" "logfire==0.29.0" numpydoc \
               traceloop-sdk==0.21.1 openai==1.100.1 prisma==0.11.0 \
               "detect_secrets==1.5.0" "respx==0.22.0" fastapi \
-              "gunicorn==21.2.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
-              "apscheduler==3.10.4" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
-              python-multipart prometheus-client==0.20.0 "pydantic==2.10.2" \
-              "diskcache==5.6.1" "Pillow==10.3.0" "jsonschema==4.22.0" \
-              "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" "websockets==13.1.0"
+              "gunicorn==23.0.0" "aiodynamo==23.10.1" "asyncio==3.4.3" \
+              "apscheduler==3.11.2" "PyGithub==1.59.1" argon2-cffi "pytest-mock==3.12.0" \
+              python-multipart prometheus-client==0.20.0 "pydantic==2.12.5" \
+              "diskcache==5.6.1" "Pillow==12.1.1" "jsonschema==4.23.0" \
+              "pytest-xdist==3.6.1" "pytest-timeout==2.2.0" "websockets==15.0.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
             pip uninstall posthog -y
@@ -346,42 +346,41 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.42.80"
             pip install langchain
             pip install lunary==0.2.5
-            pip install "azure-identity==1.16.1"
+            pip install "azure-identity==1.25.3"
             pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
-            pip install opentelemetry-api==1.25.0
-            pip install opentelemetry-sdk==1.25.0
-            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install opentelemetry-api==1.28.0
+            pip install opentelemetry-sdk==1.28.0
+            pip install opentelemetry-exporter-otlp==1.28.0
             pip install openai==1.100.1
             pip install prisma==0.11.0
             pip install "detect_secrets==1.5.0"
-            pip install "httpx==0.24.1"
+            pip install "httpx==0.28.1"
             pip install "respx==0.22.0"
             pip install fastapi
-            pip install "gunicorn==21.2.0"
-            pip install "anyio==4.2.0"
+            pip install "gunicorn==23.0.0"
+            pip install "anyio==4.8.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
-            pip install "apscheduler==3.10.4"
+            pip install "apscheduler==3.11.2"
             pip install "PyGithub==1.59.1"
             pip install argon2-cffi
             pip install "pytest-mock==3.12.0"
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.12.5"
             pip install "diskcache==5.6.1"
-            pip install "Pillow==10.3.0"
-            pip install "jsonschema==4.22.0"
-            pip install "websockets==13.1.0"
+            pip install "Pillow==12.1.1"
+            pip install "jsonschema==4.23.0"
+            pip install "websockets==15.0.1"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -700,8 +699,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
+            pip install "pydantic==2.12.5"
+            pip install "mcp==1.26.0"
             pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
@@ -746,7 +745,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.11.0"
+            pip install "pydantic==2.12.5"
             pip install "a2a-sdk"
       # Run pytest and generate JUnit XML report
       - run:
@@ -791,8 +790,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.10.2"
-            pip install "boto3==1.36.0"
+            pip install "pydantic==2.12.5"
+            pip install "boto3==1.42.80"
             pip install "semantic_router==0.1.10" --no-deps
             pip install aurelio_sdk
             pip install "pytest-xdist==3.6.1"
@@ -841,7 +840,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.12.5"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1048,8 +1047,8 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.11.0"
-            pip install "mcp==1.25.0"
+            pip install "pydantic==2.12.5"
+            pip install "mcp==1.26.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -1090,7 +1089,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1137,7 +1136,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install pytest-mock
             pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
@@ -1259,9 +1258,9 @@ jobs:
             pip install pytest-mock
             pip install "respx==0.22.0"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install "mlflow==2.17.2"
-            pip install "anthropic==0.52.0"
+            pip install "anthropic==0.54.0"
             pip install "blockbuster==1.5.24"
             pip install "pytest-xdist==3.6.1"
             pip install "pytest-timeout==2.2.0"
@@ -1352,11 +1351,11 @@ jobs:
             pip install aiohttp
             pip install openai
             pip install click
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.42.80"
             pip install jinja2
-            pip install "tokenizers==0.20.0"
+            pip install "tokenizers==0.22.2"
             pip install "uvloop==0.21.0"
-            pip install "fastuuid==0.12.0"
+            pip install "fastuuid==0.14.0"
             pip install jsonschema
       - setup_litellm_enterprise_pip
       - run:
@@ -1389,7 +1388,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.25.0"
+            pip install "mcp==1.26.0"
       - run:
           name: Run tests
           command: |
@@ -1679,10 +1678,9 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.42.80"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -1690,9 +1688,9 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
-            pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "httpx==0.28.1"
+            pip install "gunicorn==23.0.0"
+            pip install "anyio==4.8.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
@@ -1823,10 +1821,9 @@ jobs:
             pip install "mypy==1.18.2"
             pip install "jsonlines==4.0.0"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.42.80"
             pip install langchain
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langfuse>=2.0.0"
@@ -1835,9 +1832,9 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
-            pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "httpx==0.28.1"
+            pip install "gunicorn==23.0.0"
+            pip install "anyio==4.8.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
@@ -1969,10 +1966,9 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.42.80"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -1980,9 +1976,9 @@ jobs:
             pip install prisma
             pip install fastapi
             pip install jsonschema
-            pip install "httpx==0.24.1"
-            pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "httpx==0.28.1"
+            pip install "gunicorn==23.0.0"
+            pip install "anyio==4.8.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
@@ -2611,16 +2607,16 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
-            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-cloud-aiplatform==1.133.0"
             pip install aiohttp
             pip install "openai==1.100.1"
             pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.12.5"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.42.80"
             pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
@@ -2628,11 +2624,11 @@ jobs:
             pip install fastapi
             pip install jsonschema
             pip install "httpx==0.27.0"
-            pip install "anyio==3.7.1"
+            pip install "anyio==4.8.0"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
-            pip install "anthropic==0.52.0"
+            pip install "anthropic==0.54.0"
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langchain_openai==0.2.1"
             pip install "langgraph==0.3.18"
@@ -2799,7 +2795,7 @@ jobs:
             conda activate myenv
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.42.80"
             pip install "httpx==0.27.0"
             pip install "claude-agent-sdk"
             pip install -r requirements.txt
