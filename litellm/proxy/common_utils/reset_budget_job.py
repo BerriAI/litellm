@@ -591,8 +591,12 @@ class ResetBudgetJob:
                                 await spend_counter_cache.redis_cache.async_set_cache(
                                     key=counter_key, value=0.0
                                 )
-                            except Exception:
-                                pass
+                            except Exception as redis_err:
+                                verbose_proxy_logger.warning(
+                                    "Failed to reset Redis counter %s: %s",
+                                    counter_key,
+                                    redis_err,
+                                )
                         window["reset_at"] = get_budget_reset_time(
                             budget_duration=window["budget_duration"]
                         ).isoformat()
@@ -635,8 +639,12 @@ class ResetBudgetJob:
                                 await spend_counter_cache.redis_cache.async_set_cache(
                                     key=counter_key, value=0.0
                                 )
-                            except Exception:
-                                pass
+                            except Exception as redis_err:
+                                verbose_proxy_logger.warning(
+                                    "Failed to reset Redis counter %s: %s",
+                                    counter_key,
+                                    redis_err,
+                                )
                         window["reset_at"] = get_budget_reset_time(
                             budget_duration=window["budget_duration"]
                         ).isoformat()
@@ -672,14 +680,14 @@ class ResetBudgetJob:
             from litellm.proxy.proxy_server import spend_counter_cache
 
             counter_key = None
-            if item_type == "key" and hasattr(item, "token") and item.token is not None:
-                counter_key = f"spend:key:{item.token}"
+            if item_type == "key" and hasattr(item, "token") and item.token is not None:  # type: ignore[union-attr]
+                counter_key = f"spend:key:{item.token}"  # type: ignore[union-attr]
             elif (
                 item_type == "team"
                 and hasattr(item, "team_id")
-                and item.team_id is not None
+                and item.team_id is not None  # type: ignore[union-attr]
             ):
-                counter_key = f"spend:team:{item.team_id}"
+                counter_key = f"spend:team:{item.team_id}"  # type: ignore[union-attr]
 
             if counter_key is not None:
                 # Always reset in-memory (local fallback)
