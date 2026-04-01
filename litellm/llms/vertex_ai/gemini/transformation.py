@@ -208,9 +208,8 @@ def _process_gemini_media(
             return _apply_gemini_3_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
-        elif (
-            "https://generativelanguage.googleapis.com/v1beta/files"
-            in image_url
+        elif image_url.startswith(
+            "https://generativelanguage.googleapis.com/v1beta/files/"
         ):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
