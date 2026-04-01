@@ -9,7 +9,7 @@ redisvl==0.4.1
 anthropic
 orjson==3.10.12 # fast /embedding responses
 pydantic==2.11.0
-google-cloud-aiplatform==1.43.0
+google-cloud-aiplatform==1.133.0
 google-cloud-iam==2.19.1
 fastapi-sso==0.16.0 
 uvloop==0.21.0
