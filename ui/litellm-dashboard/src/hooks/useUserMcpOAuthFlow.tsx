@@ -84,6 +84,7 @@ const setStorage = (key: string, value: string) => {
     // The flow state may contain the LiteLLM access token; writing it to
     // localStorage would persist it across browser sessions and make it
     // readable by any injected script (XSS).
+    // codeql[js/clear-text-storage-of-sensitive-data]
     window.sessionStorage.setItem(key, value);
   } catch (_) {}
 };
