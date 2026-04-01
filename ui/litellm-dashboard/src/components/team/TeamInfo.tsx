@@ -66,6 +66,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    allowed_models?: string[] | null;
   };
 }
 
@@ -95,6 +96,7 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    default_team_member_models?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -366,6 +368,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        allowed_models: values.allowed_models,
       };
       MessageManager.destroy(); // Remove all existing toasts
 
@@ -554,6 +557,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
+      }
+
+      // Pass default_team_member_models to the update request
+      if (values.default_team_member_models !== undefined) {
+        updateData.default_team_member_models = values.default_team_member_models;
       }
 
       const response = await teamUpdateCall(accessToken, updateData);
@@ -833,6 +841,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         accessGroups: info.object_permission?.agent_access_groups || [],
                       },
                       access_group_ids: info.access_group_ids || [],
+                      default_team_member_models: info.default_team_member_models || [],
                     }}
                     layout="vertical"
                   >
@@ -861,6 +870,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                         context="team"
                         dataTestId="models-select"
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Default Member Models{" "}
+                          <Tooltip title="Optional. If set, newly added members default to these models instead of all team models. Leave empty if team-level model restrictions are sufficient.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="default_team_member_models"
+                    >
+                      <Select
+                        mode="multiple"
+                        placeholder="Leave empty to use team models for all members"
+                        value={form.getFieldValue("default_team_member_models") || []}
+                        onChange={(values) => form.setFieldValue("default_team_member_models", values)}
+                        options={(form.getFieldValue("models") || info.models || []).map((m: string) => ({ label: m, value: m }))}
                       />
                     </Form.Item>
 
@@ -1158,6 +1187,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ))}
                       </div>
                     </div>
+                    {info.default_team_member_models && info.default_team_member_models.length > 0 && (
+                      <div>
+                        <Text className="font-medium">Default Member Models</Text>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {info.default_team_member_models.map((model, index) => (
+                            <Badge key={index} color="blue">
+                              {model}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>
@@ -1306,6 +1347,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               step: 1,
               min: 0,
               placeholder: "Requests per minute limit for this member in this team",
+            },
+            {
+              name: "allowed_models",
+              label: (
+                <span>
+                  Allowed Models{" "}
+                  <Tooltip title="Models this member can access within this team. Leave empty to inherit all team models.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "multi-select" as const,
+              options: (info.models || []).map((m: string) => ({ label: m, value: m })),
+              placeholder: "Leave empty to inherit all team models",
             },
           ],
         }}
