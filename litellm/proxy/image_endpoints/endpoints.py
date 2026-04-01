@@ -28,11 +28,17 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
     Read a FastAPI UploadFile into a BytesIO and set .name so OpenAI SDK
     infers filename/content-type correctly.
+
+    The UploadFile is closed after reading to release the underlying
+    SpooledTemporaryFile resources and prevent memory accumulation.
     """
-    data = await upload.read()
-    buffer = io.BytesIO(data)
-    buffer.name = upload.filename
-    return buffer
+    try:
+        data = await upload.read()
+        buffer = io.BytesIO(data)
+        buffer.name = upload.filename
+        return buffer
+    finally:
+        await upload.close()
 
 
 async def batch_to_bytesio(
@@ -40,6 +46,7 @@ async def batch_to_bytesio(
 ) -> Optional[List[io.BytesIO]]:
     """
     Convert a list of UploadFiles to a list of BytesIO buffers, or None.
+    Each UploadFile is closed after reading (inside uploadfile_to_bytesio).
     """
     if not uploads:
         return None

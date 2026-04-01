@@ -1,7 +1,9 @@
 import asyncio
 import copy
+import io
 from types import SimpleNamespace
 from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock, call
 
 import orjson
 import pytest
@@ -10,6 +12,7 @@ from starlette.responses import Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.image_endpoints import endpoints
+from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio, uploadfile_to_bytesio
 
 
 @pytest.mark.asyncio
@@ -104,3 +107,90 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert pre_call_input["messages"][0]["content"] == "original prompt"
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
+
+
+# ---------------------------------------------------------------------------
+# Tests for uploadfile_to_bytesio / batch_to_bytesio — memory-leak fixes
+# ---------------------------------------------------------------------------
+
+def _make_upload_file(data: bytes, filename: str = "test.png") -> MagicMock:
+    """Return a mock UploadFile whose read/close methods are async."""
+    upload = MagicMock()
+    upload.read = AsyncMock(return_value=data)
+    upload.close = AsyncMock()
+    upload.filename = filename
+    return upload
+
+
+@pytest.mark.asyncio
+async def test_uploadfile_to_bytesio_returns_correct_data():
+    """BytesIO buffer must contain the exact bytes from the upload."""
+    image_bytes = b"\x89PNG\r\n\x1a\nfakeimage"
+    upload = _make_upload_file(image_bytes, filename="photo.png")
+
+    buf = await uploadfile_to_bytesio(upload)
+
+    assert isinstance(buf, io.BytesIO)
+    assert buf.read() == image_bytes
+    assert buf.name == "photo.png"
+
+
+@pytest.mark.asyncio
+async def test_uploadfile_to_bytesio_closes_upload_after_read():
+    """UploadFile.close() must be called exactly once to release SpooledTemporaryFile."""
+    upload = _make_upload_file(b"data")
+
+    await uploadfile_to_bytesio(upload)
+
+    upload.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_uploadfile_to_bytesio_closes_upload_on_read_error():
+    """close() must still be called even when read() raises an exception."""
+    upload = MagicMock()
+    upload.read = AsyncMock(side_effect=RuntimeError("disk error"))
+    upload.close = AsyncMock()
+    upload.filename = "broken.png"
+
+    with pytest.raises(RuntimeError, match="disk error"):
+        await uploadfile_to_bytesio(upload)
+
+    upload.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_to_bytesio_none_returns_none():
+    """None input should pass through without error."""
+    assert await batch_to_bytesio(None) is None
+
+
+@pytest.mark.asyncio
+async def test_batch_to_bytesio_empty_list_returns_none():
+    """Empty list is treated the same as None."""
+    assert await batch_to_bytesio([]) is None
+
+
+@pytest.mark.asyncio
+async def test_batch_to_bytesio_closes_all_uploads():
+    """Every UploadFile in the list must be closed after conversion."""
+    uploads = [_make_upload_file(f"img{i}".encode()) for i in range(3)]
+
+    buffers = await batch_to_bytesio(uploads)  # type: ignore[arg-type]
+
+    assert buffers is not None
+    assert len(buffers) == 3
+    for upload in uploads:
+        upload.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_to_bytesio_preserves_filenames():
+    """Each BytesIO must carry the filename from its source UploadFile."""
+    names = ["a.png", "b.png", "c.png"]
+    uploads = [_make_upload_file(b"data", filename=n) for n in names]
+
+    buffers = await batch_to_bytesio(uploads)  # type: ignore[arg-type]
+
+    assert buffers is not None
+    assert [b.name for b in buffers] == names
