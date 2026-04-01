@@ -3418,11 +3418,10 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def _mount_metrics_endpoint():
         """
-        Mount the Prometheus metrics endpoint with optional authentication.
+        Mount the Prometheus metrics endpoint with authentication.
 
-        Args:
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
+        Authentication is enabled by default (require_auth_for_metrics_endpoint: True).
+        Set 'require_auth_for_metrics_endpoint: false' in litellm_settings to disable.
         """
         from prometheus_client import make_asgi_app
 
@@ -3449,9 +3448,16 @@ class PrometheusLogger(CustomLogger):
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
-        verbose_proxy_logger.debug(
-            "Starting Prometheus Metrics on /metrics (no authentication)"
-        )
+
+        # Log based on authentication status
+        if litellm.require_auth_for_metrics_endpoint:
+            verbose_proxy_logger.debug(
+                "Starting Prometheus Metrics on /metrics (authentication required)"
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Starting Prometheus Metrics on /metrics (authentication disabled)"
+            )
 
 
 def prometheus_label_factory(
