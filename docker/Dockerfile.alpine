@@ -29,7 +29,10 @@ RUN ls -1 dist/*.whl | head -1
 RUN pip install dist/*.whl
 
 # install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+# aioboto3/aiobotocore have an unresolvable botocore conflict with boto3 1.42.x
+# Install them separately with --no-deps to bypass resolution
+RUN grep -v '^aioboto3' requirements.txt | pip wheel --no-cache-dir --wheel-dir=/wheels/ -r /dev/stdin \
+  && pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels/ "aioboto3==15.5.0" "aiobotocore==2.25.1"
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -44,7 +47,9 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+# --no-deps: all wheels are pre-built in /wheels/, skip resolution to avoid
+# the boto3/aiobotocore botocore version conflict (no compatible aioboto3 exists yet)
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
 # Convert Windows line endings to Unix for entrypoint scripts
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh

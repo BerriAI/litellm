@@ -31,7 +31,10 @@ RUN for i in 1 2 3; do \
 
 # Cache Python dependencies
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
+# aioboto3/aiobotocore have an unresolvable botocore conflict with boto3 1.42.x
+# Install them separately with --no-deps to bypass resolution
+RUN grep -v '^aioboto3' requirements.txt | pip wheel --no-cache-dir --wheel-dir=/wheels/ -r /dev/stdin \
+  && pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels/ "aioboto3==15.5.0" "aiobotocore==2.25.1" \
   && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.12.0"
 
 # Copy source after dependency layers
@@ -162,7 +165,8 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache
 
 # Install packages from wheels and optional extras without network
-RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
+RUN grep -v '^aioboto3' requirements.txt | pip install --no-index --find-links=/wheels/ -r /dev/stdin && \
+    pip install --no-index --no-deps --find-links=/wheels/ "aioboto3==15.5.0" "aiobotocore==2.25.1" && \
     pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
     pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
     pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19 && \

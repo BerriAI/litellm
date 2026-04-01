@@ -79,10 +79,12 @@ pypdf==6.9.2 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
 
 # Transitive deps pinned to prevent floating between builds
 aiofiles==24.1.0 # transitive dep (langfuse)
+aioitertools==0.12.0 # transitive dep (aiobotocore)
 colorlog==6.10.1 # transitive dep (ddtrace)
 grpc-google-iam-v1==0.14.3 # transitive dep (google-cloud-iam)
 hf-xet==1.4.2 # transitive dep (huggingface_hub)
 requests-toolbelt==1.0.0 # transitive dep (langfuse)
+wrapt==1.17.2 # transitive dep (aiobotocore)
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
