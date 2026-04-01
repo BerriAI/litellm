@@ -323,11 +323,11 @@ def test_update_litellm_params_for_health_check():
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
     litellm_params = {
-        "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test with Bedrock model without region routing - should just strip bedrock/ prefix
     litellm_params = {
@@ -398,13 +398,13 @@ def test_update_litellm_params_for_health_check():
 
     # Test route specifications - routes should be preserved
     litellm_params = {
-        "model": "bedrock/converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
-        == "converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
     )
 
     litellm_params = {
