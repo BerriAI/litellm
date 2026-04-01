@@ -1789,7 +1789,9 @@ async def increment_spend_counters(
             key_budget_limits = getattr(key_obj, "budget_limits", None) or (
                 key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
             )
-            if key_budget_limits:
+            if isinstance(key_budget_limits, str):
+                key_budget_limits = json.loads(key_budget_limits)
+            if isinstance(key_budget_limits, list):
                 for i in range(len(key_budget_limits)):
                     await spend_counter_cache.async_increment_cache(
                         key=f"spend:key:{hashed_token}:window:{i}",
@@ -1809,7 +1811,9 @@ async def increment_spend_counters(
             team_budget_limits = getattr(team_obj, "budget_limits", None) or (
                 team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
             )
-            if team_budget_limits:
+            if isinstance(team_budget_limits, str):
+                team_budget_limits = json.loads(team_budget_limits)
+            if isinstance(team_budget_limits, list):
                 for i in range(len(team_budget_limits)):
                     await spend_counter_cache.async_increment_cache(
                         key=f"spend:team:{team_id}:window:{i}",
