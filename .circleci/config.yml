@@ -2945,6 +2945,13 @@ jobs:
             conda activate myenv
             poetry run pip install --force-reinstall --no-deps -e enterprise/
       - run:
+          name: Setup litellm-proxy-extras
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            poetry run pip install --force-reinstall --no-deps -e litellm-proxy-extras/
+      - run:
           name: Generate Prisma client
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
