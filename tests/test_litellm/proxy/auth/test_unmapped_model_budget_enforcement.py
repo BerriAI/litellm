@@ -7,12 +7,23 @@ causing _is_model_cost_zero() to return True and skip all budget checks.
 See: https://github.com/BerriAI/litellm/issues/24770
 """
 
+import copy
+
+import litellm
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 from litellm.router import Router
 
 
 class TestUnmappedModelBudgetEnforcement:
     """Unmapped models must NOT bypass budget checks."""
+
+    def setup_method(self):
+        """Snapshot litellm.model_cost before each test."""
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        """Restore litellm.model_cost after each test."""
+        litellm.model_cost = self._saved_model_cost
 
     def test_unmapped_model_enforces_budget(self):
         """A model not in litellm.model_cost should have budget enforced."""
