@@ -127,3 +127,63 @@ async def test_async_set_cache_defers_model_dump_json():
     assert "async_add_cache" in call_order
     # model_dump_json must be called BEFORE async_add_cache (inside the task)
     assert call_order.index("model_dump_json") < call_order.index("async_add_cache")
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_skips_oversized_responses():
+    """
+    async_set_cache must NOT call async_add_cache when model_dump_json()
+    produces a string larger than MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB * 1024.
+
+    The early return must happen before any `await`, ensuring the large string
+    is freed immediately and does not accumulate across N concurrent tasks.
+    Regression test for Vertex image generation ~803MB peak from 64 concurrent
+    _cache_result tasks each holding a ~12.5 MB serialized string during I/O.
+    """
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+    from litellm.types.utils import ModelResponse, Usage
+
+    result = ModelResponse(
+        id="oversized-id",
+        model="gemini-2.0-flash",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Return a string that exceeds the per-item limit
+    oversized_json = "x" * (MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB * 1024 + 1)
+    result.model_dump_json = lambda: oversized_json  # type: ignore[method-assign]
+
+    cache_called = []
+
+    async def fake_async_add_cache(serialized, **kwargs):
+        cache_called.append(serialized)
+
+    mock_cache = MagicMock(spec=Cache)
+    mock_cache.async_add_cache = fake_async_add_cache
+    mock_cache.cache = MagicMock()
+
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+    llm_caching_handler.dual_cache = MagicMock()
+
+    with patch("litellm.cache", mock_cache):
+        with patch.object(
+            llm_caching_handler, "_should_store_result_in_cache", return_value=True
+        ):
+            await llm_caching_handler.async_set_cache(
+                result=result,
+                original_function=MagicMock(),
+                kwargs={"model": "gemini-2.0-flash"},
+                args=None,
+            )
+            await asyncio.sleep(0)  # drain pending tasks
+
+    assert not cache_called, (
+        "async_add_cache was called for an oversized response — "
+        "this would hold the large serialized string in memory during cache I/O"
+    )

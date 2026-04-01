@@ -34,6 +34,7 @@ from typing import (
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
@@ -859,8 +860,18 @@ class LLMCachingHandler:
                         _dual_cache=self.dual_cache,
                         _kwargs=new_kwargs,
                     ):
+                        json_str = _result.model_dump_json()
+                        # Guard: skip cache I/O for responses that exceed the
+                        # per-item size limit (default 1 MB).  model_dump_json()
+                        # is synchronous so only one task holds this string at a
+                        # time; the early return (before any await) lets GC
+                        # reclaim it before the next task runs — avoiding the
+                        # N × 12 MB spike seen with large image responses.
+                        max_bytes = MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB * 1024
+                        if max_bytes > 0 and len(json_str) > max_bytes:
+                            return
                         await litellm.cache.async_add_cache(
-                            _result.model_dump_json(),
+                            json_str,
                             dynamic_cache_object=_dual_cache,
                             **_kwargs,
                         )
