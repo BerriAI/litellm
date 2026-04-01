@@ -5,7 +5,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Button as AntButton, Form, Input, InputNumber, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -83,10 +83,10 @@ interface BudgetLimitEntry {
 }
 
 const BUDGET_WINDOW_OPTIONS = [
-  { value: "1h", label: "Hourly" },
-  { value: "24h", label: "Daily" },
-  { value: "7d", label: "Weekly" },
-  { value: "30d", label: "Monthly" },
+  { value: "1h",  label: "Hourly",  resetHint: "Resets every hour" },
+  { value: "24h", label: "Daily",   resetHint: "Resets daily at midnight UTC" },
+  { value: "7d",  label: "Weekly",  resetHint: "Resets every Sunday at midnight UTC" },
+  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
 ];
 
 function BudgetWindowsEditor({
@@ -111,43 +111,51 @@ function BudgetWindowsEditor({
 
   return (
     <div>
-      {value.map((window, idx) => (
-        <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-          <Select
-            value={window.budget_duration}
-            onChange={(v) => updateWindow(idx, "budget_duration", v)}
-            style={{ width: 120 }}
-          >
-            {BUDGET_WINDOW_OPTIONS.map((opt) => (
-              <Select.Option key={opt.value} value={opt.value}>
-                {opt.label}
-              </Select.Option>
-            ))}
-          </Select>
-          <NumericalInput
-            step={0.01}
-            min={0}
-            value={window.max_budget ?? undefined}
-            onChange={(v: number | null) => updateWindow(idx, "max_budget", v)}
-            placeholder="Max $ (e.g. 10.00)"
-            style={{ width: 160 }}
-          />
-          <span
-            onClick={() => removeWindow(idx)}
-            style={{ cursor: "pointer", color: "#ff4d4f", fontSize: 16, lineHeight: 1 }}
-            title="Remove"
-          >
-            ✕
-          </span>
-        </div>
-      ))}
-      <TremorButton
-        size="xs"
-        variant="secondary"
-        onClick={(e: React.MouseEvent) => { e.preventDefault(); addWindow(); }}
+      {value.map((window, idx) => {
+        const hint = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHint;
+        return (
+          <div key={idx} style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Select
+                value={window.budget_duration}
+                onChange={(v) => updateWindow(idx, "budget_duration", v)}
+                style={{ width: 130 }}
+                options={BUDGET_WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
+              <InputNumber
+                step={0.01}
+                min={0}
+                precision={2}
+                value={window.max_budget ?? undefined}
+                onChange={(v) => updateWindow(idx, "max_budget", v ?? null)}
+                placeholder="Max spend ($)"
+                style={{ width: 160 }}
+                prefix="$"
+              />
+              <AntButton
+                type="text"
+                danger
+                size="small"
+                onClick={() => removeWindow(idx)}
+                style={{ padding: "0 4px" }}
+              >
+                ✕
+              </AntButton>
+            </div>
+            {hint && (
+              <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>
+                ↻ {hint}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <AntButton
+        size="small"
+        onClick={(e) => { e.preventDefault(); addWindow(); }}
       >
-        + Add Window
-      </TremorButton>
+        + Add Budget Window
+      </AntButton>
     </div>
   );
 }
