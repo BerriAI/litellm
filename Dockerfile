@@ -34,10 +34,7 @@ RUN ls -1 dist/*.whl | head -1
 RUN pip install dist/*.whl
 
 # install dependencies as wheels
-# aioboto3/aiobotocore have an unresolvable botocore conflict with boto3 1.42.x
-# Install them separately with --no-deps to bypass resolution
-RUN grep -v '^aioboto3' requirements.txt | pip wheel --no-cache-dir --wheel-dir=/wheels/ -r /dev/stdin \
-  && pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels/ "aioboto3==15.5.0" "aiobotocore==2.25.1"
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
@@ -93,8 +90,6 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-# --no-deps: all wheels are pre-built in /wheels/, skip resolution to avoid
-# the boto3/aiobotocore botocore version conflict (no compatible aioboto3 exists yet)
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
 # Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)

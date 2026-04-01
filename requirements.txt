@@ -19,7 +19,7 @@ uvicorn==0.33.0 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.14.0 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
-boto3==1.42.80 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, compatible with aioboto3)
+boto3==1.42.80 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 redisvl==0.4.1 ## redis semantic caching
 prisma==0.11.0 # for db
@@ -52,8 +52,7 @@ opentelemetry-sdk==1.28.0
 opentelemetry-exporter-otlp==1.28.0
 a2a-sdk==0.3.25 ; python_version >= "3.10"
 # grpcio: pinned to 1.80.0 (past reconnect bug #38290 in 1.68.x, has Python 3.14 wheels)
-grpcio==1.80.0; python_version < "3.14"
-grpcio==1.80.0; python_version >= "3.14"
+grpcio==1.80.0
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 tzdata==2025.1 # IANA time zone database
@@ -67,7 +66,6 @@ tokenizers==0.22.2 # for calculating usage
 click==8.1.8 # for proxy cli
 rich==13.9.4 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
-aioboto3==15.5.0 # for async sagemaker calls
 aiohttp==3.13.5 # for network calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic==2.12.5 # proxy + openai req. + mcp
@@ -79,12 +77,10 @@ pypdf==6.9.2 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
 
 # Transitive deps pinned to prevent floating between builds
 aiofiles==24.1.0 # transitive dep (langfuse)
-aioitertools==0.12.0 # transitive dep (aiobotocore)
 colorlog==6.10.1 # transitive dep (ddtrace)
 grpc-google-iam-v1==0.14.3 # transitive dep (google-cloud-iam)
 hf-xet==1.4.2 # transitive dep (huggingface_hub)
 requests-toolbelt==1.0.0 # transitive dep (langfuse)
-wrapt==1.17.2 # transitive dep (aiobotocore)
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES

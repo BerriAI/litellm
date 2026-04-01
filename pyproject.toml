@@ -48,7 +48,7 @@ apscheduler = {version = "3.11.2", optional = true}
 fastapi-sso = { version = "0.16.0", optional = true }
 PyJWT = { version = "2.12.1", optional = true, python = ">=3.9" }
 python-multipart = { version = "0.0.20", optional = true}
-cryptography = {version = "43.0.3", optional = true} # Docker uses 46.0.5; pyproject uses 43.0.3 for Poetry Python 3.9.0/3.9.1 compat
+cryptography = {version = "46.0.5", optional = true} # GHSA-r6ph-v2qm-q3c2
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "1.25.3", optional = true, python = ">=3.9"}
 azure-keyvault-secrets = {version = "4.10.0", optional = true}
@@ -73,10 +73,7 @@ mlflow = {version = "3.9.0", optional = true, python = ">=3.10"} # not in PyPI p
 soundfile = {version = "0.12.1", optional = true}
 pyroscope-io = {version = "0.8.16", optional = true, markers = "sys_platform != 'win32'"}
 # grpcio: pinned to 1.80.0 (past reconnect bug #38290 in 1.68.x, has Python 3.14 wheels)
-grpcio = [
-    {version = "1.80.0", python = "<3.14", optional = true},
-    {version = "1.80.0", python = ">=3.14", optional = true},
-]
+grpcio = {version = "1.80.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
