@@ -435,6 +435,7 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 valid_token=valid_token,
+                llm_router=llm_router,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
@@ -3085,6 +3086,7 @@ async def _check_team_member_model_access(
     model: Union[str, List[str]],
     team_object: LiteLLM_TeamTable,
     valid_token: UserAPIKeyAuth,
+    llm_router: Optional[Router],
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
@@ -3119,7 +3121,7 @@ async def _check_team_member_model_access(
     try:
         _can_object_call_model(
             model=model,
-            llm_router=None,
+            llm_router=llm_router,
             models=member_allowed_models,
             object_type="team",
         )
