@@ -686,7 +686,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: Optional[dict]
-                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+                    if (
+                        jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
+                        and not jwt_handler.is_jwt(token=api_key)
+                    ):
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
@@ -1303,9 +1306,21 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             team_member_info.litellm_budget_table.max_budget
                         )
                         if team_member_budget is not None and team_member_budget > 0:
-                            if valid_token.team_member_spend > team_member_budget:
+                            # Read from cross-pod counter (Redis-first) if available
+                            from litellm.proxy.proxy_server import get_current_spend
+
+                            team_member_spend = valid_token.team_member_spend
+                            if (
+                                valid_token.user_id is not None
+                                and valid_token.team_id is not None
+                            ):
+                                team_member_spend = await get_current_spend(
+                                    counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                    fallback_spend=team_member_spend,
+                                )
+                            if team_member_spend > team_member_budget:
                                 raise litellm.BudgetExceededError(
-                                    current_cost=valid_token.team_member_spend,
+                                    current_cost=team_member_spend,
                                     max_budget=team_member_budget,
                                 )
 

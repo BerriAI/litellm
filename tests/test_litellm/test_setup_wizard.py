@@ -58,7 +58,7 @@ _ANTHROPIC = {
 _AZURE = {
     "id": "azure",
     "name": "Azure OpenAI",
-    "env_key": "AZURE_API_KEY",
+    "env_key": "AZURE_AI_API_KEY",
     "models": [],
     "test_model": None,
     "needs_api_base": True,
@@ -123,8 +123,8 @@ def test_build_config_master_key_quoted():
 def test_build_config_does_not_mutate_env_vars():
     """_build_config must not modify the caller's env_vars dict."""
     env_vars = {
-        "AZURE_API_KEY": "az-key",
-        "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
+        "AZURE_AI_API_KEY": "az-key",
+        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-deployment",
     }
     original_keys = set(env_vars.keys())
@@ -134,8 +134,8 @@ def test_build_config_does_not_mutate_env_vars():
 
 def test_build_config_azure_uses_deployment_name():
     env_vars = {
-        "AZURE_API_KEY": "az-key",
-        "_LITELLM_AZURE_API_BASE_AZURE": "https://my.azure.com",
+        "AZURE_AI_API_KEY": "az-key",
+        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://my.azure.com",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "my-gpt4o",
     }
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
@@ -147,7 +147,7 @@ def test_build_config_azure_uses_deployment_name():
 
 def test_build_config_azure_no_deployment_skipped():
     """Azure without a deployment name should emit nothing (not fallback to gpt-4o)."""
-    env_vars = {"AZURE_API_KEY": "az-key"}  # no deployment sentinel
+    env_vars = {"AZURE_AI_API_KEY": "az-key"}  # no deployment sentinel
     config = SetupWizard._build_config([_AZURE], env_vars, "sk-master")
     # No azure model entry should be emitted when deployment name is absent
     assert "model: azure/" not in config
@@ -157,7 +157,7 @@ def test_build_config_no_display_name_collision_openai_and_azure():
     """OpenAI gpt-4o and azure gpt-4o should get distinct model_name values."""
     env_vars = {
         "OPENAI_API_KEY": "sk-openai",
-        "AZURE_API_KEY": "az-key",
+        "AZURE_AI_API_KEY": "az-key",
         "_LITELLM_AZURE_DEPLOYMENT_AZURE": "gpt-4o",
     }
     config = SetupWizard._build_config([_OPENAI, _AZURE], env_vars, "sk-master")
@@ -182,7 +182,7 @@ def test_build_config_internal_sentinel_keys_excluded():
     """_LITELLM_ prefixed sentinel keys must not appear in environment_variables."""
     env_vars = {
         "OPENAI_API_KEY": "sk-real",
-        "_LITELLM_AZURE_API_BASE_AZURE": "https://x.azure.com",
+        "_LITELLM_AZURE_AI_API_BASE_AZURE": "https://x.azure.com",
     }
     config = SetupWizard._build_config([_OPENAI], env_vars, "sk-master")
     assert "_LITELLM_" not in config

@@ -4554,6 +4554,72 @@ def hash_token(token: str):
     return hashed_token
 
 
+def hash_password(password: str) -> str:
+    """Hash a password using scrypt with a random salt."""
+    import base64
+    import hashlib
+    import os
+
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return "scrypt:" + base64.b64encode(salt + dk).decode()
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    import base64
+    import hashlib
+    import secrets
+
+    if stored.startswith("scrypt:"):
+        try:
+            raw = base64.b64decode(stored[7:])
+            salt, dk = raw[:16], raw[16:]
+            dk2 = hashlib.scrypt(
+                password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32
+            )
+            return secrets.compare_digest(dk, dk2)
+        except Exception:
+            return False
+    # SHA256 fallback (not vulnerable to pass-the-hash: checks sha256(input) == stored)
+    if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
+        return secrets.compare_digest(
+            hashlib.sha256(password.encode()).hexdigest().encode(), stored.encode()
+        )
+    return False
+
+
+async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+    """
+    Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
+    are left alone (they migrate on next login via the SHA256 fallback).
+    Skips quickly if no plaintext passwords exist.
+    """
+    all_with_pw = await prisma_client.db.litellm_usertable.find_many(
+        where={"password": {"not": None}},
+    )
+
+    def _is_sha256_hex(s: str) -> bool:
+        return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+    plaintext_users = [
+        u
+        for u in all_with_pw
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
+    ]
+    if not plaintext_users:
+        return "No plaintext passwords found"
+
+    for user in plaintext_users:
+        await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user.user_id},
+            data={"password": hash_password(user.password)},
+        )
+    return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
+
+
 def _hash_token_if_needed(token: str) -> str:
     """
     Hash the token if it's a string and starts with "sk-"
