@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.exceptions import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -1601,3 +1602,382 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
     assert "default_pool" not in priority_keys[0], (
         f"Priority key should NOT use 'default_pool', should use team's priority. Got: {priority_keys[0]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_marker_set_for_router_fallback():
+    """
+    Validate pre-call behavior for router fallback integration.
+
+    When primary model capacity is exhausted, dynamic_rate_limiter_v3 should:
+    - avoid raising HTTPException in pre-call hook
+    - set _litellm_rate_limit_error in request data
+    - store a litellm.RateLimitError that router can use for fallback
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.8, "low": 0.0}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "ptu-primary"
+    fallback_model = "paygo-fallback"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 10,
+                },
+            },
+            {
+                "model_name": fallback_model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                },
+            },
+        ],
+        fallbacks=[{model: [fallback_model]}],
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+    low_priority_user.user_id = "low_user"
+
+    model_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="model_saturation_check",
+        value=model,
+        rate_limit_type="requests",
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=11,  # over limit
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+    result = await handler.async_pre_call_hook(
+        user_api_key_dict=low_priority_user,
+        cache=dual_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is None
+    assert "_litellm_rate_limit_error" in data
+    assert isinstance(data["_litellm_rate_limit_error"], litellm.RateLimitError)
+    assert "Model capacity reached" in str(data["_litellm_rate_limit_error"])
+
+
+@pytest.mark.asyncio
+async def test_priority_limit_enforced_only_when_saturated_sets_fallback_marker():
+    """
+    Validate saturation-aware priority enforcement with fallback marker behavior.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.8, "low": 0.2}
+    litellm.priority_reservation_settings.saturation_threshold = 0.5
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    model = "test-model"
+    fallback_model = "fallback-model"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 100,
+                },
+            },
+            {
+                "model_name": fallback_model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                },
+            },
+        ],
+        fallbacks=[{model: [fallback_model]}],
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+    low_priority_user.user_id = "low_user"
+
+    model_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="model_saturation_check",
+        value=model,
+        rate_limit_type="requests",
+    )
+    priority_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="priority_model",
+        value=f"{model}:low",
+        rate_limit_type="requests",
+    )
+
+    # Saturated case -> enforce priority limit -> marker must be set
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=60,  # 60% saturation > threshold 50%
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=priority_counter_key,
+        value=21,  # over low-priority allocation
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+    data_saturated = {"model": model, "messages": [{"role": "user", "content": "a"}]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=low_priority_user,
+        cache=dual_cache,
+        data=data_saturated,
+        call_type="completion",
+    )
+    assert "_litellm_rate_limit_error" in data_saturated
+    assert isinstance(data_saturated["_litellm_rate_limit_error"], litellm.RateLimitError)
+    assert "Priority-based rate limit exceeded" in str(
+        data_saturated["_litellm_rate_limit_error"]
+    )
+
+    # Unsaturated case -> do not enforce priority limit -> marker must NOT be set
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=30,  # 30% saturation < threshold 50%
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=priority_counter_key,
+        value=20,
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+    data_unsaturated = {"model": model, "messages": [{"role": "user", "content": "b"}]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=low_priority_user,
+        cache=dual_cache,
+        data=data_unsaturated,
+        call_type="completion",
+    )
+    assert "_litellm_rate_limit_error" not in data_unsaturated
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_raises_fail_fast_rate_limit():
+    """
+    Ensure no-fallback path preserves fail-fast pre-call behavior.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.8, "low": 0.0}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    model = "no-fallback-model"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 10,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+    low_priority_user.user_id = "low_user"
+
+    model_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="model_saturation_check",
+        value=model,
+        rate_limit_type="requests",
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=11,  # over model limit
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+    with pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=low_priority_user,
+            cache=dual_cache,
+            data=data,
+            call_type="completion",
+        )
+
+    assert "_litellm_rate_limit_error" not in data
+
+
+@pytest.mark.asyncio
+async def test_disable_fallbacks_preserves_fail_fast():
+    """
+    Ensure disable_fallbacks=True preserves fail-fast HTTPException behavior
+    even when router fallbacks are configured.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.8, "low": 0.0}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    model = "ptu-model"
+    fallback_model = "fallback-model"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 10,
+                },
+            },
+            {
+                "model_name": fallback_model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                },
+            },
+        ],
+        fallbacks=[{model: [fallback_model]}],
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+    low_priority_user.user_id = "low_user"
+
+    # Set model counter to exceed limit
+    model_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="model_saturation_check",
+        value=model,
+        rate_limit_type="requests",
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=11,
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+
+    # Request with disable_fallbacks=True should still raise HTTPException
+    data = {
+        "model": model,
+        "messages": [{"role": "user", "content": "test"}],
+        "disable_fallbacks": True,
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=low_priority_user,
+            cache=dual_cache,
+            data=data,
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "_litellm_rate_limit_error" not in data
+
+
+@pytest.mark.asyncio
+async def test_limit_remaining_zero_boundary_condition():
+    """
+    Test the boundary condition where limit_remaining == 0 to ensure the
+    rate limiter correctly identifies this as an over-limit condition.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.8, "low": 0.0}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    model = "test-model"
+    fallback_model = "fallback-model"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": 10,
+                },
+            },
+            {
+                "model_name": fallback_model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                },
+            },
+        ],
+        fallbacks=[{model: [fallback_model]}],
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    low_priority_user = UserAPIKeyAuth()
+    low_priority_user.metadata = {"priority": "low"}
+    low_priority_user.user_id = "low_user"
+
+    # Set model counter exactly at capacity (limit_remaining will be 0)
+    model_counter_key = handler.v3_limiter.create_rate_limit_keys(
+        key="model_saturation_check",
+        value=model,
+        rate_limit_type="requests",
+    )
+    await handler.internal_usage_cache.async_set_cache(
+        key=model_counter_key,
+        value=10,
+        ttl=60,
+        litellm_parent_otel_span=None,
+        local_only=False,
+    )
+
+    # Request with configured fallback should set the marker
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+    result = await handler.async_pre_call_hook(
+        user_api_key_dict=low_priority_user,
+        cache=dual_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    # Pre-call hook returns None and sets the marker for router to handle
+    assert result is None
+    assert "_litellm_rate_limit_error" in data
+    assert isinstance(data["_litellm_rate_limit_error"], litellm.RateLimitError)
+

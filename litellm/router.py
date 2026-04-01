@@ -5537,7 +5537,33 @@ class Router:
 
         mock_timeout = kwargs.pop("mock_timeout", None)
 
+        # Check if request was rate-limited by the pre-call hook (dynamic_rate_limiter_v3).
+        # Pop the marker before entering the try block so each case uses the right
+        # propagation path:
+        #   • disable_fallbacks=False  → raise inside the try so async_function_with_fallbacks_common_utils
+        #                                can trigger the fallback machinery.
+        #   • disable_fallbacks=True   → raise directly (outside the try) so the error
+        #                                reaches the caller without being re-wrapped by
+        #                                async_function_with_fallbacks_common_utils.
+        #                                This branch is unexpected: the pre-call hook should
+        #                                have raised directly when disable_fallbacks=True
+        #                                (indicates data dict / kwargs diverged).
+        rate_limit_error = kwargs.pop("_litellm_rate_limit_error", None)
+        if rate_limit_error is not None and disable_fallbacks:
+            verbose_router_logger.debug(
+                f"Unexpected: _litellm_rate_limit_error marker set for "
+                f"{model_group} but disable_fallbacks=True. Raising directly."
+            )
+            raise rate_limit_error
+
         try:
+            if rate_limit_error is not None:
+                # disable_fallbacks=False: let common_utils handle the fallback.
+                verbose_router_logger.info(
+                    f"Rate limit detected from pre-call hook for {model_group}, triggering fallback"
+                )
+                raise rate_limit_error
+            
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
                 model_group=model_group,

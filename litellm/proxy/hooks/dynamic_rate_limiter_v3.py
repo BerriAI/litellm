@@ -17,10 +17,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
+    RateLimitStatus,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.fallback_event_handlers import (
+    _check_non_standard_fallback_format,
+)
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 
@@ -471,31 +475,55 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             f"Read-only check: {json.dumps(check_response, indent=2)}"
         )
 
-        # PHASE 2: Decide which limits to enforce
+        # PHASE 2: Decide which limits to enforce.
+        # Helper to raise a uniform 429 for model saturation, used in both the
+        # OVER_LIMIT branch and the exact-capacity boundary check below.
+        def _raise_model_saturation_exceeded(status: RateLimitStatus) -> None:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": f"Model capacity reached for {model}. "
+                    f"Priority: {priority}, "
+                    f"Rate limit type: {status['rate_limit_type']}, "
+                    f"Remaining: {status['limit_remaining']}"
+                },
+                headers={
+                    "retry-after": str(self.v3_limiter.window_size),
+                    "rate_limit_type": str(status["rate_limit_type"]),
+                    "x-litellm-priority": priority or "default",
+                },
+            )
+
+        # Always enforce the model-saturation boundary, regardless of overall_code.
+        #
+        # Why not rely on overall_code == "OVER_LIMIT" alone?
+        # The read-only check (Phase 1) and the counter increment (Phase 3) are not
+        # atomic across concurrent requests.  When the last available slot is claimed
+        # between these two phases, the read-only snapshot can still show
+        # limit_remaining == 0 while overall_code reports "OK" (the limiter only flips
+        # to "OVER_LIMIT" after a successful increment pushes the counter past the
+        # threshold).  Blocking here closes that race window.
+        #
+        # Backward-compatibility note: this check fires whenever limit_remaining <= 0
+        # for a model_saturation_check entry, including when overall_code is "OK".
+        # Prior to this change, only overall_code == "OVER_LIMIT" triggered a block for
+        # that descriptor.  The tightening is intentional — it prevents the exact-boundary
+        # race — but callers that depended on the old behavior (allowing one extra request
+        # at the limit boundary) will observe stricter enforcement.
+        for status in check_response["statuses"]:
+            if (
+                status["descriptor_key"] == "model_saturation_check"
+                and status["limit_remaining"] <= 0
+            ):
+                _raise_model_saturation_exceeded(status)
+
+        # For OVER_LIMIT responses, also enforce priority limits when saturated.
         if check_response["overall_code"] == "OVER_LIMIT":
             for status in check_response["statuses"]:
+                descriptor_key = status["descriptor_key"]
                 if status["code"] == "OVER_LIMIT":
-                    descriptor_key = status["descriptor_key"]
-
-                    # Model-wide limit exceeded (ALWAYS enforce)
-                    if descriptor_key == "model_saturation_check":
-                        raise HTTPException(
-                            status_code=429,
-                            detail={
-                                "error": f"Model capacity reached for {model}. "
-                                f"Priority: {priority}, "
-                                f"Rate limit type: {status['rate_limit_type']}, "
-                                f"Remaining: {status['limit_remaining']}"
-                            },
-                            headers={
-                                "retry-after": str(self.v3_limiter.window_size),
-                                "rate_limit_type": str(status["rate_limit_type"]),
-                                "x-litellm-priority": priority or "default",
-                            },
-                        )
-
                     # Priority limit exceeded (ONLY enforce when saturated)
-                    elif descriptor_key == "priority_model" and should_enforce_priority:
+                    if descriptor_key == "priority_model" and should_enforce_priority:
                         verbose_proxy_logger.debug(
                             f"Enforcing priority limits for {model}, saturation: {saturation:.1%}, "
                             f"priority: {priority}"
@@ -516,6 +544,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                                 "x-litellm-saturation": f"{saturation:.2%}",
                             },
                         )
+
 
         # PHASE 3: Increment counters separately to avoid early-exit issues
         # Model counter must ALWAYS increment, but priority counter might be over limit
@@ -579,6 +608,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - Model counter increments but priority check fails → model over-capacity
         - Priority counter increments but not enforced → inaccurate metrics
 
+        When rate limit is exceeded:
+        - If model-specific fallback is configured: sets marker on data for router fallback
+        - If no fallback is configured for this model: raises HTTPException fail-fast
+
         Args:
             user_api_key_dict: User authentication and metadata
             cache: Dual cache instance
@@ -586,8 +619,23 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             call_type: Type of API call being made
 
         Returns:
-            None if request is allowed, otherwise raises HTTPException
+            None if request is allowed
+            Raises HTTPException if rate limit exceeded and no fallback path exists
         """
+        def _has_fallback_for_model(_fallbacks: Optional[list], _model: str) -> bool:
+            if not _fallbacks:
+                return False
+            # Non-standard formats (flat string list or LiteLLMParams dict list) are
+            # treated as model-agnostic fallbacks — the router will try them regardless
+            # of which model group triggered the rate limit.
+            if _check_non_standard_fallback_format(_fallbacks):
+                return True
+            for item in _fallbacks:
+                if isinstance(item, dict):
+                    if _model in item or "*" in item:
+                        return True
+            return False
+
         if "model" not in data:
             return None
 
@@ -595,6 +643,37 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority = self._get_priority_from_user_api_key_dict(
             user_api_key_dict=user_api_key_dict
         )
+
+        def _to_ratelimit_error(http_exception: HTTPException) -> litellm.RateLimitError:
+            detail = http_exception.detail
+            if isinstance(detail, dict):
+                message = str(detail.get("error") or detail)
+            else:
+                message = str(detail)
+            return litellm.RateLimitError(
+                message=message,
+                model=model,
+                llm_provider="litellm_proxy",
+            )
+
+        def _should_defer_to_router_fallback(_data: dict, _model: str) -> bool:
+            """
+            Defer rate-limit handling to router only when a fallback path exists.
+
+            This preserves legacy behavior (raise in pre-call) for no-fallback setups.
+            Respects the disable_fallbacks flag to preserve fail-fast behavior when
+            fallbacks are explicitly disabled.
+            """
+            # If fallbacks are explicitly disabled, always fail fast
+            if _data.get("disable_fallbacks", False):
+                return False
+
+            request_fallbacks = _data.get("fallbacks")
+            if _has_fallback_for_model(request_fallbacks, _model):
+                return True
+
+            router_fallbacks = getattr(getattr(self, "llm_router", None), "fallbacks", None)
+            return _has_fallback_for_model(router_fallbacks, _model)
 
         # Get model configuration
         model_group_info: Optional[
@@ -631,7 +710,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 data=data,
             )
 
-        except HTTPException:
+        except HTTPException as e:
+            if _should_defer_to_router_fallback(data, model):
+                # Mark request so router fallback flow can consume the error.
+                verbose_proxy_logger.info(
+                    f"Rate limit exceeded for {model} (priority={priority}), "
+                    f"marking for router fallback"
+                )
+                data["_litellm_rate_limit_error"] = _to_ratelimit_error(e)
+                return None
+
+            # No fallback path configured: preserve fail-fast behavior.
             raise
         except Exception as e:
             verbose_proxy_logger.error(
