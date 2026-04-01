@@ -923,6 +923,45 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+### Route all OpenAI chat completions through the Responses API (recommended)
+
+Instead of prefixing each model with `openai/responses/`, you can enable a global flag to automatically route **all** `/chat/completions` requests for OpenAI models through the Responses API bridge. This is the recommended approach for OpenAI models.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python showLineNumbers title="Global flag - route all OpenAI completions via Responses API"
+import litellm
+
+litellm.route_all_chat_openai_to_responses = True
+
+response = litellm.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+  route_all_chat_openai_to_responses: true
+```
+
+Or set via environment variable:
+
+```bash
+LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES=true
+```
+
+</TabItem>
+</Tabs>
+
+:::note
+This flag only applies to the `openai` provider. Azure OpenAI and other providers are unaffected.
+:::
+
 ## Free-form Function Calling
 
 <Tabs>
