@@ -27,7 +27,6 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     remove_custom_field_from_tools,
-    strip_unsupported_file_api_betas_for_bedrock_invoke,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -54,6 +53,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
+
+    # Beta header patterns that are not supported by Bedrock Invoke API
+    # These will be filtered out to prevent 400 "invalid beta flag" errors
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -461,11 +463,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        beta_list = strip_unsupported_file_api_betas_for_bedrock_invoke(list(beta_set))
-        if beta_list:
-            anthropic_messages_request["anthropic_beta"] = beta_list
-        else:
-            anthropic_messages_request.pop("anthropic_beta", None)
+        if beta_set:
+            anthropic_messages_request["anthropic_beta"] = list(beta_set)
 
         return anthropic_messages_request
 
