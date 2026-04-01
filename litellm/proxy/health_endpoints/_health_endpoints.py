@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import os
 import time
@@ -36,7 +37,8 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
-from litellm.secret_managers.main import get_secret
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.secret_managers.main import get_secret, get_secret_bool
 
 #### Health ENDPOINTS ####
 
@@ -143,6 +145,90 @@ def get_callback_identifier(callback):
         if callback_strs:
             return callback_strs[0]
     return callback_name(callback)
+
+
+def _parse_config_row_param_value(param_value: Any) -> dict:
+    if param_value is None:
+        return {}
+
+    if isinstance(param_value, str):
+        try:
+            parsed_value = json.loads(param_value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed_value if isinstance(parsed_value, dict) else {}
+
+    if isinstance(param_value, dict):
+        return dict(param_value)
+
+    try:
+        parsed_value = dict(param_value)
+    except (TypeError, ValueError):
+        return {}
+
+    return parsed_value if isinstance(parsed_value, dict) else {}
+
+
+def _is_truthy_config_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+
+    if value is None:
+        return False
+
+    return bool(value)
+
+
+async def _resolve_test_email_address(prisma_client: Any) -> Optional[str]:
+    test_email_address = os.getenv("TEST_EMAIL_ADDRESS")
+
+    try:
+        store_model_in_db = (
+            get_secret_bool("STORE_MODEL_IN_DB", default_value=False) is True
+        )
+
+        if not store_model_in_db and prisma_client is not None:
+            general_settings_row = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "general_settings"}
+            )
+            general_settings = _parse_config_row_param_value(
+                getattr(general_settings_row, "param_value", None)
+            )
+            store_model_in_db = _is_truthy_config_flag(
+                general_settings.get("store_model_in_db")
+            )
+
+        if not store_model_in_db or prisma_client is None:
+            return test_email_address
+
+        environment_variables_row = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
+        environment_variables = _parse_config_row_param_value(
+            getattr(environment_variables_row, "param_value", None)
+        )
+        db_test_email_address = environment_variables.get("TEST_EMAIL_ADDRESS")
+
+        if db_test_email_address is None:
+            return test_email_address
+
+        decrypted_test_email_address = decrypt_value_helper(
+            value=db_test_email_address,
+            key="TEST_EMAIL_ADDRESS",
+            exception_type="debug",
+            return_original_value=True,
+        )
+
+        return decrypted_test_email_address or test_email_address
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Falling back to TEST_EMAIL_ADDRESS from env after DB lookup failed: %s",
+            str(e),
+        )
+        return test_email_address
 
 
 router = APIRouter()
@@ -438,22 +524,6 @@ async def health_services_endpoint(  # noqa: PLR0915
                     },
                 )
         if service == "email":
-            from litellm.proxy.proxy_server import proxy_config, store_model_in_db
-
-            # TEST_EMAIL_ADDRESS is stored encrypted in the DB when the proxy
-            # is running in DB mode.  Calling get_config() ensures the value is
-            # freshly decrypted and available both in the returned config dict
-            # and in os.environ.  For YAML / env-var deployments the call is a
-            # cheap no-op and os.getenv() still works as the fallback.
-            if store_model_in_db and prisma_client is not None:
-                _fresh_config = await proxy_config.get_config()
-                _env_vars = _fresh_config.get("environment_variables", {})
-                _test_email_address = _env_vars.get(
-                    "TEST_EMAIL_ADDRESS"
-                ) or os.getenv("TEST_EMAIL_ADDRESS")
-            else:
-                _test_email_address = os.getenv("TEST_EMAIL_ADDRESS")
-
             webhook_event = WebhookEvent(
                 event="key_created",
                 event_group=Litellm_EntityType.KEY,
@@ -463,7 +533,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 spend=0,
                 max_budget=0,
                 user_id=user_api_key_dict.user_id,
-                user_email=_test_email_address,
+                user_email=await _resolve_test_email_address(prisma_client),
                 team_id=user_api_key_dict.team_id,
             )
 
