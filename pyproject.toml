@@ -48,7 +48,7 @@ apscheduler = {version = "3.11.2", optional = true}
 fastapi-sso = { version = "0.16.0", optional = true }
 PyJWT = { version = "2.12.1", optional = true, python = ">=3.9" }
 python-multipart = { version = "0.0.20", optional = true}
-cryptography = {version = "46.0.5", optional = true} # GHSA-r6ph-v2qm-q3c2
+cryptography = {version = "43.0.3", optional = true} # Docker uses 46.0.5; pyproject uses 43.0.3 for Poetry Python 3.9.0/3.9.1 compat
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "1.25.3", optional = true, python = ">=3.9"}
 azure-keyvault-secrets = {version = "4.10.0", optional = true}
