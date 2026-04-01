@@ -27,6 +27,10 @@ on:
         required: false
         type: number
         default: 10
+      artifact-name:
+        description: "Unique name for the coverage artifact (must be unique per run)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -102,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          name: coverage-${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
           retention-days: 1
 
@@ -123,7 +127,7 @@ jobs:
       - name: Download coverage report
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
-          pattern: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: coverage-${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage-reports
           merge-multiple: true
 
