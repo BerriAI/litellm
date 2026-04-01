@@ -532,7 +532,7 @@ def test_gemini_with_grounding():
     ## Check streaming
 
     response = completion(
-        model="gemini/gemini-2.0-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         tools=tools,
         stream=True,
@@ -566,7 +566,7 @@ def test_gemini_with_empty_function_call_arguments():
         }
     ]
     response = completion(
-        model="gemini/gemini-2.0-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         tools=tools,
     )
@@ -775,7 +775,7 @@ def test_gemini_tool_use():
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What's the weather like in Lima, Peru today?"},
         ],
-        "model": "gemini/gemini-2.0-flash",
+        "model": "gemini/gemini-2.5-flash",
         "tools": [
             {
                 "type": "function",

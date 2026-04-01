@@ -71,7 +71,7 @@ PROVIDERS: List[Dict] = [
         "id": "azure",
         "name": "Azure OpenAI",
         "description": "GPT-4o via Azure",
-        "env_key": "AZURE_API_KEY",
+        "env_key": "AZURE_AI_API_KEY",
         "key_hint": "your-azure-key",
         "test_model": None,  # needs deployment name — skip validation
         "models": [],
@@ -428,7 +428,7 @@ class SetupWizard:
                     f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: "
                 )
                 if api_base:
-                    env_vars[f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"] = api_base
+                    env_vars[f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"] = api_base
                 deployment = _styled_input(
                     f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: "
                 )
@@ -557,7 +557,7 @@ class SetupWizard:
                         f'      api_base: "{_yaml_escape(str(p["api_base"]))}"'
                     )
                 elif p.get("needs_api_base"):
-                    azure_base_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
+                    azure_base_key = f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"
                     if azure_base_key in env_copy:
                         lines.append(
                             f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'

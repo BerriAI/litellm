@@ -66,6 +66,15 @@ async def spend_key_fn():
         )
 
 
+def _strip_password_from_users(users) -> None:
+    """Strip password field from a list of user objects."""
+    for user in users if isinstance(users, list) else [users]:
+        if user and hasattr(user, "__dict__"):
+            user.__dict__.pop("password", None)
+        elif isinstance(user, dict):
+            user.pop("password", None)
+
+
 @router.get(
     "/spend/users",
     tags=["Budget & Spend Tracking"],
@@ -105,13 +114,15 @@ async def spend_user_fn(
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
             )
-            return [user_info]
+            result = [user_info]
         else:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_all"
             )
+            result = user_info
 
-        return user_info
+        _strip_password_from_users(result)
+        return result
 
     except Exception as e:
         raise HTTPException(
