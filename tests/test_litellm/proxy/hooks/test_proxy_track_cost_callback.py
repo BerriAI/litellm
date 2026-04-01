@@ -449,6 +449,94 @@ async def test_async_post_call_failure_hook_enriches_missing_team_alias():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_uses_actual_start_time():
+    """
+    Regression test for: failed requests logging 0 duration because both
+    start_time and end_time were set to datetime.now().
+
+    When litellm_logging_obj is present in request_data, start_time passed to
+    update_database should be litellm_logging_obj.start_time, not datetime.now().
+    """
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+    )
+
+    actual_start = datetime(2026, 1, 1, 12, 0, 0)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.start_time = actual_start
+    mock_logging_obj.litellm_trace_id = None
+    mock_logging_obj.model_call_details = {}
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+        "litellm_logging_obj": mock_logging_obj,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Timeout after 300s"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_args = mock_update_database.call_args[1]
+        assert (
+            call_args["start_time"] == actual_start
+        ), "start_time should be the actual request start, not the failure timestamp"
+        assert (
+            call_args["end_time"] > actual_start
+        ), "end_time should be after start_time"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_falls_back_start_time_when_no_logging_obj():
+    """
+    When litellm_logging_obj is absent from request_data, start_time should
+    fall back to datetime.now() without raising.
+    """
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+    )
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+        # no litellm_logging_obj
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Auth error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_args = mock_update_database.call_args[1]
+        assert isinstance(call_args["start_time"], datetime)
+        assert isinstance(call_args["end_time"], datetime)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model_value", [None, ""])
 async def test_track_cost_callback_skips_for_falsy_model_and_no_slo(model_value):
     """
