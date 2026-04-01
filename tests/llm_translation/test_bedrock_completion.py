@@ -2653,13 +2653,13 @@ def test_bedrock_top_k_param(model, expected_params):
 def test_bedrock_invoke_provider():
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
@@ -3075,16 +3075,16 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
     if sync_mode:
         response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
     else:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
 
@@ -3111,7 +3111,7 @@ async def test_bedrock_passthrough_router():
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
             }
         ]
@@ -3177,9 +3177,9 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     }
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse-stream",
             data=data,
         )
         async for chunk in response:
@@ -3230,9 +3230,9 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:
@@ -3282,9 +3282,9 @@ async def test_bedrock_streaming_passthrough_test1(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:
