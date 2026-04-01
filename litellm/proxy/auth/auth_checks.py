@@ -76,6 +76,7 @@ all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes
 def _check_key_or_team_allowed_ips(
     valid_token: Optional[UserAPIKeyAuth],
     request: Request,
+    general_settings: dict,
 ) -> None:
     """
     Check IP allowlist stored in key/team metadata.
@@ -104,7 +105,7 @@ def _check_key_or_team_allowed_ips(
     is_valid, client_ip = _check_valid_ip(
         allowed_ips=allowed_ips,
         request=request,
-        use_x_forwarded_for=False,
+        use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
     )
     if not is_valid:
         raise ProxyException(
@@ -147,7 +148,7 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 0. [OPTIONAL] IP allowlist - key/team metadata.allowed_ips (no DB in hot path)
-    _check_key_or_team_allowed_ips(valid_token=valid_token, request=request)
+    _check_key_or_team_allowed_ips(valid_token=valid_token, request=request, general_settings=general_settings)
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
         request_body, route
