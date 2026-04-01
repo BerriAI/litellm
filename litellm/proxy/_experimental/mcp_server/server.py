@@ -1818,6 +1818,12 @@ if MCP_AVAILABLE:
                 server_name=server_name,
             )
         )
+
+        # Extract custom headers for logging callbacks
+        custom_headers = _extract_custom_headers(raw_headers)
+        if custom_headers:
+            standard_logging_mcp_tool_call["custom_headers"] = custom_headers
+
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -1826,6 +1832,14 @@ if MCP_AVAILABLE:
                 "mcp_tool_call_metadata"
             ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
+            # Populate requester_custom_headers in metadata so it flows into
+            # StandardLoggingMetadata via _STANDARD_LOGGING_METADATA_KEYS
+            if custom_headers:
+                _lp = litellm_logging_obj.model_call_details.get("litellm_params")
+                if isinstance(_lp, dict):
+                    _meta = _lp.get("metadata")
+                    if isinstance(_meta, dict):
+                        _meta["requester_custom_headers"] = custom_headers
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -2112,6 +2126,41 @@ if MCP_AVAILABLE:
             extra_headers=extra_headers,
             raw_headers=raw_headers,
         )
+
+    _SENSITIVE_CUSTOM_HEADER_PREFIXES = frozenset(
+        {
+            "x-mcp-server-auth-",
+            "x-litellm-",
+        }
+    )
+
+    _SENSITIVE_CUSTOM_HEADERS = frozenset(
+        {
+            "x-api-key",
+        }
+    )
+
+    def _extract_custom_headers(
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        """Extract x-* custom headers from raw HTTP headers, excluding sensitive ones."""
+        if not raw_headers:
+            return None
+        custom: Dict[str, str] = {}
+        for k, v in raw_headers.items():
+            key_lower = k.lower()
+            if not key_lower.startswith("x-"):
+                continue
+            if key_lower in _SENSITIVE_CUSTOM_HEADERS:
+                continue
+            if any(
+                key_lower.startswith(prefix)
+                for prefix in _SENSITIVE_CUSTOM_HEADER_PREFIXES
+            ):
+                continue
+            if v is not None and isinstance(v, str):
+                custom[k] = v
+        return custom if custom else None
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
