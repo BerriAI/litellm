@@ -127,7 +127,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "Akto": `${asset_logos_folder}akto.svg`,
-  "Qohash Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
+  "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
