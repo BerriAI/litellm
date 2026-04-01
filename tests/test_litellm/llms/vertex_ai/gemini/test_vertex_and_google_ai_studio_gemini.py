@@ -3703,6 +3703,19 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert result_auto["service_tier"] == "priority"
 
+    # Test AUTO (uppercase) -> priority
+    optional_params_auto_upper = {}
+    non_default_params_auto_upper = {"service_tier": "AUTO"}
+
+    result_auto_upper = v.map_openai_params(
+        non_default_params=non_default_params_auto_upper,
+        optional_params=optional_params_auto_upper,
+        model="gemini-3-pro-preview",
+        drop_params=True,
+    )
+
+    assert result_auto_upper["service_tier"] == "priority"
+
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
     """Test promptTokensDetails with VIDEO modality for video inputs.
