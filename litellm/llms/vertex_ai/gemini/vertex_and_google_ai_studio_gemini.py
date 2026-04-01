@@ -369,7 +369,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         'auto' maps to 'priority'.
         Other values are passed lowercased.
         """
-        if value == "auto":
+        if value.lower() == "auto":
             optional_params["service_tier"] = "priority"
         else:
             optional_params["service_tier"] = value.lower()
