@@ -20,6 +20,7 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
 import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
+import ConcurrentRequestLogs from "./concurrent_request_logs";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -354,12 +355,21 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   return (
     <div className="w-full p-6 overflow-x-hidden box-border">
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
+      <TabGroup
+        defaultIndex={0}
+        onIndexChange={(index) =>
+          setActiveTab(
+            ["request logs", "audit logs", "deleted keys", "deleted teams", "concurrent request logs"][index] ??
+              "request logs",
+          )
+        }
+      >
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
           <Tab>Deleted Keys</Tab>
           <Tab>Deleted Teams</Tab>
+          <Tab>Concurrent Request Logs</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -515,6 +525,9 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           </TabPanel>
           <TabPanel>
             <DeletedTeamsPage />
+          </TabPanel>
+          <TabPanel>
+            <ConcurrentRequestLogs accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

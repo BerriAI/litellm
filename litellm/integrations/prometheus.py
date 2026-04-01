@@ -346,6 +346,20 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_remaining_api_key_tokens_for_model"),
             )
 
+            # Current parallel requests for API Key (max_parallel_requests counter)
+            self.litellm_current_parallel_requests = self._gauge_factory(
+                "litellm_current_parallel_requests",
+                "Current number of parallel requests being processed for API key",
+                labelnames=["token", "key_name", "key_alias", "team_alias"],
+            )
+
+            # Timestamp of when the parallel requests gauge was last updated
+            self.litellm_current_parallel_requests_timestamp = self._gauge_factory(
+                "litellm_current_parallel_requests_timestamp",
+                "Unix timestamp when the parallel requests gauge was last updated",
+                labelnames=["token", "key_name", "key_alias", "team_alias"],
+            )
+
             ########################################
             # LLM API Deployment Metrics / analytics
             ########################################
