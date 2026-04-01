@@ -1,8 +1,11 @@
 import asyncio
+import base64
 import copy
+import hashlib
 import json
 import logging
 import os
+import sys
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -41,41 +44,106 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 #### Health ENDPOINTS ####
 
 
+def _str_to_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+
+    normalized_value = value.strip().lower()
+    if normalized_value == "true":
+        return True
+    if normalized_value == "false":
+        return False
+    return None
+
+
 def get_secret(
     secret_name: str, default_value: Optional[Union[str, bool]] = None
 ) -> Optional[Union[str, bool]]:
-    # Import lazily to avoid proxy startup cycles involving secret manager setup.
-    from litellm.secret_managers.main import get_secret as _get_secret
+    if secret_name.startswith("os.environ/"):
+        secret_name = secret_name.replace("os.environ/", "")
 
-    return _get_secret(secret_name=secret_name, default_value=default_value)
+    secret_value = os.getenv(secret_name)
+    if secret_value is None:
+        return default_value
+
+    return secret_value
 
 
 def get_secret_bool(
     secret_name: str, default_value: Optional[bool] = None
 ) -> Optional[bool]:
-    # Import lazily to avoid proxy startup cycles involving secret manager setup.
-    from litellm.secret_managers.main import get_secret_bool as _get_secret_bool
+    secret_value = get_secret(secret_name=secret_name)
+    if secret_value is None:
+        return default_value
 
-    return _get_secret_bool(secret_name=secret_name, default_value=default_value)
+    if isinstance(secret_value, bool):
+        return secret_value
+
+    return _str_to_bool(secret_value)
+
+
+def _get_proxy_signing_key() -> Optional[str]:
+    salt_key = os.getenv("LITELLM_SALT_KEY")
+    if salt_key is not None:
+        return salt_key
+
+    proxy_server_module = sys.modules.get("litellm.proxy.proxy_server")
+    if proxy_server_module is not None:
+        proxy_master_key = getattr(proxy_server_module, "master_key", None)
+        if isinstance(proxy_master_key, str):
+            return proxy_master_key
+
+    return os.getenv("LITELLM_MASTER_KEY")
+
+
+def _decrypt_value(value: bytes, signing_key: str) -> str:
+    import nacl.secret
+
+    hash_bytes = hashlib.sha256(signing_key.encode()).digest()
+    box = nacl.secret.SecretBox(hash_bytes)
+
+    if len(value) == 0:
+        return ""
+
+    plaintext = box.decrypt(value)
+    return plaintext.decode("utf-8")
 
 
 def decrypt_value_helper(
-    value: str,
+    value: Any,
     key: str,
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
-) -> Optional[str]:
-    # Import lazily so this module does not participate in proxy import cycles.
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-        decrypt_value_helper as _decrypt_value_helper,
-    )
+) -> Any:
+    signing_key = _get_proxy_signing_key()
 
-    return _decrypt_value_helper(
-        value=value,
-        key=key,
-        exception_type=exception_type,
-        return_original_value=return_original_value,
-    )
+    try:
+        if isinstance(value, str):
+            if signing_key is None:
+                raise ValueError("No signing key configured")
+
+            try:
+                decoded_b64 = base64.urlsafe_b64decode(value)
+            except Exception:
+                decoded_b64 = base64.b64decode(value)
+
+            return _decrypt_value(value=decoded_b64, signing_key=signing_key)
+
+        return value
+    except Exception as e:
+        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        if exception_type == "debug":
+            verbose_proxy_logger.debug(error_message)
+            return value if return_original_value else None
+
+        verbose_proxy_logger.debug(
+            f"Unable to decrypt value={value} for key: {key}, returning None"
+        )
+        if return_original_value:
+            return value
+
+        verbose_proxy_logger.exception(error_message)
+        return None
 
 
 def _resolve_os_environ_variables(params: dict) -> dict:
