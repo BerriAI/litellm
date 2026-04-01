@@ -169,9 +169,6 @@ def get_llm_provider(  # noqa: PLR0915
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret_str(api_key)
-
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
         if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):

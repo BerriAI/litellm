@@ -686,7 +686,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: Optional[dict]
-                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+                    if (
+                        jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
+                        and not jwt_handler.is_jwt(token=api_key)
+                    ):
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)

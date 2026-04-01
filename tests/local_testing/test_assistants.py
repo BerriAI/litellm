@@ -288,6 +288,8 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                         thread_id=_new_thread.id, custom_llm_provider=provider
                     )
                     assert isinstance(messages.data[0], Message)
+                elif run.status == "failed" and run.last_error and "No connection matching model" in run.last_error.message:
+                    pytest.skip(f"Azure deployment not found: {run.last_error.message}")
                 else:
                     pytest.fail(
                         "An unexpected error occurred when running the thread, {}".format(
@@ -320,6 +322,8 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                         thread_id=_new_thread.id, custom_llm_provider=provider
                     )
                     assert isinstance(messages.data[0], Message)
+                elif run.status == "failed" and run.last_error and "No connection matching model" in run.last_error.message:
+                    pytest.skip(f"Azure deployment not found: {run.last_error.message}")
                 else:
                     pytest.fail(
                         "An unexpected error occurred when running the thread, {}".format(

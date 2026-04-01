@@ -14,6 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
+    LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
@@ -1176,3 +1177,102 @@ class TestModelInfoEndpoint:
             assert result["id"] == "team-model-1"
             assert result["object"] == "model"
             assert result["owned_by"] == "custom"
+
+
+class TestAddAndDeleteModelLifecycle:
+    """
+    Mock replacement for test_add_and_delete_models in tests/test_models.py.
+
+    The original integration test required a live proxy + OPENAI_API_KEY.
+    This test verifies the same lifecycle (add → delete → double-delete fails)
+    by calling the endpoint handlers directly with mocked DB.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_then_delete_model(self):
+        """
+        - Add model via add_new_model → returns model_id
+        - Delete model via delete_model → returns success
+        - Delete same model again → raises (model not found)
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+        )
+
+        model_id = "lifecycle-test-model-123"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        # Build a real LiteLLM_ProxyModelTable for the DB mock to return
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="lifecycle-model",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock()
+
+        mock_router = MagicMock()
+        mock_router.delete_deployment = MagicMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        with patch(f"{_PS}.prisma_client", mock_prisma), \
+             patch(f"{_PS}.store_model_in_db", True), \
+             patch(f"{_PS}.proxy_config", mock_proxy_config), \
+             patch(f"{_PS}.proxy_logging_obj", MagicMock()), \
+             patch(f"{_PS}.general_settings", {}), \
+             patch(f"{_PS}.premium_user", True), \
+             patch(f"{_PS}.llm_router", mock_router), \
+             patch(_ENCRYPT, side_effect=lambda value, **kwargs: value):
+
+            # --- ADD ---
+            add_result = await add_new_model(
+                model_params=Deployment(
+                    model_name="lifecycle-model",
+                    litellm_params=LiteLLM_Params(
+                        model="openai/gpt-4.1-nano", api_key="fake-key"
+                    ),
+                    model_info={"id": model_id},
+                ),
+                user_api_key_dict=admin_user,
+            )
+            assert add_result.model_id == model_id
+
+            # --- DELETE ---
+            delete_result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+            assert "deleted successfully" in delete_result["message"]
+
+            # --- DELETE again should fail (model not found) ---
+            mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+                return_value=None
+            )
+            from litellm.proxy.proxy_server import ProxyException
+
+            with pytest.raises(ProxyException) as exc_info:
+                await delete_model_endpoint(
+                    model_info=ModelInfoDelete(id=model_id),
+                    user_api_key_dict=admin_user,
+                )
+            assert str(exc_info.value.code) == "400"
