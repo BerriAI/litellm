@@ -208,13 +208,29 @@ class FakeAnthropicMessagesStreamIterator:
                     )
 
         # 5. message_delta event (with final usage and stop_reason)
+        # Include cache usage fields so clients that only read message_delta
+        # (like Claude Code's SDK) see the full input token breakdown.
+        delta_usage: Dict[str, Any] = {
+            "output_tokens": usage.get("output_tokens", 0) if usage else 0,
+        }
+        if usage:
+            if usage.get("input_tokens") is not None:
+                delta_usage["input_tokens"] = usage["input_tokens"]
+            if usage.get("cache_creation_input_tokens") is not None:
+                delta_usage["cache_creation_input_tokens"] = usage[
+                    "cache_creation_input_tokens"
+                ]
+            if usage.get("cache_read_input_tokens") is not None:
+                delta_usage["cache_read_input_tokens"] = usage[
+                    "cache_read_input_tokens"
+                ]
         message_delta = {
             "type": "message_delta",
             "delta": {
                 "stop_reason": response_dict.get("stop_reason"),
                 "stop_sequence": response_dict.get("stop_sequence"),
             },
-            "usage": {"output_tokens": usage.get("output_tokens", 0) if usage else 0},
+            "usage": delta_usage,
         }
         chunks.append(
             f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode()
