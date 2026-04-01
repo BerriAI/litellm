@@ -41,6 +41,9 @@ class ForceParamsHook(CustomLogger):
                 temperature: 0.7   # 覆盖全局 0.0，仅对此模型生效
     """
 
+    def __init__(self):
+        super().__init__()
+
     async def async_pre_call_deployment_hook(
         self,
         kwargs: Dict[str, Any],
@@ -75,3 +78,5 @@ class ForceParamsHook(CustomLogger):
 
         kwargs.update(merged)
         return kwargs
+
+proxy_handler_instance = ForceParamsHook()
