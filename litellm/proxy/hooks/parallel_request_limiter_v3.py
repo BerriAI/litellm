@@ -23,6 +23,7 @@ from typing import (
 
 from fastapi import HTTPException
 
+import litellm
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -1359,11 +1360,64 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     },
                 )
 
+    async def _emit_parallel_requests_metric(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        current_count: int,
+    ) -> None:
+        """Emit Prometheus gauge metrics for current parallel requests with timestamp."""
+        try:
+            import time
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            # Find the Prometheus logger from callbacks
+            prometheus_logger: Optional[PrometheusLogger] = None
+            for callback in litellm.callbacks:
+                if isinstance(callback, PrometheusLogger):
+                    prometheus_logger = callback
+                    break
+
+            if prometheus_logger is None:
+                verbose_proxy_logger.debug("PrometheusLogger not found in callbacks")
+                return
+
+            if not hasattr(prometheus_logger, "litellm_current_parallel_requests"):
+                verbose_proxy_logger.debug("litellm_current_parallel_requests metric not found on PrometheusLogger")
+                return
+
+            current_ts = time.time()
+
+            verbose_proxy_logger.info(
+                f"[METRICS] Emitting parallel_requests metric: "
+                f"token={user_api_key_dict.token}, "
+                f"key_alias={user_api_key_dict.key_alias}, "
+                f"current_count={current_count}, "
+                f"timestamp={current_ts}"
+            )
+
+            labels = {
+                "token": user_api_key_dict.token or "",
+                "key_name": user_api_key_dict.key_name or "",
+                "key_alias": user_api_key_dict.key_alias or "",
+                "team_alias": user_api_key_dict.team_alias or "",
+            }
+
+            # Emit the value gauge
+            prometheus_logger.litellm_current_parallel_requests.labels(**labels).set(current_count)
+
+            # Emit the timestamp gauge (so we know when this value was set)
+            if hasattr(prometheus_logger, "litellm_current_parallel_requests_timestamp"):
+                prometheus_logger.litellm_current_parallel_requests_timestamp.labels(**labels).set(current_ts)
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to emit parallel_requests metric: {e}")
+            # Don't let metrics break rate limiting
+
     async def _increment_max_parallel_requests(
         self,
         api_key: str,
         max_parallel_requests: int,
         parent_otel_span: Optional[Span] = None,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> Tuple[int, int]:
         """
         Atomically check and increment the max_parallel_requests counter.
@@ -1390,7 +1444,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 previous_count = results[1]
                 current_count = results[2]
 
-                print(f"\n[RATE_LIMITER] max_parallel_requests incremented for {api_key}: previous={previous_count}, current={current_count}, limit={max_parallel_requests}\n", flush=True)
+                verbose_proxy_logger.debug(
+                    f"max_parallel_requests incremented for {api_key}: previous={previous_count}, current={current_count}, limit={max_parallel_requests}"
+                )
+
+                # Emit Prometheus metric
+                if user_api_key_dict:
+                    await self._emit_parallel_requests_metric(
+                        user_api_key_dict=user_api_key_dict,
+                        current_count=current_count,
+                    )
 
                 if was_incremented == 0:
                     # Counter was NOT incremented - limit exceeded
@@ -1452,8 +1515,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 increment_list=pipeline_operations,
                 litellm_parent_otel_span=parent_otel_span,
             )
+            new_count = current_count + 1
+            # Emit Prometheus metric in fallback path
+            if user_api_key_dict:
+                await self._emit_parallel_requests_metric(
+                    user_api_key_dict=user_api_key_dict,
+                    current_count=new_count,
+                )
             # Return (previous, new) count (approximate since fallback is non-atomic)
-            return (current_count, current_count + 1)
+            return (current_count, new_count)
         except Exception as e:
             verbose_proxy_logger.warning(
                 f"Failed to increment max_parallel_requests counter: {str(e)}"
@@ -1465,6 +1535,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         api_key: str,
         parent_otel_span: Optional[Span] = None,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> Tuple[int, int]:
         """
         Decrement the max_parallel_requests counter in Redis.
@@ -1487,7 +1558,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # Results: [previous_count, current_count]
                 previous_count = results[0]
                 current_count = results[1]
-                print(f"\n[RATE_LIMITER] max_parallel_requests decremented for {api_key}: previous={previous_count}, current={current_count}\n", flush=True)
+                verbose_proxy_logger.debug(
+                    f"max_parallel_requests decremented for {api_key}: previous={previous_count}, current={current_count}"
+                )
+                # Emit Prometheus metric
+                if user_api_key_dict:
+                    await self._emit_parallel_requests_metric(
+                        user_api_key_dict=user_api_key_dict,
+                        current_count=current_count,
+                    )
                 return (previous_count, current_count)
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -1497,7 +1576,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Fallback: use cache operations (non-atomic)
         current_value = await self.internal_usage_cache.async_get_cache(
             key=counter_key,
-            parent_otel_span=parent_otel_span,
+            litellm_parent_otel_span=parent_otel_span,
         )
         current_count = int(current_value) if current_value is not None else 0
         previous_count = current_count
@@ -1509,6 +1588,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ttl=self.max_parallel_requests_ttl,
                 litellm_parent_otel_span=parent_otel_span,
             ) or 0
+
+        # Emit Prometheus metric in fallback path
+        if user_api_key_dict:
+            await self._emit_parallel_requests_metric(
+                user_api_key_dict=user_api_key_dict,
+                current_count=current_count,
+            )
 
         return (previous_count, current_count)
 

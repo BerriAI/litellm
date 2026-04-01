@@ -896,6 +896,7 @@ class ProxyBaseLLMRequestProcessing:
             api_key=user_api_key_dict.api_key,
             max_parallel_requests=max_parallel_requests,
             parent_otel_span=user_api_key_dict.parent_otel_span,
+            user_api_key_dict=user_api_key_dict,
         )
 
         is_streaming = False  # Initialize for finally block access
@@ -920,7 +921,9 @@ class ProxyBaseLLMRequestProcessing:
                             yield chunk
                     finally:
                         # Stream complete or client disconnected - decrement
-                        await rate_limiter._decrement_max_parallel_requests(api_key, parent_span)
+                        await rate_limiter._decrement_max_parallel_requests(
+                            api_key, parent_span, user_api_key_dict
+                        )
 
                 return await self._process_streaming_response(
                     responses=responses,
@@ -941,7 +944,9 @@ class ProxyBaseLLMRequestProcessing:
             # 4. NON-STREAMING DECREMENT (streaming decrements in generator wrapper)
             if not is_streaming:
                 await rate_limiter._decrement_max_parallel_requests(
-                    user_api_key_dict.api_key, user_api_key_dict.parent_otel_span
+                    user_api_key_dict.api_key,
+                    user_api_key_dict.parent_otel_span,
+                    user_api_key_dict,
                 )
 
     async def _handle_responses(

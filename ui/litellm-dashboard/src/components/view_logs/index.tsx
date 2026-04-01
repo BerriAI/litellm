@@ -31,6 +31,7 @@ import { RequestResponsePanel } from "./RequestResponsePanel";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
 import { VectorStoreViewer } from "./VectorStoreViewer";
+import ConcurrentRequestLogs from "./concurrent_request_logs";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -605,6 +606,7 @@ export default function SpendLogsTable({
           <Tab>Audit Logs</Tab>
           <Tab>Deleted Keys</Tab>
           <Tab>Deleted Teams</Tab>
+          <Tab>Concurrent Request Logs</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -913,6 +915,9 @@ export default function SpendLogsTable({
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>
           <TabPanel><DeletedTeamsPage /></TabPanel>
+          <TabPanel>
+            <ConcurrentRequestLogs accessToken={accessToken} />
+          </TabPanel>
         </TabPanels>
       </TabGroup>
 
