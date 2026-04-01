@@ -409,7 +409,6 @@ model LiteLLM_JWTKeyMapping {
     id                String   @id @default(uuid())
     jwt_claim_name    String   // e.g. "sub", "email"
     jwt_claim_value   String   // The claim value to match
-    issuer            String   @default("")  // JWT "iss" claim — differentiates identical claims across IdPs
     token             String   // Hashed virtual key (FK)
     description       String?
     is_active         Boolean  @default(true)
@@ -420,8 +419,8 @@ model LiteLLM_JWTKeyMapping {
 
     litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
 
-    @@unique([jwt_claim_name, jwt_claim_value, issuer])
-    @@index([jwt_claim_name, jwt_claim_value, issuer, is_active])
+    @@unique([jwt_claim_name, jwt_claim_value])
+    @@index([jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
@@ -482,7 +481,7 @@ model LiteLLM_DeletedVerificationToken {
     rotation_interval       String?
     last_rotation_at        DateTime?
     key_rotation_at         DateTime?
-    key_rotation_email  String?
+    key_rotation_email      String?
 
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
