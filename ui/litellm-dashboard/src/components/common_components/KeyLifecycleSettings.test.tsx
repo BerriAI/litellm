@@ -53,7 +53,7 @@ vi.mock("@tremor/react", () => ({
     };
     return (
       <input
-        data-testid={name === "duration" ? "duration-input" : "custom-interval-input"}
+        data-testid={name === "duration" ? "duration-input" : name === "key_rotation_email" ? "key-rotation-email-input" : "custom-interval-input"}
         value={value}
         onChange={handleChange}
         placeholder={placeholder}
