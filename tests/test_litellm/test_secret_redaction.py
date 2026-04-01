@@ -307,12 +307,12 @@ def test_redact_string_applied_to_httpx_error_message():
     response = httpx.Response(400, request=request)
 
     # httpx.Response.raise_for_status() includes the full URL in the error message
-    try:
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
         response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        error_str = redact_string(str(exc))
-        assert fake_key not in error_str
-        assert "REDACTED" in error_str
+
+    error_str = redact_string(str(exc_info.value))
+    assert fake_key not in error_str
+    assert "REDACTED" in error_str
 
 
 def test_redact_url_query_param_key_in_logger_output():
@@ -328,3 +328,32 @@ def test_redact_url_query_param_key_in_logger_output():
     output = _capture_logger_output(log_messages)
     assert fake_key not in output
     assert "REDACTED" in output
+
+
+def test_exception_mapping_respects_redaction_opt_out():
+    """When LITELLM_DISABLE_REDACT_SECRETS=true, exception messages pass through unredacted."""
+    import httpx
+
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    fake_key = "AIzaSyFakeGeminiKey1234567890ABCDE"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro?key={fake_key}"
+    request = httpx.Request("POST", url)
+    response = httpx.Response(400, request=request)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        response.raise_for_status()
+    original_exc = exc_info.value
+
+    with patch(
+        "litellm.litellm_core_utils.exception_mapping_utils._ENABLE_SECRET_REDACTION",
+        False,
+    ):
+        with pytest.raises(Exception) as mapped_exc_info:
+            exception_type(
+                model="gemini/gemini-pro",
+                original_exception=original_exc,
+                custom_llm_provider="gemini",
+            )
+    # Key must survive in the mapped exception when redaction is disabled
+    assert fake_key in str(mapped_exc_info.value)
