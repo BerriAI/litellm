@@ -1,19 +1,12 @@
 import base64
-import os
 from typing import Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.signing_key_utils import get_proxy_signing_key
 
 
 def _get_salt_key():
-    from litellm.proxy.proxy_server import master_key
-
-    salt_key = os.getenv("LITELLM_SALT_KEY", None)
-
-    if salt_key is None:
-        salt_key = master_key
-
-    return salt_key
+    return get_proxy_signing_key()
 
 
 def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
