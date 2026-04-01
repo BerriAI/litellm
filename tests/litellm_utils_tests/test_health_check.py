@@ -335,7 +335,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test that non-Bedrock models are not affected by Bedrock-specific logic
     litellm_params = {
