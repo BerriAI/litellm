@@ -53,6 +53,11 @@ class QostodianNexus(GenericGuardrailAPI):
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Qostodian Nexus to the given inputs.
+
+        NOTE: This override is intentionally a pass-through. It must be present
+        directly in this class's __dict__ so that LiteLLM's unified guardrail
+        routing check (`"apply_guardrail" in type(callback).__dict__` in
+        litellm/proxy/utils.py) routes calls correctly. Do not remove.
         """
         return await super().apply_guardrail(
             inputs=inputs,
