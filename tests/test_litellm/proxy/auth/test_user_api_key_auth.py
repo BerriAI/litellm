@@ -9,8 +9,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock
-
 import pytest
 
 import litellm.proxy.proxy_server
@@ -48,9 +46,9 @@ def test_get_api_key():
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_honors_key_level_model_access_restriction_allowed():
+async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o-mini"}
+    request_data = {"model": "gpt-4o"}
 
     with patch(
         "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
@@ -64,11 +62,34 @@ async def test_custom_auth_honors_key_level_model_access_restriction_allowed():
             route="/v1/chat/completions",
             parent_otel_span=None,
         )
+        mock_can_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_honors_key_level_model_access_restriction_allowed_with_opt_in():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
+    request_data = {"model": "gpt-4o-mini"}
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
+    ) as mock_can_key, patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
         mock_can_key.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_honors_key_level_model_access_restriction_denied():
+async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
     request_data = {"model": "gpt-4o"}
 
@@ -76,6 +97,9 @@ async def test_custom_auth_honors_key_level_model_access_restriction_denied():
         "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
     ) as mock_can_key, patch(
         "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
     ):
         mock_can_key.side_effect = ProxyException(
             message="Key not allowed to access model",

@@ -1819,13 +1819,14 @@ async def _run_post_custom_auth_checks(
                 ),
             )
 
-    await _enforce_key_and_fallback_model_access(
-        valid_token=valid_token,
-        request_data=request_data,
-        route=route,
-        llm_model_list=llm_model_list,
-        llm_router=llm_router,
-    )
+    if general_settings.get("custom_auth_run_common_checks", False):
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route=route,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
 
     current_model = request_data.get("model", None)
 
