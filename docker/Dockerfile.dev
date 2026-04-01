@@ -25,11 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Install Python dependencies with cache mount for faster rebuilds
-# aioboto3/aiobotocore have an unresolvable botocore conflict with boto3 1.42.x
-# Install them separately with --no-deps to bypass resolution
 RUN --mount=type=cache,target=/root/.cache/pip \
-    grep -v '^aioboto3' requirements.txt | pip wheel --no-cache-dir --wheel-dir=/wheels/ -r /dev/stdin \
-    && pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels/ "aioboto3==15.5.0" "aiobotocore==2.25.1"
+    pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # Fix JWT dependency conflicts early
 RUN pip uninstall jwt -y || true && \
@@ -112,8 +109,6 @@ COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /app/dist/*.whl .
 
 # Install all dependencies in one step with no-cache for smaller image
-# --no-deps: all wheels are pre-built in /wheels/, skip resolution to avoid
-# the boto3/aiobotocore botocore version conflict (no compatible aioboto3 exists yet)
 RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && \
     rm -f *.whl && \
     rm -rf /wheels
