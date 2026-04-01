@@ -70,7 +70,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -196,7 +196,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -741,7 +741,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -907,7 +907,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
@@ -1984,7 +1984,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
     "model, expected_supports_tool_call",
     [
         ("bedrock/us.amazon.nova-pro-v1:0", True),
-        ("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", True),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", True),
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
@@ -2908,7 +2908,7 @@ def test_bedrock_application_inference_profile():
     ) as mock_post2:
         try:
             resp = completion(
-                model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,

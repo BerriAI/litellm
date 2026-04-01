@@ -453,7 +453,7 @@ class TestLangfuseLogging:
                 created=1723081200,
             ).model_dump()
             await litellm.acompletion(
-                model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},

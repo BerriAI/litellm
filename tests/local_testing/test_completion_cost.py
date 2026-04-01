@@ -313,7 +313,7 @@ def test_cost_azure_embedding():
 
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
-    model = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     response = litellm.completion(
         model=model, messages=messages, mock_response="hello cool one"
@@ -321,7 +321,7 @@ def test_cost_bedrock_pricing_actual_calls():
 
     print("response", response)
     cost = litellm.completion_cost(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
@@ -2713,7 +2713,7 @@ def test_cost_calculator_with_base_model():
     resp = litellm.completion(
         model="bedrock/random-model",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        base_model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        base_model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
         mock_response="Hello, how are you?",
     )
     assert resp.model == "random-model"
@@ -2752,7 +2752,7 @@ def test_cost_calculator_with_base_model_with_router(base_model_arg):
     if base_model_arg == "litellm_param":
         model_item["litellm_params"][
             "base_model"
-        ] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+        ] = "bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0"
     elif base_model_arg == "model_info":
         model_item["model_info"] = {
             "base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",

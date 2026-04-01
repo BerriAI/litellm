@@ -331,7 +331,7 @@ def test_update_litellm_params_for_health_check():
 
     # Test with Bedrock model without region routing - should just strip bedrock/ prefix
     litellm_params = {
-        "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)

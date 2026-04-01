@@ -225,7 +225,7 @@ def test_transform_tool_call_with_cache_control():
     ]
 
     result = config.transform_request(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -410,7 +410,7 @@ def test_transform_response_with_computer_use_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -497,7 +497,7 @@ def test_transform_response_with_bash_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -610,7 +610,7 @@ def test_transform_response_with_structured_response_being_called():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -758,7 +758,7 @@ async def test_bedrock_bash_tool_acompletion():
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
@@ -823,7 +823,7 @@ async def test_bedrock_computer_use_acompletion():
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
@@ -1262,17 +1262,17 @@ async def test_assistant_message_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1307,11 +1307,11 @@ async def test_assistant_message_list_content_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1349,11 +1349,11 @@ async def test_tool_message_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1400,11 +1400,11 @@ async def test_tool_message_string_content_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1447,11 +1447,11 @@ async def test_assistant_tool_calls_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1501,11 +1501,11 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1546,11 +1546,11 @@ async def test_no_cache_control_no_cache_point():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -3319,7 +3319,7 @@ def test_transform_response_with_both_json_tool_call_and_real_tool():
     optional_params = {"json_mode": True}
 
     result = config._transform_response(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -3397,7 +3397,7 @@ def test_transform_response_does_not_mutate_optional_params():
     optional_params = {"json_mode": True, "other_key": "value"}
 
     config._transform_response(
-        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,

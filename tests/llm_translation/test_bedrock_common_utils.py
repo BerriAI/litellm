@@ -137,7 +137,7 @@ class TestGetBedrockBaseModel:
     @pytest.mark.parametrize("input_model,expected", [
         ("anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
         ("anthropic.claude-haiku-4-5-20251001-v1:0:18k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("bedrock/anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
         ("us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
     ])
     def test_strips_throughput_suffix(self, input_model, expected):

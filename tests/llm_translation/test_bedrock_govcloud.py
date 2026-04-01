@@ -238,21 +238,21 @@ class TestBedrockGovCloudSupport:
         
         # Calculate costs using the standard Bedrock format with region parameter
         base_cost = completion_cost(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=base_model_response,
             messages=messages,
             region_name="us-east-1",  # Standard region
         )
         
         gov_east_cost = completion_cost(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_model_response,
             messages=messages,
             region_name="us-gov-east-1",  # Gov region
         )
         
         gov_west_cost = completion_cost(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_west_model_response,
             messages=messages,
             region_name="us-gov-west-1",  # Gov region
@@ -286,7 +286,7 @@ class TestBedrockGovCloudSupport:
         large_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
         
         large_base_cost = completion_cost(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_response,
             messages=messages,
             region_name="us-east-1",
@@ -305,7 +305,7 @@ class TestBedrockGovCloudSupport:
         large_gov_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-east-1"}
         
         large_gov_cost = completion_cost(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_gov_response,
             messages=messages,
             region_name="us-gov-east-1",
@@ -373,21 +373,21 @@ class TestBedrockGovCloudSupport:
         
         # Test base model completion
         base_result = completion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-east-1"
         )
         
         # Test gov-east model completion
         gov_east_result = completion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-east-1"
         )
         
         # Test gov-west model completion
         gov_west_result = completion(
-            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-west-1"
         )
