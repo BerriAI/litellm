@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import ANY
+from unittest.mock import ANY, MagicMock
 
 import pytest
 import respx
@@ -14,7 +14,12 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LiteLLM_UserTableFiltered,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.proxy_server import app
@@ -99,6 +104,34 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert response.status_code == 400
     print(f"response: {response.json()}")
     assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
+
+
+async def test_route_create_file_without_managed_files_hook_message():
+    """OSS deployments omit the managed_files hook; error should explain Enterprise + alternatives."""
+    from litellm.proxy.openai_files_endpoints.files_endpoints import route_create_file
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache(default_in_memory_ttl=1))
+    user = UserAPIKeyAuth(api_key="sk-test")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await route_create_file(
+            llm_router=MagicMock(),
+            _create_file_request={"file": b"x", "purpose": "batch"},
+            purpose="batch",
+            proxy_logging_obj=proxy_logging,
+            user_api_key_dict=user,
+            target_model_names_list=["gpt-3.5-turbo"],
+            is_router_model=False,
+            router_model=None,
+            custom_llm_provider="openai",
+            model=None,
+            target_storage="default",
+        )
+
+    msg = exc_info.value.message
+    assert "target_model_names" in msg
+    assert "litellm-enterprise" in msg
+    assert CommonProxyErrors.not_premium_user.value in msg
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):

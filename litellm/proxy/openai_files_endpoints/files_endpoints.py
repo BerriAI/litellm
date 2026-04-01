@@ -213,7 +213,14 @@ async def route_create_file(
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(
-                message="Managed files hook not found",
+                message=(
+                    "The `target_model_names` form field requires LiteLLM Enterprise managed files "
+                    "(the `litellm-enterprise` package). This image or environment does not load that hook—"
+                    "use a LiteLLM Enterprise Docker image or `pip install litellm-enterprise`, set "
+                    "`LITELLM_LICENSE`, and restart. On open-source-only deployments, omit "
+                    "`target_model_names` and use the `model` form field to route uploads to one model. "
+                    + CommonProxyErrors.not_premium_user.value
+                ),
                 type="None",
                 param="None",
                 code=500,
