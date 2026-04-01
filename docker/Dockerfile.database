@@ -42,6 +42,11 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
+# Override litellm-proxy-extras with local version to pick up schema changes not in PyPI release
+RUN cd /app/litellm-proxy-extras && python -m build && \
+    rm -f /wheels/litellm_proxy_extras-*.whl && \
+    cp dist/litellm_proxy_extras-*.whl /wheels/
+
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -83,9 +88,6 @@ COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
-
-# Install litellm-proxy-extras from local source to pick up schema changes not in the PyPI release
-RUN pip install --force-reinstall --no-deps /app/litellm-proxy-extras/
 
 # SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
