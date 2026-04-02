@@ -43,41 +43,66 @@ class TestAhealthCheckExceptionPreservation:
 
 
 class TestHealthCheckEndpointExceptionPropagation:
-    """Test that _perform_health_check propagates exception objects through to unhealthy_endpoints."""
+    """Test that _perform_health_check returns exceptions via exceptions_by_model_id."""
 
-    def test_unhealthy_endpoint_with_exception_dict(self):
-        """When health check returns {"error": ..., "exception": e}, exception should be in the endpoint."""
-        from litellm.proxy.health_check import _clean_endpoint_data
+    @pytest.mark.asyncio
+    async def test_unhealthy_endpoint_dict_exception_in_map(self):
+        """When ahealth_check returns {"error": ..., "exception": e}, the exception
+        must appear in exceptions_by_model_id keyed by model_id — not in the endpoint dict."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy.health_check import _perform_health_check
 
         auth_error = litellm.AuthenticationError(
             message="Invalid key", llm_provider="openai", model="gpt-4"
         )
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"id": "deploy-abc"},
+            }
+        ]
 
-        # Simulate what _perform_health_check does for an unhealthy dict result
-        is_healthy = {"error": "auth failed", "exception": auth_error}
-        litellm_params = {"model": "gpt-4", "api_key": "fake"}
-        cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details=True)
-        # Exception should be preserved after cleaning
-        if "exception" in is_healthy:
-            cleaned["exception"] = is_healthy["exception"]
+        with patch(
+            "litellm.proxy.health_check.litellm.ahealth_check",
+            new=AsyncMock(return_value={"error": "auth failed", "exception": auth_error}),
+        ):
+            healthy, unhealthy, exc_map = await _perform_health_check(model_list)
 
-        assert cleaned["exception"] is auth_error
+        assert len(unhealthy) == 1
+        assert "exception" not in unhealthy[0], "exception must not be in endpoint dict"
+        assert exc_map.get("deploy-abc") is auth_error
 
-    def test_unhealthy_endpoint_raw_exception(self):
-        """When gather returns a raw Exception, it should be stored in the endpoint dict."""
+    @pytest.mark.asyncio
+    async def test_raw_exception_from_gather_in_map(self):
+        """When asyncio.gather returns a raw Exception, it must appear in
+        exceptions_by_model_id — not in the endpoint dict."""
+        from unittest.mock import patch
+
+        from litellm.proxy.health_check import _perform_health_check
+
         raw_exc = litellm.RateLimitError(
             message="Rate limited", llm_provider="openai", model="gpt-4"
         )
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"id": "deploy-xyz"},
+            }
+        ]
 
-        # Simulate the else branch in _perform_health_check
-        from litellm.proxy.health_check import _clean_endpoint_data
+        # Simulate asyncio.gather returning a raw exception for this task
+        with patch(
+            "litellm.proxy.health_check._run_model_health_check",
+            side_effect=raw_exc,
+        ):
+            healthy, unhealthy, exc_map = await _perform_health_check(model_list)
 
-        litellm_params = {"model": "gpt-4"}
-        cleaned = _clean_endpoint_data(litellm_params, details=True)
-        if isinstance(raw_exc, Exception):
-            cleaned["exception"] = raw_exc
-
-        assert cleaned["exception"] is raw_exc
+        assert len(unhealthy) == 1
+        assert "exception" not in unhealthy[0], "exception must not be in endpoint dict"
+        assert exc_map.get("deploy-xyz") is raw_exc
 
 
 class TestGetAllowedFailsFromPolicyWithHealthCheckExceptions:
