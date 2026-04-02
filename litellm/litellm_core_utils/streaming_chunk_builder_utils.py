@@ -728,7 +728,7 @@ class ChunkProcessor:
         # Gate behind litellm.enforce_openai_completion_token_invariant so
         # operators who rely on raw backend values can opt out.
         if (
-            getattr(litellm, "enforce_openai_completion_token_invariant", True)
+            litellm.enforce_openai_completion_token_invariant
             and returned_usage.completion_tokens_details is not None
             and returned_usage.completion_tokens_details.reasoning_tokens is not None
             and returned_usage.completion_tokens_details.reasoning_tokens
