@@ -2163,35 +2163,40 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
 
-        for endpoint in unhealthy_endpoints:
-            model_id = endpoint.get("model_id")
-            if not model_id:
-                continue
+        # Only feed health check failures into the cooldown pipeline when
+        # allowed_fails_policy is configured. Without it, cooldown is not the
+        # routing exclusion mechanism and triggering it would be a
+        # backwards-incompatible behavioral change for existing users.
+        if llm_router.allowed_fails_policy is not None:
+            for endpoint in unhealthy_endpoints:
+                model_id = endpoint.get("model_id")
+                if not model_id:
+                    continue
 
-            original_exception = _exceptions.get(model_id)
-            if original_exception is None:
-                continue
+                original_exception = _exceptions.get(model_id)
+                if original_exception is None:
+                    continue
 
-            exception_status = getattr(original_exception, "status_code", 500)
+                exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
-            ):
-                continue
+                if llm_router.health_check_ignore_transient_errors and exception_status in (
+                    429,
+                    408,
+                ):
+                    continue
 
-            increment_deployment_failures_for_current_minute(
-                litellm_router_instance=llm_router,
-                deployment_id=model_id,
-            )
+                increment_deployment_failures_for_current_minute(
+                    litellm_router_instance=llm_router,
+                    deployment_id=model_id,
+                )
 
-            _set_cooldown_deployments(
-                litellm_router_instance=llm_router,
-                original_exception=original_exception,
-                exception_status=exception_status,
-                deployment=model_id,
-                time_to_cooldown=llm_router.cooldown_time,
-            )
+                _set_cooldown_deployments(
+                    litellm_router_instance=llm_router,
+                    original_exception=original_exception,
+                    exception_status=exception_status,
+                    deployment=model_id,
+                    time_to_cooldown=llm_router.cooldown_time,
+                )
 
     except Exception as e:
         verbose_proxy_logger.warning(
