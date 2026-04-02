@@ -32,8 +32,37 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+
+
+def _parse_call_type(call_type: Optional[str]) -> Optional[Any]:
+    if call_type is None:
+        return None
+
+    try:
+        from litellm.types.utils import CallTypes
+
+        return CallTypes(call_type)
+    except (ImportError, TypeError, ValueError):
+        return None
+
+
+def _get_responses_call_type() -> Optional[Any]:
+    try:
+        from litellm.types.utils import CallTypes
+
+        return CallTypes.responses
+    except (AttributeError, ImportError):
+        return None
+
+
+def _get_chatgpt_provider_name() -> str:
+    try:
+        from litellm.types.utils import LlmProviders
+
+        return LlmProviders.CHATGPT.value
+    except (AttributeError, ImportError):
+        return "chatgpt"
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -252,19 +281,11 @@ class BaseResponsesAPIStreamingIterator:
         """
         try:
             # Align with chat pipeline: use logging_obj model_call_details + call_type
-            typed_call_type: Optional[CallTypes] = None
-            if self.call_type is not None:
-                try:
-                    typed_call_type = CallTypes(self.call_type)
-                except ValueError:
-                    typed_call_type = None
+            typed_call_type = _parse_call_type(self.call_type)
             if typed_call_type is None:
-                try:
-                    typed_call_type = CallTypes(
-                        getattr(self.logging_obj, "call_type", None)
-                    )
-                except Exception:
-                    typed_call_type = None
+                typed_call_type = _parse_call_type(
+                    getattr(self.logging_obj, "call_type", None)
+                )
 
             request_data = self.request_data or getattr(
                 self.logging_obj, "model_call_details", {}
@@ -330,19 +351,11 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
         try:
-            typed_call_type: Optional[CallTypes] = None
-            if self.call_type is not None:
-                try:
-                    typed_call_type = CallTypes(self.call_type)
-                except ValueError:
-                    typed_call_type = None
+            typed_call_type = _parse_call_type(self.call_type)
         except Exception:
             typed_call_type = None
         if typed_call_type is None:
-            try:
-                typed_call_type = CallTypes.responses
-            except Exception:
-                typed_call_type = None
+            typed_call_type = _get_responses_call_type()
 
         try:
             # Call synchronously; async hook will be executed via asyncio.run in a new loop
@@ -1223,7 +1236,7 @@ class ManagedResponsesWebSocketHandler:
         if provider_name is not None:
             return provider_name
         if call_kwargs.get("chatgpt_auth_file_path"):
-            return LlmProviders.CHATGPT.value
+            return _get_chatgpt_provider_name()
         return None
 
     def _rewrite_event_model_in_message(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1355,7 +1368,7 @@ class ManagedResponsesWebSocketHandler:
         return self._strip_provider_prefix(model, self._get_provider_name(call_kwargs))
 
     def _provider_uses_local_history_only(self, call_kwargs: Dict[str, Any]) -> bool:
-        return self._get_provider_name(call_kwargs) == LlmProviders.CHATGPT.value
+        return self._get_provider_name(call_kwargs) == _get_chatgpt_provider_name()
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], event_model: Optional[str]
