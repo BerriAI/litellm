@@ -25,6 +25,8 @@ RUN for i in 1 2 3; do \
       linux-headers \
       build-base \
       bash \
+      coreutils \
+      curl \
       openssl \
       openssl-dev \
       nodejs \
@@ -34,7 +36,8 @@ RUN for i in 1 2 3; do \
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
-    PATH="/app/.venv/bin:${PATH}" \
+    NVM_DIR=/root/.nvm \
+    PATH="/root/.nvm/versions/node/v20.20.2/bin:/app/.venv/bin:${PATH}" \
     LITELLM_NON_ROOT=true \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
@@ -45,13 +48,23 @@ COPY . .
 # Build Admin UI once and stage the static output for the runtime image.
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     mv /app/.npmrc /app/.npmrc.bak && \
-    npm install -g npm@11.12.1 && npm cache clean --force && \
+    NVM_VERSION="v0.40.4" && \
+    NVM_CHECKSUM="4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f" && \
+    NODE_VERSION="v20.20.2" && \
+    NVM_SCRIPT="/tmp/install-nvm.sh" && \
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT" && \
+    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c - && \
+    bash "$NVM_SCRIPT" && \
+    export NVM_DIR="$HOME/.nvm" && \
+    . "$NVM_DIR/nvm.sh" && \
+    nvm install "${NODE_VERSION}" && \
+    nvm use "${NODE_VERSION}" && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
     mv .npmrc .npmrc.bak && \
-    npm ci && \
+    npm ci --no-audit --no-fund && \
     mv .npmrc.bak .npmrc && mv /app/.npmrc.bak /app/.npmrc && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \

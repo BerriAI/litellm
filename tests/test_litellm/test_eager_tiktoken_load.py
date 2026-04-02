@@ -21,6 +21,7 @@ import pytest
 def _run_python(script: str, env_override: dict | None = None) -> subprocess.CompletedProcess:
     """Run a Python script in a subprocess and return the result."""
     import os
+
     env = os.environ.copy()
     # Remove the var so each test controls it explicitly
     env.pop("LITELLM_DISABLE_LAZY_LOADING", None)
@@ -32,7 +33,9 @@ def _run_python(script: str, env_override: dict | None = None) -> subprocess.Com
         capture_output=True,
         text=True,
         env=env,
-        timeout=60,
+        # Importing litellm can cold-load tiktoken/tokenizer assets and is
+        # occasionally slow on CI runners; these tests validate behavior, not speed.
+        timeout=180,
     )
 
 
