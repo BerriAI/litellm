@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-03T04:19:32.690703328Z"
+exclude-newer = "2026-03-03T09:21:56.966452805Z"
 exclude-newer-span = "P30D"
 
 [manifest]
@@ -4165,6 +4165,10 @@ dev = [
     { name = "types-requests", marker = "python_full_version >= '3.10'" },
     { name = "types-setuptools" },
 ]
+healthcheck = [
+    { name = "httpx" },
+    { name = "pyyaml" },
+]
 proxy-dev = [
     { name = "a2a-sdk", marker = "python_full_version >= '3.10'" },
     { name = "azure-identity" },
@@ -4320,6 +4324,10 @@ dev = [
     { name = "types-redis", specifier = "==4.6.0.20241004" },
     { name = "types-requests", marker = "python_full_version >= '3.10'", specifier = "==2.32.4.20260107" },
     { name = "types-setuptools", specifier = "==75.8.0.20250225" },
+]
+healthcheck = [
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "pyyaml", specifier = "==6.0.3" },
 ]
 proxy-dev = [
     { name = "a2a-sdk", marker = "python_full_version >= '3.10'", specifier = "==0.3.24" },

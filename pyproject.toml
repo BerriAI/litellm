@@ -199,13 +199,18 @@ ci = [
     "langgraph==1.0.10; python_version >= '3.10'",
     "claude-agent-sdk==0.1.44; python_version >= '3.10'",
 ]
+healthcheck = [
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+]
 
 [build-system]
-requires = ["uv_build>=0.10.7,<0.11"]
+requires = ["uv_build==0.10.7"]
 build-backend = "uv_build"
 
 [tool.uv]
 default-groups = ["dev"]
+required-version = "==0.10.9"
 exclude-newer = "30 days"
 
 [tool.uv.sources]
