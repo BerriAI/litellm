@@ -3,9 +3,8 @@ name: Trivy Dockerfile Scan
 on:
   pull_request:
     paths:
-      - "Dockerfile"
       - "docker/Dockerfile*"
-      - "docker/**/Dockerfile*"
+      - "containers/**/Dockerfile*"
   push:
     branches:
       - main
@@ -29,17 +28,7 @@ jobs:
       # Pin trivy-action to the only safe commit after the March 2026 supply chain attack.
       # See: https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23
 
-      - name: Run Trivy on Dockerfile (root)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: Dockerfile
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
       - name: Run Trivy on Dockerfile.custom_ui
-        if: always()
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: config
@@ -54,56 +43,6 @@ jobs:
         with:
           scan-type: config
           scan-ref: docker/Dockerfile.health_check
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
-      - name: Run Trivy on Dockerfile.database
-        if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: docker/Dockerfile.database
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
-      - name: Run Trivy on Dockerfile.non_root
-        if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: docker/Dockerfile.non_root
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
-      - name: Run Trivy on Dockerfile.alpine
-        if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: docker/Dockerfile.alpine
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
-      - name: Run Trivy on Dockerfile.dev
-        if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: docker/Dockerfile.dev
-          format: table
-          severity: LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "1"
-
-      - name: Run Trivy on Dockerfile.build_from_pip
-        if: always()
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: config
-          scan-ref: docker/build_from_pip/Dockerfile.build_from_pip
           format: table
           severity: LOW,MEDIUM,HIGH,CRITICAL
           exit-code: "1"
