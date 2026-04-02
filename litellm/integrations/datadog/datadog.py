@@ -27,16 +27,16 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_url_from_env,
     get_datadog_hostname,
     get_datadog_service,
     get_datadog_source,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
@@ -48,10 +48,10 @@ from litellm.types.integrations.base_health_check import IntegrationHealthCheckS
 from litellm.types.integrations.datadog import (
     DD_ERRORS,
     DD_MAX_BATCH_SIZE,
-    DataDogStatus,
     DatadogInitParams,
     DatadogPayload,
     DatadogProxyFailureHookJsonMessage,
+    DataDogStatus,
 )
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload
@@ -191,32 +191,18 @@ class DataDogLogger(
 
 
         Raises:
-            Raises a NON Blocking verbose_logger.exception if an error occurs
+            Raises exceptions to framework wrapper which handles metric tracking
         """
-        try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
-            await self._log_async_event(kwargs, response_obj, start_time, end_time)
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+        verbose_logger.debug(
+            "Datadog: Logging - Enters logging function for model %s", kwargs
+        )
+        await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
-            await self._log_async_event(kwargs, response_obj, start_time, end_time)
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
+        verbose_logger.debug(
+            "Datadog: Logging - Enters logging function for model %s", kwargs
+        )
+        await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
     async def async_post_call_failure_hook(
         self,
@@ -301,11 +287,12 @@ class DataDogLogger(
             self.log_queue.append(dd_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog: async_post_call_failure_hook - {str(e)}\n{traceback.format_exc()}"
             )
+            raise
         return None
 
     async def async_send_batch(self):
@@ -360,6 +347,7 @@ class DataDogLogger(
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
+            raise
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -368,52 +356,44 @@ class DataDogLogger(
         - Creates a Datadog payload
         - instantly logs it on DD API
         """
-        try:
-            if litellm.datadog_use_v1 is True:
-                dd_payload = self._create_v0_logging_payload(
-                    kwargs=kwargs,
-                    response_obj=response_obj,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-            else:
-                dd_payload = self.create_datadog_logging_payload(
-                    kwargs=kwargs,
-                    response_obj=response_obj,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-
-            # Build headers
-            headers = {}
-            # Add API key if available (required for direct API, optional for agent)
-            if self.DD_API_KEY:
-                headers["DD-API-KEY"] = self.DD_API_KEY
-
-            response = self.sync_client.post(
-                url=self.intake_url,
-                json=dd_payload,  # type: ignore
-                headers=headers,
+        if litellm.datadog_use_v1 is True:
+            dd_payload = self._create_v0_logging_payload(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            dd_payload = self.create_datadog_logging_payload(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
             )
 
-            response.raise_for_status()
-            if response.status_code != 202:
-                raise Exception(
-                    f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
-                )
+        # Build headers
+        headers = {}
+        # Add API key if available (required for direct API, optional for agent)
+        if self.DD_API_KEY:
+            headers["DD-API-KEY"] = self.DD_API_KEY
 
-            verbose_logger.debug(
-                "Datadog: Response from datadog API status_code: %s, text: %s",
-                response.status_code,
-                response.text,
+        response = self.sync_client.post(
+            url=self.intake_url,
+            json=dd_payload,  # type: ignore
+            headers=headers,
+        )
+
+        response.raise_for_status()
+        if response.status_code != 202:
+            raise Exception(
+                f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
             )
 
-        except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
-            )
-            pass
-        pass
+        verbose_logger.debug(
+            "Datadog: Response from datadog API status_code: %s, text: %s",
+            response.status_code,
+            response.text,
+        )
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
         dd_payload = self.create_datadog_logging_payload(
@@ -429,7 +409,7 @@ class DataDogLogger(
         )
 
         if len(self.log_queue) >= self.batch_size:
-            await self.async_send_batch()
+            await self.flush_queue()
 
     def _create_datadog_logging_payload_helper(
         self,
