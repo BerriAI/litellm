@@ -1986,7 +1986,6 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
     assert tool_name_mapping == {}
 
 
-<<<<<<< fix/issue-24443
 @pytest.mark.parametrize(
     "anthropic_type,expected_openai",
     [
@@ -2009,7 +2008,8 @@ def test_translate_anthropic_tool_choice_tool_to_openai():
         {"type": "tool", "name": "get_weather"}
     )
     assert result == {"type": "function", "function": {"name": "get_weather"}}
-=======
+
+
 class TestTranslateAnthropicOutputFormatToOpenAI:
     """Tests for translate_anthropic_output_format_to_openai adding additionalProperties: false."""
 
@@ -2135,4 +2135,3 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
->>>>>>> main
