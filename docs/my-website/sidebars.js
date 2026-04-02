@@ -1049,7 +1049,8 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing"
+        "wildcard_routing",
+        "proxy/health_check_routing"
       ],
     },
     {
