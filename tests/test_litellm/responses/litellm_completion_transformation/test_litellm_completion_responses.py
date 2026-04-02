@@ -2091,6 +2091,12 @@ class TestEnsureOutputItemContentPartAdded:
 
         events = iterator._pending_response_events
         assert len(events) == 2
+        assert isinstance(events[0], OutputItemAddedEvent)
+        assert events[0].type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        assert isinstance(events[1], ContentPartAddedEvent)
+        assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+        assert events[1].part.type == "output_text"
+        assert iterator.sent_content_part_added_event is True
 
     def test_emit_response_completed_uses_stream_finish_reason(self):
         """
