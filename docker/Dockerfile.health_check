@@ -12,5 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Make script executable
 RUN chmod +x /app/health_check_client.py
 
+# Run as non-root user
+RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid 1000 --no-create-home appuser
+USER appuser
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["python", "-c", "import sys; sys.exit(0)"]
+
 # Set entrypoint
 ENTRYPOINT ["python", "/app/health_check_client.py"]

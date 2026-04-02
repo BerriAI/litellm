@@ -74,6 +74,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { A2ATaskMetadata, MessageType } from "./types";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 import { useChatHistory } from "./useChatHistory";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -163,7 +164,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     clearMCPEvents,
   } = useChatHistory({ simplified });
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
-    const saved = sessionStorage.getItem("apiKeySource");
+    const saved = getSecureItem("apiKeySource");
     if (saved) {
       try {
         return JSON.parse(saved) as "session" | "custom";
@@ -173,7 +174,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
-  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
+  const [apiKey, setApiKey] = useState<string>(() => getSecureItem("apiKey") || "");
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -339,8 +340,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
-    sessionStorage.setItem("apiKey", apiKey);
+    setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
+    setSecureItem("apiKey", apiKey);
     sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
@@ -479,7 +480,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleImageUpload = (file: File) => {
     setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
+    const rawPreviewUrl = URL.createObjectURL(file);
+    // Sanitize: only allow blob: URLs to prevent XSS via img src injection.
+    const previewUrl = rawPreviewUrl.startsWith("blob:") ? rawPreviewUrl : "";
     setImagePreviewUrls((prev) => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
@@ -1710,7 +1713,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {uploadedImages.map((file, index) => (
                         <div key={index} className="relative inline-block">
                           <img
-                            src={imagePreviewUrls[index] || ""}
+                            src={(() => {
+                              const url = imagePreviewUrls[index];
+                              if (!url) return "";
+                              try {
+                                const parsed = new URL(url);
+                                return parsed.protocol === "blob:" ? parsed.href : "";
+                              } catch {
+                                return "";
+                              }
+                            })()}
                             alt={`Upload preview ${index + 1}`}
                             className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
                           />

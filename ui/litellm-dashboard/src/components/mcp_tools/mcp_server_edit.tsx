@@ -12,6 +12,7 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -73,7 +74,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      window.sessionStorage.setItem(
+      setSecureItem(
         EDIT_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           serverId: mcpServer.server_id,
@@ -213,7 +214,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+    const storedState = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
