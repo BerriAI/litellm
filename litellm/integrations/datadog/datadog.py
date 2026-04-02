@@ -28,7 +28,6 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_base_url_from_env,
     get_datadog_hostname,
     get_datadog_service,
     get_datadog_source,
@@ -120,6 +119,10 @@ class DataDogLogger(
                 self._configure_dd_direct_api()
 
             # Optional override for testing
+            from litellm.integrations.datadog.datadog_handler import (
+                get_datadog_base_url_from_env,
+            )
+
             dd_base_url = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"

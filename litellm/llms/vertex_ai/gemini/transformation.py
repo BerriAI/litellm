@@ -3,6 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
+
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
@@ -23,7 +24,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -713,6 +713,8 @@ def _transform_request_body(  # noqa: PLR0915
         config_fields = GenerationConfig.__annotations__.keys()
 
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
+        from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+
         labels = pop_vertex_request_labels(optional_params, litellm_params)
 
         filtered_params = {

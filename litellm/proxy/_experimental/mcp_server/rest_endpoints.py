@@ -9,7 +9,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
@@ -1027,6 +1027,8 @@ if MCP_AVAILABLE:
         """
         Test if we can connect to the provided MCP server before adding it
         """
+        from litellm.proxy._types import LitellmUserRoles
+
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1057,6 +1059,8 @@ if MCP_AVAILABLE:
         """
         Preview tools available from MCP server before adding it
         """
+        from litellm.proxy._types import LitellmUserRoles
+
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

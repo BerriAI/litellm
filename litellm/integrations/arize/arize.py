@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
-from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -18,13 +17,19 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry as _OpenTelemetry
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
     Span = Union[_Span, Any]
+    OpenTelemetry = _OpenTelemetry
 else:
     Protocol = Any
     Span = Any
+    try:
+        from litellm.integrations.opentelemetry import OpenTelemetry
+    except ImportError:
+        OpenTelemetry = None  # type: ignore
 
 
 class ArizeLogger(OpenTelemetry):

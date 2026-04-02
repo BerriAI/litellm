@@ -1,7 +1,7 @@
 import os
-import types
 from dataclasses import dataclass
 from datetime import datetime
+from types import MethodType
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
@@ -2112,7 +2112,7 @@ class OpenTelemetry(CustomLogger):
         setattr(
             exporter,
             "export",
-            types.MethodType(_export_with_failure_tracking, exporter),
+            MethodType(_export_with_failure_tracking, exporter),
         )
         setattr(exporter, "_litellm_failure_tracking_wrapped", True)
         return exporter

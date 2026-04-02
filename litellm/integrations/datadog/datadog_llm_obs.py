@@ -19,7 +19,6 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
 )
@@ -80,6 +79,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 self._configure_dd_direct_api()
 
             # Optional override for testing
+            from litellm.integrations.datadog.datadog_handler import (
+                get_datadog_base_url_from_env,
+            )
+
             dd_base_url = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
@@ -341,9 +344,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[
-                StandardLoggingPayloadErrorInformation
-            ] = standard_logging_payload.get("error_information")
+            error_information: Optional[StandardLoggingPayloadErrorInformation] = (
+                standard_logging_payload.get("error_information")
+            )
 
             if error_information:
                 error_info = DDLLMObsError(
@@ -613,9 +616,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[
-            list[StandardLoggingGuardrailInformation]
-        ] = standard_logging_payload.get("guardrail_information")
+        guardrail_info: Optional[list[StandardLoggingGuardrailInformation]] = (
+            standard_logging_payload.get("guardrail_information")
+        )
         if guardrail_info is not None:
             total_duration = 0.0
             for info in guardrail_info:
@@ -785,15 +788,15 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     if function_arguments:
                         # Store arguments as JSON string for Datadog
                         if isinstance(function_arguments, str):
-                            kv_pairs[
-                                f"tool_calls.{idx}.function.arguments"
-                            ] = function_arguments
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = (
+                                function_arguments
+                            )
                         else:
                             import json
 
-                            kv_pairs[
-                                f"tool_calls.{idx}.function.arguments"
-                            ] = json.dumps(function_arguments)
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = (
+                                json.dumps(function_arguments)
+                            )
             except (KeyError, TypeError, ValueError) as e:
                 verbose_logger.debug(
                     f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}"
