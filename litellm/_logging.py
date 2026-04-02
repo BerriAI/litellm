@@ -1,14 +1,14 @@
 import ast
 import logging
 import os
-import re
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 set_verbose = False
 
@@ -21,7 +21,6 @@ _ENABLE_SECRET_REDACTION = (
     os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 )
 
-_REDACTED = "REDACTED"
 
 
 def _build_secret_patterns() -> re.Pattern:
