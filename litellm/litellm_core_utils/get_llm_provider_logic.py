@@ -683,6 +683,15 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.LMStudioChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "chuizi":
+        # chuizi is openai compatible, unified AI gateway
+        api_base = (
+            api_base
+            or get_secret("CHUIZI_API_BASE")
+            or "https://api.chuizi.ai/v1"
+        )  # type: ignore
+
+        dynamic_api_key = api_key or get_secret_str("CHUIZI_API_KEY")
     elif custom_llm_provider == "deepseek":
         # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
         api_base = (

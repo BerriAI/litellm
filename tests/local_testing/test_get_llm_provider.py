@@ -420,3 +420,25 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base # Should use the argument base
+
+
+def test_get_llm_provider_chuizi():
+    """Test that chuizi/ prefix routes to chuizi provider."""
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="chuizi/anthropic/claude-sonnet-4-6",
+    )
+    assert custom_llm_provider == "chuizi"
+    assert model == "anthropic/claude-sonnet-4-6"
+    assert api_base == "https://api.chuizi.ai/v1"
+
+
+def test_get_llm_provider_chuizi_with_api_key():
+    """Test that chuizi provider resolves CHUIZI_API_KEY from env."""
+    os.environ["CHUIZI_API_KEY"] = "test-chuizi-key"
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="chuizi/openai/gpt-4.1",
+    )
+    assert custom_llm_provider == "chuizi"
+    assert model == "openai/gpt-4.1"
+    assert dynamic_api_key == "test-chuizi-key"
+    os.environ.pop("CHUIZI_API_KEY", None)
