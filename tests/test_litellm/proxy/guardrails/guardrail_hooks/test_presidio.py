@@ -2392,3 +2392,9 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert "John Smith" in token_values
     assert "john@example.com" in token_values
     assert "555-867-5309" in token_values
+
+    # Tokens must be numbered in left-to-right order of appearance:
+    # PERSON (pos 11) → _1, EMAIL_ADDRESS (pos 35) → _2, PHONE_NUMBER (pos 59) → _3
+    assert pii_tokens.get("<PERSON_1>") == "John Smith"
+    assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
+    assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"

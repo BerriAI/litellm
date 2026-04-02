@@ -519,28 +519,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data["metadata"]["pii_tokens"] = {}
                 pii_tokens = request_data["metadata"]["pii_tokens"]
 
-                # Build a mapping from (start, end) in original text to the
-                # entity type from anonymizer items for replacement text lookup.
-                anon_item_by_entity = {}
-                for item in redacted_text.get("items", []):
-                    anon_item_by_entity[item["entity_type"]] = (
-                        anon_item_by_entity.get(item["entity_type"], [])
-                    )
-                    anon_item_by_entity[item["entity_type"]].append(item)
-
-                # Process analyze_results in reverse order by start position
-                # so that replacing later spans first does not shift earlier
-                # coordinates in the original text.
-                sorted_results = sorted(
-                    analyze_results, key=lambda x: x["start"], reverse=True
+                # Assign sequence numbers in forward (left-to-right) order so
+                # that <PERSON_1> is the first entity in the text, etc.
+                sorted_forward = sorted(
+                    analyze_results, key=lambda x: x["start"]
                 )
-                for ar in sorted_results:
+                seq_map = {}
+                for idx, ar in enumerate(sorted_forward, start=1):
+                    seq_map[(ar["start"], ar["end"])] = idx
+
+                # Apply replacements in reverse order by start position so
+                # that replacing later spans first does not shift earlier
+                # coordinates in the original text.
+                for ar in reversed(sorted_forward):
                     start = ar["start"]
                     end = ar["end"]
                     entity_type = ar["entity_type"]
                     replacement = f"<{entity_type}>"
 
-                    seq = len(pii_tokens) + 1
+                    seq = seq_map[(start, end)]
                     if replacement.endswith(">"):
                         replacement = f"{replacement[:-1]}_{seq}>"
                     else:
