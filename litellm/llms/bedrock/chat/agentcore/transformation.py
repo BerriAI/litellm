@@ -23,9 +23,14 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreMessage,
     AgentCoreParsedResponse,
+    AgentCoreReasoningContentBlock,
     AgentCoreUsage,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
+)
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -287,6 +292,116 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         delta = content_block_delta.get("delta", {})
         return delta.get("text")
 
+    def _extract_reasoning_from_event(
+        self, event_data: Dict
+    ) -> Optional[AgentCoreReasoningContentBlock]:
+        """
+        Extract reasoning/thinking content from Strands SDK streaming events.
+
+        Strands SDK emits reasoning events with the following structure:
+        - "reasoning": True for reasoning events
+        - "reasoningText": Text from reasoning process
+        - "reasoning_signature": Signature from reasoning process (also as "signature")
+        - "redactedContent": Reasoning content redacted by the model
+
+        Args:
+            event_data: The SSE event data dict
+
+        Returns:
+            AgentCoreReasoningContentBlock if reasoning content found, None otherwise
+        """
+        # Check for top-level reasoning event (Strands format)
+        if event_data.get("reasoning"):
+            reasoning_text = event_data.get("reasoningText")
+            signature = event_data.get("reasoning_signature") or event_data.get(
+                "signature"
+            )
+            redacted_content = event_data.get("redactedContent")
+
+            if reasoning_text:
+                reasoning_block: AgentCoreReasoningContentBlock = {
+                    "reasoningText": {"text": reasoning_text}
+                }
+                if signature:
+                    reasoning_block["reasoningText"]["signature"] = signature
+                return reasoning_block
+            elif redacted_content:
+                return {"redactedContent": redacted_content}
+
+        # Check for nested event payload with reasoning delta (Bedrock Converse style)
+        event_payload = event_data.get("event")
+        if event_payload:
+            content_block_delta = event_payload.get("contentBlockDelta")
+            if content_block_delta:
+                delta = content_block_delta.get("delta", {})
+                # Check for reasoning content in delta
+                # Format 1: {"reasoningText": "..."} (Strands SDK flat)
+                reasoning_text = delta.get("reasoningText")
+                redacted_content = delta.get("redactedContent")
+                signature = delta.get("signature")
+
+                # Format 2: {"reasoningContent": {"text": "...", "signature": "...", "redactedContent": "..."}} (AgentCore nested)
+                reasoning_content_block = delta.get("reasoningContent")
+                if isinstance(reasoning_content_block, dict):
+                    if not reasoning_text:
+                        reasoning_text = reasoning_content_block.get("text")
+                    if not signature:
+                        signature = reasoning_content_block.get("signature")
+                    if not redacted_content:
+                        redacted_content = reasoning_content_block.get("redactedContent")
+
+                if reasoning_text:
+                    reasoning_block = {"reasoningText": {"text": reasoning_text}}
+                    if signature:
+                        reasoning_block["reasoningText"]["signature"] = signature
+                    return reasoning_block
+                elif redacted_content:
+                    return {"redactedContent": redacted_content}
+
+        return None
+
+    def _transform_reasoning_content(
+        self, reasoning_blocks: List[AgentCoreReasoningContentBlock]
+    ) -> str:
+        """
+        Extract the reasoning text from reasoning content blocks.
+
+        Returns concatenated reasoning text for compatibility with deepseek format.
+        """
+        reasoning_content_str = ""
+        for block in reasoning_blocks:
+            if "reasoningText" in block:
+                reasoning_content_str += block["reasoningText"]["text"]
+        return reasoning_content_str
+
+    def _transform_thinking_blocks(
+        self, reasoning_blocks: List[AgentCoreReasoningContentBlock]
+    ) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+        """
+        Transform reasoning blocks to OpenAI-compatible thinking blocks format.
+
+        Returns a consistent format for thinking blocks between Anthropic and Bedrock.
+        """
+        thinking_blocks_list: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
+        for block in reasoning_blocks:
+            if "reasoningText" in block:
+                _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+                _text = block["reasoningText"].get("text")
+                _signature = block["reasoningText"].get("signature")
+                if _text is not None:
+                    _thinking_block["thinking"] = _text
+                if _signature is not None:
+                    _thinking_block["signature"] = _signature
+                thinking_blocks_list.append(_thinking_block)
+            elif "redactedContent" in block:
+                _redacted_block = ChatCompletionRedactedThinkingBlock(
+                    type="redacted_thinking", data=block["redactedContent"]
+                )
+                thinking_blocks_list.append(_redacted_block)
+        return thinking_blocks_list
+
     def _extract_content_from_message(self, message: AgentCoreMessage) -> str:
         """
         Extract text content from message content blocks.
@@ -343,7 +458,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Parse direct JSON response (non-streaming).
 
         Supports multiple agent response schemas:
-        1. {"result": {"role": "assistant", "content": [{"text": "..."}]}} - standard AgentCore
+        1. {"result": {"role": "assistant", "content": [{"text": "..."}, {"reasoningContent": {...}}]}} - standard AgentCore
         2. {"response": [{"text": "..."}]} - Strands agent format
         3. {"result": "plain text"} or {"response": "plain text"} - simple string
         4. Fallback: raw JSON as content string
@@ -365,10 +480,22 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if "result" in response_json and isinstance(response_json["result"], dict):
             result = response_json["result"]
             content = self._extract_content_from_message(result)  # type: ignore
+
+            # Extract reasoning content blocks from message content
+            reasoning_blocks: Optional[List[AgentCoreReasoningContentBlock]] = None
+            content_list = result.get("content", [])
+            if isinstance(content_list, list):
+                for block in content_list:
+                    if isinstance(block, dict) and "reasoningContent" in block:
+                        if reasoning_blocks is None:
+                            reasoning_blocks = []
+                        reasoning_blocks.append(block["reasoningContent"])
+
             return AgentCoreParsedResponse(
                 content=content,
                 usage=None,
                 final_message=result,  # type: ignore
+                reasoning_content_blocks=reasoning_blocks,
             )
 
         # Strategy 2: {"response": [{"text": "..."}]} - Strands agent content blocks
@@ -380,6 +507,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 content=content,
                 usage=None,
                 final_message=None,
+                reasoning_content_blocks=None,
             )
 
         # Strategy 3: string values - {"result": "text"} or {"response": "text"}
@@ -390,6 +518,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     content=val,
                     usage=None,
                     final_message=None,
+                    reasoning_content_blocks=None,
                 )
 
         # Strategy 4: fallback - return raw JSON as content
@@ -401,6 +530,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             content=json.dumps(response_json),
             usage=None,
             final_message=None,
+            reasoning_content_blocks=None,
         )
 
     def _get_parsed_response(
@@ -440,11 +570,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Each line starts with 'data:' followed by JSON.
 
         Returns:
-            AgentCoreParsedResponse: Parsed response with content, usage, and message
+            AgentCoreParsedResponse: Parsed response with content, usage, message, and reasoning
         """
         final_message: Optional[AgentCoreMessage] = None
         usage_data: Optional[AgentCoreUsage] = None
         content_blocks: List[str] = []
+        reasoning_blocks: List[AgentCoreReasoningContentBlock] = []
 
         for line in response_text.strip().split("\n"):
             line = line.strip()
@@ -478,6 +609,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 if text := self._extract_content_delta(data):
                     content_blocks.append(text)
 
+            # Extract reasoning content (can be in top-level or nested event)
+            if reasoning_block := self._extract_reasoning_from_event(data):
+                reasoning_blocks.append(reasoning_block)
+                verbose_logger.debug("Found reasoning content block")
+
         # Build final content
         content = (
             self._extract_content_from_message(final_message)
@@ -486,10 +622,154 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         verbose_logger.debug(f"Final usage_data: {usage_data}")
+        verbose_logger.debug(f"Found {len(reasoning_blocks)} reasoning blocks")
 
         return AgentCoreParsedResponse(
-            content=content, usage=usage_data, final_message=final_message
+            content=content,
+            usage=usage_data,
+            final_message=final_message,
+            reasoning_content_blocks=reasoning_blocks if reasoning_blocks else None,
         )
+
+    def _make_stream_chunk(
+        self,
+        model: str,
+        *,
+        content: Optional[str] = None,
+        reasoning_content: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+        usage: Optional[Usage] = None,
+    ) -> ModelResponseStream:
+        """Create a ModelResponseStream chunk for streaming responses."""
+        chunk = ModelResponseStream(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            created=0,
+            model=model,
+            object="chat.completion.chunk",
+        )
+        delta_kwargs: Dict[str, Any] = {}
+        if content:
+            delta_kwargs["content"] = content
+        if reasoning_content:
+            delta_kwargs["reasoning_content"] = reasoning_content
+        if not finish_reason:
+            delta_kwargs["role"] = "assistant"
+        chunk.choices = [
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(**delta_kwargs),
+            )
+        ]
+        if usage:
+            setattr(chunk, "usage", usage)
+        return chunk
+
+    def _extract_reasoning_from_delta(
+        self, delta: dict
+    ) -> Optional[AgentCoreReasoningContentBlock]:
+        """Extract reasoning content block from a contentBlockDelta's delta dict.
+
+        Returns an AgentCoreReasoningContentBlock preserving text, signature,
+        and redacted content for downstream consumers.
+        """
+        reasoning_text = None
+        signature = None
+        redacted_content = delta.get("redactedContent")
+
+        reasoning_content_block = delta.get("reasoningContent")
+        if isinstance(reasoning_content_block, dict):
+            reasoning_text = reasoning_content_block.get("text")
+            signature = reasoning_content_block.get("signature")
+            if not redacted_content:
+                redacted_content = reasoning_content_block.get("redactedContent")
+
+        if not reasoning_text:
+            reasoning_text = delta.get("reasoningText")
+        if not signature:
+            signature = delta.get("signature")
+
+        if reasoning_text:
+            block: AgentCoreReasoningContentBlock = {
+                "reasoningText": {"text": reasoning_text}
+            }
+            if signature:
+                block["reasoningText"]["signature"] = signature
+            return block
+        elif redacted_content:
+            return {"redactedContent": redacted_content}
+        return None
+
+    def _reasoning_block_to_chunk(
+        self,
+        reasoning_block: AgentCoreReasoningContentBlock,
+        model: str,
+    ) -> ModelResponseStream:
+        """Convert a reasoning content block to a streaming chunk.
+
+        Handles both reasoningText and redactedContent blocks, preserving
+        signatures for multi-turn thinking chain support.
+        """
+        if "reasoningText" in reasoning_block:
+            return self._make_stream_chunk(
+                model,
+                reasoning_content=reasoning_block["reasoningText"]["text"],
+            )
+        return self._make_stream_chunk(
+            model,
+            reasoning_content=reasoning_block.get("redactedContent", ""),
+        )
+
+    def _process_streaming_data_obj(
+        self, data_obj: dict, model: str
+    ) -> List[ModelResponseStream]:
+        """Process a single SSE data object and return streaming chunks."""
+        chunks: List[ModelResponseStream] = []
+
+        # Process contentBlockDelta events
+        if "event" in data_obj and isinstance(data_obj["event"], dict):
+            event_payload = data_obj["event"]
+            content_block_delta = event_payload.get("contentBlockDelta")
+
+            if content_block_delta:
+                delta = content_block_delta.get("delta", {})
+                text = delta.get("text", "")
+                reasoning_block = self._extract_reasoning_from_delta(delta)
+
+                if reasoning_block:
+                    chunks.append(
+                        self._reasoning_block_to_chunk(reasoning_block, model)
+                    )
+                if text:
+                    chunks.append(self._make_stream_chunk(model, content=text))
+
+            # Process metadata/usage
+            metadata = event_payload.get("metadata")
+            if metadata and "usage" in metadata:
+                usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                chunks.append(self._make_stream_chunk(
+                    model,
+                    finish_reason="stop",
+                    usage=Usage(
+                        prompt_tokens=usage_data.get("inputTokens", 0),
+                        completion_tokens=usage_data.get("outputTokens", 0),
+                        total_tokens=usage_data.get("totalTokens", 0),
+                    ),
+                ))
+
+        # Check for top-level reasoning events (Strands format)
+        # Only process if there is no nested event wrapper (avoids double-processing)
+        if "event" not in data_obj:
+            if reasoning_block := self._extract_reasoning_from_event(data_obj):
+                chunks.append(
+                    self._reasoning_block_to_chunk(reasoning_block, model)
+                )
+
+        # Process final message
+        if "message" in data_obj and isinstance(data_obj["message"], dict):
+            chunks.append(self._make_stream_chunk(model, finish_reason="stop"))
+
+        return chunks
 
     def _stream_agentcore_response_sync(
         self,
@@ -520,74 +800,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     if not isinstance(data_obj, dict):
                         continue
 
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(
-                                chunk,
-                                "usage",
-                                Usage(
-                                    prompt_tokens=usage_data.get("inputTokens", 0),
-                                    completion_tokens=usage_data.get("outputTokens", 0),
-                                    total_tokens=usage_data.get("totalTokens", 0),
-                                ),
-                            )
-                            yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
+                    for chunk in self._process_streaming_data_obj(data_obj, model):
                         yield chunk
 
                 except json.JSONDecodeError:
@@ -736,74 +949,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     if not isinstance(data_obj, dict):
                         continue
 
-                    # Process contentBlockDelta events
-                    if "event" in data_obj and isinstance(data_obj["event"], dict):
-                        event_payload = data_obj["event"]
-                        content_block_delta = event_payload.get("contentBlockDelta")
-
-                        if content_block_delta:
-                            delta = content_block_delta.get("delta", {})
-                            text = delta.get("text", "")
-
-                            if text:
-                                chunk = ModelResponseStream(
-                                    id=f"chatcmpl-{uuid.uuid4()}",
-                                    created=0,
-                                    model=model,
-                                    object="chat.completion.chunk",
-                                )
-                                chunk.choices = [
-                                    StreamingChoices(
-                                        finish_reason=None,
-                                        index=0,
-                                        delta=Delta(content=text, role="assistant"),
-                                    )
-                                ]
-                                yield chunk
-
-                        # Process metadata/usage
-                        metadata = event_payload.get("metadata")
-                        if metadata and "usage" in metadata:
-                            chunk = ModelResponseStream(
-                                id=f"chatcmpl-{uuid.uuid4()}",
-                                created=0,
-                                model=model,
-                                object="chat.completion.chunk",
-                            )
-                            chunk.choices = [
-                                StreamingChoices(
-                                    finish_reason="stop",
-                                    index=0,
-                                    delta=Delta(),
-                                )
-                            ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
-                            setattr(
-                                chunk,
-                                "usage",
-                                Usage(
-                                    prompt_tokens=usage_data.get("inputTokens", 0),
-                                    completion_tokens=usage_data.get("outputTokens", 0),
-                                    total_tokens=usage_data.get("totalTokens", 0),
-                                ),
-                            )
-                            yield chunk
-
-                    # Process final message
-                    if "message" in data_obj and isinstance(data_obj["message"], dict):
-                        chunk = ModelResponseStream(
-                            id=f"chatcmpl-{uuid.uuid4()}",
-                            created=0,
-                            model=model,
-                            object="chat.completion.chunk",
-                        )
-                        chunk.choices = [
-                            StreamingChoices(
-                                finish_reason="stop",
-                                index=0,
-                                delta=Delta(),
-                            )
-                        ]
+                    for chunk in self._process_streaming_data_obj(data_obj, model):
                         yield chunk
 
                 except json.JSONDecodeError:
@@ -966,12 +1112,38 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
             content = parsed_data["content"]
             usage_data = parsed_data["usage"]
+            reasoning_blocks = parsed_data.get("reasoning_content_blocks")
 
             verbose_logger.debug(f"Parsed content length: {len(content)}")
             verbose_logger.debug(f"Usage data: {usage_data}")
+            verbose_logger.debug(
+                f"Reasoning blocks: {len(reasoning_blocks) if reasoning_blocks else 0}"
+            )
 
-            # Create the message
-            message = Message(content=content, role="assistant")
+            # Create the message with reasoning content if available
+            message_dict: Dict[str, Any] = {"content": content, "role": "assistant"}
+
+            if reasoning_blocks:
+                # Add provider-specific fields
+                message_dict["provider_specific_fields"] = {
+                    "reasoningContentBlocks": reasoning_blocks,
+                }
+                # Add reasoning_content (concatenated text for deepseek compatibility)
+                # Only set when non-empty to avoid masking redacted-only blocks
+                reasoning_content_text = self._transform_reasoning_content(
+                    reasoning_blocks
+                )
+                if reasoning_content_text:
+                    message_dict["reasoning_content"] = reasoning_content_text
+                # Add thinking_blocks (OpenAI-compatible format)
+                message_dict["thinking_blocks"] = self._transform_thinking_blocks(
+                    reasoning_blocks
+                )
+                verbose_logger.debug(
+                    f"Added reasoning_content: {len(reasoning_content_text)} chars"
+                )
+
+            message = Message(**message_dict)
 
             # Create choices
             choice = Choices(finish_reason="stop", index=0, message=message)
