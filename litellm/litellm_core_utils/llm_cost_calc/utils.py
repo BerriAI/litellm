@@ -204,14 +204,20 @@ def _get_token_base_cost(
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
     # Most models don't have threshold pricing, so we can return early.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
+    # Exclude service-tier-specific and batch-specific variants
+    # (e.g. input_cost_per_token_above_200k_tokens_priority,
+    # input_cost_per_token_above_272k_tokens_batches) so that the threshold
+    # detection loop only processes the standard keys. Tier-specific variants
+    # are resolved later via _get_service_tier_cost_key, while batch pricing is
+    # handled separately in batch_cost_calculator().
     threshold_keys = [
         k
         for k in model_info
         if k.startswith("input_cost_per_token_above_")
-        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
+        and not any(
+            k.endswith(suffix)
+            for suffix in tuple(f"_{st.value}" for st in ServiceTier) + ("_batches",)
+        )
     ]
     if not threshold_keys:
         return (
