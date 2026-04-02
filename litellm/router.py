@@ -6284,11 +6284,13 @@ class Router:
         """
         Update RPM usage for a deployment
         """
-        deployment_name = kwargs["litellm_params"]["metadata"].get(
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        metadata = litellm_params.get("metadata", {}) or {}
+        deployment_name = metadata.get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
-        model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
-        model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+        model_group = metadata.get("model_group", None)
+        model_info = litellm_params.get("model_info", {}) or {}
         id = model_info.get("id", None)
         if model_group is None or id is None:
             return
