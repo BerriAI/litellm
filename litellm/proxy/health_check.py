@@ -22,6 +22,7 @@ ILLEGAL_DISPLAY_PARAMS = [
     "aws_access_key_id",
     "aws_secret_access_key",
     "exception",  # internal; not JSON-serializable, never for display
+    "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
@@ -224,15 +225,11 @@ async def _perform_health_check(
             cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
-            if "exception" in is_healthy:
-                cleaned["exception"] = is_healthy["exception"]
             unhealthy_endpoints.append(cleaned)
         else:
             cleaned = _clean_endpoint_data(litellm_params, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
-            if isinstance(is_healthy, Exception):
-                cleaned["exception"] = is_healthy
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints
