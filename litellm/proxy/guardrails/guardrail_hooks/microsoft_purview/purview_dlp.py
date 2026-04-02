@@ -8,6 +8,7 @@ Supports three modes:
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -75,6 +76,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         )
         self._logging_only = logging_only
         self.guardrail_provider = "microsoft_purview"
+        self._executor = ThreadPoolExecutor(max_workers=1)
         verbose_proxy_logger.info(
             "Initialized Microsoft Purview DLP Guardrail: %s (logging_only=%s)",
             guardrail_name,
@@ -229,7 +231,6 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
         """Sync wrapper for async_logging_hook (follows Presidio pattern)."""
-        from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop() -> Tuple[dict, Any]:
             new_loop = asyncio.new_event_loop()
@@ -246,9 +247,8 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         try:
             _ = asyncio.get_running_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
+            future = self._executor.submit(run_in_new_loop)
+            return future.result()
         except RuntimeError:
             return run_in_new_loop()
 
