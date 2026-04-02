@@ -34,6 +34,8 @@ from litellm.types.llms.openai import (
 )
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
 
+_CHATGPT_PROVIDER_NAME = "chatgpt"
+
 
 def _parse_call_type(call_type: Optional[str]) -> Optional[Any]:
     if call_type is None:
@@ -54,17 +56,6 @@ def _get_responses_call_type() -> Optional[Any]:
         return CallTypes.responses
     except (AttributeError, ImportError):
         return None
-
-
-def _get_chatgpt_provider_name() -> str:
-    try:
-        from litellm.types.utils import LlmProviders
-
-        return LlmProviders.CHATGPT.value
-    except (AttributeError, ImportError):
-        return "chatgpt"
-
-
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -1236,7 +1227,7 @@ class ManagedResponsesWebSocketHandler:
         if provider_name is not None:
             return provider_name
         if call_kwargs.get("chatgpt_auth_file_path"):
-            return _get_chatgpt_provider_name()
+            return _CHATGPT_PROVIDER_NAME
         return None
 
     def _rewrite_event_model_in_message(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1368,7 +1359,7 @@ class ManagedResponsesWebSocketHandler:
         return self._strip_provider_prefix(model, self._get_provider_name(call_kwargs))
 
     def _provider_uses_local_history_only(self, call_kwargs: Dict[str, Any]) -> bool:
-        return self._get_provider_name(call_kwargs) == _get_chatgpt_provider_name()
+        return self._get_provider_name(call_kwargs) == _CHATGPT_PROVIDER_NAME
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], event_model: Optional[str]
