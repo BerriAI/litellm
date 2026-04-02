@@ -524,3 +524,31 @@ def test_get_tools_by_names_client_prefix():
     assert result[0].name == "mcp_litellm_weather_get_forecast"
     assert result[1].name == "mcp_litellm_alerts_send_notification"
 
+
+def test_get_tools_by_names_no_duplicates():
+    """Test that the same tool is not returned twice when multiple index names match it."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    available_tools = [
+        MCPTool(name="weather_get_forecast", description="Get weather forecast", inputSchema={"type": "object"}),
+    ]
+
+    # Both index names match the same tool via suffix
+    result = filter_instance._get_tools_by_names(
+        ["get_forecast", "weather_get_forecast"], available_tools
+    )
+
+    assert len(result) == 1
+    assert result[0].name == "weather_get_forecast"
+

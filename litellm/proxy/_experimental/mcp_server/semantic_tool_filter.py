@@ -245,11 +245,13 @@ class SemanticMCPToolFilter:
         server or client prefixes still match the semantic router's index names.
         """
         matched_tools = []
+        seen: set = set()
         for index_name in tool_names:
             for tool in available_tools:
                 tool_name, _ = self._extract_tool_info(tool)
-                if self._tool_name_matches(tool_name, index_name):
+                if tool_name not in seen and self._tool_name_matches(tool_name, index_name):
                     matched_tools.append(tool)
+                    seen.add(tool_name)
                     break
         return matched_tools
 
