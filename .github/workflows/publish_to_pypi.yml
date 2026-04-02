@@ -55,25 +55,30 @@ jobs:
           PYPROJECT_VERSION=$(python3 - <<'PY'
           import sys
           import tomllib
-          from packaging.requirements import Requirement
 
           with open("pyproject.toml", "rb") as f:
               proxy_requirements = tomllib.load(f)["project"]["optional-dependencies"]["proxy"]
 
+          version = None
           for requirement in proxy_requirements:
-              parsed = Requirement(requirement)
-              if parsed.name != "litellm-proxy-extras":
+              normalized = requirement.split(";", 1)[0].strip()
+              if not normalized.startswith("litellm-proxy-extras"):
                   continue
-              specifiers = list(parsed.specifier)
-              if len(specifiers) == 1 and specifiers[0].operator == "==":
-                  print(specifiers[0].version)
-                  break
-          else:
+              parts = normalized.split("==", 1)
+              if len(parts) == 2 and parts[0].strip() == "litellm-proxy-extras":
+                  candidate = parts[1].strip()
+                  if candidate:
+                      version = candidate
+                      break
+
+          if version is None:
               print(
                   "::error::Could not find an exact litellm-proxy-extras pin in project.optional-dependencies.proxy",
                   file=sys.stderr,
               )
               sys.exit(1)
+
+          print(version)
           PY
           )
           echo "pyproject.toml pins litellm-proxy-extras version: $PYPROJECT_VERSION"

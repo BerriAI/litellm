@@ -9,8 +9,12 @@ WORKDIR /app
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY scripts/health_check/health_check_client.py /app/health_check_client.py
 
-# Make script executable
-RUN chmod +x /app/health_check_client.py
+# Resolve and install the script dependencies at build time so the runtime
+# image stays self-contained in air-gapped or egress-restricted environments.
+RUN uv export --script /app/health_check_client.py --no-hashes --output-file /tmp/health-check-requirements.txt \
+  && uv pip install --system -r /tmp/health-check-requirements.txt \
+  && rm /tmp/health-check-requirements.txt \
+  && chmod +x /app/health_check_client.py
 
 # Run as non-root user
 RUN adduser --disabled-password --gecos "" --uid 1001 healthcheck
@@ -18,7 +22,7 @@ USER healthcheck
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD uv run --script /app/health_check_client.py --help || exit 1
+  CMD python /app/health_check_client.py --help || exit 1
 
 # Set entrypoint
-ENTRYPOINT ["uv", "run", "--script", "/app/health_check_client.py"]
+ENTRYPOINT ["python", "/app/health_check_client.py"]
