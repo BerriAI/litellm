@@ -3,6 +3,7 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger

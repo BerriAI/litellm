@@ -4,6 +4,7 @@ Semantic Tool Filter Hook
 Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -226,10 +227,14 @@ class SemanticToolFilterHook(CustomLogger):
             # Separate MCP tools (prefixed) from non-MCP tools — only filter
             # MCP tools, always pass non-MCP tools through untouched.
             def _tool_name(t):
-                return t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                return (
+                    t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                )
 
             mcp_tools = [t for t in tools if is_tool_name_prefixed(_tool_name(t))]
-            non_mcp_tools = [t for t in tools if not is_tool_name_prefixed(_tool_name(t))]
+            non_mcp_tools = [
+                t for t in tools if not is_tool_name_prefixed(_tool_name(t))
+            ]
 
             if not mcp_tools:
                 return None
