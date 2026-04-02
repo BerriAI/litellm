@@ -433,6 +433,13 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
     return False
 
 
+def _sanitize_for_log(message: str) -> str:
+    """Strip line breaks from strings before logging to reduce log injection risk."""
+    if not isinstance(message, str):
+        message = str(message)
+    return message.replace("\r", "").replace("\n", " ")
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -879,9 +886,10 @@ class ProxyBaseLLMRequestProcessing:
                 type(self.data).__name__,
             )
         else:
+            _safe_payload_str = _sanitize_for_log(_payload_str)
             verbose_proxy_logger.debug(
-                "Request received by LiteLLM:\n%s",
-                _payload_str,
+                "Request received by LiteLLM: %s",
+                _safe_payload_str,
             )
 
     async def base_process_llm_request(  # noqa: PLR0915

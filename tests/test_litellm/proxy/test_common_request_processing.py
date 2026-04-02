@@ -19,10 +19,19 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _sanitize_for_log,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
+
+
+class TestSanitizeForLog:
+    def test_replaces_newlines_and_strips_carriage_returns(self):
+        assert _sanitize_for_log("x\ny\rz") == "x yz"
+
+    def test_non_string_input_is_stringified(self):
+        assert _sanitize_for_log(42) == "42"
 
 
 class TestProxyBaseLLMRequestProcessing:
