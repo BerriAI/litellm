@@ -2,12 +2,16 @@ import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import (
+    BaseLLMHTTPHandler,
+    _google_genai_streaming_hidden_params,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -81,7 +85,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
     extra_headers from kwargs with proper priority.
     """
     handler = BaseLLMHTTPHandler()
-    
+
     # Mock the config
     mock_config = Mock()
     mock_config.validate_anthropic_messages_environment = Mock(
@@ -90,7 +94,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
     mock_config.transform_anthropic_messages_request = Mock(
         return_value={"model": "claude-3-opus-20240229", "messages": []}
     )
-    
+
     # Mock the client
     mock_client = AsyncMock()
     mock_response = Mock()
@@ -104,13 +108,13 @@ async def test_async_anthropic_messages_handler_extra_headers():
         "stop_reason": "end_turn",
     }
     mock_client.post = AsyncMock(return_value=mock_response)
-    
+
     # Mock logging object
     mock_logging_obj = Mock()
     mock_logging_obj.update_environment_variables = Mock()
     mock_logging_obj.model_call_details = {}
     mock_logging_obj.stream = False
-    
+
     # Test case 1: Only extra_headers in kwargs
     kwargs = {
         "extra_headers": {
@@ -118,20 +122,21 @@ async def test_async_anthropic_messages_handler_extra_headers():
             "X-Auth-Token": "token123",
         }
     }
-    
+
     with patch(
         "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
     ) as mock_provider_headers:
         mock_provider_headers.return_value = None
-        
+
         # Capture what headers are passed to validate_anthropic_messages_environment
         captured_headers = {}
+
         def capture_validate(*args, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
-        
+
         mock_config.validate_anthropic_messages_environment = capture_validate
-        
+
         try:
             await handler.async_anthropic_messages_handler(
                 model="claude-3-opus-20240229",
@@ -146,7 +151,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
             )
         except Exception:
             pass  # We're testing header extraction, not the full flow
-        
+
         # Verify extra_headers were extracted and merged
         assert "X-Custom-Header" in captured_headers
         assert captured_headers["X-Custom-Header"] == "from-kwargs"
@@ -219,9 +224,11 @@ async def test_async_anthropic_messages_handler_passes_litellm_metadata():
 
     mock_logging_obj.update_from_kwargs.assert_called_once()
     call_kwargs = mock_logging_obj.update_from_kwargs.call_args
-    kwargs_arg = call_kwargs.kwargs.get(
-        "kwargs", call_kwargs[1].get("kwargs", {})
-    ) if call_kwargs.kwargs else call_kwargs[1].get("kwargs", {})
+    kwargs_arg = (
+        call_kwargs.kwargs.get("kwargs", call_kwargs[1].get("kwargs", {}))
+        if call_kwargs.kwargs
+        else call_kwargs[1].get("kwargs", {})
+    )
 
     assert "litellm_metadata" in kwargs_arg
     assert kwargs_arg["litellm_metadata"]["model_info"] == custom_model_info
@@ -234,7 +241,7 @@ async def test_async_anthropic_messages_handler_header_priority():
     forwarded < extra_headers < provider_specific
     """
     handler = BaseLLMHTTPHandler()
-    
+
     # Mock the config
     mock_config = Mock()
     mock_client = AsyncMock()
@@ -242,31 +249,32 @@ async def test_async_anthropic_messages_handler_header_priority():
     mock_logging_obj.update_environment_variables = Mock()
     mock_logging_obj.model_call_details = {}
     mock_logging_obj.stream = False
-    
+
     # Test with all three header sources
     kwargs = {
         "headers": {"X-Priority": "forwarded", "X-Forwarded-Only": "keep"},
         "extra_headers": {"X-Priority": "extra", "X-Extra-Only": "also-keep"},
     }
-    
+
     with patch(
         "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
     ) as mock_provider_headers:
         mock_provider_headers.return_value = {
             "X-Priority": "provider",
-            "X-Provider-Only": "keep-this-too"
+            "X-Provider-Only": "keep-this-too",
         }
-        
+
         captured_headers = {}
+
         def capture_validate(*args, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
-        
+
         mock_config.validate_anthropic_messages_environment = capture_validate
         mock_config.transform_anthropic_messages_request = Mock(
             return_value={"model": "claude-3-opus-20240229", "messages": []}
         )
-        
+
         try:
             await handler.async_anthropic_messages_handler(
                 model="claude-3-opus-20240229",
@@ -281,10 +289,36 @@ async def test_async_anthropic_messages_handler_header_priority():
             )
         except Exception:
             pass
-        
+
         # Verify priority: provider_specific should win
         assert captured_headers["X-Priority"] == "provider"
         # Verify all unique headers from different sources are present
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
+    logging_obj = Mock()
+    logging_obj.get_router_model_id = Mock(return_value="router-model-id")
+
+    from_model_info = _google_genai_streaming_hidden_params(
+        api_base="https://generativelanguage.googleapis.com/v1beta",
+        litellm_params=GenericLiteLLMParams(model_info={"id": "info-id"}),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({"x-ratelimit-remaining": "10"}),
+    )
+    assert from_model_info["model_id"] == "info-id"
+    assert (
+        from_model_info["api_base"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+    assert isinstance(from_model_info["additional_headers"], dict)
+
+    from_router = _google_genai_streaming_hidden_params(
+        api_base="https://x",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        response_headers=httpx.Headers({}),
+    )
+    assert from_router["model_id"] == "router-model-id"

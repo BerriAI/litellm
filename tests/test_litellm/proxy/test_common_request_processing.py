@@ -251,9 +251,6 @@ class TestProxyBaseLLMRequestProcessing:
             return_value={"x-ratelimit-remaining-requests": "999"}
         )
 
-        llm_router = MagicMock()
-        llm_router.get_deployment.return_value = {"litellm_params": {}}
-
         headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
             response=_FakeGenaiResponse(),
             request_data={"model": "gemini/gemini-1.5-flash"},
@@ -262,7 +259,6 @@ class TestProxyBaseLLMRequestProcessing:
             logging_obj=logging_obj,
             version="9.9.9",
             proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
         )
 
         assert headers["x-litellm-call-id"] == "call-id-test"
@@ -271,9 +267,91 @@ class TestProxyBaseLLMRequestProcessing:
         assert headers["llm_provider-ratelimit-requests"] == "1000"
         assert headers["x-ratelimit-remaining-requests"] == "999"
         proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
-        llm_router.get_deployment.assert_called_once_with(
-            model_id="deployment-model-id"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
+        """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
+
+        class _FakeStreamLike:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            _hidden_params = {
+                "model_id": "stream-model-id",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "cache_key": "",
+                "response_cost": "",
+                "additional_headers": {"llm_provider-x": "y"},
+            }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-stream"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeStreamLike(),
+            request_data={"model": "gemini/gemini-2.0-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
         )
+
+        assert headers["x-litellm-model-id"] == "stream-model-id"
+        assert headers["x-litellm-model-api-base"] == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+        assert headers["llm_provider-x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_no_hidden_params_metadata_fallback(
+        self,
+    ):
+        """When response has no _hidden_params, model_id can still come from litellm_metadata."""
+
+        class _BareResponse:
+            pass
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-meta"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_BareResponse(),
+            request_data={
+                "model": "gemini/gemini-1.5-flash",
+                "litellm_metadata": {"model_info": {"id": "meta-model-id"}},
+            },
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "meta-model-id"
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):

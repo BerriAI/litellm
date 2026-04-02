@@ -150,6 +150,30 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _google_genai_streaming_hidden_params(
+    *,
+    api_base: str,
+    litellm_params: GenericLiteLLMParams,
+    logging_obj: LiteLLMLoggingObj,
+    response_headers: httpx.Headers,
+) -> Dict[str, Any]:
+    """Pre-stream metadata for proxy response headers (mirrors CustomStreamWrapper._hidden_params)."""
+    from litellm.litellm_core_utils.core_helpers import process_response_headers
+
+    _model_info: Dict[str, Any] = dict(
+        getattr(litellm_params, "model_info", None) or {}
+    )
+    _raw_id = _model_info.get("id") or logging_obj.get_router_model_id() or ""
+    _model_id = _raw_id if isinstance(_raw_id, str) else str(_raw_id)
+    return {
+        "model_id": _model_id,
+        "api_base": api_base,
+        "cache_key": "",
+        "response_cost": "",
+        "additional_headers": process_response_headers(response_headers),
+    }
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -4495,9 +4519,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4613,9 +4637,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = (
                             await callback.async_run_chat_completion_agentic_loop(
                                 tools=tool_calls,
@@ -5099,7 +5123,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5311,7 +5338,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5551,7 +5581,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -10031,6 +10064,12 @@ class BaseLLMHTTPHandler:
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
                     request_body=data,
+                    hidden_params=_google_genai_streaming_hidden_params(
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        logging_obj=logging_obj,
+                        response_headers=response.headers,
+                    ),
                 )
             else:
                 response = sync_httpx_client.post(
@@ -10140,6 +10179,12 @@ class BaseLLMHTTPHandler:
                     litellm_metadata=litellm_metadata or {},
                     custom_llm_provider=custom_llm_provider,
                     request_body=data,
+                    hidden_params=_google_genai_streaming_hidden_params(
+                        api_base=api_base,
+                        litellm_params=litellm_params,
+                        logging_obj=logging_obj,
+                        response_headers=response.headers,
+                    ),
                 )
             else:
                 response = await async_httpx_client.post(

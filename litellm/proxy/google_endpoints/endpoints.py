@@ -82,7 +82,6 @@ async def google_generate_content(
         logging_obj=logging_obj,
         version=version,
         proxy_logging_obj=proxy_logging_obj,
-        llm_router=llm_router,
     )
     fastapi_response.headers.update(success_headers)
     return response
@@ -158,7 +157,6 @@ async def google_stream_generate_content(
         logging_obj=logging_obj,
         version=version,
         proxy_logging_obj=proxy_logging_obj,
-        llm_router=llm_router,
     )
 
     # Check if response is an async iterator (streaming response)

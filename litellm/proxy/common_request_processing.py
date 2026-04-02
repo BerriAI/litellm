@@ -576,7 +576,6 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj: LiteLLMLoggingObj,
         version: Optional[str],
         proxy_logging_obj: ProxyLogging,
-        llm_router: Optional[Router] = None,
     ) -> dict[str, str]:
         """
         Build LiteLLM proxy response headers for routes that call the LLM directly
@@ -600,9 +599,6 @@ class ProxyBaseLLMRequestProcessing:
             "fastest_response_batch_completion", None
         )
         additional_headers = hidden_params.get("additional_headers", {}) or {}
-
-        if llm_router is not None:
-            request_data["deployment"] = llm_router.get_deployment(model_id=model_id)
 
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
@@ -874,20 +870,18 @@ class ProxyBaseLLMRequestProcessing:
             return
         _payload_str = json.dumps(self.data, default=str)
         if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            _key_count = len(self.data) if isinstance(self.data, dict) else 0
             verbose_proxy_logger.debug(
-                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Dict key count: %d; type: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                (
-                    list(self.data.keys())
-                    if isinstance(self.data, dict)
-                    else type(self.data).__name__
-                ),
+                _key_count,
+                type(self.data).__name__,
             )
         else:
             verbose_proxy_logger.debug(
                 "Request received by LiteLLM:\n%s",
-                json.dumps(self.data, indent=4, default=str),
+                _payload_str,
             )
 
     async def base_process_llm_request(  # noqa: PLR0915
