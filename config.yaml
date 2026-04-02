@@ -3,5 +3,13 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-3-flash-preview
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  drop_params: true
+
 general_settings:
-    master_key: os.environ/LITELLM_MASTER_KEY
+  master_key: os.environ/LITELLM_MASTER_KEY
