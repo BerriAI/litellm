@@ -403,8 +403,9 @@ class TestBedrockAnthropic1MContextRegression:
         )
 
         # Multiple beta headers including 1M context
+        # Use computer-use-2025-01-24 (supported by both bedrock and bedrock_converse)
         headers = {
-            "anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"
+            "anthropic-beta": "context-1m-2025-08-07,computer-use-2025-01-24"
         }
         messages = [{"role": "user", "content": "Test"}]
 
@@ -435,7 +436,7 @@ class TestBedrockAnthropic1MContextRegression:
 
         # Verify both headers are present
         assert "context-1m-2025-08-07" in beta_headers
-        assert "computer-use-2024-10-22" in beta_headers
+        assert "computer-use-2025-01-24" in beta_headers
 
 
 class TestBedrockAnthropicCombinedRegressions:
