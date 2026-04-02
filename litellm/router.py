@@ -9176,12 +9176,21 @@ class Router:
         cooldown_deployments = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
         _pre_cooldown_deployments = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
         )
-        if not healthy_deployments and self.enable_health_check_routing:
+        # Safety net: only bypass cooldown filter when health-check routing is
+        # driving cooldown (i.e. allowed_fails_policy is set). Without a policy,
+        # cooldowns are from real request failures and must not be bypassed.
+        if (
+            not healthy_deployments
+            and self.enable_health_check_routing
+            and self.allowed_fails_policy is not None
+        ):
             verbose_router_logger.warning(
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
@@ -9623,7 +9632,11 @@ class Router:
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
         )
-        if not healthy_deployments and self.enable_health_check_routing:
+        if (
+            not healthy_deployments
+            and self.enable_health_check_routing
+            and self.allowed_fails_policy is not None
+        ):
             verbose_router_logger.warning(
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
