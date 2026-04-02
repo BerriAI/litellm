@@ -500,7 +500,9 @@ async def test_perform_health_check_filters_by_model_id():
 
     async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
-        return [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}], []
+        return [
+            {"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}
+        ], [], {}
 
     with patch(
         "litellm.proxy.health_check._perform_health_check",
