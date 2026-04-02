@@ -1,10 +1,10 @@
 ---
 slug: april-townhall-announcement
-title: "April Townhall: Friday, 10 April at 7:30 AM"
+title: "April Townhall: Security + Product Roadmap"
 date: 2026-04-02T07:30:00
 authors:
   - krrish
-description: "Join the LiteLLM April townhall on Friday, 10 April at 7:30 AM."
+description: "Join the LiteLLM April townhall on Friday, 10 April at 7:30 AM to learn about LiteLLM's security and product roadmap."
 tags: [announcement, townhall]
 hide_table_of_contents: true
 ---
@@ -25,6 +25,10 @@ We are hosting our April townhall on **Friday, 10 April at 7:30 AM PST**.
 - Product updates and roadmap progress
 - Reliability and security updates
 - Open Q&A with the team
+
+## How to contribute
+
+Add your thoughts to this [ticket](https://github.com/BerriAI/litellm/issues/24825) to help us shape the agenda.
 
 ## Register
 
