@@ -2997,7 +2997,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install "coverage[toml]"
-            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage
+            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
