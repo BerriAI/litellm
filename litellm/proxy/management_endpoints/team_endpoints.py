@@ -62,11 +62,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
-    _get_agent_ids_from_access_groups,
-    _get_mcp_server_ids_from_access_groups,
-    _get_models_from_access_groups,
     allowed_route_check_inside_route,
     can_org_access_model,
+    get_access_object,
     get_org_object,
     get_team_object,
     get_user_object,
@@ -3349,6 +3347,9 @@ async def _resolve_access_group_resources(
     """
     Resolve resources inherited from access groups.
 
+    Fetches each access group object once and extracts all three resource
+    fields in a single pass (models, MCP servers, agents).
+
     Returns only the access-group-sourced resources (not direct assignments).
     Keeps them separate so callers can distinguish where each resource comes from.
     """
@@ -3360,16 +3361,38 @@ async def _resolve_access_group_resources(
     if not access_group_ids:
         return empty
 
+    from litellm.proxy.proxy_server import prisma_client as _prisma_client
+    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
+
+    if _user_api_key_cache is None:
+        return empty
+
+    models: List[str] = []
+    mcp_ids: List[str] = []
+    agent_ids: List[str] = []
+
+    for ag_id in access_group_ids:
+        try:
+            ag = await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=_prisma_client,
+                user_api_key_cache=_user_api_key_cache,
+                proxy_logging_obj=_proxy_logging_obj,
+            )
+            models.extend(getattr(ag, "access_model_names", []))
+            mcp_ids.extend(getattr(ag, "access_mcp_server_ids", []))
+            agent_ids.extend(getattr(ag, "access_agent_ids", []))
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Could not fetch access group %s for resource resolution",
+                ag_id,
+            )
+
     return {
-        "access_group_models": await _get_models_from_access_groups(
-            access_group_ids=access_group_ids,
-        ),
-        "access_group_mcp_server_ids": await _get_mcp_server_ids_from_access_groups(
-            access_group_ids=access_group_ids,
-        ),
-        "access_group_agent_ids": await _get_agent_ids_from_access_groups(
-            access_group_ids=access_group_ids,
-        ),
+        "access_group_models": list(set(models)),
+        "access_group_mcp_server_ids": list(set(mcp_ids)),
+        "access_group_agent_ids": list(set(agent_ids)),
     }
 
 
@@ -3601,11 +3624,20 @@ async def list_team_v2(
 
     # Resolve resources inherited from access groups for each team
     if not use_deleted_table:
-        for team_item in team_list:
-            if isinstance(team_item, TeamListItem):
-                resolved = await _resolve_access_group_resources(
-                    access_group_ids=team_item.access_group_ids,
-                )
+        team_items_with_ag = [
+            t for t in team_list
+            if isinstance(t, TeamListItem) and t.access_group_ids
+        ]
+        if team_items_with_ag:
+            results = await asyncio.gather(
+                *[
+                    _resolve_access_group_resources(
+                        access_group_ids=t.access_group_ids,
+                    )
+                    for t in team_items_with_ag
+                ]
+            )
+            for team_item, resolved in zip(team_items_with_ag, results):
                 team_item.access_group_models = resolved["access_group_models"]
                 team_item.access_group_mcp_server_ids = resolved[
                     "access_group_mcp_server_ids"
