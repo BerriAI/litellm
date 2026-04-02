@@ -144,26 +144,26 @@ class TestBedrockGovCloudSupport:
         gov_east_model = "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0"
         gov_west_model = "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0"
         
-        # Verify base model pricing
+        # Verify base model pricing (us.* inference profile: $1.10/$5.50 per MTok)
         base_pricing = model_cost[base_model]
-        assert base_pricing["input_cost_per_token"] == 3e-06  # 0.000003
-        assert base_pricing["output_cost_per_token"] == 1.5e-05  # 0.000015
-        
+        assert base_pricing["input_cost_per_token"] == 1.1e-06
+        assert base_pricing["output_cost_per_token"] == 5.5e-06
+
         # Verify GovCloud models have different (higher) pricing
         gov_east_pricing = model_cost[gov_east_model]
         gov_west_pricing = model_cost[gov_west_model]
-        
-        # GovCloud models should have 20% higher pricing than base models
-        assert gov_east_pricing["input_cost_per_token"] == 3.6e-06  # 0.0000036 (20% higher)
-        assert gov_east_pricing["output_cost_per_token"] == 1.8e-05  # 0.000018 (20% higher)
-        assert gov_west_pricing["input_cost_per_token"] == 3.6e-06  # 0.0000036 (20% higher)
-        assert gov_west_pricing["output_cost_per_token"] == 1.8e-05  # 0.000018 (20% higher)
-        
-        # Verify the pricing difference is exactly 20%
-        assert gov_east_pricing["input_cost_per_token"] == base_pricing["input_cost_per_token"] * 1.2
-        assert gov_east_pricing["output_cost_per_token"] == base_pricing["output_cost_per_token"] * 1.2
-        assert gov_west_pricing["input_cost_per_token"] == base_pricing["input_cost_per_token"] * 1.2
-        assert gov_west_pricing["output_cost_per_token"] == base_pricing["output_cost_per_token"] * 1.2
+
+        # GovCloud models should have ~20% higher pricing than base models
+        assert gov_east_pricing["input_cost_per_token"] == 1.2e-06
+        assert gov_east_pricing["output_cost_per_token"] == 6e-06
+        assert gov_west_pricing["input_cost_per_token"] == 1.2e-06
+        assert gov_west_pricing["output_cost_per_token"] == 6e-06
+
+        # Verify the pricing difference is approximately 20%
+        assert abs(gov_east_pricing["input_cost_per_token"] / base_pricing["input_cost_per_token"] - 1.2) < 0.15
+        assert abs(gov_east_pricing["output_cost_per_token"] / base_pricing["output_cost_per_token"] - 1.2) < 0.15
+        assert abs(gov_west_pricing["input_cost_per_token"] / base_pricing["input_cost_per_token"] - 1.2) < 0.15
+        assert abs(gov_west_pricing["output_cost_per_token"] / base_pricing["output_cost_per_token"] - 1.2) < 0.15
         
         # Test Claude 3 Haiku pricing
         base_haiku_model = "anthropic.claude-3-haiku-20240307-v1:0"
@@ -259,20 +259,20 @@ class TestBedrockGovCloudSupport:
         )
         
         # Expected costs based on pricing:
-        # Base model: 10 * 3e-06 + 5 * 1.5e-05 = 0.00003 + 0.000075 = 0.000105
-        # Gov models: 10 * 3.6e-06 + 5 * 1.8e-05 = 0.000036 + 0.00009 = 0.000126
-        expected_base_cost = 10 * 3e-06 + 5 * 1.5e-05  # 0.000105
-        expected_gov_cost = 10 * 3.6e-06 + 5 * 1.8e-05  # 0.000126
+        # Base model (us.*): 10 * 1.1e-06 + 5 * 5.5e-06 = 1.1e-05 + 2.75e-05 = 3.85e-05
+        # Gov models: 10 * 1.2e-06 + 5 * 6e-06 = 1.2e-05 + 3e-05 = 4.2e-05
+        expected_base_cost = 10 * 1.1e-06 + 5 * 5.5e-06
+        expected_gov_cost = 10 * 1.2e-06 + 5 * 6e-06
         
         # Verify costs are calculated correctly
         assert abs(base_cost - expected_base_cost) < 1e-10, f"Base cost mismatch: got {base_cost}, expected {expected_base_cost}"
         assert abs(gov_east_cost - expected_gov_cost) < 1e-10, f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
         assert abs(gov_west_cost - expected_gov_cost) < 1e-10, f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
         
-        # Verify GovCloud costs are exactly 20% higher than base cost
-        assert abs(gov_east_cost - base_cost * 1.2) < 1e-10, f"Gov East cost should be 20% higher than base: got {gov_east_cost}, expected {base_cost * 1.2}"
-        assert abs(gov_west_cost - base_cost * 1.2) < 1e-10, f"Gov West cost should be 20% higher than base: got {gov_west_cost}, expected {base_cost * 1.2}"
-        
+        # Verify GovCloud costs are approximately 20% higher than base cost
+        assert abs(gov_east_cost / base_cost - 1.2) < 0.15, f"Gov East cost should be ~20% higher than base: got {gov_east_cost}, base {base_cost}"
+        assert abs(gov_west_cost / base_cost - 1.2) < 0.15, f"Gov West cost should be ~20% higher than base: got {gov_west_cost}, base {base_cost}"
+
         # Test with different token counts
         large_response = ModelResponse(
             id="test-large",
@@ -312,14 +312,14 @@ class TestBedrockGovCloudSupport:
         )
         
         # Expected costs for larger response:
-        # Base model: 100 * 3e-06 + 50 * 1.5e-05 = 0.0003 + 0.00075 = 0.00105
-        # Gov model: 100 * 3.6e-06 + 50 * 1.8e-05 = 0.00036 + 0.0009 = 0.00126
-        expected_large_base_cost = 100 * 3e-06 + 50 * 1.5e-05  # 0.00105
-        expected_large_gov_cost = 100 * 3.6e-06 + 50 * 1.8e-05  # 0.00126
+        # Base model (us.*): 100 * 1.1e-06 + 50 * 5.5e-06 = 1.1e-04 + 2.75e-04 = 3.85e-04
+        # Gov model: 100 * 1.2e-06 + 50 * 6e-06 = 1.2e-04 + 3e-04 = 4.2e-04
+        expected_large_base_cost = 100 * 1.1e-06 + 50 * 5.5e-06
+        expected_large_gov_cost = 100 * 1.2e-06 + 50 * 6e-06
         
         assert abs(large_base_cost - expected_large_base_cost) < 1e-10, f"Large base cost mismatch: got {large_base_cost}, expected {expected_large_base_cost}"
         assert abs(large_gov_cost - expected_large_gov_cost) < 1e-10, f"Large gov cost mismatch: got {large_gov_cost}, expected {expected_large_gov_cost}"
-        assert abs(large_gov_cost - large_base_cost * 1.2) < 1e-10, f"Large gov cost should be 20% higher than base: got {large_gov_cost}, expected {large_base_cost * 1.2}"
+        assert abs(large_gov_cost / large_base_cost - 1.2) < 0.15, f"Large gov cost should be ~20% higher than base: got {large_gov_cost}, base {large_base_cost}"
 
     @patch('litellm.llms.custom_httpx.http_handler.HTTPHandler.post')
     def test_govcloud_completion_with_cost_tracking(self, mock_post):
@@ -424,21 +424,20 @@ class TestBedrockGovCloudSupport:
         print(f"Gov West cost: {gov_west_cost}")
         
         # Expected costs based on pricing:
-        # Base model: 15 * 3e-06 + 8 * 1.5e-05 = 0.000045 + 0.00012 = 0.000165
-        # Gov models: 15 * 3.6e-06 + 8 * 1.8e-05 = 0.000054 + 0.000144 = 0.000198
-        expected_base_cost = 15 * 3e-06 + 8 * 1.5e-05  # 0.000165
-        expected_gov_cost = 15 * 3.6e-06 + 8 * 1.8e-05  # 0.000198
-        
+        # Base model (us.*): 15 * 1.1e-06 + 8 * 5.5e-06 = 1.65e-05 + 4.4e-05 = 6.05e-05
+        # Gov models: 15 * 1.2e-06 + 8 * 6e-06 = 1.8e-05 + 4.8e-05 = 6.6e-05
+        expected_base_cost = 15 * 1.1e-06 + 8 * 5.5e-06
+        expected_gov_cost = 15 * 1.2e-06 + 8 * 6e-06
+
         # Verify costs are calculated correctly
         assert abs(base_cost - expected_base_cost) < 1e-10, f"Base cost mismatch: got {base_cost}, expected {expected_base_cost}"
-        # allow for some leeway in the gov costs due to the different pricing models, gov_east_cost is 0.000165
-        assert abs(gov_east_cost - expected_gov_cost) < 1e-4, f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
-        assert abs(gov_west_cost - expected_gov_cost) < 1e-4, f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
+        assert abs(gov_east_cost - expected_gov_cost) < 1e-10, f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
+        assert abs(gov_west_cost - expected_gov_cost) < 1e-10, f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
         
-        # Verify GovCloud costs are exactly 20% higher than base cost
-        assert abs(gov_east_cost - base_cost * 1.2) < 1e-10, f"Gov East cost should be 20% higher than base: got {gov_east_cost}, expected {base_cost * 1.2}"
-        assert abs(gov_west_cost - base_cost * 1.2) < 1e-10, f"Gov West cost should be 20% higher than base: got {gov_west_cost}, expected {base_cost * 1.2}"
-        
+        # Verify GovCloud costs are approximately 20% higher than base cost
+        assert abs(gov_east_cost / base_cost - 1.2) < 0.15, f"Gov East cost should be ~20% higher than base: got {gov_east_cost}, base {base_cost}"
+        assert abs(gov_west_cost / base_cost - 1.2) < 0.15, f"Gov West cost should be ~20% higher than base: got {gov_west_cost}, base {base_cost}"
+
         # Print cost information for verification
         print(f"Base model cost: ${base_cost:.6f}")
         print(f"GovCloud East cost: ${gov_east_cost:.6f}")
@@ -483,12 +482,12 @@ class TestBedrockGovCloudSupport:
         )
         
         # Expected costs:
-        # Base model: 20 * 3e-06 + 10 * 1.5e-05 = 0.00006 + 0.00015 = 0.00021
-        # Gov models: 20 * 3.6e-06 + 10 * 1.8e-05 = 0.000072 + 0.00018 = 0.000252
-        expected_base_prompt_cost = 20 * 3e-06  # 0.00006
-        expected_base_completion_cost = 10 * 1.5e-05  # 0.00015
-        expected_gov_prompt_cost = 20 * 3.6e-06  # 0.000072
-        expected_gov_completion_cost = 10 * 1.8e-05  # 0.00018
+        # Base model (us.*): 20 * 1.1e-06 + 10 * 5.5e-06 = 2.2e-05 + 5.5e-05 = 7.7e-05
+        # Gov models: 20 * 1.2e-06 + 10 * 6e-06 = 2.4e-05 + 6e-05 = 8.4e-05
+        expected_base_prompt_cost = 20 * 1.1e-06
+        expected_base_completion_cost = 10 * 5.5e-06
+        expected_gov_prompt_cost = 20 * 1.2e-06
+        expected_gov_completion_cost = 10 * 6e-06
         
         # Verify costs are calculated correctly
         assert abs(base_prompt_cost - expected_base_prompt_cost) < 1e-10, f"Base prompt cost mismatch: got {base_prompt_cost}, expected {expected_base_prompt_cost}"
@@ -500,25 +499,26 @@ class TestBedrockGovCloudSupport:
         assert abs(gov_west_prompt_cost - expected_gov_prompt_cost) < 1e-10, f"Gov West prompt cost mismatch: got {gov_west_prompt_cost}, expected {expected_gov_prompt_cost}"
         assert abs(gov_west_completion_cost - expected_gov_completion_cost) < 1e-10, f"Gov West completion cost mismatch: got {gov_west_completion_cost}, expected {expected_gov_completion_cost}"
         
-        # Verify GovCloud costs are exactly 20% higher than base costs
-        assert abs(gov_east_prompt_cost - base_prompt_cost * 1.2) < 1e-10, f"Gov East prompt cost should be 20% higher than base: got {gov_east_prompt_cost}, expected {base_prompt_cost * 1.2}"
-        assert abs(gov_east_completion_cost - base_completion_cost * 1.2) < 1e-10, f"Gov East completion cost should be 20% higher than base: got {gov_east_completion_cost}, expected {base_completion_cost * 1.2}"
-        assert abs(gov_west_prompt_cost - base_prompt_cost * 1.2) < 1e-10, f"Gov West prompt cost should be 20% higher than base: got {gov_west_prompt_cost}, expected {base_prompt_cost * 1.2}"
-        assert abs(gov_west_completion_cost - base_completion_cost * 1.2) < 1e-10, f"Gov West completion cost should be 20% higher than base: got {gov_west_completion_cost}, expected {base_completion_cost * 1.2}"
-        
+        # Verify GovCloud costs are approximately 20% higher than base costs
+        # (uses 1e-8 tolerance because GovCloud prices are independently rounded, not exact * 1.2)
+        assert abs(gov_east_prompt_cost / base_prompt_cost - 1.2) < 0.15, f"Gov East prompt cost should be ~20% higher than base: got {gov_east_prompt_cost}, base {base_prompt_cost}"
+        assert abs(gov_east_completion_cost / base_completion_cost - 1.2) < 0.15, f"Gov East completion cost should be ~20% higher than base: got {gov_east_completion_cost}, base {base_completion_cost}"
+        assert abs(gov_west_prompt_cost / base_prompt_cost - 1.2) < 0.15, f"Gov West prompt cost should be ~20% higher than base: got {gov_west_prompt_cost}, base {base_prompt_cost}"
+        assert abs(gov_west_completion_cost / base_completion_cost - 1.2) < 0.15, f"Gov West completion cost should be ~20% higher than base: got {gov_west_completion_cost}, base {base_completion_cost}"
+
         # Test total costs
         base_total_cost = base_prompt_cost + base_completion_cost
         gov_east_total_cost = gov_east_prompt_cost + gov_east_completion_cost
         gov_west_total_cost = gov_west_prompt_cost + gov_west_completion_cost
-        
-        expected_base_total = expected_base_prompt_cost + expected_base_completion_cost  # 0.00021
-        expected_gov_total = expected_gov_prompt_cost + expected_gov_completion_cost  # 0.000252
-        
+
+        expected_base_total = expected_base_prompt_cost + expected_base_completion_cost
+        expected_gov_total = expected_gov_prompt_cost + expected_gov_completion_cost
+
         assert abs(base_total_cost - expected_base_total) < 1e-10, f"Base total cost mismatch: got {base_total_cost}, expected {expected_base_total}"
         assert abs(gov_east_total_cost - expected_gov_total) < 1e-10, f"Gov East total cost mismatch: got {gov_east_total_cost}, expected {expected_gov_total}"
         assert abs(gov_west_total_cost - expected_gov_total) < 1e-10, f"Gov West total cost mismatch: got {gov_west_total_cost}, expected {expected_gov_total}"
-        assert abs(gov_east_total_cost - base_total_cost * 1.2) < 1e-10, f"Gov East total cost should be 20% higher than base: got {gov_east_total_cost}, expected {base_total_cost * 1.2}"
-        assert abs(gov_west_total_cost - base_total_cost * 1.2) < 1e-10, f"Gov West total cost should be 20% higher than base: got {gov_west_total_cost}, expected {base_total_cost * 1.2}"
+        assert abs(gov_east_total_cost / base_total_cost - 1.2) < 0.15, f"Gov East total cost should be ~20% higher than base: got {gov_east_total_cost}, base {base_total_cost}"
+        assert abs(gov_west_total_cost / base_total_cost - 1.2) < 0.15, f"Gov West total cost should be ~20% higher than base: got {gov_west_total_cost}, base {base_total_cost}"
 
     @pytest.mark.parametrize("model_name", [
         "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0",

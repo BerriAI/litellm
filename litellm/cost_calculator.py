@@ -727,6 +727,18 @@ def _select_model_name_for_cost_calc(
         )
         if prefer_request_bedrock_profile:
             return_model = model
+        elif gov_region and custom_llm_provider == "bedrock":
+            # For GovCloud: use the base model id (without inference-profile
+            # prefix) so the region prefix is added below, matching
+            # "bedrock/us-gov-*/anthropic.*" keys in model_cost.
+            base = completion_response_model or model or ""
+            if base.startswith("bedrock/"):
+                base = base[len("bedrock/"):]
+            for p in _BEDROCK_INFERENCE_PROFILE_PREFIXES:
+                if base.startswith(p):
+                    base = base[len(p):]
+                    break
+            return_model = base
         elif completion_response_model is not None:
             return_model = completion_response_model
         elif model is not None:
