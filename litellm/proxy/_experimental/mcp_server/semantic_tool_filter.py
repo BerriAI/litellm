@@ -3,6 +3,7 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
@@ -100,6 +101,25 @@ class SemanticMCPToolFilter:
             description = str(tool.description) if tool.description else str(tool.name)
 
         return name, description
+
+    @staticmethod
+    def _normalize_tool_name(name: str) -> str:
+        """Normalize tool name for comparison: lowercase, replace hyphens with underscores."""
+        return name.replace("-", "_").lower()
+
+    def _tool_name_matches(self, client_name: str, index_name: str) -> bool:
+        """
+        Check if client_name matches index_name, accounting for prefixes.
+
+        MCP tools may be prefixed by the server name (e.g., "weather-get_forecast")
+        or further prefixed by clients. This matches by normalizing hyphens/underscores
+        and checking if client_name ends with index_name.
+        """
+        if client_name == index_name:
+            return True
+        norm_client = self._normalize_tool_name(client_name)
+        norm_index = self._normalize_tool_name(index_name)
+        return norm_client.endswith(norm_index)
 
     def _build_router(self, tools: List) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
@@ -216,17 +236,19 @@ class SemanticMCPToolFilter:
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]
     ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
-        for tool in available_tools:
-            tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
+        """Get tools from available_tools by their names, preserving order.
 
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
-        return [tool_map[name] for name in tool_names if name in tool_map]
+        Uses prefix-aware matching so that client-provided tool names with
+        server or client prefixes still match the semantic router's index names.
+        """
+        matched_tools = []
+        for index_name in tool_names:
+            for tool in available_tools:
+                tool_name, _ = self._extract_tool_info(tool)
+                if self._tool_name_matches(tool_name, index_name):
+                    matched_tools.append(tool)
+                    break
+        return matched_tools
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """

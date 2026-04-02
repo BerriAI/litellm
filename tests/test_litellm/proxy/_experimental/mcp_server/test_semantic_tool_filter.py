@@ -392,3 +392,132 @@ async def test_semantic_filter_hook_skips_no_tools():
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
 
+
+def test_normalize_tool_name():
+    """Test that tool name normalization handles hyphens and case."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    assert SemanticMCPToolFilter._normalize_tool_name("get-weather-forecast") == "get_weather_forecast"
+    assert SemanticMCPToolFilter._normalize_tool_name("Send_Notification") == "send_notification"
+    assert SemanticMCPToolFilter._normalize_tool_name("weather-get_forecast") == "weather_get_forecast"
+    assert SemanticMCPToolFilter._normalize_tool_name("read_document") == "read_document"
+
+
+def test_tool_name_matches():
+    """Test prefix-aware tool name matching."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    f = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Exact match
+    assert f._tool_name_matches("get_forecast", "get_forecast") is True
+    # Server prefix (hyphen separator)
+    assert f._tool_name_matches("weather-get_forecast", "get_forecast") is True
+    # Client prefix (underscores throughout)
+    assert f._tool_name_matches("mcp_litellm_weather_get_forecast", "get_forecast") is True
+    # No match - tool name doesn't end with index name
+    assert f._tool_name_matches("get_forecast_v2", "get_forecast") is False
+    # No match - completely different
+    assert f._tool_name_matches("send_notification", "get_forecast") is False
+
+
+def test_get_tools_by_names_exact_match():
+    """Test that _get_tools_by_names works with exact name matches."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    available_tools = [
+        MCPTool(name="get_forecast", description="Get weather forecast", inputSchema={"type": "object"}),
+        MCPTool(name="send_notification", description="Send a notification", inputSchema={"type": "object"}),
+        MCPTool(name="read_document", description="Read a document", inputSchema={"type": "object"}),
+    ]
+
+    result = filter_instance._get_tools_by_names(
+        ["send_notification", "get_forecast"], available_tools
+    )
+
+    assert len(result) == 2
+    assert result[0].name == "send_notification"
+    assert result[1].name == "get_forecast"
+
+
+def test_get_tools_by_names_server_prefix():
+    """Test matching when available tools have server prefix (e.g., weather-get_forecast)."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    available_tools = [
+        MCPTool(name="weather-get_forecast", description="Get weather forecast", inputSchema={"type": "object"}),
+        MCPTool(name="alerts-send_notification", description="Send a notification", inputSchema={"type": "object"}),
+        MCPTool(name="docs-read_document", description="Read a document", inputSchema={"type": "object"}),
+    ]
+
+    result = filter_instance._get_tools_by_names(
+        ["get_forecast", "send_notification"], available_tools
+    )
+
+    assert len(result) == 2
+    assert result[0].name == "weather-get_forecast"
+    assert result[1].name == "alerts-send_notification"
+
+
+def test_get_tools_by_names_client_prefix():
+    """Test matching when available tools have client-added prefix with underscore normalization."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    available_tools = [
+        MCPTool(name="mcp_litellm_weather_get_forecast", description="Get weather forecast", inputSchema={"type": "object"}),
+        MCPTool(name="mcp_litellm_alerts_send_notification", description="Send a notification", inputSchema={"type": "object"}),
+    ]
+
+    # Semantic router returns server-prefixed names (with hyphens)
+    result = filter_instance._get_tools_by_names(
+        ["weather-get_forecast", "alerts-send_notification"], available_tools
+    )
+
+    assert len(result) == 2
+    assert result[0].name == "mcp_litellm_weather_get_forecast"
+    assert result[1].name == "mcp_litellm_alerts_send_notification"
+
