@@ -1105,8 +1105,10 @@ def test_file_data_field_order():
 
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
-    # Test with HTTPS URL and explicit format (audio file)
-    file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
+    # Test with GCS URL and explicit format (audio file).
+    # Files API URIs (generativelanguage.googleapis.com/.../files/…) are intentionally
+    # excluded here — the Files API already knows the mime type so we never set it.
+    file_url = "gs://my-bucket/audio/sample.mp3"
     format = "audio/mpeg"
 
     result = _process_gemini_media(image_url=file_url, format=format)
