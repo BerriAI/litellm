@@ -148,5 +148,12 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text = response_json.get("text") or ""
         response = TranscriptionResponse(text=text)
+
+        # Preserve Mistral-specific fields (e.g. diarization segments)
+        if "segments" in response_json:
+            response["segments"] = response_json["segments"]
+        if "language" in response_json:
+            response["language"] = response_json["language"]
+
         response._hidden_params = response_json
         return response

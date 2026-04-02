@@ -2,13 +2,14 @@
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, message, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -165,8 +166,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
+  const tagOptions = tagsData
+    ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name }))
+    : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -175,7 +180,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [keyOwner, setKeyOwner] = useState("you");
-  const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [hasPrefilled, setHasPrefilled] = useState(false);
   const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
@@ -806,19 +810,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown
-                teams={selectedOrganizationId ? teams?.filter((t) => t.organization_id === selectedOrganizationId) : teams}
                 disabled={selectedProjectId !== null}
-                loading={!teams}
-                onChange={(teamId) => {
-                  const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-                  setSelectedCreateKeyTeam(selectedTeam);
+                organizationId={selectedOrganizationId}
+                onTeamSelect={(team) => {
+                  setSelectedCreateKeyTeam(team);
                   setSelectedProjectId(null);
                   form.setFieldValue("project_id", undefined);
                   // Auto-populate org from team for non-admin users
-                  if (selectedTeam?.organization_id) {
-                    setSelectedOrganizationId(selectedTeam.organization_id);
-                    form.setFieldValue("organization_id", selectedTeam.organization_id);
-                  } else if (!teamId) {
+                  if (team?.organization_id) {
+                    setSelectedOrganizationId(team.organization_id);
+                    form.setFieldValue("organization_id", team.organization_id);
+                  } else if (!team) {
                     setSelectedOrganizationId(null);
                     form.setFieldValue("organization_id", undefined);
                   }
@@ -1340,9 +1342,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     <Select
                       mode="tags"
                       style={{ width: "100%" }}
-                      placeholder="Enter tags"
+                      placeholder="Select or enter tags"
                       tokenSeparators={[","]}
-                      options={predefinedTags}
+                      options={tagOptions}
                     />
                   </Form.Item>
                   <Accordion className="mt-4 mb-4">

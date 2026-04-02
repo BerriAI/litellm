@@ -1627,6 +1627,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
     team_table = MagicMock(spec=LiteLLM_TeamTable)
     team_table.metadata = {}
+    team_table.team_id = "test_team_id"
     team_table.team_alias = "Test Team"
     team_table.budget_duration = None
 
@@ -1639,12 +1640,22 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
     mock_budget_response = MagicMock()
     mock_budget_response.budget_id = "new_budget_456"
 
-    with patch(
-        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
-        new_callable=AsyncMock
-    ) as mock_new_budget:
-        mock_new_budget.return_value = mock_budget_response
+    mock_db = MagicMock()
+    mock_db.litellm_teammembership.update_many = AsyncMock(return_value={"count": 0})
+    mock_prisma = MagicMock()
+    mock_prisma.db = mock_db
 
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+            new_callable=AsyncMock,
+            return_value=mock_budget_response,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+    ):
         result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
             team_table=team_table,
             user_api_key_dict=mock_user_api_key_dict,
@@ -1653,7 +1664,6 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
             team_member_budget_duration="45d",
         )
 
-        assert mock_new_budget.called
         assert "team_member_budget_id" in result["metadata"]
         assert result["metadata"]["team_member_budget_id"] == "new_budget_456"
 
@@ -3266,7 +3276,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_new_team_standalone_validates_against_user_models():
+async def test_new_team_standalone_validates_against_user_models(monkeypatch):
     """
     Test that /team/new WITHOUT organization_id still validates models against user's personal models.
 
@@ -3277,10 +3287,16 @@ async def test_new_team_standalone_validates_against_user_models():
     - Team is created WITHOUT organization_id and models=['gpt-4']
     - Expected: Should fail with "Model not in allowed user models"
     """
+    import litellm
     from fastapi import Request
 
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Avoid injecting max_budget via global defaults; that path calls get_user_object and
+    # needs cache/DB mocks — this test only covers model validation.
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", None)
 
     # Create non-admin user with restrictive personal models
     non_admin_user = UserAPIKeyAuth(
