@@ -655,16 +655,31 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 ? (
+                    {info.models.length === 0 && !(info.access_group_models?.length) ? (
                       <Badge color="red">All proxy models</Badge>
                     ) : (
-                      info.models.map((model, index) => (
-                        <Badge key={index} color="red">
-                          {model}
-                        </Badge>
-                      ))
+                      <>
+                        {info.models.map((model: string, index: number) => (
+                          <Badge key={`direct-${index}`} color="blue">
+                            {model}
+                          </Badge>
+                        ))}
+                        {(info.access_group_models || []).map((model: string, index: number) => (
+                          <Badge key={`ag-${index}`} color="green" title="From access group">
+                            {model}
+                          </Badge>
+                        ))}
+                      </>
                     )}
                   </div>
+                  {info.access_group_models && info.access_group_models.length > 0 && (
+                    <div className="mt-2">
+                      <Text className="text-xs text-gray-500">
+                        <span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />Direct
+                        <span className="inline-block w-2 h-2 rounded-full bg-green-500 ml-3 mr-1" />From access group
+                      </Text>
+                    </div>
+                  )}
                 </Card>
 
                 <Card>
