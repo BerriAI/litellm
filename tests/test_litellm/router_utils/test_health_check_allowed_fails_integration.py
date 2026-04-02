@@ -282,7 +282,7 @@ class TestWriteHealthStateIntegration:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "timeout", "exception": timeout_exc},
+            {"model_id": "deploy-1", "error": "timeout"},
         ]
         healthy_endpoints = [
             {"model_id": "deploy-2"},
@@ -295,6 +295,7 @@ class TestWriteHealthStateIntegration:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=healthy_endpoints,
                     unhealthy_endpoints=unhealthy_endpoints,
+                    exceptions_by_model_id={"deploy-1": timeout_exc},
                 )
                 mock_cooldown.assert_called_once_with(
                     litellm_router_instance=router,
@@ -316,7 +317,7 @@ class TestWriteHealthStateIntegration:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "unknown failure"},  # no "exception" key
+            {"model_id": "deploy-1", "error": "unknown failure"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -326,6 +327,7 @@ class TestWriteHealthStateIntegration:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
+                    # no exceptions_by_model_id → cooldown should not fire
                 )
                 mock_cooldown.assert_not_called()
 
@@ -345,7 +347,7 @@ class TestWriteHealthStateIntegration:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+            {"model_id": "deploy-1", "error": "rate limited"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -358,6 +360,7 @@ class TestWriteHealthStateIntegration:
                     _write_health_state_to_router_cache(
                         healthy_endpoints=[],
                         unhealthy_endpoints=unhealthy_endpoints,
+                        exceptions_by_model_id={"deploy-1": rate_exc},
                     )
                     mock_increment.assert_called_once_with(
                         litellm_router_instance=router,
@@ -557,7 +560,7 @@ class TestHealthCheckIgnoreTransientErrors:
         assert getattr(rate_exc, "status_code", None) == 429
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+            {"model_id": "deploy-1", "error": "rate limited"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -570,6 +573,7 @@ class TestHealthCheckIgnoreTransientErrors:
                     _write_health_state_to_router_cache(
                         healthy_endpoints=[],
                         unhealthy_endpoints=unhealthy_endpoints,
+                        exceptions_by_model_id={"deploy-1": rate_exc},
                     )
                     mock_cooldown.assert_not_called()
                     mock_increment.assert_not_called()
@@ -591,7 +595,7 @@ class TestHealthCheckIgnoreTransientErrors:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "timeout", "exception": timeout_exc},
+            {"model_id": "deploy-1", "error": "timeout"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -601,6 +605,7 @@ class TestHealthCheckIgnoreTransientErrors:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
+                    exceptions_by_model_id={"deploy-1": timeout_exc},
                 )
                 mock_cooldown.assert_not_called()
 
@@ -621,7 +626,7 @@ class TestHealthCheckIgnoreTransientErrors:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "auth failed", "exception": auth_exc},
+            {"model_id": "deploy-1", "error": "auth failed"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -631,6 +636,7 @@ class TestHealthCheckIgnoreTransientErrors:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
+                    exceptions_by_model_id={"deploy-1": auth_exc},
                 )
                 mock_cooldown.assert_called_once()
 
@@ -651,13 +657,14 @@ class TestHealthCheckIgnoreTransientErrors:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+            {"model_id": "deploy-1", "error": "rate limited"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
             _write_health_state_to_router_cache(
                 healthy_endpoints=[],
                 unhealthy_endpoints=unhealthy_endpoints,
+                exceptions_by_model_id={"deploy-1": rate_exc},
             )
 
         # Health state cache should have NO entry for deploy-1
@@ -682,7 +689,7 @@ class TestHealthCheckIgnoreTransientErrors:
         )
 
         unhealthy_endpoints = [
-            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+            {"model_id": "deploy-1", "error": "rate limited"},
         ]
 
         with patch.object(proxy_module, "llm_router", router):
@@ -692,5 +699,6 @@ class TestHealthCheckIgnoreTransientErrors:
                 _write_health_state_to_router_cache(
                     healthy_endpoints=[],
                     unhealthy_endpoints=unhealthy_endpoints,
+                    exceptions_by_model_id={"deploy-1": rate_exc},
                 )
                 mock_cooldown.assert_called_once()
