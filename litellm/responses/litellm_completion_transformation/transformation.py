@@ -181,7 +181,7 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort = None
+        reasoning_effort: Optional[Any] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):

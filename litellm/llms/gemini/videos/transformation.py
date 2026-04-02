@@ -343,7 +343,7 @@ class GeminiVideoConfig(BaseVideoConfig):
             model=model,
         )
 
-        usage_data = {}
+        usage_data: Dict[str, Any] = {}
         if request_data:
             parameters = request_data.get("parameters", {})
             duration = (

@@ -1272,15 +1272,15 @@ class BedrockLLM(BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
+    @staticmethod
     def get_bedrock_model_id(
-        self,
         optional_params: dict,
         provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
         model: str,
     ) -> str:
         modelId = optional_params.pop("model_id", None)
         if modelId is not None:
-            modelId = self.encode_model_id(model_id=modelId)
+            modelId = BedrockLLM.encode_model_id(model_id=modelId)
         else:
             modelId = model
 
@@ -1288,19 +1288,19 @@ class BedrockLLM(BaseAWSLLM):
             modelId, optional_params
         )
         if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_for_llama_like_model(modelId)
+            modelId = BedrockLLM._get_model_id_for_llama_like_model(modelId)
 
         return modelId
 
+    @staticmethod
     def _get_model_id_for_llama_like_model(
-        self,
         model: str,
     ) -> str:
         """
         Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
         """
         model_id = model.replace("llama/", "")
-        return self.encode_model_id(model_id=model_id)
+        return BedrockLLM.encode_model_id(model_id=model_id)
 
 
 def get_response_stream_shape():
