@@ -756,7 +756,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
             # Preserve extra_headers for authentication (e.g. GitHub Copilot)
-            extra_headers = kwargs.get("litellm_params", {}).get("extra_headers")
+            extra_headers = (kwargs.get("litellm_params") or {}).get("extra_headers")
             if extra_headers:
                 kwargs_for_followup["extra_headers"] = extra_headers
 
@@ -982,7 +982,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             }
 
             # Preserve extra_headers for authentication (e.g. GitHub Copilot)
-            extra_headers = kwargs.get("litellm_params", {}).get("extra_headers")
+            extra_headers = (kwargs.get("litellm_params") or {}).get("extra_headers")
             if extra_headers:
                 kwargs_for_followup["extra_headers"] = extra_headers
 

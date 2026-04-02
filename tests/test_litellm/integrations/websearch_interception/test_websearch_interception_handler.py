@@ -273,3 +273,67 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+from unittest.mock import patch
+
+@pytest.mark.asyncio
+async def test_extra_headers_propagated_agentic_loop():
+    """Test that extra_headers are propagated in Anthropic-style agentic loop."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "litellm_params": {"extra_headers": {"editor-version": "vscode/1.110.0"}}
+    }
+
+    with patch(
+        "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate"
+    ) as mock_acreate, patch.object(
+        logger, "_execute_search", return_value="mock search result"
+    ):
+        await logger._execute_agentic_loop(
+            model="gpt-4",
+            messages=[],
+            tool_calls=[{"id": "call_1", "type": "function", "input": {"query": "hello"}}],
+            thinking_blocks=[],
+            anthropic_messages_optional_request_params={},
+            logging_obj=Mock(model_call_details={}),
+            stream=False,
+            kwargs=kwargs,
+        )
+
+        mock_acreate.assert_called_once()
+        call_kwargs = mock_acreate.call_args.kwargs
+        assert call_kwargs.get("extra_headers") == {"editor-version": "vscode/1.110.0"}
+
+
+@pytest.mark.asyncio
+async def test_extra_headers_propagated_chat_completion_agentic_loop():
+    """Test that extra_headers are propagated in OpenAI-style chat completion agentic loop."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    kwargs = {
+        "litellm_params": {"extra_headers": {"editor-version": "vscode/1.110.0"}}
+    }
+
+    with patch(
+        "litellm.acompletion"
+    ) as mock_acompletion, patch.object(
+        logger, "_execute_search", return_value="mock search result"
+    ):
+        await logger._execute_chat_completion_agentic_loop(
+            model="gpt-4",
+            messages=[],
+            tool_calls=[
+                {"id": "call_1", "type": "function", "function": {"arguments": {"query": "hello"}}}
+            ],
+            optional_params={},
+            logging_obj=Mock(),
+            stream=False,
+            kwargs=kwargs,
+            response_format="openai",
+        )
+
+        mock_acompletion.assert_called_once()
+        call_kwargs = mock_acompletion.call_args.kwargs
+        assert call_kwargs.get("extra_headers") == {"editor-version": "vscode/1.110.0"}
