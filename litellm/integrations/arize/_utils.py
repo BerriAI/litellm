@@ -236,12 +236,41 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
     if prompt_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
-    reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
+    # Chat Completions API uses "completion_tokens_details"; Responses API
+    # uses "output_tokens_details". Check both so the span is populated
+    # regardless of which API produced the usage object.
+    completion_details = usage.get("completion_tokens_details") or usage.get(
+        "output_tokens_details"
+    ) or {}
+    reasoning_tokens = completion_details.get("reasoning_tokens")
     if reasoning_tokens:
         safe_set_attribute(
             span,
             span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
             reasoning_tokens,
+        )
+    audio_tokens = completion_details.get("audio_tokens")
+    if audio_tokens:
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO,
+            audio_tokens,
+        )
+
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    cached_tokens = prompt_details.get("cached_tokens")
+    if cached_tokens:
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+            cached_tokens,
+        )
+    audio_input_tokens = prompt_details.get("audio_tokens")
+    if audio_input_tokens:
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO,
+            audio_input_tokens,
         )
 
 
