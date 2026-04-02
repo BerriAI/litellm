@@ -528,6 +528,12 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_token_above_200k_tokens",
         "input_cost_per_token_above_272k_tokens",
         "output_cost_per_token_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens_flex",
+        "cache_read_input_token_cost_above_272k_tokens_batches",
+        "input_cost_per_token_above_272k_tokens_flex",
+        "input_cost_per_token_above_272k_tokens_batches",
+        "output_cost_per_token_above_272k_tokens_flex",
+        "output_cost_per_token_above_272k_tokens_batches",
         "input_cost_per_character_above_128k_tokens",
         "output_cost_per_character_above_128k_tokens",
         "input_cost_per_image_above_128k_tokens",
@@ -620,6 +626,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_flex": {
+                    "type": "number"
+                },
+                "cache_read_input_token_cost_above_272k_tokens_batches": {
+                    "type": "number"
+                },
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },
@@ -639,6 +651,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
@@ -656,6 +670,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_batches": {
+                    "type": "number"
+                },
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},

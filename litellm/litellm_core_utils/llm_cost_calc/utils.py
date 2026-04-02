@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, TypedDict, cast
+from typing import List, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -159,6 +159,64 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
     return base_key
 
 
+def _parse_token_threshold_value(threshold_str: str) -> float:
+    """
+    Parse token threshold strings used in model pricing keys.
+
+    Supports raw numeric values plus common `k` and `m` suffixes, such as
+    `128`, `272k`, and `1m`.
+    """
+    normalized_threshold = threshold_str.strip().lower()
+    multiplier = 1.0
+
+    if normalized_threshold.endswith("k"):
+        normalized_threshold = normalized_threshold[:-1]
+        multiplier = 1_000.0
+    elif normalized_threshold.endswith("m"):
+        normalized_threshold = normalized_threshold[:-1]
+        multiplier = 1_000_000.0
+
+    return float(normalized_threshold) * multiplier
+
+
+def _extract_token_threshold_from_key(key: str) -> Optional[Tuple[str, float]]:
+    try:
+        threshold_str = key.split("_above_", 1)[1].split("_tokens", 1)[0]
+        threshold = _parse_token_threshold_value(threshold_str)
+    except (IndexError, ValueError):
+        return None
+
+    return threshold_str, threshold
+
+
+def _get_sorted_input_token_threshold_keys(
+    model_info: ModelInfo,
+    excluded_suffixes: Tuple[str, ...] = (),
+) -> List[Tuple[str, str, float]]:
+    """
+    Return input threshold-pricing keys sorted by numeric threshold descending.
+
+    This avoids relying on lexicographic ordering of keys like `272k` vs `1m`.
+    """
+    threshold_entries: List[Tuple[str, str, float]] = []
+
+    for key in model_info:
+        if not key.startswith("input_cost_per_token_above_"):
+            continue
+        if any(key.endswith(suffix) for suffix in excluded_suffixes):
+            continue
+
+        parsed_threshold = _extract_token_threshold_from_key(key)
+        if parsed_threshold is None:
+            continue
+
+        threshold_str, threshold = parsed_threshold
+        threshold_entries.append((key, threshold_str, threshold))
+
+    threshold_entries.sort(key=lambda item: item[2], reverse=True)
+    return threshold_entries
+
+
 def _get_token_base_cost(
     model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
 ) -> Tuple[float, float, float, float, float]:
@@ -204,16 +262,17 @@ def _get_token_base_cost(
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
     # Most models don't have threshold pricing, so we can return early.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
-    threshold_keys = [
-        k
-        for k in model_info
-        if k.startswith("input_cost_per_token_above_")
-        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
-    ]
-    if not threshold_keys:
+    # Exclude service-tier-specific and batch-specific variants
+    # (e.g. input_cost_per_token_above_200k_tokens_priority,
+    # input_cost_per_token_above_272k_tokens_batches) so that the threshold
+    # detection loop only processes the standard keys. Tier-specific variants
+    # are resolved later via _get_service_tier_cost_key, while batch pricing is
+    # handled separately in batch_cost_calculator().
+    threshold_entries = _get_sorted_input_token_threshold_keys(
+        model_info,
+        excluded_suffixes=tuple(f"_{st.value}" for st in ServiceTier) + ("_batches",),
+    )
+    if not threshold_entries:
         return (
             prompt_base_cost,
             completion_base_cost,
@@ -222,17 +281,10 @@ def _get_token_base_cost(
             cache_read_cost,
         )
 
-    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
-    threshold: Optional[float] = None
-    for key in sorted(threshold_keys, reverse=True):
+    for key, threshold_str, threshold in threshold_entries:
         value = model_info.get(key)
         if value is not None:
             try:
-                # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = float(threshold_str.replace("k", "")) * (
-                    1000 if "k" in threshold_str else 1
-                )
                 if usage.prompt_tokens > threshold:
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
@@ -307,8 +359,6 @@ def _get_token_base_cost(
                         )
 
                     break
-            except (IndexError, ValueError):
-                continue
             except Exception:
                 continue
 

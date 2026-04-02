@@ -35,6 +35,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     PromptTokensDetailsResult,
     _calculate_input_cost,
+    _get_token_base_cost,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -322,6 +323,32 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
     expected_completion = model_cost_map["output_cost_per_token_above_272k_tokens"] * completion_tokens
     assert round(prompt_cost, 10) == round(expected_prompt, 10)
     assert round(completion_cost, 10) == round(expected_completion, 10)
+
+
+def test_get_token_base_cost_uses_highest_numeric_threshold():
+    usage = Usage(
+        prompt_tokens=1_100_000,
+        completion_tokens=100,
+        total_tokens=1_100_100,
+    )
+    model_info = {
+        "key": "test-model",
+        "litellm_provider": "openai",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_272k_tokens": 5e-6,
+        "output_cost_per_token_above_272k_tokens": 6e-6,
+        "input_cost_per_token_above_1m_tokens": 7e-6,
+        "output_cost_per_token_above_1m_tokens": 8e-6,
+    }
+
+    prompt_base_cost, completion_base_cost, _, _, _ = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+    )
+
+    assert prompt_base_cost == pytest.approx(7e-6)
+    assert completion_base_cost == pytest.approx(8e-6)
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching():

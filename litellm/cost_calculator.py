@@ -2054,6 +2054,10 @@ def batch_cost_calculator(
             skips the global litellm.get_model_info() lookup so that
             deployment-specific pricing is used.
     """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        _get_cost_per_unit,
+        _get_sorted_input_token_threshold_keys,
+    )
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider
@@ -2076,37 +2080,100 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches = model_info.get("input_cost_per_token_batches")
-    input_cost_per_token = model_info.get("input_cost_per_token")
-    output_cost_per_token_batches = model_info.get("output_cost_per_token_batches")
-    output_cost_per_token = model_info.get("output_cost_per_token")
-    total_prompt_cost = 0.0
-    total_completion_cost = 0.0
-    if input_cost_per_token_batches:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
-    elif input_cost_per_token:
-        # Subtract cached tokens from prompt_tokens before calculating cost
-        # Fixes issue where cached tokens are being charged again
-        total_prompt_cost = (
-            get_billable_input_tokens(usage) * (input_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
+    prompt_tokens = get_billable_input_tokens(usage)
+    details = _parse_prompt_tokens_details(usage)
+    cache_read_tokens = details["cache_hit_tokens"]
 
-        # Add cache read cost if applicable
-        details = _parse_prompt_tokens_details(usage)
-        cache_read_tokens = details["cache_hit_tokens"]
-        cache_read_cost_key = _get_service_tier_cost_key(
-            "cache_read_input_token_cost", None
+    input_cost_per_token_batches = _get_cost_per_unit(
+        model_info, "input_cost_per_token_batches", None
+    )
+    input_cost_per_token = _get_cost_per_unit(model_info, "input_cost_per_token", None)
+    output_cost_per_token_batches = _get_cost_per_unit(
+        model_info, "output_cost_per_token_batches", None
+    )
+    output_cost_per_token = _get_cost_per_unit(
+        model_info, "output_cost_per_token", None
+    )
+    cache_read_cost_batches = _get_cost_per_unit(
+        model_info, "cache_read_input_token_cost_batches", None
+    )
+    cache_read_cost = _get_cost_per_unit(
+        model_info, "cache_read_input_token_cost", None
+    )
+
+    prompt_cost_per_token = (
+        input_cost_per_token_batches
+        if input_cost_per_token_batches is not None
+        else ((input_cost_per_token / 2) if input_cost_per_token is not None else 0.0)
+    )
+    completion_cost_per_token = (
+        output_cost_per_token_batches
+        if output_cost_per_token_batches is not None
+        else (
+            (output_cost_per_token / 2) if output_cost_per_token is not None else 0.0
         )
-        total_prompt_cost += (
-            calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens)
-            / 2
+    )
+    cache_read_cost_per_token = (
+        cache_read_cost_batches
+        if cache_read_cost_batches is not None
+        else ((cache_read_cost / 2) if cache_read_cost is not None else 0.0)
+    )
+
+    threshold_entries = _get_sorted_input_token_threshold_keys(
+        model_info,
+        excluded_suffixes=("_priority", "_flex", "_batches"),
+    )
+    for key, threshold_str, threshold in threshold_entries:
+        value = model_info.get(key)
+        if value is None:
+            continue
+
+        if usage.prompt_tokens <= threshold:
+            continue
+
+        batch_input_key = f"input_cost_per_token_above_{threshold_str}_tokens_batches"
+        batch_output_key = f"output_cost_per_token_above_{threshold_str}_tokens_batches"
+        batch_cache_key = (
+            f"cache_read_input_token_cost_above_{threshold_str}_tokens_batches"
         )
-    if output_cost_per_token_batches:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
-    elif output_cost_per_token:
-        total_completion_cost = (
-            usage.completion_tokens * (output_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
+        standard_output_key = f"output_cost_per_token_above_{threshold_str}_tokens"
+        standard_cache_key = (
+            f"cache_read_input_token_cost_above_{threshold_str}_tokens"
+        )
+
+        prompt_cost_per_token = (
+            _get_cost_per_unit(model_info, batch_input_key, None)
+            if model_info.get(batch_input_key) is not None
+            else (
+                (_get_cost_per_unit(model_info, key, None) or 0.0) / 2
+                if model_info.get(key) is not None
+                else prompt_cost_per_token
+            )
+        )
+        completion_cost_per_token = (
+            _get_cost_per_unit(model_info, batch_output_key, None)
+            if model_info.get(batch_output_key) is not None
+            else (
+                (_get_cost_per_unit(model_info, standard_output_key, None) or 0.0) / 2
+                if model_info.get(standard_output_key) is not None
+                else completion_cost_per_token
+            )
+        )
+        cache_read_cost_per_token = (
+            _get_cost_per_unit(model_info, batch_cache_key, None)
+            if model_info.get(batch_cache_key) is not None
+            else (
+                (_get_cost_per_unit(model_info, standard_cache_key, None) or 0.0) / 2
+                if model_info.get(standard_cache_key) is not None
+                else cache_read_cost_per_token
+            )
+        )
+        break
+
+    total_prompt_cost = (
+        prompt_tokens * prompt_cost_per_token
+    ) + (cache_read_tokens * cache_read_cost_per_token)
+    total_completion_cost = usage.completion_tokens * completion_cost_per_token
 
     return total_prompt_cost, total_completion_cost
 
