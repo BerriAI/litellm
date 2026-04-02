@@ -692,7 +692,7 @@ async def test_router_v1_messages_fallbacks():
             {
                 "model_name": "bedrock-claude",
                 "litellm_params": {
-                    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
                     "mock_response": "Hello, world I am a fallback!",
                 },
             },

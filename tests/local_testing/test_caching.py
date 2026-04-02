@@ -1237,7 +1237,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         response_2_content = ""
 
         response1 = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1253,7 +1253,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=40,
             temperature=1,

@@ -76,7 +76,7 @@ def test_bedrock_timeout():
     litellm.set_verbose = True
     try:
         response = litellm.completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             timeout=0.01,
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
         )

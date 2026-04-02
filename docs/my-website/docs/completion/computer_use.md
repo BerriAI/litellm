@@ -80,7 +80,7 @@ model_list:
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: claude-bedrock         # Bedrock Anthropic model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      model: bedrock/anthropic.claude-haiku-4-5-20251001:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-west-2
@@ -153,7 +153,7 @@ import litellm
 
 assert litellm.supports_computer_use(model="anthropic/claude-3-5-sonnet-latest") == True
 assert litellm.supports_computer_use(model="anthropic/claude-3-7-sonnet-20250219") == True
-assert litellm.supports_computer_use(model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0") == True
+assert litellm.supports_computer_use(model="bedrock/anthropic.claude-haiku-4-5-20251001:0") == True
 assert litellm.supports_computer_use(model="vertex_ai/claude-3-5-sonnet") == True
 assert litellm.supports_computer_use(model="openai/gpt-4") == False
 ```
@@ -171,7 +171,7 @@ model_list:
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: claude-bedrock         # Bedrock Anthropic model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      model: bedrock/anthropic.claude-haiku-4-5-20251001:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-west-2

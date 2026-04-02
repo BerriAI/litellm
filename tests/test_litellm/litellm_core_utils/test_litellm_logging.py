@@ -20,7 +20,7 @@ from litellm.types.utils import ModelResponse, TextCompletionResponse
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": "Hey"}],
         stream=True,
         call_type="completion",
