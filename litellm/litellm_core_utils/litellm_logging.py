@@ -44,6 +44,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    MAX_ORIGINAL_RESPONSE_LOG_CHARS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
 )
@@ -1184,6 +1185,20 @@ class Logging(LiteLLMLoggingBaseClass):
             original_response = json.dumps(original_response)
         if isinstance(original_response, (str, list, dict)):
             original_response = truncate_base64_in_messages(original_response)
+        # Cap the stored string so that large provider responses (e.g. Vertex
+        # image-generation JSON with base64 already removed by truncate_base64_in_messages
+        # but still multi-MB of JSON structure) don't accumulate in Logging objects
+        # while async callbacks are waiting.  Logging callbacks use this for debugging
+        # only; they don't need the full provider response.
+        if (
+            MAX_ORIGINAL_RESPONSE_LOG_CHARS > 0
+            and isinstance(original_response, str)
+            and len(original_response) > MAX_ORIGINAL_RESPONSE_LOG_CHARS
+        ):
+            original_response = (
+                original_response[:MAX_ORIGINAL_RESPONSE_LOG_CHARS]
+                + f"...[truncated, {len(original_response)} chars total]"
+            )
         litellm.error_logs["POST_CALL"] = locals()
         try:
             self.model_call_details["input"] = input

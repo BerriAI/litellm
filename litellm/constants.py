@@ -62,6 +62,15 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS = (
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 
+# Maximum number of characters to store in model_call_details["original_response"].
+# After base64 truncation the raw Vertex / Gemini response is still multi-MB of
+# JSON structure; this cap prevents each Logging object from holding those large
+# strings for the duration of the async callback chain.
+# Set to 0 to disable. Default: 10 000 chars (~10 KB).
+MAX_ORIGINAL_RESPONSE_LOG_CHARS = int(
+    os.getenv("MAX_ORIGINAL_RESPONSE_LOG_CHARS", 10_000)
+)
+
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING = (

@@ -295,6 +295,45 @@ def test_truncate_base64_in_value_bare_dict_value():
     assert "base64_data truncated" in result["inlineData"]["data"]
 
 
+def test_post_call_caps_original_response_length():
+    """
+    post_call must cap the stored original_response string to
+    MAX_ORIGINAL_RESPONSE_LOG_CHARS characters.
+
+    Regression test for Fix 9: after Fix 6 removes the 8MB base64 payload, the
+    remaining Vertex/Gemini JSON structure is still multi-MB.  Storing it verbatim
+    in model_call_details["original_response"] means every Logging object holds
+    ~6 MB for the full duration of the async callback chain.  At 95 concurrent
+    requests that is ~570 MB of live strings.
+    """
+    from litellm.constants import MAX_ORIGINAL_RESPONSE_LOG_CHARS
+
+    # Build a large but non-base64 string (simulates post-base64-truncation Vertex JSON)
+    large_json = '{"candidates":[' + ("x" * (MAX_ORIGINAL_RESPONSE_LOG_CHARS + 1000)) + "]}"
+
+    logging_obj = setup_logging()
+    logging_obj.post_call(original_response=large_json, input=[], api_key="")
+
+    stored = logging_obj.model_call_details["original_response"]
+    assert len(stored) <= MAX_ORIGINAL_RESPONSE_LOG_CHARS + 100, (
+        f"original_response is {len(stored)} chars — "
+        f"expected at most {MAX_ORIGINAL_RESPONSE_LOG_CHARS + 100} chars"
+    )
+    assert "truncated" in stored, "Truncation marker missing from capped response"
+
+
+def test_post_call_does_not_cap_short_response():
+    """post_call must not alter responses shorter than MAX_ORIGINAL_RESPONSE_LOG_CHARS."""
+    from litellm.constants import MAX_ORIGINAL_RESPONSE_LOG_CHARS
+
+    short = '{"choices":[{"message":{"content":"Hello"}}]}'
+    assert len(short) < MAX_ORIGINAL_RESPONSE_LOG_CHARS
+
+    logging_obj = setup_logging()
+    logging_obj.post_call(original_response=short, input=[], api_key="")
+    assert logging_obj.model_call_details["original_response"] == short
+
+
 def test_post_call_truncates_base64_in_error_logs():
     """
     litellm.error_logs["POST_CALL"] must also receive the truncated version.
