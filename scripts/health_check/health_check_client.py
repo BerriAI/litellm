@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#   "httpx==0.28.1",
+#   "pyyaml==6.0.2",
+# ]
+# ///
+
 """
 LiteLLM Health Check Client
 
