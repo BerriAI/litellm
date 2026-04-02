@@ -1,6 +1,7 @@
 """
 Unit tests for Bedrock Guardrails
 """
+
 import json
 import os
 import sys
@@ -239,7 +240,6 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
-
         mock_post.return_value = mock_bedrock_response
 
         # Call the method that should log the redacted response
@@ -346,7 +346,6 @@ async def test_bedrock_guardrail_original_response_not_modified():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
-
         mock_post.return_value = mock_bedrock_response
 
         # Call the method
@@ -861,6 +860,7 @@ async def test__redact_pii_matches_comprehensive_coverage():
 
     print("Comprehensive coverage redaction test passed")
 
+
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
     """Test that BedrockGuardrail respects aws_bedrock_runtime_endpoint when set"""
@@ -1090,8 +1090,7 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
         assert "tool_calls" in guardrailed_inputs
         assert len(guardrailed_inputs["tool_calls"]) == 1
         assert (
-            guardrailed_inputs["tool_calls"][0]["id"]
-            == "call_eFSCWFsyL7MclHYnzKrcQnMK"
+            guardrailed_inputs["tool_calls"][0]["id"] == "call_eFSCWFsyL7MclHYnzKrcQnMK"
         )
         assert guardrailed_inputs["tool_calls"][0]["function"]["name"] == "get_weather"
         assert (
@@ -1106,12 +1105,12 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
     """Test that BLOCKED content raises exception even when masking is enabled
-    
+
     This test verifies the bug fix where previously mask_request_content=True or
     mask_response_content=True would bypass all BLOCKED content checks. Now it
     properly distinguishes between BLOCKED (raise exception) and ANONYMIZED (apply masking).
     """
-    
+
     # Create guardrail with masking enabled
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
@@ -1119,7 +1118,7 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         mask_request_content=True,  # Masking enabled
         mask_response_content=True,  # Masking enabled
     )
-    
+
     # Mock Bedrock response with BLOCKED content (hate speech)
     blocked_response = {
         "action": "GUARDRAIL_INTERVENED",
@@ -1147,24 +1146,24 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         ],
         "outputs": [{"text": "Content blocked due to policy violation"}],
     }
-    
+
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
     mock_bedrock_response.json.return_value = blocked_response
-    
+
     # Mock credentials
     mock_credentials = MagicMock()
     mock_credentials.access_key = "test-access-key"
     mock_credentials.secret_key = "test-secret-key"
     mock_credentials.token = None
-    
+
     request_data = {
         "model": "gpt-4o",
         "messages": [
             {"role": "user", "content": "Test message with PII and hate speech"},
         ],
     }
-    
+
     # Mock AWS-related methods
     with patch.object(
         guardrail.async_handler, "post", new_callable=AsyncMock
@@ -1174,7 +1173,7 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         guardrail, "_prepare_request", return_value=MagicMock()
     ):
         mock_post.return_value = mock_bedrock_response
-        
+
         # Should raise HTTPException for BLOCKED content
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.make_bedrock_api_request(
@@ -1182,10 +1181,195 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
                 messages=request_data.get("messages"),
                 request_data=request_data,
             )
-        
+
         # Verify exception details
         assert exc_info.value.status_code == 400
         assert "Violated guardrail policy" in str(exc_info.value.detail)
-        
+
         print("✅ BLOCKED content with masking enabled raises exception correctly")
 
+
+@pytest.mark.asyncio
+async def test__redact_pii_matches_with_null_list_fields():
+    """Test that _redact_pii_matches handles None/null list fields without crashing.
+
+    Bedrock API can return null for fields like regexes, customWords, managedWordLists,
+    and piiEntities. The .get("key", []) pattern returns None (not []) when the key
+    exists with a null value, which previously caused 'NoneType' object is not iterable.
+    """
+
+    # Real-world response from Bedrock where regexes is null
+    response_with_null_regexes = {
+        "action": "NONE",
+        "actionReason": "No action.",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "action": "NONE",
+                            "detected": True,
+                            "match": "joebloggs@gmail.com",
+                            "type": "EMAIL",
+                        }
+                    ],
+                    "regexes": None,  # null from Bedrock API
+                },
+                "wordPolicy": None,  # entire policy is null
+                "topicPolicy": None,
+                "contentPolicy": None,
+                "contextualGroundingPolicy": None,
+            }
+        ],
+    }
+
+    # Should not raise any exception
+    redacted = _redact_pii_matches(response_with_null_regexes)
+
+    # PII entity match should be redacted
+    pii_entities = redacted["assessments"][0]["sensitiveInformationPolicy"][
+        "piiEntities"
+    ]
+    assert pii_entities[0]["match"] == "[REDACTED]"
+    assert pii_entities[0]["type"] == "EMAIL"
+
+    # Test with null piiEntities and non-null regexes
+    response_with_null_pii = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,  # null
+                    "regexes": [
+                        {
+                            "name": "CUSTOM",
+                            "match": "secret-pattern",
+                            "action": "BLOCKED",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+    redacted = _redact_pii_matches(response_with_null_pii)
+    regexes = redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"]
+    assert regexes[0]["match"] == "[REDACTED]"
+
+    # Test with null customWords and managedWordLists in wordPolicy
+    response_with_null_word_lists = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": None,  # null
+                    "managedWordLists": None,  # null
+                },
+            }
+        ],
+    }
+
+    # Should not raise any exception
+    redacted = _redact_pii_matches(response_with_null_word_lists)
+    assert redacted["assessments"][0]["wordPolicy"]["customWords"] is None
+    assert redacted["assessments"][0]["wordPolicy"]["managedWordLists"] is None
+
+
+@pytest.mark.asyncio
+async def test_should_raise_guardrail_blocked_exception_with_null_list_fields():
+    """Test that _should_raise_guardrail_blocked_exception handles None/null list fields.
+
+    Same issue as _redact_pii_matches: Bedrock API returns null for list fields
+    like topics, filters, customWords, etc. which causes iteration over None.
+    """
+
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Response where all policy sub-lists are null
+    response_all_null_lists = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": None,  # null
+                },
+                "contentPolicy": {
+                    "filters": None,  # null
+                },
+                "wordPolicy": {
+                    "customWords": None,  # null
+                    "managedWordLists": None,  # null
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,  # null
+                    "regexes": None,  # null
+                },
+                "contextualGroundingPolicy": {
+                    "filters": None,  # null
+                },
+            }
+        ],
+    }
+
+    # Should not raise any exception and should return False
+    # (no BLOCKED actions found since all lists are null)
+    result = guardrail._should_raise_guardrail_blocked_exception(
+        response_all_null_lists
+    )
+    assert result is False
+
+    # Response with a mix of null lists and a BLOCKED action
+    response_mixed_null_with_blocked = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": None,  # null - should not crash
+                },
+                "contentPolicy": {
+                    "filters": [
+                        {
+                            "type": "HATE",
+                            "confidence": "HIGH",
+                            "action": "BLOCKED",
+                        }
+                    ],
+                },
+                "wordPolicy": {
+                    "customWords": None,  # null
+                    "managedWordLists": None,  # null
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,  # null
+                    "regexes": None,  # null
+                },
+                "contextualGroundingPolicy": None,  # entire policy is null
+            }
+        ],
+    }
+
+    # Should return True because there's a BLOCKED content filter
+    result = guardrail._should_raise_guardrail_blocked_exception(
+        response_mixed_null_with_blocked
+    )
+    assert result is True
+
+    # Response with null lists but action is not GUARDRAIL_INTERVENED
+    response_no_intervention = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,
+                    "regexes": None,
+                },
+            }
+        ],
+    }
+
+    result = guardrail._should_raise_guardrail_blocked_exception(
+        response_no_intervention
+    )
+    assert result is False
