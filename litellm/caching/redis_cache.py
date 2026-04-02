@@ -16,7 +16,7 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -926,6 +926,44 @@ class RedisCache(BaseCache):
                 "litellm.caching.caching: get() - Got exception from REDIS: ", e
             )
 
+    def get_cache_with_ttl(
+        self, key: str, parent_otel_span: Optional[Span] = None, **kwargs
+    ) -> Tuple[Any, Optional[int]]:
+        """
+        Get a cache value along with its remaining TTL from Redis (sync).
+
+        Returns:
+            Tuple of (value, ttl_seconds). TTL is None if key has no expiry
+            or key does not exist.
+        """
+        try:
+            key = self.check_and_fix_namespace(key=key)
+            start_time = time.time()
+            pipe = self.redis_client.pipeline(transaction=False)
+            pipe.get(key)
+            pipe.ttl(key)
+            results = pipe.execute()
+            cached_response = results[0]
+            ttl = results[1]
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type=f"get_cache_with_ttl <- {_get_call_stack_info()}",
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+            response = self._get_cache_logic(cached_response=cached_response)
+            _ttl: Optional[int] = ttl if isinstance(ttl, int) and ttl > 0 else None
+            return response, _ttl
+        except Exception as e:
+            verbose_logger.error(
+                "litellm.caching.redis_cache: get_cache_with_ttl() - Got exception from REDIS: ", e
+            )
+            return None, None
+
     def _run_redis_mget_operation(self, keys: List[str]) -> List[Any]:
         """
         Wrapper to call `mget` on the redis client
@@ -1117,6 +1155,142 @@ class RedisCache(BaseCache):
             )
             verbose_logger.error(f"Error occurred in async batch get cache - {str(e)}")
             return key_value_dict
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache_with_ttl(
+        self, key: str, parent_otel_span: Optional[Span] = None, **kwargs
+    ) -> Tuple[Any, Optional[int]]:
+        """
+        Get a cache value along with its remaining TTL from Redis.
+
+        Returns:
+            Tuple of (value, ttl_seconds). TTL is None if key has no expiry,
+            or -2 if key does not exist.
+        """
+        from redis.asyncio import Redis
+
+        _redis_client: Redis = self.init_async_client()  # type: ignore
+        key = self.check_and_fix_namespace(key=key)
+        start_time = time.time()
+
+        try:
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                pipe.get(key)
+                pipe.ttl(key)
+                results = await pipe.execute()
+
+            cached_response = results[0]
+            ttl = results[1]  # -1 = no expiry, -2 = key doesn't exist
+
+            response = self._get_cache_logic(cached_response=cached_response)
+
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_get_cache_with_ttl <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                    event_metadata={"key": key},
+                )
+            )
+            # Return None TTL for keys without expiry or non-existent keys
+            _ttl: Optional[int] = ttl if isinstance(ttl, int) and ttl > 0 else None
+            return response, _ttl
+        except Exception as e:
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_get_cache_with_ttl <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                    event_metadata={"key": key},
+                )
+            )
+            verbose_logger.error(
+                f"litellm.caching.redis_cache: async_get_cache_with_ttl() - Got exception from REDIS: {str(e)}"
+            )
+            return None, None
+
+    @_redis_circuit_breaker_guard
+    async def async_batch_get_cache_with_ttl(
+        self,
+        key_list: Union[List[str], List[Optional[str]]],
+        parent_otel_span: Optional[Span] = None,
+    ) -> Dict[str, Tuple[Any, Optional[int]]]:
+        """
+        Bulk read from Redis, returning values together with their remaining TTLs.
+
+        Uses a single pipeline round-trip: for each key issues GET + TTL.
+
+        Returns:
+            dict mapping key -> (decoded_value, remaining_ttl_seconds).
+            TTL is None when the key has no expiry.
+        """
+        result: Dict[str, Tuple[Any, Optional[int]]] = {}
+        start_time = time.time()
+        _key_list = [key for key in key_list if key is not None]
+        try:
+            _keys = []
+            for cache_key in _key_list:
+                cache_key = self.check_and_fix_namespace(key=cache_key)
+                _keys.append(cache_key)
+
+            _redis_client = self.init_async_client()
+            async with _redis_client.pipeline(transaction=False) as pipe:
+                for k in _keys:
+                    pipe.get(k)
+                    pipe.ttl(k)
+                raw_results = await pipe.execute()
+
+            # raw_results is [value1, ttl1, value2, ttl2, ...]
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type=f"async_batch_get_cache_with_ttl <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+
+            for i, original_key in enumerate(_key_list):
+                raw_value = raw_results[i * 2]
+                raw_ttl = raw_results[i * 2 + 1]
+                decoded_value = self._get_cache_logic(raw_value)
+                _ttl: Optional[int] = raw_ttl if isinstance(raw_ttl, int) and raw_ttl > 0 else None
+                if isinstance(original_key, bytes):
+                    original_key = original_key.decode("utf-8")
+                result[original_key] = (decoded_value, _ttl)
+
+            return result
+        except Exception as e:
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    call_type=f"async_batch_get_cache_with_ttl <- {_get_call_stack_info()}",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            verbose_logger.error(f"Error occurred in async_batch_get_cache_with_ttl - {str(e)}")
+            return result
 
     def sync_ping(self) -> bool:
         """
