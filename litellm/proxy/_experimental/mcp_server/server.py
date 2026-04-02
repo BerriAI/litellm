@@ -396,6 +396,50 @@ if MCP_AVAILABLE:
             else:
                 data = body_data
 
+            # --- Pre MCP Tool Call Hook (fixes #25011) ---
+            # Invoke pre_call_hook BEFORE dispatching to call_mcp_tool so
+            # that CustomLogger callbacks fire for ALL /mcp/ tool calls,
+            # regardless of whether the local registry or managed-server
+            # path handles them.  Without this, _handle_local_mcp_tool
+            # (Path 1) bypasses all hooks.
+            from litellm.proxy.proxy_server import (
+                proxy_logging_obj as _proxy_log_obj,
+            )
+
+            if _proxy_log_obj and user_api_key_auth:
+                _pre_hook_kwargs = {
+                    "name": name,
+                    "arguments": arguments or {},
+                    "user_api_key_user_id": getattr(
+                        user_api_key_auth, "user_id", None
+                    ),
+                    "user_api_key_team_id": getattr(
+                        user_api_key_auth, "team_id", None
+                    ),
+                    "user_api_key_end_user_id": getattr(
+                        user_api_key_auth, "end_user_id", None
+                    ),
+                    "user_api_key_hash": getattr(
+                        user_api_key_auth, "api_key_hash", None
+                    ),
+                    "user_api_key_request_route": "/mcp/",
+                    "incoming_bearer_token": None,
+                }
+                _mcp_req = (
+                    _proxy_log_obj._create_mcp_request_object_from_kwargs(
+                        _pre_hook_kwargs
+                    )
+                )
+                _synth = _proxy_log_obj._convert_mcp_to_llm_format(
+                    _mcp_req, _pre_hook_kwargs
+                )
+                await _proxy_log_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_auth,
+                    data=_synth,
+                    call_type="call_mcp_tool",
+                )
+            # --- End pre-call hook fix ---
+
             response = await call_mcp_tool(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
