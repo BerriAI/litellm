@@ -10,10 +10,10 @@ cd "$(dirname "$0")/../litellm-proxy-extras"
 
 # Build the package
 echo "📦 Building package..."
-poetry build
+uv build
 
 # Publish to PyPI
 echo "🌎 Publishing to PyPI..."
-poetry publish
+uv publish
 
 echo "✅ Done! Package published successfully"

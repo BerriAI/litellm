@@ -68,6 +68,9 @@ def check_database():
         return True
     except Exception as e:
         print(f"  ✗ Database connection failed: {e}")
+        print("    Install the local test environment first:")
+        print("    make install-test-deps")
+        print("")
         print("    Start PostgreSQL with:")
         print("    docker run --name litellm-postgres -e POSTGRES_USER=llmproxy \\")
         print("      -e POSTGRES_PASSWORD=dbpassword9090 -e POSTGRES_DB=litellm \\")
@@ -107,8 +110,9 @@ def main():
         print("✓ All checks passed! Ready to run E2E tests.")
         print("\nRun tests with:")
         print("  cd litellm")
+        print("  make install-test-deps")
         print("  export DATABASE_URL='postgresql://llmproxy:dbpassword9090@localhost:5432/litellm'")
-        print("  poetry run pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py -vv")
+        print("  uv run pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py -vv")
         return 0
     else:
         print("✗ Some checks failed. Please fix the issues above.")

@@ -16,7 +16,7 @@ repos:
         exclude: ^litellm/__init__.py$
     -   id: black
         name: black
-        entry: poetry run black
+        entry: uv run --frozen black
         language: system
         types: [python]
         files: (litellm/|litellm_proxy_extras/).*\.py
@@ -27,13 +27,13 @@ repos:
        exclude: ^litellm/tests/|^litellm/proxy/tests/|^litellm/tests/test_litellm/|^tests/test_litellm/|^tests/enterprise/
        additional_dependencies: [flake8-print]
        files: (litellm/|litellm_proxy_extras/|enterprise/).*\.py
--   repo: https://github.com/python-poetry/poetry
-    rev: 1.8.0
-    hooks:
-      - id: poetry-check
-        files: ^(pyproject.toml|litellm-proxy-extras/pyproject.toml)$
 -   repo: local
     hooks:
+    -   id: uv-lock-check
+        name: uv lock check
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject.toml|enterprise/pyproject.toml|litellm-proxy-extras/pyproject.toml|uv.lock)$
     -   id: check-files-match
         name: Check if files match
         entry: python3 ci_cd/check_files_match.py

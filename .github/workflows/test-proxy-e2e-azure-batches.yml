@@ -42,44 +42,36 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Poetry
-        run: pip install 'poetry==2.3.2'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
 
-      - name: Cache Poetry dependencies
+      - name: Cache uv dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.0.0
         with:
           path: |
-            ~/.cache/pypoetry
-            ~/.cache/pip
+            ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-poetry-e2e-batches-${{ hashFiles('poetry.lock') }}
+          key: ${{ runner.os }}-uv-e2e-batches-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-poetry-e2e-batches-
-            ${{ runner.os }}-poetry-
+            ${{ runner.os }}-uv-e2e-batches-
+            ${{ runner.os }}-uv-
 
       - name: Install dependencies
         run: |
-          poetry config virtualenvs.in-project true
-          poetry install --with dev,proxy-dev --extras "proxy"
-          poetry run pip install psycopg2-binary==2.9.11 uvicorn==0.42.0 fastapi==0.135.2 httpx==0.28.1 tenacity==9.1.4
-
-      - name: Setup litellm-enterprise
-        run: |
-          poetry run pip install --force-reinstall --no-deps -e enterprise/
+          uv sync --frozen --group ci --group proxy-dev --extra proxy
 
       - name: Generate Prisma client
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
-          poetry run pip install nodejs-wheel-binaries==24.13.1
-          poetry run prisma generate --schema litellm/proxy/schema.prisma
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run Prisma migrations
         env:
           DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
         run: |
           cd litellm/proxy
-          poetry run prisma migrate deploy --schema schema.prisma
+          uv run --no-sync prisma migrate deploy --schema schema.prisma
           cd ../..
 
       - name: Run Azure Batch E2E Tests
@@ -90,7 +82,7 @@ jobs:
           USE_STATE_TRACKER: "true"
           LITELLM_LOG: DEBUG
         run: |
-          poetry run pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py \
+          uv run --no-sync pytest tests/proxy_e2e_azure_batches_tests/test_proxy_e2e_azure_batches.py \
             -vv -s -k "test_e2e_managed_batch" \
             --tb=short \
             --maxfail=3 \

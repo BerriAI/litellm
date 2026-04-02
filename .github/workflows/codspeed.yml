@@ -34,13 +34,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          pip install -e "."
-          pip install pytest pytest-codspeed==4.3.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
           mode: simulation
-          run: pytest tests/benchmarks/ --codspeed
+          run: uv run --frozen --group ci pytest tests/benchmarks/ --codspeed

@@ -29,8 +29,12 @@ install_grype() {
 # Function to install ggshield
 install_ggshield() {
     echo "Installing ggshield..."
-    pip3 install --upgrade pip
-    pip3 install ggshield
+    if ! command -v uv >/dev/null 2>&1; then
+        curl -LsSf https://astral.sh/uv/0.10.9/install.sh | env UV_NO_MODIFY_PATH=1 sh
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+    uv tool install --force ggshield==1.48.0
+    export PATH="$(uv tool dir --bin):$PATH"
     echo "ggshield installed successfully"
 }
 
@@ -117,7 +121,7 @@ run_grype_scans() {
     echo "Using locally built image: litellm:latest"
     
     # Allowlist of CVEs to be ignored in failure threshold/reporting
-    # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); pip fallback unused; no OS-level fix
+    # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); legacy installer fallback unused; no OS-level fix
     # - GHSA-4xh5-x5gv-qwph: GitHub Security Advisory alias for CVE-2025-8869
     # - GHSA-5j98-mcp5-4vw2: glob CLI command injection via -c/--cmd; glob CLI is not used in the litellm runtime image,
     #   and the vulnerable versions are pulled in only via OS-level/node tooling outside of our application code
