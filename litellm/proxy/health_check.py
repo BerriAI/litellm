@@ -211,6 +211,10 @@ async def _perform_health_check(
 
     healthy_endpoints = []
     unhealthy_endpoints = []
+    # Exceptions keyed by model_id; returned separately so callers can use
+    # them for cooldown integration without risking JSON-serialization errors
+    # in the /health response.
+    exceptions_by_model_id: dict = {}
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]
@@ -225,14 +229,18 @@ async def _perform_health_check(
             cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+                if "exception" in is_healthy:
+                    exceptions_by_model_id[_model_id] = is_healthy["exception"]
             unhealthy_endpoints.append(cleaned)
         else:
             cleaned = _clean_endpoint_data(litellm_params, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+                if isinstance(is_healthy, Exception):
+                    exceptions_by_model_id[_model_id] = is_healthy
             unhealthy_endpoints.append(cleaned)
 
-    return healthy_endpoints, unhealthy_endpoints
+    return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
 
 
 def _update_litellm_params_for_health_check(
@@ -375,7 +383,11 @@ async def perform_health_check(
         )
 
     try:
-        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        (
+            healthy_endpoints,
+            unhealthy_endpoints,
+            exceptions_by_model_id,
+        ) = await _perform_health_check(
             model_list,
             details,
             max_concurrency=max_concurrency,
@@ -407,4 +419,4 @@ async def perform_health_check(
             _rss_mb_for_log(),
         )
 
-    return healthy_endpoints, unhealthy_endpoints
+    return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
