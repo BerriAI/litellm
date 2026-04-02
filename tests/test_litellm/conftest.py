@@ -29,6 +29,42 @@ from litellm.llms.custom_httpx.async_client_cleanup import (
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module
 
 
+def _reset_module_level_aws_auth_caches():
+    """
+    Clear module-level AWS auth state that can survive between tests.
+
+    Bedrock/SageMaker handlers are instantiated once at import time and cache
+    resolved credentials on the handler instance. If a previous test resolves an
+    invalid or different auth flow, later tests can reuse that cached state and
+    bypass their local monkeypatched env setup.
+    """
+    for module_name in (
+        "litellm.main",
+        "litellm.files.main",
+        "litellm.rerank_api.main",
+        "litellm.realtime_api.main",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        for attr_name in dir(module):
+            obj = getattr(module, attr_name)
+            iam_cache = getattr(obj, "iam_cache", None)
+            if iam_cache is None:
+                continue
+            flush_cache = getattr(iam_cache, "flush_cache", None)
+            if callable(flush_cache):
+                flush_cache()
+
+    try:
+        import boto3
+
+        boto3.DEFAULT_SESSION = None
+    except Exception:
+        pass
+
+
 @pytest.fixture(scope="session")
 def isolated_aws_credentials_dir(tmp_path_factory):
     aws_dir = tmp_path_factory.mktemp("aws-config")
@@ -54,6 +90,12 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", raising=False)
     monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
 
 
 def _run_coroutine_if_needed(result):
@@ -196,6 +238,7 @@ def isolate_litellm_state():
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    _reset_module_level_aws_auth_caches()
 
     # Clear all callback lists to prevent cross-test contamination
     if hasattr(litellm, 'callbacks'):
@@ -228,6 +271,7 @@ def isolate_litellm_state():
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    _reset_module_level_aws_auth_caches()
     current_module_level_client = litellm.__dict__.get("module_level_client")
     current_module_level_aclient = litellm.__dict__.get("module_level_aclient")
 
