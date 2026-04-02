@@ -46,7 +46,7 @@
 ### Python SDK
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 ```python
@@ -68,7 +68,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
 
 ```shell
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 litellm --model gpt-4o
 ```
 
@@ -390,8 +390,8 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 ### Backend
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
-3. Install dependencies `pip install -e ".[all]"`
-4. `pip install prisma`
+3. Install dependencies `uv sync --all-extras --group proxy-dev`
+4. `uv run prisma generate`
 5. `prisma generate`
 6. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
@@ -419,7 +419,7 @@ We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features
 
 ## Quick Start for Contributors
 
-This requires poetry to be installed.
+This requires uv to be installed.
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
@@ -473,4 +473,3 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
-
