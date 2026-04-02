@@ -217,6 +217,7 @@ class SharedHealthCheckManager:
             return (
                 cached_results.get("healthy_endpoints", []),
                 cached_results.get("unhealthy_endpoints", []),
+                {},
             )
 
         # No recent cache, try to acquire lock
