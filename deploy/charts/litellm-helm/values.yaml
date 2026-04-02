@@ -147,6 +147,10 @@ httpRoute:
   annotations: {}
   hostnames: []
   rules: []
+  # - matches:
+  #     - path:
+  #         type: PathPrefix
+  #         value: /
   #   backendRefs:
   #   - name: litellm
   #     port: 4000

@@ -11,8 +11,10 @@ metadata:
   {{- end }}
 spec:
   parentRefs:
-    - name: {{ .Values.httpRoute.gatewayName }}
-      namespace: {{ default .Release.Namespace .Values.httpRoute.gatewayNamespace }}
+    - name: {{ required "httpRoute.gatewayName is required when httpRoute.enabled is true" .Values.httpRoute.gatewayName }}
+      {{- with (default "" .Values.httpRoute.gatewayNamespace) }}
+      namespace: {{ . }}
+      {{- end }}
       {{- with .Values.httpRoute.gatewayGroup }}
       group: {{ . }}
       {{- end }}
