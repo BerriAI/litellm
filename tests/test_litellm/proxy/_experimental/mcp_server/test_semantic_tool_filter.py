@@ -394,6 +394,47 @@ async def test_semantic_filter_hook_skips_no_tools():
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_hook_skips_non_mcp_only_tools():
+    """
+    Test that the hook returns None when all tools are non-MCP (no prefix).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tools": [
+            MCPTool(name="web_search", description="Search the web", inputSchema={"type": "object"}),
+            MCPTool(name="code_interpreter", description="Run code", inputSchema={"type": "object"}),
+        ],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is None, "Hook should skip when no MCP tools are present"
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_zero_matches_returns_empty():
     """
     Test that filter_tools returns an empty list when zero semantic matches are found.
