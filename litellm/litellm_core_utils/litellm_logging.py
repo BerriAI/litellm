@@ -64,7 +64,10 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import (
+    strip_large_base64_from_result,
+    truncate_base64_in_messages,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -2609,6 +2612,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
 
         self.has_run_logging(event_type="async_success")
+
+        # Free large base64 image data URIs from result before slow DB/observability
+        # callbacks run. standard_logging_object (built above) already holds a
+        # truncated copy, so DB writes are unaffected.
+        result = strip_large_base64_from_result(result)
 
         for callback in callbacks:
             # check if callback can run for this request

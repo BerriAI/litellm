@@ -205,6 +205,56 @@ def test_post_call_truncates_raw_vertex_json_base64():
     assert "base64_data truncated" in stored
 
 
+def test_strip_large_base64_from_result():
+    """
+    strip_large_base64_from_result must truncate long data-URI base64 payloads
+    stored in result.choices[].message["images"][].image_url["url"].
+
+    Regression test for Fix 7: Vertex image generation responses store ~7.9 MB
+    data URIs in ModelResponse.  Each live Logging object holds a reference to
+    `result` until all async callbacks (DB writes, cost tracking) finish.
+    With 32 concurrent requests that is ~253 MB of live base64 data.
+    strip_large_base64_from_result is called after standard_logging_object is
+    built (which already holds a truncated copy) so DB writes are unaffected.
+    """
+    from litellm.litellm_core_utils.logging_utils import strip_large_base64_from_result
+    import litellm
+
+    b64_payload = "X" * 200  # well above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    data_uri = f"data:image/png;base64,{b64_payload}"
+
+    # Build a minimal ModelResponse that mimics Vertex image generation output.
+    response = litellm.ModelResponse(
+        id="test-fix7",
+        model="gemini-2.0-flash",
+    )
+    choice = response.choices[0]
+    # Store the image directly as the TypedDict structure used at runtime.
+    choice.message["images"] = [  # type: ignore[index]
+        {"image_url": {"url": data_uri}}
+    ]
+
+    result = strip_large_base64_from_result(response)
+
+    stored_url = result.choices[0].message["images"][0]["image_url"]["url"]  # type: ignore[index]
+    assert b64_payload not in stored_url, (
+        "Full base64 payload still present after strip_large_base64_from_result — "
+        "~7.9 MB data URI will accumulate in live Logging objects during async callbacks"
+    )
+    assert "base64_data truncated" in stored_url
+
+
+def test_strip_large_base64_from_result_no_images():
+    """strip_large_base64_from_result must be a no-op for responses without images."""
+    from litellm.litellm_core_utils.logging_utils import strip_large_base64_from_result
+    import litellm
+
+    response = litellm.ModelResponse(id="test-fix7-noop", model="gpt-4o")
+    result = strip_large_base64_from_result(response)
+    # Should return the same object unchanged
+    assert result is response
+
+
 def test_post_call_truncates_base64_in_error_logs():
     """
     litellm.error_logs["POST_CALL"] must also receive the truncated version.

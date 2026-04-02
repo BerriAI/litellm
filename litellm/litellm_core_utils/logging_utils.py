@@ -156,6 +156,47 @@ def _truncate_base64_in_value(value: Any) -> Any:
     return root
 
 
+def strip_large_base64_from_result(result: Any) -> Any:
+    """Truncate large base64 image data URIs inside a ModelResponse in-place.
+
+    Called in async_success_handler after standard_logging_object is built
+    (which already holds a truncated copy) and before slow DB/observability
+    callbacks run.  Replaces every ``image_url.url`` data-URI that exceeds
+    MAX_BASE64_LENGTH_FOR_LOGGING with a size placeholder, freeing the
+    ~7.9 MB string from the Logging object's lifetime.
+
+    Operates on ``result.choices[].message["images"][].image_url["url"]`` —
+    the location where Vertex AI / Gemini image-generation responses store
+    inline image data after ``_extract_image_response_from_parts`` constructs
+    the data URI (``"data:<mime>;base64,<payload>"``).
+
+    Mutation is safe here because the HTTP response has already been sent to
+    the caller before async_success_handler is scheduled.
+    """
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return result
+    choices = getattr(result, "choices", None)
+    if not choices:
+        return result
+    for choice in choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        images = getattr(message, "images", None)
+        if not images:
+            continue
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            image_url = img.get("image_url")
+            if not isinstance(image_url, dict):
+                continue
+            url = image_url.get("url")
+            if isinstance(url, str):
+                image_url["url"] = _truncate_base64_in_string(url)
+    return result
+
+
 def truncate_base64_in_messages(
     messages: Optional[Union[str, list, dict]],
 ) -> Optional[Union[str, list, dict]]:
