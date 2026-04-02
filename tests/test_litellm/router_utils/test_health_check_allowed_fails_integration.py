@@ -702,3 +702,63 @@ class TestHealthCheckIgnoreTransientErrors:
                     exceptions_by_model_id={"deploy-1": rate_exc},
                 )
                 mock_cooldown.assert_called_once()
+
+
+class TestSharedCacheTransientErrorFilter:
+    """
+    When SharedHealthCheckManager returns cached results, exceptions_by_model_id
+    is always {}. The filter must fall back to the 'exception_status' field stored
+    on each endpoint dict so 429/408 endpoints are still excluded correctly.
+    """
+
+    def test_cached_429_excluded_via_exception_status_field(self):
+        """Cache-hit path: endpoint with exception_status=429 is excluded from health state."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        # Simulate a cache-hit endpoint: exception_status stored as int, no exceptions dict
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "rate limited", "exception_status": 429},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            _write_health_state_to_router_cache(
+                healthy_endpoints=[],
+                unhealthy_endpoints=unhealthy_endpoints,
+                exceptions_by_model_id={},
+            )
+
+        # deploy-1 should NOT be marked unhealthy (429 was filtered)
+        unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
+        assert "deploy-1" not in unhealthy_ids
+
+    def test_cached_401_still_marked_unhealthy(self):
+        """Cache-hit path: endpoint with exception_status=401 is still written as unhealthy."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "auth failed", "exception_status": 401},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            _write_health_state_to_router_cache(
+                healthy_endpoints=[],
+                unhealthy_endpoints=unhealthy_endpoints,
+                exceptions_by_model_id={},
+            )
+
+        unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
+        assert "deploy-1" in unhealthy_ids
