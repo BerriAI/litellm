@@ -113,13 +113,16 @@ class SemanticMCPToolFilter:
 
         MCP tools may be prefixed by the server name (e.g., "weather-get_forecast")
         or further prefixed by clients. This matches by normalizing hyphens/underscores
-        and checking if client_name ends with index_name.
+        and checking if client_name ends with index_name at a word boundary.
         """
         if client_name == index_name:
             return True
         norm_client = self._normalize_tool_name(client_name)
         norm_index = self._normalize_tool_name(index_name)
-        return norm_client.endswith(norm_index)
+        if not norm_client.endswith(norm_index):
+            return False
+        # Ensure match is at a word boundary (preceded by underscore separator)
+        return len(norm_client) == len(norm_index) or norm_client[-(len(norm_index) + 1)] == "_"
 
     def _build_router(self, tools: List) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""

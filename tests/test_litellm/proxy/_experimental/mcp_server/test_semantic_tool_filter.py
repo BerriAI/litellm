@@ -430,6 +430,9 @@ def test_tool_name_matches():
     assert f._tool_name_matches("get_forecast_v2", "get_forecast") is False
     # No match - completely different
     assert f._tool_name_matches("send_notification", "get_forecast") is False
+    # No match - suffix without word boundary (e.g., "preview" should not match "view")
+    assert f._tool_name_matches("preview", "view") is False
+    assert f._tool_name_matches("broadcast", "cast") is False
 
 
 def test_get_tools_by_names_exact_match():
