@@ -18,7 +18,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    apply_embedded_bedrock_region_from_model_path,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -563,6 +566,51 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
+
+    def get_bedrock_model_id(
+        self,
+        optional_params: dict,
+        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        model: str,
+    ) -> str:
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
+        modelId = modelId.replace("invoke/", "", 1)
+        modelId = apply_embedded_bedrock_region_from_model_path(
+            modelId, optional_params
+        )
+        if provider == "llama" and "llama/" in modelId:
+            modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
+        elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:
+            modelId = self._get_model_id_from_model_with_spec(
+                modelId, spec="deepseek_r1"
+            )
+        return modelId
+
+    def _get_model_id_from_model_with_spec(
+        self,
+        model: str,
+        spec: str,
+    ) -> str:
+        """
+        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
+        """
+        model_id = model.replace(spec + "/", "")
+        return self.encode_model_id(model_id=model_id)
+
+    def encode_model_id(self, model_id: str) -> str:
+        """
+        Double encode the model ID to ensure it matches the expected double-encoded format.
+        Args:
+            model_id (str): The model ID to encode.
+        Returns:
+            str: The double-encoded model ID.
+        """
+        return urllib.parse.quote(model_id, safe="")
 
     def convert_messages_to_prompt(
         self, model, messages, provider, custom_prompt_dict

@@ -67,7 +67,12 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
+from ..common_utils import (
+    BedrockError,
+    ModelResponseIterator,
+    apply_embedded_bedrock_region_from_model_path,
+    get_bedrock_tool_name,
+)
 
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
@@ -1266,6 +1271,36 @@ class BedrockLLM(BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
+
+    def get_bedrock_model_id(
+        self,
+        optional_params: dict,
+        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        model: str,
+    ) -> str:
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
+        modelId = apply_embedded_bedrock_region_from_model_path(
+            modelId, optional_params
+        )
+        if provider == "llama" and "llama/" in modelId:
+            modelId = self._get_model_id_for_llama_like_model(modelId)
+
+        return modelId
+
+    def _get_model_id_for_llama_like_model(
+        self,
+        model: str,
+    ) -> str:
+        """
+        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
+        """
+        model_id = model.replace("llama/", "")
+        return self.encode_model_id(model_id=model_id)
 
 
 def get_response_stream_shape():
