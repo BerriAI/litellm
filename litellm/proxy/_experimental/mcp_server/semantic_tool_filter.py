@@ -194,11 +194,17 @@ class SemanticMCPToolFilter:
             if not matched_tool_names:
                 # Return only non-MCP tools (built-in tools without a server prefix)
                 # to avoid exceeding provider tool limits when no semantic matches exist
-                return [
+                non_mcp_tools = [
                     tool
                     for tool in available_tools
                     if not is_tool_name_prefixed(self._extract_tool_info(tool)[0])
                 ]
+                if non_mcp_tools:
+                    return non_mcp_tools
+
+                # Fallback: if all tools are MCP tools (no built-in tools), return
+                # a bounded subset to avoid an empty tool list that would confuse the model
+                return available_tools[:limit]
 
             return self._get_tools_by_names(matched_tool_names, available_tools)
 

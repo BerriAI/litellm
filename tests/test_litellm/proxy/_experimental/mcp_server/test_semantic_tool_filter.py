@@ -205,6 +205,7 @@ async def test_semantic_filter_zero_matches_returns_only_non_mcp_tools():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
     # Create mock tools: 3 MCP tools (prefixed with server name) and 2 built-in tools
     mcp_tools = [
@@ -246,7 +247,50 @@ async def test_semantic_filter_zero_matches_returns_only_non_mcp_tools():
     assert "code_interpreter" in filtered_names
     # No MCP tools should be returned
     for name in filtered_names:
-        assert "-" not in name, f"MCP tool {name} should not be returned on zero matches"
+        assert MCP_TOOL_PREFIX_SEPARATOR not in name, f"MCP tool {name} should not be returned on zero matches"
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_zero_matches_all_mcp_tools():
+    """
+    Test that when all tools are MCP tools and zero matches, bounded subset is returned.
+
+    Given: Only MCP tools (no built-in tools)
+    When: Semantic filter finds zero matches
+    Then: Returns top-K MCP tools (bounded) rather than empty list
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/24984
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    # Create only MCP tools
+    mcp_tools = [
+        MCPTool(name=f"server1-tool_{i}", description=f"MCP tool {i}", inputSchema={"type": "object"})
+        for i in range(20)
+    ]
+
+    mock_router = Mock()
+    mock_router.return_value = []
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=5,
+        similarity_threshold=0.1,
+        enabled=True,
+    )
+    filter_instance.tool_router = mock_router
+
+    filtered = await filter_instance.filter_tools(
+        query="hello",
+        available_tools=mcp_tools,
+    )
+
+    # Should return bounded subset (top_k), not empty and not all 20
+    assert len(filtered) == 5, f"Expected bounded subset of 5, got {len(filtered)}"
+    assert len(filtered) < len(mcp_tools), "Should not return all tools"
 
 
 @pytest.mark.asyncio
