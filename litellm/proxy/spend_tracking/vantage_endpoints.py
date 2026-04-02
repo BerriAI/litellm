@@ -375,20 +375,9 @@ async def vantage_dry_run_export(
     try:
         # Dry-run uses the FOCUS database + transformer directly,
         # bypassing the destination so no Vantage credentials are required.
-        from litellm.integrations.focus.database import FocusLiteLLMDatabase
         from litellm.integrations.focus.export_engine import FocusExportEngine
-        from litellm.integrations.focus.spend_logs_database import FocusSpendLogsDatabase
-        from litellm.integrations.focus.transformer import (
-            FocusSkuTransformer,
-            FocusTransformer,
-        )
 
-        database = (
-            FocusSpendLogsDatabase() if request.sku_breakdown else FocusLiteLLMDatabase()
-        )
-        transformer = (
-            FocusSkuTransformer() if request.sku_breakdown else FocusTransformer()
-        )
+        database, transformer = FocusExportEngine._make_pipeline(request.sku_breakdown)
 
         import polars as pl
 

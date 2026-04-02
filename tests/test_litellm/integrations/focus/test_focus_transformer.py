@@ -185,13 +185,15 @@ def test_explode_null_token_treated_as_zero():
     assert result["_sku_type"][0] == "prompt_token"
 
 
-def test_explode_all_zero_tokens_returns_null_sku():
+def test_explode_all_zero_tokens_returns_empty_frame():
+    # Zero-token requests produce no SKU rows — callers must not emit phantom
+    # null-SKU records (ServiceSubcategory=null) into the FOCUS output.
     frame = _frame(_make_row(prompt_tokens=0, completion_tokens=0))
     result = _explode_by_sku(frame)
 
-    assert result.height == 1
-    assert result["_sku_type"][0] is None
-    assert result["_sku_quantity"][0] is None
+    assert result.is_empty()
+    assert "_sku_type" in result.columns
+    assert "_sku_quantity" in result.columns
 
 
 def test_explode_multiple_input_rows():
@@ -211,6 +213,19 @@ def test_explode_multiple_input_rows():
 def test_sku_transformer_empty_frame_returns_schema_frame():
     result = FocusSkuTransformer().transform(pl.DataFrame())
     assert result.is_empty()
+
+
+def test_sku_transformer_all_zero_tokens_returns_empty_schema_frame():
+    """End-to-end: a request where all token counts are zero must produce no
+    output rows — not a phantom row with ServiceSubcategory=null."""
+    frame = _frame(_make_row(prompt_tokens=0, completion_tokens=0,
+                             cache_read_input_tokens=0, cache_creation_input_tokens=0))
+    result = FocusSkuTransformer().transform(frame)
+
+    assert result.is_empty()
+    # Schema must still be correct so downstream serializers don't break
+    assert "ServiceSubcategory" in result.columns
+    assert "BilledCost" in result.columns
 
 
 def test_sku_transformer_produces_one_row_per_active_sku():

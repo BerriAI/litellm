@@ -87,6 +87,12 @@ class FocusSpendLogsDatabase:
         # Cache tokens are stored in metadata->additional_usage_values as JSON.
         # COALESCE handles NULL metadata, missing keys, and non-numeric values
         # gracefully — falling back to 0 in all cases.
+        #
+        # NOTE: The ::jsonb cast and -> / ->> operators below are PostgreSQL-
+        # specific. This class intentionally bypasses the Prisma ORM (which is
+        # database-agnostic) to access these operators. If LiteLLM ever adds
+        # support for a second database backend, this query will need a dialect-
+        # specific implementation.
         query = f"""
         SELECT
             sl.request_id,

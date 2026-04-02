@@ -7,6 +7,8 @@ from datetime import timedelta
 
 import polars as pl
 
+from litellm._logging import verbose_logger
+
 from .schema import FOCUS_NORMALIZED_SCHEMA
 
 
@@ -63,8 +65,9 @@ def _explode_by_sku(frame: pl.DataFrame) -> pl.DataFrame:
     - ``_sku_quantity``: token count for that SKU type (Float64)
 
     Rows where a given token column is zero or null are excluded from that
-    SKU's sub-frame.  If the incoming frame is empty or no recognised token
-    columns are present, the frame is returned with both columns set to null.
+    SKU's sub-frame.  If the incoming frame is empty, or all token counts are
+    zero, an empty frame (0 rows) is returned so callers don't emit phantom
+    zero-cost records with a null SKU type into the FOCUS output.
     """
     if frame.is_empty():
         return frame.with_columns(
@@ -84,7 +87,10 @@ def _explode_by_sku(frame: pl.DataFrame) -> pl.DataFrame:
             sku_frames.append(filtered)
 
     if not sku_frames:
-        return frame.with_columns(
+        # All token counts are zero — return an empty frame so no phantom
+        # null-SKU rows reach the FOCUS output (ServiceSubcategory would be null,
+        # which downstream billing consumers may reject or mishandle).
+        return frame.head(0).with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("_sku_type"),
             pl.lit(None, dtype=pl.Float64).alias("_sku_quantity"),
         )
@@ -204,8 +210,11 @@ class FocusSkuTransformer:
         if frame.is_empty():
             return pl.DataFrame(schema=self.schema)
 
-        # Explode each DB row into one row per active SKU type
+        # Explode each DB row into one row per active SKU type.
+        # Returns an empty frame when all token counts are zero.
         frame = _explode_by_sku(frame)
+        if frame.is_empty():
+            return pl.DataFrame(schema=self.schema)
 
         # Proportional cost per SKU: spend * (sku_tokens / total_tokens).
         # This ensures cost rows sum back to the original request spend.
@@ -225,6 +234,15 @@ class FocusSkuTransformer:
                 .alias("_sku_cost"),
             )
         else:
+            non_zero_spend = frame.filter(pl.col("spend").fill_null(0.0) > 0)
+            if not non_zero_spend.is_empty():
+                verbose_logger.warning(
+                    "FocusSkuTransformer: frame has non-zero spend but no recognised "
+                    "token columns (%s). Cost will be zeroed in the FOCUS output. "
+                    "Ensure the data source includes at least one of: %s.",
+                    list(frame.columns),
+                    [c for c, _ in _SKU_COLUMNS],
+                )
             frame = frame.with_columns(pl.lit(0.0).alias("_sku_cost"))
 
         # Build Tags JSON from metadata columns
