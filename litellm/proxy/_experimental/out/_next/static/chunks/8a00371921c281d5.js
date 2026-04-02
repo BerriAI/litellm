@@ -397,7 +397,7 @@ audio_file = open("path/to/your/audio/file.mp3", "rb")
 response = client.audio.transcriptions.create(
 	model="${y}",
 	file=audio_file${n?`,
-	prompt="${n.replace(/"/g,'\\"')}"`:""}
+	prompt="${n.replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`:""}
 )
 
 print(response.text)
