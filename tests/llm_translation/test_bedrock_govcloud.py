@@ -198,8 +198,23 @@ class TestBedrockGovCloudSupport:
         from litellm.utils import Usage
         
         # Mock completion response for base model
+        # Use us.* inference profile ID to match us.* pricing ($1.10/$5.50 per MTok)
         base_model_response = ModelResponse(
             id="test-base",
+            choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
+            created=1234567890,
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        base_model_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
+
+        # Mock completion response for gov model
+        # GovCloud responses use base anthropic.* model ID; pricing is looked up
+        # via bedrock/us-gov-east-1/anthropic.* entries in model_cost
+        gov_model_response = ModelResponse(
+            id="test-gov",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
             created=1234567890,
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -207,26 +222,14 @@ class TestBedrockGovCloudSupport:
             system_fingerprint=None,
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
-        base_model_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
-        
-        # Mock completion response for gov model
-        gov_model_response = ModelResponse(
-            id="test-gov",
-            choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
-            created=1234567890,
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",  # Same base model name
-            object="chat.completion",
-            system_fingerprint=None,
-            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        )
         gov_model_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-east-1"}
-        
+
         # Mock completion response for gov-west model
         gov_west_model_response = ModelResponse(
             id="test-gov-west",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",  # Same base model name
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
@@ -237,25 +240,27 @@ class TestBedrockGovCloudSupport:
         messages = [{"role": "user", "content": "Hello, how are you?"}]
         
         # Calculate costs using the standard Bedrock format with region parameter
+        # Base model uses us.* inference profile — no region_name needed since
+        # the response model already contains the us.* prefix for pricing lookup.
         base_cost = completion_cost(
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=base_model_response,
             messages=messages,
-            region_name="us-east-1",  # Standard region
         )
-        
+
+        # GovCloud models use region_name to look up bedrock/us-gov-*/anthropic.* pricing
         gov_east_cost = completion_cost(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_model_response,
             messages=messages,
-            region_name="us-gov-east-1",  # Gov region
+            region_name="us-gov-east-1",
         )
-        
+
         gov_west_cost = completion_cost(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=gov_west_model_response,
             messages=messages,
-            region_name="us-gov-west-1",  # Gov region
+            region_name="us-gov-west-1",
         )
         
         # Expected costs based on pricing:
@@ -278,20 +283,19 @@ class TestBedrockGovCloudSupport:
             id="test-large",
             choices=[Choices(finish_reason="stop", index=0, message=Message(content="A longer response", role="assistant"))],
             created=1234567890,
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             object="chat.completion",
             system_fingerprint=None,
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
         )
         large_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
-        
+
         large_base_cost = completion_cost(
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_response,
             messages=messages,
-            region_name="us-east-1",
         )
-        
+
         # Create large response for gov model
         large_gov_response = ModelResponse(
             id="test-large-gov",
@@ -303,9 +307,9 @@ class TestBedrockGovCloudSupport:
             usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
         )
         large_gov_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-east-1"}
-        
+
         large_gov_cost = completion_cost(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             completion_response=large_gov_response,
             messages=messages,
             region_name="us-gov-east-1",
@@ -379,15 +383,16 @@ class TestBedrockGovCloudSupport:
         )
         
         # Test gov-east model completion
+        # GovCloud users specify the base anthropic.* model ID with the gov region
         gov_east_result = completion(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-east-1"
         )
-        
+
         # Test gov-west model completion
         gov_west_result = completion(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello"}],
             aws_region_name="us-gov-west-1"
         )
