@@ -907,6 +907,21 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     return []
 
 
+# Anthropic's Files API uses these betas when using file_id / hosted files. Bedrock Invoke
+# rejects them with "invalid beta flag". Document blocks with source.url still work without them.
+BEDROCK_INVOKE_UNSUPPORTED_FILE_API_BETAS: frozenset[str] = frozenset(
+    {
+        "files-api-2025-04-14",
+        "code-execution-2025-05-22",
+    }
+)
+
+
+def strip_unsupported_file_api_betas_for_bedrock_invoke(betas: List[str]) -> List[str]:
+    """Drop Files-API-only betas from anthropic_beta before Bedrock Invoke."""
+    return [b for b in betas if b not in BEDROCK_INVOKE_UNSUPPORTED_FILE_API_BETAS]
+
+
 class CommonBatchFilesUtils:
     """
     Common utilities for Bedrock batch and file operations.
