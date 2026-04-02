@@ -513,7 +513,8 @@ def cost_per_token(  # noqa: PLR0915
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
         return azure_openai_cost_per_token(
-            model=model, usage=usage_block, response_time_ms=response_time_ms
+            model=model, usage=usage_block, response_time_ms=response_time_ms,
+            service_tier=service_tier,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(
@@ -539,6 +540,7 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block,
             response_time_ms=response_time_ms,
             request_model=request_model,
+            service_tier=service_tier,
         )
     else:
         model_info = _cached_get_model_info_helper(
