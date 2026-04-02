@@ -2106,6 +2106,20 @@ def _schedule_background_health_check_db_save(
     )
 
 
+def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
+    """Return the HTTP status code for an unhealthy endpoint.
+
+    Prefers the live exception object in `exceptions` (direct health check path).
+    Falls back to the `exception_status` integer stored on the endpoint dict
+    (shared-cache path, where exception objects are not available).
+    """
+    model_id = endpoint.get("model_id")
+    exc = exceptions.get(model_id) if model_id else None
+    if exc is not None:
+        return getattr(exc, "status_code", 500)
+    return endpoint.get("exception_status", 500)
+
+
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
@@ -2134,10 +2148,7 @@ def _write_health_state_to_router_cache(
             _effective_unhealthy = [
                 ep
                 for ep in unhealthy_endpoints
-                if getattr(
-                    _exceptions.get(ep.get("model_id")), "status_code", 500
-                )
-                not in (429, 408)
+                if _get_endpoint_exception_status(ep, _exceptions) not in (429, 408)
             ]
 
         states = build_deployment_health_states(
