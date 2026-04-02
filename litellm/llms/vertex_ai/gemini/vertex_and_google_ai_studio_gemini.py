@@ -3120,7 +3120,7 @@ class ModelResponseIterator:
                                 choice.delta is None
                                 or (
                                     not choice.delta.tool_calls
-                                    and choice.delta.content is None
+                                    and not choice.delta.content
                                 )
                             )
                         ):

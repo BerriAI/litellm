@@ -337,3 +337,69 @@ def test_streaming_tool_calls_then_empty_content_finish_reason_is_tool_calls():
     assert len(response2.choices) == 1
     assert response2.choices[0].finish_reason == "tool_calls"
     assert response2.choices[0].delta.content is None
+
+
+def test_streaming_tool_calls_then_empty_text_finish_reason_is_tool_calls():
+    """
+    When Gemini streams tool calls in one chunk and the final chunk has BOTH
+    empty content (parts: [{text: ""}]) AND finishReason="STOP", the
+    finish_reason must still be "tool_calls".
+
+    This covers models like gemini-3.1-flash-lite-preview that send the
+    final chunk with content (empty text) instead of omitting it entirely.
+
+    Ref: https://github.com/BerriAI/litellm/issues/22900
+    """
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    # Chunk 1: tool call with no finishReason
+    chunk_with_tool_calls = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_weather",
+                                "args": {"location": "Boston, MA"},
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "index": 0,
+            }
+        ],
+    }
+
+    # Chunk 2: finishReason="STOP" with empty text content (not None, but "")
+    chunk_empty_text_with_finish = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": ""}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+    }
+
+    # Process chunk 1: tool calls
+    response1 = iterator.chunk_parser(chunk_with_tool_calls)
+    assert response1 is not None
+    assert len(response1.choices) == 1
+    assert response1.choices[0].delta.tool_calls is not None
+    assert iterator.has_seen_tool_calls is True
+
+    # Process chunk 2: empty text content with finishReason
+    response2 = iterator.chunk_parser(chunk_empty_text_with_finish)
+    assert response2 is not None
+    assert len(response2.choices) == 1
+    assert response2.choices[0].finish_reason == "tool_calls"
