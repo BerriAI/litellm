@@ -205,8 +205,8 @@ class TestManagedWebSocketHandlerIntegration:
     def test_should_resolve_proxy_model_alias_to_underlying_deployment(self):
         from litellm.types.router import Deployment
 
-        handler = self._make_handler()
         mock_router = MagicMock()
+        handler = self._make_handler(llm_router=mock_router)
         mock_router.model_group_alias = {}
         mock_router.get_deployment_by_model_group_name.return_value = Deployment(
             model_name="chatgpt/gpt-5.4-1",
@@ -217,16 +217,24 @@ class TestManagedWebSocketHandlerIntegration:
             model_info={"id": "deployment-1"},
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            msg_obj = {
-                "type": "response.create",
-                "response": {"model": "chatgpt/gpt-5.4-1", "input": []},
-            }
-            deployment_params = handler._rewrite_event_model_in_message(msg_obj)
+        msg_obj = {
+            "type": "response.create",
+            "response": {"model": "chatgpt/gpt-5.4-1", "input": []},
+        }
+        deployment_params = handler._rewrite_event_model_in_message(msg_obj)
 
         assert msg_obj["response"]["model"] == "chatgpt/gpt-5.4"
         assert deployment_params["model"] == "chatgpt/gpt-5.4"
         assert deployment_params["chatgpt_auth_file_path"] == "/tmp/auth.json"
+
+    def test_should_strip_provider_prefix_for_client_visible_model_name(self):
+        handler = self._make_handler(model="chatgpt/gpt-5.4", custom_llm_provider="chatgpt")
+        assert (
+            handler._get_client_visible_model_name(
+                "chatgpt/gpt-5.4", {"custom_llm_provider": "chatgpt"}
+            )
+            == "gpt-5.4"
+        )
 
     @pytest.mark.asyncio
     async def test_should_emit_noop_warmup_events_without_upstream_call(self):

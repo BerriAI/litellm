@@ -32,7 +32,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
 
 
@@ -955,6 +955,7 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self.llm_router = kwargs.pop("llm_router", None)
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
             k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
@@ -1189,19 +1190,17 @@ class ManagedResponsesWebSocketHandler:
             return None, {}
 
         try:
-            from litellm.proxy.proxy_server import llm_router
-
-            if llm_router is None:
+            if self.llm_router is None:
                 return None, {}
 
             resolved_model_name = event_model
-            alias_item = llm_router.model_group_alias.get(event_model)
+            alias_item = self.llm_router.model_group_alias.get(event_model)
             if isinstance(alias_item, str):
                 resolved_model_name = alias_item
             elif isinstance(alias_item, dict):
                 resolved_model_name = alias_item.get("model", event_model)
 
-            deployment = llm_router.get_deployment_by_model_group_name(
+            deployment = self.llm_router.get_deployment_by_model_group_name(
                 model_group_name=resolved_model_name
             )
             if deployment is None:
@@ -1216,6 +1215,16 @@ class ManagedResponsesWebSocketHandler:
                 exc,
             )
             return None, {}
+
+    def _get_provider_name(self, call_kwargs: Dict[str, Any]) -> Optional[str]:
+        provider_name = cast(
+            Optional[str], call_kwargs.get("custom_llm_provider")
+        ) or cast(Optional[str], self.custom_llm_provider)
+        if provider_name is not None:
+            return provider_name
+        if call_kwargs.get("chatgpt_auth_file_path"):
+            return LlmProviders.CHATGPT.value
+        return None
 
     def _rewrite_event_model_in_message(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1289,7 +1298,7 @@ class ManagedResponsesWebSocketHandler:
             "id": response_id,
             "object": "response",
             "created_at": now,
-            "model": model.replace("chatgpt/", "", 1),
+            "model": self._get_client_visible_model_name(model, call_kwargs),
             "output": [],
             "parallel_tool_calls": bool(call_kwargs.get("parallel_tool_calls", True)),
             "status": "completed",
@@ -1335,14 +1344,18 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["previous_response_id"] = previous_response_id
 
     @staticmethod
-    def _provider_uses_local_history_only(
-        model: str, call_kwargs: Dict[str, Any]
-    ) -> bool:
-        if model.startswith("chatgpt/"):
-            return True
-        if call_kwargs.get("chatgpt_auth_file_path"):
-            return True
-        return False
+    def _strip_provider_prefix(model: str, provider_name: Optional[str]) -> str:
+        if provider_name and model.startswith(f"{provider_name}/"):
+            return model[len(provider_name) + 1 :]
+        return model
+
+    def _get_client_visible_model_name(
+        self, model: str, call_kwargs: Dict[str, Any]
+    ) -> str:
+        return self._strip_provider_prefix(model, self._get_provider_name(call_kwargs))
+
+    def _provider_uses_local_history_only(self, call_kwargs: Dict[str, Any]) -> bool:
+        return self._get_provider_name(call_kwargs) == LlmProviders.CHATGPT.value
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], event_model: Optional[str]
@@ -1495,7 +1508,7 @@ class ManagedResponsesWebSocketHandler:
         self._apply_history(
             call_kwargs, previous_response_id, current_messages, prior_history
         )
-        if self._provider_uses_local_history_only(model, call_kwargs):
+        if self._provider_uses_local_history_only(call_kwargs):
             call_kwargs.pop("previous_response_id", None)
         self._inject_credentials(call_kwargs, event_model)
         self._update_proxy_request(call_kwargs, model)

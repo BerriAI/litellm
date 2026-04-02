@@ -96,14 +96,17 @@ def _get_metadata_variable_name(request: Request) -> str:
     return "metadata"
 
 
-def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+def get_chain_id_from_headers(
+    headers: Optional[Dict[str, str]], allow_generic_session_id: bool = False
+) -> Optional[str]:
     """
     Extract chain id for call chaining from request headers.
 
-    x-litellm-trace-id, x-litellm-session-id, and session_id are treated as the
-    same chain identifier. When multiple are present, x-litellm-trace-id takes
-    precedence. Header keys are matched case-insensitively so this works with raw
-    header dicts from any transport.
+    x-litellm-trace-id and x-litellm-session-id are treated as the same chain
+    identifier. When multiple are present, x-litellm-trace-id takes precedence.
+    For a narrow set of Codex responses flows, callers can opt in to treating a
+    generic session_id header as equivalent. Header keys are matched
+    case-insensitively so this works with raw header dicts from any transport.
 
     Used by MCP (and other paths that have raw_headers but no Request) to set
     litellm_trace_id/litellm_session_id for spend logs and logging consistency.
@@ -111,11 +114,14 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     if not headers:
         return None
     normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return (
-        normalized.get("x-litellm-trace-id")
-        or normalized.get("x-litellm-session-id")
-        or normalized.get("session_id")
+    chain_id = normalized.get("x-litellm-trace-id") or normalized.get(
+        "x-litellm-session-id"
     )
+    if chain_id is not None:
+        return chain_id
+    if allow_generic_session_id:
+        return normalized.get("session_id")
+    return None
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
@@ -611,6 +617,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         data: dict,
         _metadata_variable_name: str,
+        allow_generic_session_id: bool = False,
     ) -> dict:
         """
         Add litellm metadata from request headers
@@ -633,12 +640,12 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
 
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        # x-litellm-trace-id, x-litellm-session-id, and session_id all identify the
-        # same request/session chain for downstream provider calls and spend logging.
+        # Only purpose-built LiteLLM headers are accepted by default. Responses
+        # endpoints can opt in to mapping a generic session_id header for Codex.
         chain_id = (
             headers.get("x-litellm-trace-id")
             or headers.get("x-litellm-session-id")
-            or headers.get("session_id")
+            or (headers.get("session_id") if allow_generic_session_id else None)
         )
 
         if agent_id_from_header:
@@ -653,7 +660,9 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(
-                f"Extracted chain_id from header (trace-id/session-id/session_id): {chain_id}"
+                "Extracted chain_id from request headers (trace-id/session-id%s): %s",
+                "/session_id" if allow_generic_session_id else "",
+                chain_id,
             )
 
         if isinstance(data[_metadata_variable_name], dict):
@@ -974,10 +983,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
+    allow_generic_session_id = request.url.path in {"/v1/responses", "/responses"}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        allow_generic_session_id=allow_generic_session_id,
     )
 
     # Add headers to metadata for guardrails to access (fixes #17477)

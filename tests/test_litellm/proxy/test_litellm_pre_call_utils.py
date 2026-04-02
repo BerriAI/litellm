@@ -1176,12 +1176,26 @@ def test_add_litellm_metadata_from_request_headers_session_id_sets_chain_id():
     headers = {"session_id": "codex-session"}
     data = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
+        headers=headers,
+        data=data,
+        _metadata_variable_name="metadata",
+        allow_generic_session_id=True,
     )
     assert data["metadata"]["trace_id"] == "codex-session"
     assert data["metadata"]["session_id"] == "codex-session"
     assert data["litellm_session_id"] == "codex-session"
     assert data["litellm_trace_id"] == "codex-session"
+
+
+def test_add_litellm_metadata_from_request_headers_session_id_ignored_by_default():
+    headers = {"session_id": "generic-session"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"] == {}
+    assert "litellm_session_id" not in data
+    assert "litellm_trace_id" not in data
 
 
 def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precedence():

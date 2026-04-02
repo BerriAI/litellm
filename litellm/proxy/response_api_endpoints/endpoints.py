@@ -990,6 +990,7 @@ async def responses_websocket_endpoint(
                 )
             )
         except Exception:
+            # The client may disconnect immediately after the failed handshake.
             pass
         await websocket.close(code=1008, reason="Authentication failed")
         return
@@ -1102,6 +1103,7 @@ async def responses_websocket_endpoint(
     # Phase 2: route to upstream provider
     try:
         data["user_api_key_dict"] = user_api_key_dict
+        data["llm_router"] = llm_router
         if initial_client_message is not None:
             data["initial_client_message"] = initial_client_message
         llm_call = await route_request(
