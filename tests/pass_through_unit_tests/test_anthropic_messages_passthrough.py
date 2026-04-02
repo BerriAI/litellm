@@ -95,7 +95,7 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     @property
@@ -103,7 +103,7 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
         """
         This is the model name that is expected to be in the logging payload
         """
-        return "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        return "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
@@ -634,7 +634,7 @@ async def test_anthropic_messages_with_extra_headers():
 #         # Call the handler with headers in kwargs
 #         try:
 #             await handler.async_anthropic_messages_handler(
-#                 model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+#                 model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
 #                 messages=[{"role": "user", "content": "Hello"}],
 #                 anthropic_messages_provider_config=mock_provider_config,
 #                 anthropic_messages_optional_request_params={"max_tokens": 100},
@@ -756,7 +756,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                     "type": "message",
                     "role": "assistant",
                     "content": [{"type": "text", "text": "This is a mock response"}],
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     "stop_reason": "end_turn",
                     "usage": {"input_tokens": 10, "output_tokens": 20},
                 }
@@ -778,7 +778,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough():
                 # Call the function with AWS credentials
                 await litellm.anthropic.messages.acreate(
                     messages=[{"role": "user", "content": "Hello, test credentials"}],
-                    model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     max_tokens=100,
                     **aws_params,
                 )
@@ -807,7 +807,7 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "This is a mock response"}],
-        "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
@@ -836,7 +836,7 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         # Call anthropic.messages.acreate with aws_region_name
         response = await litellm.anthropic.messages.acreate(
             messages=[{"role": "user", "content": "Hello, test region"}],
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             max_tokens=100,
             aws_region_name=test_region,
             client=mock_client,

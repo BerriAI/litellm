@@ -293,25 +293,45 @@ def _override_openai_response_model(
        we preserve the actual model that was used (the fallback model).
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
+    3. If this was a fastest_response batch completion, use the winning model's
+       model group name instead of the comma-separated list the client sent.
     """
     if not requested_model:
         return
 
-    # Check if a fallback occurred - if so, preserve the actual model used
     hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
     if isinstance(hidden_params, dict):
+        # Check if a fallback occurred - if so, preserve the actual model used
         fallback_headers = hidden_params.get("additional_headers", {}) or {}
         attempted_fallbacks = fallback_headers.get(
             "x-litellm-attempted-fallbacks", None
         )
         if attempted_fallbacks is not None and attempted_fallbacks > 0:
-            # A fallback occurred - preserve the actual model that was used
             verbose_proxy_logger.debug(
                 "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
                 log_context,
                 attempted_fallbacks,
             )
             return
+
+        # For fastest_response batch completions, use the winning model's group
+        # name rather than the comma-separated list the client sent.
+        if hidden_params.get("fastest_response_batch_completion"):
+            winning_model = fallback_headers.get("x-litellm-model-group")
+            if winning_model:
+                verbose_proxy_logger.debug(
+                    "%s: fastest_response detected, using winning model group=%r instead of requested=%r.",
+                    log_context,
+                    winning_model,
+                    requested_model,
+                )
+                requested_model = winning_model
+            else:
+                verbose_proxy_logger.debug(
+                    "%s: fastest_response detected but no model group header found, preserving actual model from response.",
+                    log_context,
+                )
+                return
 
     # Check if this is an Azure Model Router request - if so, preserve the actual model used
     if _is_azure_model_router_request(requested_model):
@@ -1059,11 +1079,13 @@ class ProxyBaseLLMRequestProcessing:
                         "_litellm_client_requested_model"
                     ] = requested_model_from_client
 
-                # Streaming: attach a closure that CSW.__anext__ will call
-                # at stream end instead of firing logging directly.  The
-                # closure runs ONLY guardrail hooks (not all callbacks) on
-                # the assembled response so guardrail_information is
-                # populated, then fires both logging handlers.
+                # Streaming: attach a closure that fires after all guardrail
+                # end-of-stream blocks complete.  CSW.__anext__ stores the
+                # assembled response on logging_obj; the outer consumer
+                # (ProxyLogging._fire_deferred_stream_logging) fires the
+                # closure after the full streaming pipeline finishes.
+                # The closure runs non-apply_guardrail hooks on the
+                # assembled response, then fires both logging handlers.
                 # Only for CustomStreamWrapper — raw async generators from
                 # passthrough routes bypass CSW and would orphan the closure.
                 from litellm.litellm_core_utils.streaming_handler import (
@@ -1383,16 +1405,19 @@ class ProxyBaseLLMRequestProcessing:
         cache_hit: Any,
     ) -> None:
         """
-        Run only post-call guardrail hooks on an assembled streaming response,
-        then fire both async and sync logging handlers.
+        Run non-streaming post-call guardrail hooks on an assembled streaming
+        response, then fire both async and sync logging handlers.
 
-        Called by CSW.__anext__ at stream end via a closure stored on
-        logging_obj._on_deferred_stream_complete.
+        Called by ProxyLogging._fire_deferred_stream_logging after the full
+        streaming pipeline (including unified_guardrail end-of-stream blocks)
+        has completed.
+
+        Guardrails with apply_guardrail are skipped — they already ran via
+        unified_guardrail's streaming iterator.  Only guardrails that override
+        async_post_call_success_hook directly (without apply_guardrail) run
+        here.
 
         This is audit-only — content has already been delivered to the client.
-        Blocking guardrails that raise HTTPException cannot prevent content
-        delivery for streaming.  Per-chunk filtering should use
-        async_post_call_streaming_hook instead.
 
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
@@ -1405,7 +1430,6 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.utils import (
                 _check_and_merge_model_level_guardrails,
             )
-            from litellm.proxy.utils import unified_guardrail as _unified_guardrail
 
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
@@ -1421,14 +1445,12 @@ class ProxyBaseLLMRequestProcessing:
                 try:
                     guardrail_result = None
                     if "apply_guardrail" in type(cb).__dict__:
-                        guardrail_data["guardrail_to_apply"] = cb
-                        guardrail_result = (
-                            await _unified_guardrail.async_post_call_success_hook(
-                                user_api_key_dict=captured_user_api_key_dict,
-                                data=guardrail_data,
-                                response=_response,
-                            )
-                        )
+                        # Skip — apply_guardrail guardrails already ran via
+                        # unified_guardrail's end-of-stream block in the
+                        # streaming iterator pipeline.  Running them again
+                        # here would duplicate the guardrail API call
+                        # (e.g. double OpenAI Moderation charges).
+                        continue
                     else:
                         guardrail_result = await cb.async_post_call_success_hook(
                             user_api_key_dict=captured_user_api_key_dict,

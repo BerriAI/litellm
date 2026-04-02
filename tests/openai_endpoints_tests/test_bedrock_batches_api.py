@@ -7,7 +7,7 @@ client = OpenAI(
 )
 
 
-BEDROCK_BATCH_MODEL = "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0"
+BEDROCK_BATCH_MODEL = "bedrock/batch-us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.asyncio
