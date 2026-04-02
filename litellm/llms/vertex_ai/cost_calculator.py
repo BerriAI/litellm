@@ -197,34 +197,25 @@ def _handle_128k_pricing(
     prompt_tokens = usage.prompt_tokens
     completion_tokens = usage.completion_tokens
 
-    input_rate: float
     if (
         _is_above_128k(tokens=prompt_tokens)
         and input_cost_per_token_above_128k_tokens is not None
     ):
-        input_rate = input_cost_per_token_above_128k_tokens
+        prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
-        _base_input = model_info["input_cost_per_token"]
-        assert _base_input is not None, (
-            "model_info missing input_cost_per_token for 128k pricing path"
-        )
-        input_rate = _base_input
-    prompt_cost = prompt_tokens * input_rate
+        prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
-    output_rate: float
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
     if (
         _is_above_128k(tokens=completion_tokens)
         and output_cost_per_token_above_128k_tokens is not None
     ):
-        output_rate = output_cost_per_token_above_128k_tokens
+        completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
-        _base_output = model_info["output_cost_per_token"]
-        assert _base_output is not None, (
-            "model_info missing output_cost_per_token for 128k pricing path"
-        )
-        output_rate = _base_output
-    completion_cost = completion_tokens * output_rate
+        completion_cost = completion_tokens * model_info["output_cost_per_token"]
 
     return prompt_cost, completion_cost
 
