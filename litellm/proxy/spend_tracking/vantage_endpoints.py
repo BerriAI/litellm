@@ -377,10 +377,18 @@ async def vantage_dry_run_export(
         # bypassing the destination so no Vantage credentials are required.
         from litellm.integrations.focus.database import FocusLiteLLMDatabase
         from litellm.integrations.focus.export_engine import FocusExportEngine
-        from litellm.integrations.focus.transformer import FocusTransformer
+        from litellm.integrations.focus.spend_logs_database import FocusSpendLogsDatabase
+        from litellm.integrations.focus.transformer import (
+            FocusSkuTransformer,
+            FocusTransformer,
+        )
 
-        database = FocusLiteLLMDatabase()
-        transformer = FocusTransformer()
+        database = (
+            FocusSpendLogsDatabase() if request.sku_breakdown else FocusLiteLLMDatabase()
+        )
+        transformer = (
+            FocusSkuTransformer() if request.sku_breakdown else FocusTransformer()
+        )
 
         import polars as pl
 
@@ -478,12 +486,14 @@ async def vantage_export(
         )
 
     try:
+        from litellm.integrations.focus.export_engine import FocusExportEngine
         from litellm.integrations.vantage.vantage_logger import VantageLogger
 
-        # Prefer the already-registered logger to avoid recreating HTTP clients
-        # on every export call.
-        logger = _get_registered_vantage_logger()
-        if logger is None:
+        if request.sku_breakdown:
+            # SKU breakdown requires a dedicated engine with FocusSkuTransformer.
+            # We cannot reuse the registered VantageLogger because it holds a
+            # FocusTransformer internally and threading the flag through every
+            # logger/scheduler layer would be overly invasive.
             settings = await _get_vantage_settings()
             if not settings:
                 raise HTTPException(
@@ -492,16 +502,47 @@ async def vantage_export(
                         "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
                     },
                 )
-            logger = VantageLogger(
-                api_key=settings.get("api_key"),
-                integration_token=settings.get("integration_token"),
-                base_url=settings.get("base_url"),
+            engine = FocusExportEngine(
+                provider="vantage",
+                export_format="csv",
+                prefix="vantage_exports",
+                destination_config=settings,
+                sku_breakdown=True,
             )
-        await logger.export_usage_data(
-            limit=request.limit,
-            start_time_utc=request.start_time_utc,
-            end_time_utc=request.end_time_utc,
-        )
+            if request.start_time_utc or request.end_time_utc:
+                from litellm.integrations.focus.destinations import FocusTimeWindow
+
+                window = FocusTimeWindow(
+                    start_time=request.start_time_utc,
+                    end_time=request.end_time_utc,
+                    frequency="manual",
+                )
+                await engine.export_window(window=window, limit=request.limit)
+            else:
+                await engine.export_all(limit=request.limit)
+        else:
+            # Prefer the already-registered logger to avoid recreating HTTP
+            # clients on every export call.
+            logger = _get_registered_vantage_logger()
+            if logger is None:
+                settings = await _get_vantage_settings()
+                if not settings:
+                    raise HTTPException(
+                        status_code=404,
+                        detail={
+                            "error": "Vantage settings not found. Please initialize settings first using /vantage/init"
+                        },
+                    )
+                logger = VantageLogger(
+                    api_key=settings.get("api_key"),
+                    integration_token=settings.get("integration_token"),
+                    base_url=settings.get("base_url"),
+                )
+            await logger.export_usage_data(
+                limit=request.limit,
+                start_time_utc=request.start_time_utc,
+                end_time_utc=request.end_time_utc,
+            )
 
         verbose_proxy_logger.info("Vantage export completed successfully")
 
