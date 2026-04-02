@@ -39,6 +39,12 @@ def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "my-fake-aws-access-key-id")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "my-fake-aws-secret-access-key")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
+    # Keep these transformation tests on the simple access-key path. A leaked
+    # session token or role/web-identity env var pushes Bedrock auth down a
+    # different branch and fails before the mocked HTTP client is exercised.
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
 
 
 @pytest.fixture
