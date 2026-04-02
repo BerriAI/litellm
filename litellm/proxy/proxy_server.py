@@ -2124,9 +2124,19 @@ def _write_health_state_to_router_cache(
         if llm_router is None or not llm_router.enable_health_check_routing:
             return
 
+        # When health_check_ignore_transient_errors is set, treat 429/408
+        # endpoints as healthy so they are not filtered from routing.
+        _effective_unhealthy = unhealthy_endpoints
+        if llm_router.health_check_ignore_transient_errors:
+            _effective_unhealthy = [
+                ep
+                for ep in unhealthy_endpoints
+                if getattr(ep.get("exception"), "status_code", 500) not in (429, 408)
+            ]
+
         states = build_deployment_health_states(
             healthy_endpoints=healthy_endpoints,
-            unhealthy_endpoints=unhealthy_endpoints,
+            unhealthy_endpoints=_effective_unhealthy,
         )
         if states:
             llm_router.health_state_cache.set_deployment_health_states(states)

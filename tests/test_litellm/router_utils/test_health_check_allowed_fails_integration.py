@@ -634,6 +634,37 @@ class TestHealthCheckIgnoreTransientErrors:
                 )
                 mock_cooldown.assert_called_once()
 
+    def test_429_not_written_to_health_state_cache_when_flag_enabled(self):
+        """429 endpoint is excluded from health state cache when flag is set,
+        so the binary health check filter does not mark it as unhealthy."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1")],
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        rate_exc = litellm.RateLimitError(
+            message="Rate limited", model="gpt-4", llm_provider="openai"
+        )
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            _write_health_state_to_router_cache(
+                healthy_endpoints=[],
+                unhealthy_endpoints=unhealthy_endpoints,
+            )
+
+        # Health state cache should have NO entry for deploy-1
+        # (429 was ignored, not written as unhealthy)
+        unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
+        assert "deploy-1" not in unhealthy_ids
+
     def test_429_triggers_cooldown_when_flag_disabled(self):
         """When flag is False (default), 429 still triggers cooldown."""
         import litellm.proxy.proxy_server as proxy_module
