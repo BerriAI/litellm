@@ -178,6 +178,33 @@ def test_post_call_handles_non_string_original_response():
     assert logging_obj.model_call_details["original_response"] is sentinel
 
 
+def test_post_call_truncates_raw_vertex_json_base64():
+    """
+    post_call must truncate the Vertex AI raw JSON base64 format:
+        {"inlineData": {"mimeType": "image/png", "data": "<BASE64>"}}
+    The previous _DATA_URI_RE only matched "data:<mime>;base64,<payload>" —
+    it was a NO-OP for Vertex AI responses and left the full 12 MB string
+    stored verbatim in model_call_details and error_logs.
+    Regression test for Fix 6.
+    """
+    b64_payload = "A" * 200  # above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    # Vertex AI raw API response format (no "data:" URI prefix)
+    raw_json = (
+        '{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png",'
+        f'"data":"{b64_payload}"}}}}]}}]}}'
+    )
+
+    logging_obj = setup_logging()
+    logging_obj.post_call(original_response=raw_json, input=[], api_key="")
+
+    stored = logging_obj.model_call_details["original_response"]
+    assert b64_payload not in stored, (
+        "Full Vertex AI raw base64 payload found in model_call_details — "
+        "_JSON_BASE64_FIELD_RE truncation is not working"
+    )
+    assert "base64_data truncated" in stored
+
+
 def test_post_call_truncates_base64_in_error_logs():
     """
     litellm.error_logs["POST_CALL"] must also receive the truncated version.

@@ -43,6 +43,15 @@ _BYTES_PER_MIB = 1024 * 1024
 # Captures: group(1)=mime_type, group(2)=base64_payload
 _DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
 
+# Regex matching raw JSON base64 fields used by Vertex AI / Google AI Studio:
+#   "data":"<base64payload>"  (inside inlineData, imageBytes, etc.)
+# The captured groups are: group(1)=opening_quote+key+colon+quote,
+# group(2)=base64_payload, group(3)=closing_quote.
+# We only replace payloads longer than MAX_BASE64_LENGTH_FOR_LOGGING.
+_JSON_BASE64_FIELD_RE = re.compile(
+    r'("(?:data|imageBytes|bytesBase64Encoded)"\s*:\s*")([A-Za-z0-9+/=]{64,})(")'
+)
+
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
 _MAX_TRUNCATION_DEPTH = 20
@@ -68,11 +77,34 @@ def _base64_data_uri_replacer(match: re.Match) -> str:
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
+def _json_base64_field_replacer(match: re.Match) -> str:
+    """Replace a raw JSON base64 field value with a size placeholder if too long.
+
+    Handles Vertex AI / Google AI Studio responses where the base64 payload
+    appears as a bare JSON string value rather than a data-URI:
+        {"inlineData": {"mimeType": "image/png", "data": "<BASE64>"}}
+    """
+    prefix = match.group(1)  # e.g. '"data":"'
+    payload = match.group(2)
+    suffix = match.group(3)  # closing '"'
+    if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
+        return match.group(0)
+    size_str = _format_base64_size(len(payload))
+    return f"{prefix}[base64_data truncated: {size_str}]{suffix}"
+
+
 def _truncate_base64_in_string(value: str) -> str:
-    """Replace long base64 data-URI payloads in a string with a size placeholder."""
+    """Replace long base64 payloads in a string with a size placeholder.
+
+    Handles two formats:
+    1. data-URI format:  data:<mime>;base64,<payload>
+    2. Raw JSON field:   "data":"<payload>"  (Vertex AI / Google AI Studio)
+    """
     if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return value
-    return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
+    value = _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
+    value = _JSON_BASE64_FIELD_RE.sub(_json_base64_field_replacer, value)
+    return value
 
 
 def _truncate_base64_in_value(value: Any) -> Any:
