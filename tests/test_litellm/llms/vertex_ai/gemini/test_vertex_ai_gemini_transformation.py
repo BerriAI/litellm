@@ -1849,3 +1849,5 @@ def test_process_gemini_media_files_api_uri_with_explicit_format():
 
     assert "file_data" in part
     assert part["file_data"]["file_uri"] == gemini_file_uri
+    # The Files API already knows the mime type; explicit format must NOT be forwarded.
+    assert part["file_data"].get("mime_type") is None

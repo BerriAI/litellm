@@ -5,6 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -208,7 +209,7 @@ def _process_gemini_media(
             return _apply_gemini_3_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
-        elif "https://generativelanguage.googleapis.com/v1beta/files/" in image_url:
+        elif re.search(r"https://generativelanguage\.googleapis\.com/v[^/]+/files/", image_url):
             # Gemini Files API URI — mime type is already known by the API,
             # no need to resolve it from the URL (which would cause a 403).
             file_data = FileDataType(file_uri=image_url)
