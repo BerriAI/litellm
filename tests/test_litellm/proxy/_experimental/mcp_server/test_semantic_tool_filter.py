@@ -392,3 +392,53 @@ async def test_semantic_filter_hook_skips_no_tools():
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
 
+
+@pytest.mark.asyncio
+async def test_semantic_filter_zero_matches_returns_only_non_mcp_tools():
+    """
+    Test that when zero semantic matches are found, only non-MCP tools are returned.
+
+    MCP tools have server-name prefixes (e.g., "weather-get_forecast").
+    Non-MCP tools don't (e.g., "web_search"). On zero matches, the filter
+    should drop all MCP tools to avoid exceeding the 128 tool limit.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Mock the semantic router to return no matches
+    filter_instance.tool_router = Mock(return_value=[])
+
+    # Mix of MCP tools (prefixed) and non-MCP tools (no prefix)
+    available_tools = [
+        MCPTool(name="weather-get_forecast", description="Get forecast", inputSchema={"type": "object"}),
+        MCPTool(name="email-send_email", description="Send email", inputSchema={"type": "object"}),
+        MCPTool(name="docs-read_document", description="Read doc", inputSchema={"type": "object"}),
+        MCPTool(name="web_search", description="Search the web", inputSchema={"type": "object"}),
+        MCPTool(name="code_interpreter", description="Run code", inputSchema={"type": "object"}),
+    ]
+
+    filtered = await filter_instance.filter_tools(
+        query="hello",
+        available_tools=available_tools,
+    )
+
+    # Should return only non-MCP tools
+    filtered_names = [t.name for t in filtered]
+    assert "web_search" in filtered_names
+    assert "code_interpreter" in filtered_names
+    assert len(filtered) == 2, f"Expected 2 non-MCP tools, got {len(filtered)}: {filtered_names}"
+    # MCP tools should be excluded
+    assert "weather-get_forecast" not in filtered_names
+    assert "email-send_email" not in filtered_names
+    assert "docs-read_document" not in filtered_names
+
