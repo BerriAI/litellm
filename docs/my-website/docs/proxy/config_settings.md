@@ -367,6 +367,9 @@ router_settings:
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
 | search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search/index.md) |
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
+| enable_health_check_routing | boolean | If true, enables health check-driven deployment filtering to avoid routing requests to unhealthy deployments |
+| health_check_staleness_threshold | integer | Maximum age in seconds for cached health check results before marking deployments as stale |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 
 
 ### environment variables - Reference
