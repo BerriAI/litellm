@@ -1253,49 +1253,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 raise Exception(
                     "Key is blocked. Update via `/key/unblock` if you're an admin."
                 )
-            config = valid_token.config
-
-            if config != {}:
-                model_list = config.get("model_list", [])
-                new_model_list = model_list
-                verbose_proxy_logger.debug(
-                    f"\n new llm router model list {new_model_list}"
-                )
-            elif (
-                isinstance(valid_token.models, list)
-                and "all-team-models" in valid_token.models
-            ):
-                # Do not do any validation at this step
-                # the validation will occur when checking the team has access to this model
-                pass
-            else:
-                model = get_model_from_request(request_data, route)
-                fallback_models = cast(
-                    Optional[List[ALL_FALLBACK_MODEL_VALUES]],
-                    request_data.get("fallbacks", None),
-                )
-
-                if model is not None:
-                    await can_key_call_model(
-                        model=model,
-                        llm_model_list=llm_model_list,
-                        valid_token=valid_token,
-                        llm_router=llm_router,
-                    )
-
-                if fallback_models is not None:
-                    for m in fallback_models:
-                        await can_key_call_model(
-                            model=m["model"] if isinstance(m, dict) else m,
-                            llm_model_list=llm_model_list,
-                            valid_token=valid_token,
-                            llm_router=llm_router,
-                        )
-                        await is_valid_fallback_model(
-                            model=m["model"] if isinstance(m, dict) else m,
-                            llm_router=llm_router,
-                            user_model=None,
-                        )
+            await _enforce_key_and_fallback_model_access(
+                valid_token=valid_token,
+                request_data=request_data,
+                route=route,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
@@ -1824,6 +1788,61 @@ async def _lookup_end_user_and_apply_budget(
     return valid_token, end_user_object
 
 
+async def _enforce_key_and_fallback_model_access(
+    *,
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    llm_model_list: Optional[list],
+    llm_router: Optional[Any],
+) -> None:
+    """
+    Key-level model allowlist and client fallbacks (same as standard auth).
+    Not included in common_checks — common_checks enforces team/user/project model access only.
+    """
+    config = valid_token.config
+
+    if config != {}:
+        model_list = config.get("model_list", [])
+        new_model_list = model_list
+        verbose_proxy_logger.debug(
+            f"\n new llm router model list {new_model_list}"
+        )
+    elif (
+        isinstance(valid_token.models, list)
+        and "all-team-models" in valid_token.models
+    ):
+        pass
+    else:
+        model = get_model_from_request(request_data, route)
+        fallback_models = cast(
+            Optional[List[ALL_FALLBACK_MODEL_VALUES]],
+            request_data.get("fallbacks", None),
+        )
+
+        if model is not None:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+
+        if fallback_models is not None:
+            for m in fallback_models:
+                await can_key_call_model(
+                    model=m["model"] if isinstance(m, dict) else m,
+                    llm_model_list=llm_model_list,
+                    valid_token=valid_token,
+                    llm_router=llm_router,
+                )
+                await is_valid_fallback_model(
+                    model=m["model"] if isinstance(m, dict) else m,
+                    llm_router=llm_router,
+                    user_model=None,
+                )
+
+
 async def _run_post_custom_auth_checks(
     valid_token: UserAPIKeyAuth,
     request: Request,
@@ -1833,6 +1852,7 @@ async def _run_post_custom_auth_checks(
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_model_list,
         llm_router,
         model_max_budget_limiter,
         prisma_client,
@@ -1875,6 +1895,15 @@ async def _run_post_custom_auth_checks(
                     else ""
                 ),
             )
+
+    if general_settings.get("custom_auth_run_common_checks", False):
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route=route,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
 
     current_model = request_data.get("model", None)
 

@@ -3,22 +3,30 @@ import json
 import os
 import sys
 from typing import Tuple
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import MagicMock
-
 import pytest
 
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import JWTRoutingOverride, LiteLLM_JWTAuth, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+    JWTRoutingOverride,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import get_api_key, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_post_custom_auth_checks,
+    get_api_key,
+    user_api_key_auth,
+)
 
 
 def test_get_api_key():
@@ -36,6 +44,86 @@ def test_get_api_key():
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_does_not_enforce_key_model_access_by_default():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
+    request_data = {"model": "gpt-4o"}
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
+    ) as mock_can_key, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_can_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_honors_key_level_model_access_restriction_allowed_with_opt_in():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
+    request_data = {"model": "gpt-4o-mini"}
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
+    ) as mock_can_key, patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_can_key.assert_awaited_once_with(
+            model="gpt-4o-mini",
+            llm_model_list=ANY,
+            valid_token=valid_token,
+            llm_router=ANY,
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
+    request_data = {"model": "gpt-4o"}
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
+    ) as mock_can_key, patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+    ), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"custom_auth_run_common_checks": True},
+    ):
+        mock_can_key.side_effect = ProxyException(
+            message="Key not allowed to access model",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=401,
+        )
+        with pytest.raises(ProxyException) as exc:
+            await _run_post_custom_auth_checks(
+                valid_token=valid_token,
+                request=None,
+                request_data=request_data,
+                route="/v1/chat/completions",
+                parent_otel_span=None,
+            )
+
+        assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
 @pytest.mark.parametrize(
