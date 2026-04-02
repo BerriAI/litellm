@@ -35,6 +35,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
+from fastapi.exceptions import WebSocketRequestValidationError
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -1139,6 +1140,21 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         ),
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+@app.exception_handler(WebSocketRequestValidationError)
+async def websocket_validation_exception_handler(
+    websocket: WebSocket, exc: WebSocketRequestValidationError
+):
+    verbose_proxy_logger.error(
+        "WebSocket validation error on %s: %s",
+        getattr(websocket, "url", None),
+        exc.errors(),
+    )
+    await websocket.close(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason=safe_dumps(exc.errors()),
     )
 
 
@@ -13912,3 +13928,63 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
+
+# Ensure the Responses API websocket endpoint is registered exactly once.
+# During local/source-mounted development the route can be duplicated with stale
+# metadata, causing FastAPI to reject websocket upgrades before the latest
+# handler logic runs.
+from starlette.routing import WebSocketRoute
+from starlette.websockets import WebSocket
+
+from litellm.proxy.response_api_endpoints.endpoints import (
+    responses_websocket_endpoint,
+)
+
+app.router.routes = [
+    route
+    for route in app.router.routes
+    if not (
+        isinstance(route, WebSocketRoute)
+        and getattr(route, "path", None) in ("/v1/responses", "/responses")
+    )
+]
+app.router.routes.append(
+    WebSocketRoute("/v1/responses", responses_websocket_endpoint)
+)
+app.router.routes.append(WebSocketRoute("/responses", responses_websocket_endpoint))
+
+_original_router_not_found = app.router.not_found
+
+
+async def _responses_websocket_not_found_fallback(scope, receive, send):
+    if scope["type"] == "websocket" and scope.get("path") in (
+        "/v1/responses",
+        "/responses",
+    ):
+        websocket = WebSocket(scope, receive=receive, send=send)
+        await responses_websocket_endpoint(websocket)
+        return
+    await _original_router_not_found(scope, receive, send)
+
+
+app.router.not_found = _responses_websocket_not_found_fallback
+
+
+class _ResponsesWebSocketBypassMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope.get("type") == "websocket"
+            and scope.get("path") in ("/v1/responses", "/responses")
+        ):
+            query_string = (scope.get("query_string") or b"").decode("latin1")
+            if "model=" not in query_string:
+                websocket = WebSocket(scope, receive=receive, send=send)
+                await responses_websocket_endpoint(websocket)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_ResponsesWebSocketBypassMiddleware)

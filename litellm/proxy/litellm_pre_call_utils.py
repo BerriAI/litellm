@@ -100,9 +100,10 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     """
     Extract chain id for call chaining from request headers.
 
-    x-litellm-trace-id and x-litellm-session-id are interchangeable; when both
-    are present, x-litellm-trace-id takes precedence. Header keys are matched
-    case-insensitively so this works with raw header dicts from any transport.
+    x-litellm-trace-id, x-litellm-session-id, and session_id are treated as the
+    same chain identifier. When multiple are present, x-litellm-trace-id takes
+    precedence. Header keys are matched case-insensitively so this works with raw
+    header dicts from any transport.
 
     Used by MCP (and other paths that have raw_headers but no Request) to set
     litellm_trace_id/litellm_session_id for spend logs and logging consistency.
@@ -110,8 +111,10 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     if not headers:
         return None
     normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return normalized.get("x-litellm-trace-id") or normalized.get(
-        "x-litellm-session-id"
+    return (
+        normalized.get("x-litellm-trace-id")
+        or normalized.get("x-litellm-session-id")
+        or normalized.get("session_id")
     )
 
 
@@ -630,9 +633,12 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
 
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
-        chain_id = headers.get("x-litellm-trace-id") or headers.get(
-            "x-litellm-session-id"
+        # x-litellm-trace-id, x-litellm-session-id, and session_id all identify the
+        # same request/session chain for downstream provider calls and spend logging.
+        chain_id = (
+            headers.get("x-litellm-trace-id")
+            or headers.get("x-litellm-session-id")
+            or headers.get("session_id")
         )
 
         if agent_id_from_header:
@@ -647,7 +653,7 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(
-                f"Extracted chain_id from header (trace-id/session-id): {chain_id}"
+                f"Extracted chain_id from header (trace-id/session-id/session_id): {chain_id}"
             )
 
         if isinstance(data[_metadata_variable_name], dict):

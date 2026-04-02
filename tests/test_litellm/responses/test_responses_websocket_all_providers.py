@@ -7,6 +7,9 @@ Tests that:
 3. Providers without native websocket support use ManagedResponsesWebSocketHandler
 """
 
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
@@ -164,6 +167,158 @@ class TestManagedWebSocketHandlerIntegration:
         assert handler.api_base == "https://api.example.com"
         assert handler.timeout == 30.0
         assert handler.custom_llm_provider == "test_provider"
+
+    @staticmethod
+    def _make_handler(**kwargs):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        mock_websocket = kwargs.pop("websocket", MagicMock())
+        mock_websocket.send_text = kwargs.get(
+            "send_text", AsyncMock()
+        )
+        mock_logging_obj = Logging(
+            model="test-model",
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=0,
+            litellm_call_id="test-id",
+            function_id="test-func",
+        )
+
+        return ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model=kwargs.pop("model", "chatgpt/gpt-5.4-1"),
+            logging_obj=mock_logging_obj,
+            user_api_key_dict=None,
+            litellm_metadata={},
+            api_key="test-key",
+            api_base="https://api.example.com",
+            timeout=30.0,
+            custom_llm_provider=kwargs.pop("custom_llm_provider", "chatgpt"),
+            **kwargs,
+        )
+
+    def test_should_resolve_proxy_model_alias_to_underlying_deployment(self):
+        from litellm.types.router import Deployment
+
+        handler = self._make_handler()
+        mock_router = MagicMock()
+        mock_router.model_group_alias = {}
+        mock_router.get_deployment_by_model_group_name.return_value = Deployment(
+            model_name="chatgpt/gpt-5.4-1",
+            litellm_params={
+                "model": "chatgpt/gpt-5.4",
+                "chatgpt_auth_file_path": "/tmp/auth.json",
+            },
+            model_info={"id": "deployment-1"},
+        )
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            msg_obj = {
+                "type": "response.create",
+                "response": {"model": "chatgpt/gpt-5.4-1", "input": []},
+            }
+            deployment_params = handler._rewrite_event_model_in_message(msg_obj)
+
+        assert msg_obj["response"]["model"] == "chatgpt/gpt-5.4"
+        assert deployment_params["model"] == "chatgpt/gpt-5.4"
+        assert deployment_params["chatgpt_auth_file_path"] == "/tmp/auth.json"
+
+    @pytest.mark.asyncio
+    async def test_should_emit_noop_warmup_events_without_upstream_call(self):
+        handler = self._make_handler()
+        msg_obj = {
+            "type": "response.create",
+            "response": {
+                "model": "chatgpt/gpt-5.4",
+                "generate": False,
+                "input": [],
+            },
+        }
+        call_kwargs = {"input": [], "parallel_tool_calls": True}
+
+        handled = await handler._maybe_handle_noop_warmup(
+            msg_obj=msg_obj,
+            model="chatgpt/gpt-5.4",
+            call_kwargs=call_kwargs,
+        )
+
+        assert handled is True
+        assert handler.websocket.send_text.await_count == 2
+        created_event = json.loads(handler.websocket.send_text.await_args_list[0].args[0])
+        completed_event = json.loads(
+            handler.websocket.send_text.await_args_list[1].args[0]
+        )
+        assert created_event["type"] == "response.created"
+        assert completed_event["type"] == "response.completed"
+        assert completed_event["response"]["model"] == "gpt-5.4"
+
+    @pytest.mark.asyncio
+    async def test_should_drop_previous_response_id_for_chatgpt_provider(self):
+        handler = self._make_handler()
+        handler._get_history_messages = MagicMock(
+            return_value=[
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Earlier"}],
+                }
+            ]
+        )
+        handler._inject_credentials = MagicMock()
+        handler._update_proxy_request = MagicMock()
+        handler._save_turn_history = MagicMock()
+        handler._stream_and_forward = AsyncMock(
+            return_value={
+                "type": "response.completed",
+                "response": {"id": "resp_123", "output": []},
+            }
+        )
+
+        raw_message = json.dumps(
+            {
+                "type": "response.create",
+                "response": {
+                    "model": "chatgpt/gpt-5.4",
+                    "previous_response_id": "resp_prev",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Hi"}],
+                        }
+                    ],
+                },
+            }
+        )
+
+        await handler._process_response_create(raw_message)
+
+        _, stream_kwargs = handler._stream_and_forward.await_args.args
+        assert "previous_response_id" not in stream_kwargs
+        assert stream_kwargs["input"][0]["role"] == "assistant"
+        assert stream_kwargs["input"][1]["role"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_should_process_initial_client_message_before_receive_loop(self):
+        initial_message = json.dumps(
+            {"type": "response.create", "response": {"model": "chatgpt/gpt-5.4"}}
+        )
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=RuntimeError("disconnect"))
+        handler = self._make_handler(
+            websocket=websocket, initial_client_message=initial_message
+        )
+        handler._process_response_create = AsyncMock()
+
+        await handler.run()
+
+        handler._process_response_create.assert_awaited_once_with(initial_message)
 
 
 class TestChunkTransformation:
@@ -775,6 +930,64 @@ class TestWebSocketErrorHandling:
         error_event = mock_websocket.send_text.call_args[0][0]
         assert "error" in error_event
         assert "Invalid JSON" in error_event
+        parsed = json.loads(error_event)
+        assert parsed["status"] == 400
+        assert parsed["error"]["type"] == "invalid_request_error"
+
+    @pytest.mark.asyncio
+    async def test_managed_handler_bad_request_includes_status_and_nested_error(self):
+        import litellm
+
+        handler = TestManagedWebSocketHandlerIntegration._make_handler(
+            model="chatgpt/gpt-5.4",
+            custom_llm_provider="chatgpt",
+        )
+        handler._stream_and_forward = AsyncMock(
+            side_effect=litellm.BadRequestError(
+                message=(
+                    'ChatgptException - {\n'
+                    '  "error": {\n'
+                    '    "message": "No tool call found for custom tool call output with call_id call_RlrXilcrezdITUjYJK87E6iX.",\n'
+                    '    "type": "invalid_request_error",\n'
+                    '    "param": "input",\n'
+                    '    "code": null\n'
+                    "  }\n"
+                    "}"
+                ),
+                model="chatgpt/gpt-5.4",
+                llm_provider="chatgpt",
+                body={
+                    "error": {
+                        "message": "No tool call found for custom tool call output with call_id call_RlrXilcrezdITUjYJK87E6iX.",
+                        "type": "invalid_request_error",
+                        "param": "input",
+                        "code": None,
+                    }
+                },
+            )
+        )
+
+        await handler._process_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "model": "chatgpt/gpt-5.4",
+                        "input": "hello",
+                    },
+                }
+            )
+        )
+
+        handler.websocket.send_text.assert_called_once()
+        error_event = json.loads(handler.websocket.send_text.call_args[0][0])
+        assert error_event["type"] == "error"
+        assert error_event["status"] == 400
+        assert error_event["error"]["type"] == "invalid_request_error"
+        assert (
+            "No tool call found for custom tool call output"
+            in error_event["error"]["message"]
+        )
 
 
 class TestWebSocketChunkTypes:
