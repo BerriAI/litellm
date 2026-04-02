@@ -158,7 +158,7 @@ def _bedrock_invoke_embedded_region_names() -> frozenset:
 
 
 def strip_bedrock_routing_prefix(model: str) -> str:
-    """Strip one LiteLLM routing prefix (bedrock/, converse/, etc.)."""
+    """Strip all LiteLLM routing prefixes (bedrock/, converse/, invoke/, etc.)."""
     s = model
     for prefix in ("bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"):
         if s.startswith(prefix):

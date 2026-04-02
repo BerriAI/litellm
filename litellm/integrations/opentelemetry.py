@@ -657,9 +657,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -2096,7 +2096,7 @@ class OpenTelemetry(CustomLogger):
         original_export = exporter.export
         parent = self
 
-        def _export_with_failure_tracking(self, spans):
+        def _export_with_failure_tracking(_exporter_self, spans):
             try:
                 result = original_export(spans)
             except Exception:

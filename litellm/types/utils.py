@@ -234,7 +234,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_second_1080p: Optional[
         float
-    ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
+    ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p, 4k)
+    output_cost_per_second_720p: Optional[
+        float
+    ]  # video_generation tier: 720p resolution
+    output_cost_per_second_4k: Optional[float]  # video_generation tier: 4k resolution
     ocr_cost_per_page: Optional[float]  # for OCR models
     annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
@@ -2966,6 +2970,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
     output_cost_per_second_1080p: Optional[float] = None
+    output_cost_per_second_720p: Optional[float] = None
+    output_cost_per_second_4k: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
 

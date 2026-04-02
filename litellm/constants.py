@@ -149,7 +149,7 @@ MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "
 _MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
 MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
     {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
-    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+    | {c.strip() for c in _MCP_STDIO_EXTRA_COMMANDS.split(",") if c.strip()}
 )
 
 LITELLM_UI_ALLOW_HEADERS = [
