@@ -2427,6 +2427,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await shared_health_manager.perform_shared_health_check(
                     model_list=_llm_model_list,
                     details=details_bool,
@@ -2440,6 +2441,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
@@ -2450,6 +2452,7 @@ async def _run_background_health_check():
             (
                 healthy_endpoints,
                 unhealthy_endpoints,
+                _exceptions_by_model_id,
             ) = await _run_direct_health_check_with_instrumentation(
                 _llm_model_list,
                 health_check_details,
@@ -2492,7 +2495,9 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints)
+        _write_health_state_to_router_cache(
+            healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id
+        )
 
         await asyncio.sleep(health_check_interval)
 

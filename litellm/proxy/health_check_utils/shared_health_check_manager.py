@@ -231,7 +231,11 @@ class SharedHealthCheckManager:
                     len(model_list),
                 )
 
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    exceptions_by_model_id,
+                ) = await perform_health_check(
                     model_list=model_list,
                     details=details,
                     max_concurrency=max_concurrency,
@@ -242,7 +246,7 @@ class SharedHealthCheckManager:
                     healthy_endpoints, unhealthy_endpoints
                 )
 
-                return healthy_endpoints, unhealthy_endpoints
+                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
 
             finally:
                 # Always release the lock
