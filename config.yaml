@@ -1,0 +1,7 @@
+model_list:
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+general_settings:
+    master_key: os.environ/LITELLM_MASTER_KEY

@@ -138,5 +138,7 @@ COPY docker/supervisord.conf /etc/supervisord.conf
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
+COPY config.yaml /app/config.yaml
+
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs
-CMD ["--port", "4000"]
+CMD ["--port", "4000", "--config", "/app/config.yaml"]
