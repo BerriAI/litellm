@@ -11,12 +11,15 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.vertex_ai.common_utils import (
+    vertex_request_labels_from_litellm_params,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
+    RerankBilledUnits,
     RerankResponse,
     RerankResponseMeta,
-    RerankBilledUnits,
     RerankResponseResult,
 )
 
@@ -109,6 +112,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         """
         Transform the request from Cohere format to Vertex AI Discovery Engine format
@@ -144,6 +148,10 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # Map return_documents to ignoreRecordDetailsInResponse
         # When return_documents is False, we want to ignore record details (return only IDs)
         request_data["ignoreRecordDetailsInResponse"] = not return_documents
+
+        user_labels = vertex_request_labels_from_litellm_params(litellm_params)
+        if user_labels:
+            request_data["userLabels"] = user_labels
 
         return request_data
 

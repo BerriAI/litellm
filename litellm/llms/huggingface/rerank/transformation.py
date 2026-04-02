@@ -146,6 +146,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Union[OptionalRerankParams, dict],
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
