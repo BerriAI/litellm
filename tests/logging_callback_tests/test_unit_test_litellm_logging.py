@@ -255,6 +255,46 @@ def test_strip_large_base64_from_result_no_images():
     assert result is response
 
 
+def test_truncate_base64_in_string_bare_payload():
+    """
+    _truncate_base64_in_string must truncate a string that IS entirely a base64
+    payload (no data-URI prefix, no surrounding JSON field syntax).
+
+    Regression test for Fix 8: after httpx.Response.json() is called the
+    "data" key value is a bare 8 MB base64 string.  The previous two regex
+    patterns (_DATA_URI_RE, _JSON_BASE64_FIELD_RE) both require surrounding
+    structure and left bare payloads unchanged, so they accumulated in every
+    model_call_details["original_response"] dict copy for the full duration of
+    the Logging object.
+    """
+    from litellm.litellm_core_utils.logging_utils import _truncate_base64_in_string
+
+    b64_payload = "A" * 200  # above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    result = _truncate_base64_in_string(b64_payload)
+    assert b64_payload not in result, (
+        "Bare base64 payload was not truncated — 8 MB dict values from "
+        "parsed Vertex JSON will accumulate in model_call_details"
+    )
+    assert "base64_data truncated" in result
+
+
+def test_truncate_base64_in_value_bare_dict_value():
+    """
+    _truncate_base64_in_value must truncate bare base64 strings in dict values,
+    as produced by httpx.Response.json() on a Vertex AI image response:
+        {"inlineData": {"mimeType": "image/png", "data": "<8MB_BASE64>"}}
+    """
+    from litellm.litellm_core_utils.logging_utils import _truncate_base64_in_value
+
+    b64_payload = "B" * 200
+    parsed = {"inlineData": {"mimeType": "image/png", "data": b64_payload}}
+    result = _truncate_base64_in_value(parsed)
+    assert result["inlineData"]["data"] != b64_payload, (
+        "Bare base64 value inside parsed JSON dict was not truncated"
+    )
+    assert "base64_data truncated" in result["inlineData"]["data"]
+
+
 def test_post_call_truncates_base64_in_error_logs():
     """
     litellm.error_logs["POST_CALL"] must also receive the truncated version.

@@ -52,6 +52,13 @@ _JSON_BASE64_FIELD_RE = re.compile(
     r'("(?:data|imageBytes|bytesBase64Encoded)"\s*:\s*")([A-Za-z0-9+/=]{64,})(")'
 )
 
+# Regex matching a string that IS entirely a base64 payload.
+# Used when _truncate_base64_in_value passes a bare dict value (e.g. the "data"
+# field after JSON parsing, which is just the raw base64 characters with no
+# surrounding JSON quote structure).  Must be anchored so we don't accidentally
+# truncate short alphanumeric strings.
+_BARE_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{64,}={0,2}$")
+
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
 _MAX_TRUNCATION_DEPTH = 20
@@ -96,12 +103,20 @@ def _json_base64_field_replacer(match: re.Match) -> str:
 def _truncate_base64_in_string(value: str) -> str:
     """Replace long base64 payloads in a string with a size placeholder.
 
-    Handles two formats:
+    Handles three formats:
     1. data-URI format:  data:<mime>;base64,<payload>
     2. Raw JSON field:   "data":"<payload>"  (Vertex AI / Google AI Studio)
+    3. Bare base64 string: the entire value is a base64 payload (e.g. a parsed
+       dict value after JSON decoding, where the surrounding JSON quotes are
+       gone and only the raw characters remain).
     """
     if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return value
+    # Fast-path: if the entire string is a bare base64 payload, truncate it
+    # directly without running the heavier sub() patterns.
+    if len(value) > MAX_BASE64_LENGTH_FOR_LOGGING and _BARE_BASE64_RE.match(value):
+        size_str = _format_base64_size(len(value))
+        return f"[base64_data truncated: {size_str}]"
     value = _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
     value = _JSON_BASE64_FIELD_RE.sub(_json_base64_field_replacer, value)
     return value
