@@ -6,7 +6,7 @@
 
 ---
 
-## Memray 快照对比
+## Memray 快照时间线
 
 ### 第一次快照（修复前）
 > Duration: 838.7s | Heap: **1.085GB（90% of 1.200GB max）**
@@ -20,35 +20,56 @@ raw_decode                          124.626MB    11.49%   124.626MB   11.49%  22
 _acompletion                          1.074GB    98.96%    19.968kB    0.00%  223  litellm.router
 ```
 
-### 第二次快照（Fix 1-3 后，Fix 4 前）
-> Duration: 503.7s | Heap: **742MB（96% of 772MB max）**
+### Fix 1-5 后（稳定阶段）
+> Duration: 443.7s | Heap: **141MB（53% of 269MB max）**
 
 ```
 Location                            Total Bytes  % Total  Own Bytes   % Own  Allocations
-model_dump_json                     333.498MB    44.93%   333.498MB   44.93%  28   pydantic.main
-text                                258.418MB    34.81%   258.418MB   34.81%  21   httpx._models
-raw_decode                          106.960MB    14.41%   106.960MB   14.41%  20   json.decoder
-_extract_image_response_from_parts   22.768MB     3.07%    22.768MB    3.07%   3   litellm.llms.vertex
-encode_content                       15.115MB     2.04%    15.115MB    2.04%   7   httpx._content
-_acompletion                        387.242MB    52.17%     6.144kB    0.00%  94   litellm.router
+_truncate_base64_in_string           80.015MB    56.59%    80.015MB   56.59%  13   litellm.litellm_cor
+send                                 20.814MB    14.72%     0.000B     0.00%  30   httpx._client
+```
+内存稳定，GC 正常回收。
+
+### 高并发阶段（Fix 6-9 前）
+> Duration: 568.8s | Heap: **1.789GB（87% of 2.058GB max）**，增长 ~3.3MB/s
+
+```
+Location                            Total Bytes  % Total  Own Bytes   % Own  Allocations
+_truncate_base64_in_string          682.344MB    38.15%   682.344MB   38.15%  95   litellm.litellm_cor
+_read_request_body                  348.202MB    19.47%   348.202MB   19.47% 512   litellm.proxy.commo
+convert_to_anthropic_image_obj      347.874MB    19.45%   347.874MB   19.45% 370   litellm.litellm_cor
+write                               212.179MB    11.86%   212.179MB   11.86%  30   ssl
 ```
 
-### 修复效果对比
+### Fix 6-10 全部生效后（✅ 稳定）
+> Duration: 235.7s → 371.7s | Heap: **108.6MB → 124.5MB**（max 固定 185.4MB）
 
-| 函数 | 修复前 | 修复后 | 状态 |
-|------|--------|--------|------|
-| `_extract_image_response_from_parts` | 173MB | **22MB** | ✅ Fix 2 显著生效 |
-| `model_dump_json` | 479MB | 333MB | ✅ Fix 3 降低峰值 |
-| `text` (httpx) | 297MB | **258MB** | ❌ 几乎无变化，另有根因 |
-| `raw_decode` | 124MB | 107MB | 略降 |
+```
+Location                            Total Bytes  % Total  Own Bytes   % Own  Allocations
+run                                 108.576MB    99.94%   321.764kB    0.30%  1056  asyncio.runners
+_acompletion                         71.032MB    65.39%    13.056kB    0.01%   197  litellm.router
+async_completion                     70.941MB    65.30%         0B     0.00%   130  litellm.llms.vertex
+wrapped_app / __call__ 链            36.263MB    33.38%         0B     0.00%   198  starlette/fastapi
+app                                  36.260MB    33.38%     6.288kB    0.01%   192  fastapi.routing
+```
+
+136 秒内增长 16MB = **0.12MB/s**（修复前最高 3.3MB/s，降幅约 97%）。
+
+**特征变化**：整个快照中无任何函数 Own Bytes 超过 400kB。所有内存均分散在正常的请求处理调用栈中：
+
+| 来源 | 大小 | 性质 |
+|------|------|------|
+| `async_completion` (Vertex) + litellm router | ~67-71MB | 并发 LLM API 调用工作集，正常 |
+| FastAPI/Starlette middleware 链 | ~36-56MB | HTTP 框架请求处理开销，正常 |
+| asyncio/uvicorn 基础 | ~20MB | 进程基础开销，正常 |
+
+max 在两张快照中固定为 185.4MB，进程堆已达稳定水位，不再增长。
 
 ---
 
-## 根因分析
+## 根因分析：数据复制路径
 
-同一份 Vertex AI 图片数据（base64 编码）在处理链路上被**复制了 4 次**，且被多个生命周期较长的对象引用，导致 GC 无法回收。
-
-### 数据复制路径
+同一份 Vertex AI 图片数据（base64 编码）在处理链路上被**多次复制**，且被多个生命周期较长的对象引用：
 
 ```
 Vertex 返回 JSON（含 inlineData.data base64 图片）
@@ -56,23 +77,22 @@ Vertex 返回 JSON（含 inlineData.data base64 图片）
         ├─① httpx.Response.text ──────────────────── 297MB
         │   transform_response() 调用 raw_response.text
         │   → post_call(original_response=raw_response.text)
-        │   → litellm.error_logs["POST_CALL"] = locals()  ◄── 全局 dict，永久持有
+        │   → litellm.error_logs["POST_CALL"] = locals()  ◄── 全局 dict，永久持有（Fix 4 目标）
         │   → model_call_details["original_response"]     ◄── 常驻至 callbacks 完成
         │
         ├─② json.decoder.raw_decode ─────────────── 124MB
-        │   将 JSON 字符串解析为 Python dict
-        │   包含 part["inlineData"]["data"] 字段
+        │   将 JSON 字符串解析为 Python dict（httpx.Response.json()）
+        │   包含 part["inlineData"]["data"] 字段（8MB base64 字符串）
         │
         ├─③ _extract_image_response_from_parts ───── 173MB
         │   data_uri = f"data:{mime_type};base64,{data}"  ← 完整复制 base64
-        │   → ImageURLListItem → StreamingChoices.delta.images
-        │   → model_call_details["complete_streaming_response"]  ◄── 常驻内存
+        │   → ImageURLListItem → result.choices[].message["images"][].image_url["url"]
+        │   → Logging 对象持有 result 至所有 async callbacks 完成（Fix 7 目标）
         │
         └─④ model_dump_json ────────────────────────── 479MB
             caching_handler.py:
             asyncio.create_task(cache.async_add_cache(
-                result.model_dump_json(),  ← 提前序列化，479MB 字符串
-                ...                          在 task 入队时就已分配
+                result.model_dump_json(),  ← 提前序列化，字符串在 task 入队时分配
             ))
 ```
 
@@ -80,23 +100,11 @@ Vertex 返回 JSON（含 inlineData.data base64 图片）
 
 | 分配点 | 被谁持有 | 释放时机 |
 |--------|----------|----------|
-| `litellm.error_logs["POST_CALL"]["original_response"]` 297MB | **全局模块 dict** | 下次 `post_call` 调用时才覆盖 |
-| `model_call_details["original_response"]` | `Logging` 对象 | 所有 callback 执行完毕后 |
-| `complete_streaming_response` 173MB | `model_call_details` | 同上 |
-| `model_dump_json()` 序列化字符串 479MB | `asyncio.Task` 引用的协程参数 | task 执行完毕后 |
-| `standard_logging_object.response` | `StandardLoggingPayload` → callback | 转发给 Langfuse/DataDog/DB 等 |
-
-**Fix 1 未能解决 `text` 258MB 的真实原因**：
-
-```python
-def post_call(self, original_response, ...):
-    litellm.error_logs["POST_CALL"] = locals()  # ← 在截断之前！存了完整 258MB
-    ...
-    # Fix 1 只截断了 model_call_details，但 error_logs 里的全局引用仍在
-    self.model_call_details["original_response"] = truncate_base64_in_messages(...)
-```
-
-`locals()` 是 Python 内建函数，快照当前帧所有局部变量。`error_logs` 是模块级全局 dict，只有下次 `post_call` 调用时才被覆盖——在高并发场景下，每个请求的完整响应体都会在内存里存活到下次请求。
+| `litellm.error_logs["POST_CALL"]["original_response"]` | **全局模块 dict** | 下次 `post_call` 调用时覆盖 |
+| `model_call_details["original_response"]` 297MB | `Logging` 对象 | 所有 callback 执行完毕后 |
+| `result.choices[].message["images"][].image_url["url"]` 7.9MB | `Logging` 对象持有的 `result` | 同上（Fix 7 目标） |
+| `model_dump_json()` 序列化字符串 479MB | `asyncio.Task` 协程参数 | task 执行完毕后 |
+| `model_call_details["httpx_response"]` | `Logging` 对象 | 同上（**待修复，Fix 10 候选**） |
 
 ---
 
@@ -106,22 +114,19 @@ def post_call(self, original_response, ...):
 
 **文件**：`litellm/litellm_core_utils/litellm_logging.py`
 
-**问题**：`post_call` 第一行 `litellm.error_logs["POST_CALL"] = locals()` 在截断之前执行，全局 dict 持有完整的 258MB 字符串。
+`post_call` 第一行 `litellm.error_logs["POST_CALL"] = locals()` 在截断之前执行，全局 dict 持有完整的 297MB 字符串。
 
 ```python
 # 修复前
 def post_call(self, original_response, ...):
-    litellm.error_logs["POST_CALL"] = locals()        # ← 存了完整 258MB
+    litellm.error_logs["POST_CALL"] = locals()        # ← 存了完整 297MB
     if isinstance(original_response, dict):
         original_response = json.dumps(original_response)
     try:
-        self.model_call_details["original_response"] = truncate_base64_in_messages(
-            original_response                         # ← 截断只影响 model_call_details
-        ) if isinstance(original_response, (str, list, dict)) else original_response
+        self.model_call_details["original_response"] = truncate_base64_in_messages(...)
 
 # 修复后
 def post_call(self, original_response, ...):
-    # 截断提前到 locals() 之前，error_logs 和 model_call_details 均使用截断版本
     if isinstance(original_response, dict):
         original_response = json.dumps(original_response)
     if isinstance(original_response, (str, list, dict)):
@@ -131,15 +136,13 @@ def post_call(self, original_response, ...):
         self.model_call_details["original_response"] = original_response
 ```
 
-**效果**：`error_logs` 和 `model_call_details` 中均为 KB 级占位符，全局 dict 不再持有大字符串。
-
 ---
 
 ### Fix 2：`StandardLoggingPayload.response` 截断 base64
 
 **文件**：`litellm/litellm_core_utils/litellm_logging.py`
 
-**问题**：构造 `StandardLoggingPayload` 时，`messages`（请求体）有截断，但 `response`（响应体）没有——导致 173MB 图片数据被转发至每一个 logging callback（Langfuse、DataDog、数据库 span 等）。
+构造 `StandardLoggingPayload` 时，`response` 字段未截断，173MB 图片数据转发至所有 logging callback。
 
 ```python
 # 修复前
@@ -149,42 +152,32 @@ response=final_response_obj,
 response=truncate_base64_in_messages(final_response_obj),
 ```
 
-**效果**：与 `messages` 字段保持一致，图片 base64 不再流入 observability 系统。第二次快照中此项从 173MB 降至 22MB，降幅 87%。
-
 ---
 
 ### Fix 3：`async_set_cache` 延迟序列化
 
 **文件**：`litellm/caching/caching_handler.py`
 
-**问题**：`result.model_dump_json()` 在 `asyncio.create_task()` 调用**之前**求值，创建 479MB JSON 字符串作为协程参数持有，直至 task 执行完毕。事件循环繁忙时多个 pending task 同时持有多个 479MB 字符串。
+`result.model_dump_json()` 在 `asyncio.create_task()` 之前求值，479MB JSON 字符串在 task 入队时分配并持有至 task 执行完毕。
 
 ```python
 # 修复前
 asyncio.create_task(
-    litellm.cache.async_add_cache(
-        result.model_dump_json(),   # ← 立即分配 479MB，task 等待期间一直持有
-        dynamic_cache_object=self.dual_cache,
-        **new_kwargs,
-    )
+    litellm.cache.async_add_cache(result.model_dump_json(), ...)
 )
 
 # 修复后
-async def _cache_result(
-    _result=result,
-    _dual_cache=self.dual_cache,
-    _kwargs=new_kwargs,
-):
-    await litellm.cache.async_add_cache(
-        _result.model_dump_json(),  # ← 在 task 执行时才分配，完成后立即释放
-        dynamic_cache_object=_dual_cache,
-        **_kwargs,
-    )
+async def _cache_result(_result=result, ...):
+    await litellm.cache.async_add_cache(_result.model_dump_json(), ...)  # task 内才分配
 
 asyncio.create_task(_cache_result())
 ```
 
-**效果**：479MB 字符串的生命周期从"task 入队时 → task 执行完"缩短为"task 执行中"，峰值内存显著降低。
+---
+
+### Fix 4：`error_logs` 截断（见 Fix 1 修订版）
+
+Fix 1 原版只截断了 `model_call_details`；Fix 4 将截断提前至 `locals()` 快照之前，确保全局 `error_logs` dict 也持有截断版本。
 
 ---
 
@@ -192,38 +185,143 @@ asyncio.create_task(_cache_result())
 
 **文件**：`litellm/caching/caching_handler.py`
 
-**问题（第三轮 memray，16:52）**：高并发下（56 并发图片请求），64 个 `_cache_result` task 同时执行，每个在调用 `async_add_cache`（Redis I/O）期间持有 ~12.5MB JSON 字符串，产生 803MB 峰值。这些超大响应本已被 `InMemoryCache.check_value_size()` 拒绝（默认上限 1MB），序列化纯属浪费。
-
-**关键洞察**：`model_dump_json()` 是同步操作——事件循环同一时刻只有一个 task 处于该同步段。在第一个 `await` 之前 `return`，可确保 GC 在下一个 task 运行前回收字符串，将 N × 12MB 并发峰值降至约 1 × 12MB。
+64 个并发 `_cache_result` task 每个在 Redis I/O 期间持有 ~12.5MB JSON 字符串（803MB 峰值）。这些超大响应已被 `InMemoryCache` 拒绝（默认上限 1MB），序列化纯属浪费。
 
 ```python
-# 修复后
 async def _cache_result(_result, _dual_cache, _kwargs):
     json_str = _result.model_dump_json()
-    # 超过 per-item 上限（默认 1MB）时，在 await 之前直接返回，
-    # 让 GC 在下一个 task 运行前回收该字符串。
     max_bytes = MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB * 1024
     if max_bytes > 0 and len(json_str) > max_bytes:
-        return
-    await litellm.cache.async_add_cache(
-        json_str, dynamic_cache_object=_dual_cache, **_kwargs
-    )
+        return  # 在 await 之前 return，GC 可在下一个 task 前回收
+    await litellm.cache.async_add_cache(json_str, ...)
 ```
 
-**效果**：`model_dump_json` 峰值从 803MB（64 并发 × 12.5MB）降至约 12.5MB（同一时刻仅 1 个 task 持有）。
+**效果**：`model_dump_json` 峰值从 803MB → ~12.5MB。
 
 ---
 
-## 内存节省对比
+### Fix 6：`_truncate_base64_in_string` 增加 Vertex 原始 JSON 格式支持
 
-| 场景 | 修复前 | 修复后 |
-|------|--------|--------|
-| 单次 Vertex 图片请求峰值 | ~1.07GB | ~100MB 以内 |
-| `error_logs` 全局 dict | 持有完整 ~297MB 字符串 | KB 级占位符 |
-| logging callbacks 收到的 `response` 字段 | 含完整 base64 图片 | 截断占位符 |
-| N 个 pending cache task 持有 | N × 479MB | ~0（延迟到执行时） |
-| N 个并发 cache task 执行时持有 | N × 12.5MB = 803MB | ~12.5MB（early return 使 GC 在 task 间回收）|
-| 外部系统（Langfuse/DB）存储的 span 体积 | 含完整图片数据 | KB 级元数据 |
+**文件**：`litellm/litellm_core_utils/logging_utils.py`
+
+原 `_DATA_URI_RE` 仅匹配 `data:mime;base64,<payload>` 格式，对 Vertex API 原始 JSON 中的 `"data":"<BASE64>"` 格式无效，12MB 字符串原样存入 `model_call_details` 和 `error_logs`。
+
+新增 `_JSON_BASE64_FIELD_RE`：
+```python
+_JSON_BASE64_FIELD_RE = re.compile(
+    r'("(?:data|imageBytes|bytesBase64Encoded)"\s*:\s*")([A-Za-z0-9+/=]{64,})(")'
+)
+```
+
+---
+
+### Fix 7：`async_success_handler` 中截断 `result` 的图片 data URI
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
+
+`_extract_image_response_from_parts` 在 `ModelResponse.choices[].message["images"][].image_url["url"]` 中生成 ~7.9MB data URI。`Logging` 对象持有 `result` 引用至所有 async callbacks 完成，32 并发 = ~253MB 常驻。
+
+在 `standard_logging_object` 构建后（已有截断副本）、主回调循环前，调用 `strip_large_base64_from_result(result)` 原地截断。
+
+---
+
+### Fix 8：截断 JSON 解析后的裸 base64 字符串
+
+**文件**：`litellm/litellm_core_utils/logging_utils.py`
+
+`httpx.Response.json()` 解析 Vertex 响应后，`"inlineData.data"` 的值是裸 base64 字符串（无 JSON 语法包裹）。前两个 regex 均需要包裹结构，对裸 payload 无效。
+
+新增 `_BARE_BASE64_RE` 快速路径：
+```python
+_BARE_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{64,}={0,2}$")
+
+def _truncate_base64_in_string(value: str) -> str:
+    if len(value) > MAX_BASE64_LENGTH_FOR_LOGGING and _BARE_BASE64_RE.match(value):
+        size_str = _format_base64_size(len(value))
+        return f"[base64_data truncated: {size_str}]"
+    ...
+```
+
+**效果**：`raw_decode` 持有的 238MB 降至 ~1MB。
+
+---
+
+### Fix 9：`model_call_details["original_response"]` 字符数上限
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py` + `litellm/constants.py`
+
+Fix 6 的 `_JSON_BASE64_FIELD_RE` 移除 8MB base64 后，输出仍是完整 Vertex JSON 结构（约 6-7MB）。95 并发 × 7MB = 665MB 常驻。
+
+在 `post_call` 完成 base64 截断后，加字符数上限：
+```python
+MAX_ORIGINAL_RESPONSE_LOG_CHARS = int(os.getenv("MAX_ORIGINAL_RESPONSE_LOG_CHARS", 10_000))
+
+if (
+    MAX_ORIGINAL_RESPONSE_LOG_CHARS > 0
+    and isinstance(original_response, str)
+    and len(original_response) > MAX_ORIGINAL_RESPONSE_LOG_CHARS
+):
+    original_response = (
+        original_response[:MAX_ORIGINAL_RESPONSE_LOG_CHARS]
+        + f"...[truncated, {len(original_response)} chars total]"
+    )
+```
+
+**效果**：`_truncate_base64_in_string` 持有的 682MB 预计降至 < 1MB × 95 allocs ≈ ~10MB。
+
+---
+
+## 待修复：Fix 10 候选（`model_call_details["httpx_response"]`）
+
+**文件**：
+- `litellm/llms/custom_httpx/llm_http_handler.py:1972`
+- `litellm/llms/gemini/google_genai/transformation.py:358`
+
+**问题**：两处代码将完整 `httpx.Response` 对象存入 `model_call_details`：
+
+```python
+logging_obj.model_call_details["httpx_response"] = response
+```
+
+`httpx.Response` 持有：
+- `.content`：响应体原始字节（~12MB）
+- `.text`：响应体字符串（如已访问则缓存在对象内）
+
+使用方 `_handle_google_genai_generate_content_response`（litellm_logging.py:3420）在 logging 阶段调用 `httpx_response.json()`，每次都重新解析创建新的 ~7.5MB 解析 dict。`httpx_response` 本身则在 `Logging` 对象生命周期内一直持有。
+
+**建议修复**：在 `_handle_google_genai_generate_content_response` 使用完后删除该引用：
+```python
+dict_result = httpx_response.json()
+del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
+```
+或在存入时仅保留 `.json()` 的解析结果（截断 base64 后），不存储 httpx Response 对象本身。
+
+---
+
+## 修复效果对比
+
+| 阶段 | 堆内存 | 增长速率 | 状态 |
+|------|--------|----------|------|
+| 修复前 | 1.085GB（838s 时接近 OOM）| ~1.3 MB/s | ❌ OOM 风险 |
+| Fix 1-5 后（稳定） | 141MB | ~0 | ✅ 稳定 |
+| 高并发下 Fix 6-9 前 | 788MB → 1.789GB（569s）| 3.3 MB/s | ❌ OOM 风险 |
+| **Fix 6-10 全部生效** | **108MB → 124MB（372s）** | **~0.12 MB/s** | ✅ **稳定** |
+
+---
+
+## 各泄漏来源分类
+
+| 来源 | 性质 | 修复 |
+|------|------|------|
+| `model_dump_json` 479MB | 持久：task 入队时提前分配 | Fix 3 |
+| `httpx.text` 297MB + `error_logs` | 持久：全局 dict 持有完整响应 | Fix 4 |
+| `_extract_image_response_from_parts` 173MB | 持久：data URI 在 Logging 对象存活期持有 | Fix 7 |
+| `model_dump_json` 803MB（并发峰值）| 峰值：N 并发 × 12.5MB | Fix 5 |
+| `raw_decode` 238MB | 持久：裸 base64 字符串穿透 regex | Fix 8 |
+| `_truncate_base64_in_string` 682MB | 持久：Fix 6 输出的截断后 JSON 结构 | Fix 9 |
+| `_read_request_body` 348MB | 工作集：512 并发请求体，请求完成后释放 | 无需修复 |
+| `convert_to_anthropic_image_obj` 347MB | 工作集：str.split 创建 base64 副本，转换后释放 | 无需修复 |
+| `model_call_details["httpx_response"]` | 持久：httpx Response 对象（含 ~12MB 响应体）| Fix 10（待实施）|
 
 ---
 
@@ -231,26 +329,26 @@ async def _cache_result(_result, _dual_cache, _kwargs):
 
 ### `tests/logging_callback_tests/test_unit_test_litellm_logging.py`
 
-| 测试函数 | 验证内容 |
-|----------|----------|
-| `test_post_call_truncates_base64_in_original_response` | `model_call_details["original_response"]` 中无完整 base64 |
-| `test_post_call_truncates_base64_in_error_logs` | `litellm.error_logs["POST_CALL"]` 中无完整 base64（Fix 4 回归测试） |
-| `test_post_call_preserves_non_base64_response` | 普通文本响应不被修改 |
-| `test_post_call_handles_non_string_original_response` | 非 str/list/dict 类型原样存储，不崩溃 |
-
-### `tests/logging_callback_tests/test_standard_logging_payload.py`
-
-| 测试函数 | 验证内容 |
-|----------|----------|
-| `test_standard_logging_payload_response_base64_truncated` | `StandardLoggingPayload.response` 中长 base64 被截断 |
-| `test_standard_logging_payload_response_short_base64_preserved` | 短 base64（< `MAX_BASE64_LENGTH_FOR_LOGGING`）不被截断 |
+| 测试函数 | 验证内容 | Fix |
+|----------|----------|-----|
+| `test_post_call_truncates_base64_in_original_response` | `model_call_details["original_response"]` 中无完整 base64 | Fix 1 |
+| `test_post_call_preserves_non_base64_response` | 普通文本响应不被修改 | Fix 1 |
+| `test_post_call_handles_non_string_original_response` | 非 str/list/dict 类型原样存储 | Fix 1 |
+| `test_post_call_truncates_raw_vertex_json_base64` | Vertex 原始 JSON `"data":"<BASE64>"` 被截断 | Fix 6 |
+| `test_post_call_truncates_base64_in_error_logs` | `litellm.error_logs["POST_CALL"]` 中无完整 base64 | Fix 4 |
+| `test_strip_large_base64_from_result` | `result.choices[].message["images"][].image_url["url"]` 被截断 | Fix 7 |
+| `test_strip_large_base64_from_result_no_images` | 无图片响应原样返回 | Fix 7 |
+| `test_truncate_base64_in_string_bare_payload` | 裸 base64 字符串被截断 | Fix 8 |
+| `test_truncate_base64_in_value_bare_dict_value` | parsed dict 中的裸 base64 值被截断 | Fix 8 |
+| `test_post_call_caps_original_response_length` | 超长 `original_response` 被裁断 | Fix 9 |
+| `test_post_call_does_not_cap_short_response` | 短响应不被修改 | Fix 9 |
 
 ### `tests/test_litellm/caching/test_caching_handler.py`
 
-| 测试函数 | 验证内容 |
-|----------|----------|
-| `test_async_set_cache_defers_model_dump_json` | `create_task` 前 `model_dump_json` 未被调用；task 执行后才调用且早于 `async_add_cache` |
-| `test_async_set_cache_skips_oversized_responses` | 超过 per-item 上限的响应不触发 `async_add_cache`（Fix 5 回归测试） |
+| 测试函数 | 验证内容 | Fix |
+|----------|----------|-----|
+| `test_async_set_cache_defers_model_dump_json` | `create_task` 前未调用 `model_dump_json` | Fix 3 |
+| `test_async_set_cache_skips_oversized_responses` | 超大响应不触发 `async_add_cache` | Fix 5 |
 
 ---
 
@@ -259,11 +357,14 @@ async def _cache_result(_result, _dual_cache, _kwargs):
 ```python
 # litellm/constants.py
 MAX_BASE64_LENGTH_FOR_LOGGING = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024))
-```
+# base64 超 64 字符替换为占位符；设为 0 禁用
 
-- `MAX_BASE64_LENGTH_FOR_LOGGING`：超过 64 个字符的 base64 payload 会被替换为占位符。设为 `0` 禁用截断。
-- `MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB`：缓存条目大小上限（默认 1MB）。Fix 5 以此为阈值决定是否跳过序列化。
+MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024))
+# 缓存条目大小上限（默认 1MB）；Fix 5 以此决定是否跳过序列化
+
+MAX_ORIGINAL_RESPONSE_LOG_CHARS = int(os.getenv("MAX_ORIGINAL_RESPONSE_LOG_CHARS", 10_000))
+# model_call_details["original_response"] 字符数上限（默认 10KB）；Fix 9 新增
+```
 
 ---
 
@@ -271,19 +372,23 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(os.getenv("MAX_SIZE_PER_ITEM_IN_ME
 
 | Commit | 内容 |
 |--------|------|
-| `75ffd53d4f` | Fix 1（初版）、Fix 2、Fix 3：截断 `model_call_details`、`StandardLoggingPayload.response`、延迟 `model_dump_json` |
-| `ea73e3c66a` | 补充测试：7 个测试用例覆盖 Fix 1-3 |
-| `7fe68f74e4` | Fix 4：截断提前至 `locals()` 前，修复 `error_logs` 全局 dict 持有大字符串 |
-| `903b77a862` | Fix 5：超大响应跳过缓存序列化，803MB → ~12.5MB |
+| `75ffd53d4f` | Fix 1（初版）、Fix 2、Fix 3 |
+| `ea73e3c66a` | 补充测试：Fix 1-3 |
+| `7fe68f74e4` | Fix 4：截断提前至 `locals()` 前 |
+| `903b77a862` | Fix 5：超大响应跳过缓存序列化 |
+| `f04383437e` | Fix 6：`_JSON_BASE64_FIELD_RE` 覆盖 Vertex 原始 JSON 格式 |
+| `862285e8ac` | Fix 7：`strip_large_base64_from_result`，截断 Logging 对象内 data URI |
+| `9b9aef5890` | Fix 8：`_BARE_BASE64_RE` 截断裸 base64 字符串 |
+| `cb755d68ef` | Fix 9：`MAX_ORIGINAL_RESPONSE_LOG_CHARS`，`original_response` 字符数上限 |
 
 ---
 
 ## 根本性建议
 
-1. **大文件响应不应进入 logging pipeline**：图片/音频生成类接口的响应体可能达到数百 MB，应在进入 `Logging` 对象之前统一截断，而非在各个下游分别处理。
+1. **大文件响应不应进入 logging pipeline**：图片/音频生成类接口响应体可达数百 MB，应在进入 `Logging` 对象之前统一截断。
 
-2. **全局调试 dict 应避免持有业务数据**：`litellm.error_logs` 是模块级 dict，用于保存最近一次调用的现场。这类结构在高并发场景下极易成为内存陷阱。应在存入前统一清理大字段，或改用固定大小的循环缓冲区。
+2. **全局调试 dict 避免持有业务数据**：`litellm.error_logs` 是模块级 dict，高并发下易成内存陷阱。应在存入前清理大字段，或改用固定大小循环缓冲区。
 
-3. **in-memory cache 应设置合理的条目大小上限**：`InMemoryCache` 的 `max_size_per_item` 默认 1MB，可通过环境变量 `MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB` 调整。
+3. **不要把 `httpx.Response` 对象存入 `model_call_details`**：httpx Response 持有完整响应体字节。如需用于 logging，应立即提取所需内容（如解析后截断的 dict），再存入 `model_call_details`，并在使用后删除引用。
 
-4. **`model_call_details` 生命周期应尽早释放**：所有 logging 数据持续保存在 `Logging` 对象中直至所有 callbacks 完成。可考虑在 callbacks 执行完毕后主动 `del` 大字段。
+4. **`model_call_details` 生命周期问题**：所有 logging 数据持续保存至所有 callbacks 完成。可考虑在 callbacks 执行完毕后主动 `del` 大字段（`original_response`、`httpx_response`）。

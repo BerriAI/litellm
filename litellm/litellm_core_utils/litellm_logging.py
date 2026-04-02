@@ -3374,7 +3374,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, ModelResponse):
             return result
 
-        httpx_response = self.model_call_details.get("httpx_response", None)
+        httpx_response = self.model_call_details.pop("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
@@ -3414,7 +3414,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
-        httpx_response = self.model_call_details.get("httpx_response", None)
+        httpx_response = self.model_call_details.pop("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
         dict_result = httpx_response.json()

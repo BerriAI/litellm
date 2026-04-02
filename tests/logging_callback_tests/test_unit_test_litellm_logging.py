@@ -356,3 +356,130 @@ def test_post_call_truncates_base64_in_error_logs():
         "global dict is keeping the large string alive and preventing GC"
     )
     assert "base64_data truncated" in error_log_response
+
+
+# ---------------------------------------------------------------------------
+# Tests for Fix 10: httpx_response popped from model_call_details after use
+# ---------------------------------------------------------------------------
+
+
+def test_handle_anthropic_messages_response_pops_httpx_response():
+    """
+    _handle_anthropic_messages_response_logging must remove httpx_response from
+    model_call_details after using it.
+
+    Regression test for Fix 10: the httpx.Response object holds the full ~12 MB
+    response body.  Keeping it in model_call_details for the entire Logging
+    object lifetime means the body is never freed while async callbacks are
+    running.  Using pop() instead of get() ensures the reference is released
+    as soon as the handler has extracted what it needs.
+    """
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    logging_obj = setup_logging()
+
+    # Minimal Anthropic JSON response body
+    anthropic_body = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello"}],
+        "model": "claude-3-5-sonnet-20241022",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+    }
+    fake_response = httpx.Response(
+        status_code=200,
+        json=anthropic_body,
+    )
+    logging_obj.model_call_details["httpx_response"] = fake_response
+
+    # Patch transform_response to avoid needing the full Anthropic SDK chain
+    with patch.object(
+        litellm.AnthropicConfig,
+        "transform_response",
+        return_value=litellm.ModelResponse(),
+    ):
+        logging_obj._handle_anthropic_messages_response_logging(result={})
+
+    assert "httpx_response" not in logging_obj.model_call_details, (
+        "httpx_response still in model_call_details after handler — "
+        "~12 MB httpx Response body will not be freed until Logging object is GC'd"
+    )
+
+
+def test_handle_google_genai_generate_content_response_pops_httpx_response():
+    """
+    _handle_non_streaming_google_genai_generate_content_response_logging must
+    remove httpx_response from model_call_details after using it.
+
+    Regression test for Fix 10: same root cause as the Anthropic path — the
+    httpx.Response body (~12 MB) is held for the full Logging object lifetime
+    if the reference is not released after use.
+    """
+    from unittest.mock import patch
+    import httpx
+
+    logging_obj = setup_logging()
+
+    # Minimal Vertex/Google GenAI JSON response body (text-only, no image)
+    genai_body = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1},
+    }
+    fake_response = httpx.Response(status_code=200, json=genai_body)
+    logging_obj.model_call_details["httpx_response"] = fake_response
+
+    with patch.object(
+        litellm.VertexGeminiConfig,
+        "_transform_google_generate_content_to_openai_model_response",
+        return_value=litellm.ModelResponse(),
+    ):
+        logging_obj._handle_non_streaming_google_genai_generate_content_response_logging(
+            result={}
+        )
+
+    assert "httpx_response" not in logging_obj.model_call_details, (
+        "httpx_response still in model_call_details after handler — "
+        "~12 MB httpx Response body will not be freed until Logging object is GC'd"
+    )
+
+
+def test_handle_anthropic_messages_response_no_httpx_response_uses_result():
+    """
+    _handle_anthropic_messages_response_logging must fall back to parsing
+    `result` directly when httpx_response is absent.  This path is used by
+    callers that do not store the raw httpx.Response in model_call_details.
+    """
+    from unittest.mock import patch
+
+    logging_obj = setup_logging()
+    # No httpx_response in model_call_details
+    assert "httpx_response" not in logging_obj.model_call_details
+
+    anthropic_result = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hi"}],
+        "model": "claude-3-5-sonnet-20241022",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 2, "output_tokens": 1},
+    }
+    with patch.object(
+        litellm.AnthropicConfig,
+        "transform_parsed_response",
+        return_value=litellm.ModelResponse(),
+    ):
+        result = logging_obj._handle_anthropic_messages_response_logging(
+            result=anthropic_result
+        )
+
+    assert result is not None
