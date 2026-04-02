@@ -566,6 +566,67 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.error(f"Error setting custom headers: {e}")
             return {}
 
+    @staticmethod
+    async def build_litellm_proxy_success_headers_from_llm_response(
+        *,
+        response: Any,
+        request_data: dict,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        logging_obj: LiteLLMLoggingObj,
+        version: Optional[str],
+        proxy_logging_obj: ProxyLogging,
+    ) -> dict[str, str]:
+        """
+        Build LiteLLM proxy response headers for routes that call the LLM directly
+        (e.g. Google native :generateContent) instead of base_process_llm_request.
+        """
+        if isinstance(response, dict):
+            hidden_params = response.get("_hidden_params") or {}
+        else:
+            hidden_params = getattr(response, "_hidden_params", None) or {}
+        if not isinstance(hidden_params, dict):
+            hidden_params = {}
+
+        model_id = ProxyBaseLLMRequestProcessing._get_model_id_from_response(
+            hidden_params, request_data
+        )
+
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=logging_obj.litellm_call_id,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            request_data=request_data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+            **additional_headers,
+        )
+
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
+
+        return custom_headers
+
     async def common_processing_pre_call_logic(
         self,
         request: Request,
@@ -809,18 +870,18 @@ class ProxyBaseLLMRequestProcessing:
             return
         _payload_str = json.dumps(self.data, default=str)
         if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            _key_count = len(self.data) if isinstance(self.data, dict) else 0
             verbose_proxy_logger.debug(
-                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Dict key count: %d; type: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                list(self.data.keys())
-                if isinstance(self.data, dict)
-                else type(self.data).__name__,
+                _key_count,
+                type(self.data).__name__,
             )
         else:
             verbose_proxy_logger.debug(
                 "Request received by LiteLLM:\n%s",
-                json.dumps(self.data, indent=4, default=str),
+                _payload_str,
             )
 
     async def base_process_llm_request(  # noqa: PLR0915
@@ -1075,9 +1136,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data[
-                        "_litellm_client_requested_model"
-                    ] = requested_model_from_client
+                    self.data["_litellm_client_requested_model"] = (
+                        requested_model_from_client
+                    )
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1427,9 +1488,7 @@ class ProxyBaseLLMRequestProcessing:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
-            from litellm.proxy.utils import (
-                _check_and_merge_model_level_guardrails,
-            )
+            from litellm.proxy.utils import _check_and_merge_model_level_guardrails
 
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
@@ -1599,11 +1658,12 @@ class ProxyBaseLLMRequestProcessing:
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
-            error_body = await e.response.aread()
+            http_status_error: httpx.HTTPStatusError = e
+            error_body = await http_status_error.response.aread()
             error_text = error_body.decode("utf-8")
 
             raise HTTPException(
-                status_code=e.response.status_code,
+                status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
@@ -1671,7 +1731,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1899,9 +1961,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

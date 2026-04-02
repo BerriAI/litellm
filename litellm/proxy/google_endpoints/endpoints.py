@@ -35,6 +35,7 @@ async def google_generate_content(
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
         version,
     )
 
@@ -73,6 +74,16 @@ async def google_generate_content(
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
     response = await llm_router.agenerate_content(**data)
+    success_headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+        response=response,
+        request_data=data,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        logging_obj=logging_obj,
+        version=version,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    fastapi_response.headers.update(success_headers)
     return response
 
 
@@ -95,6 +106,7 @@ async def google_stream_generate_content(
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
         version,
     )
 
@@ -137,9 +149,24 @@ async def google_stream_generate_content(
         raise HTTPException(status_code=500, detail="Router not initialized")
     response = await llm_router.agenerate_content_stream(**data)
 
+    success_headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+        response=response,
+        request_data=data,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        logging_obj=logging_obj,
+        version=version,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     # Check if response is an async iterator (streaming response)
     if response is not None and hasattr(response, "__aiter__"):
-        return StreamingResponse(content=response, media_type="text/event-stream")
+        return StreamingResponse(
+            content=response,
+            media_type="text/event-stream",
+            headers=success_headers,
+        )
+    fastapi_response.headers.update(success_headers)
     return response
 
 
