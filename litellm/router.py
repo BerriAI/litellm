@@ -7854,22 +7854,18 @@ class Router:
                     )
                 ):
                     model_group_info.max_output_tokens = model_info["max_output_tokens"]
-                if model_info.get("input_cost_per_token", None) is not None and (
+                _merge_input_cost = model_info.get("input_cost_per_token")
+                if _merge_input_cost is not None and (
                     model_group_info.input_cost_per_token is None
-                    or model_info["input_cost_per_token"]
-                    > model_group_info.input_cost_per_token
+                    or _merge_input_cost > model_group_info.input_cost_per_token
                 ):
-                    model_group_info.input_cost_per_token = model_info[
-                        "input_cost_per_token"
-                    ]
-                if model_info.get("output_cost_per_token", None) is not None and (
+                    model_group_info.input_cost_per_token = _merge_input_cost
+                _merge_output_cost = model_info.get("output_cost_per_token")
+                if _merge_output_cost is not None and (
                     model_group_info.output_cost_per_token is None
-                    or model_info["output_cost_per_token"]
-                    > model_group_info.output_cost_per_token
+                    or _merge_output_cost > model_group_info.output_cost_per_token
                 ):
-                    model_group_info.output_cost_per_token = model_info[
-                        "output_cost_per_token"
-                    ]
+                    model_group_info.output_cost_per_token = _merge_output_cost
                 if (
                     model_info.get("supports_parallel_function_calling", None)
                     is not None

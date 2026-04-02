@@ -52,7 +52,7 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
     # Get the model router pricing from model_prices_and_context_window.json
     # Use "model_router" as the key (without actual model name suffix)
     model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-    router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
+    router_flat_cost_per_token = model_info.get("input_cost_per_token") or 0
 
     if router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token

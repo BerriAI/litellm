@@ -544,10 +544,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if (
-            model_info.get("input_cost_per_token", 0) > 0
-            or model_info.get("output_cost_per_token", 0) > 0
-        ):
+        _input_cpt = model_info.get("input_cost_per_token") or 0
+        _output_cpt = model_info.get("output_cost_per_token") or 0
+        if _input_cpt > 0 or _output_cpt > 0:
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
