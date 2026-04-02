@@ -18,14 +18,12 @@ def test_using_litellm():
 
         print("litellm imported successfully")
     except Exception as e:
-        pytest.fail(
-            f"Error occurred: {e}. Installing litellm on python3.8 failed please retry"
-        )
+        pytest.fail(f"Error occurred: {e}. Installing litellm failed please retry")
 
 
 def test_litellm_proxy_server():
-    # Install the local litellm[proxy] package in development mode
-    subprocess.run(["pip", "install", "-e", ".[proxy]"])
+    # Sync the local litellm[proxy] dependencies into the project environment
+    subprocess.run(["uv", "sync", "--frozen", "--extra", "proxy"], check=True)
 
     # Import the proxy_server module
     try:
@@ -39,11 +37,12 @@ def test_litellm_proxy_server():
 
 def test_package_dependencies():
     """
-    Test that all optional dependencies are correctly specified in extras.
+    Test that all optional dependency entries are exposed via project optional-dependencies.
     """
     try:
         import pathlib
         import litellm
+        from packaging.requirements import Requirement
         
         # Try to import tomllib (Python 3.11+) or tomli (older versions)
         try:
@@ -62,28 +61,22 @@ def test_package_dependencies():
         with open(pyproject_path, "rb") as f:
             pyproject = tomli.load(f)
 
-        # Get all optional dependencies from poetry.dependencies
-        poetry_deps = pyproject["tool"]["poetry"]["dependencies"]
-        optional_deps = {
-            name.lower()
-            for name, value in poetry_deps.items()
-            if isinstance(value, dict) and value.get("optional", False)
-        }
-        print(optional_deps)
-        # Get all packages listed in extras
-        extras = pyproject["tool"]["poetry"]["extras"]
-        all_extra_deps = set()
-        for extra_group in extras.values():
-            all_extra_deps.update(dep.lower() for dep in extra_group)
-        print(all_extra_deps)
-        # Check that all optional dependencies are in some extras group
-        missing_from_extras = optional_deps - all_extra_deps
-        assert (
-            not missing_from_extras
-        ), f"Optional dependencies missing from extras: {missing_from_extras}"
+        optional_deps = pyproject["project"]["optional-dependencies"]
+        assert optional_deps, "Expected project.optional-dependencies to be defined"
 
+        parsed_requirements = set()
+        for extra_name, requirements in optional_deps.items():
+            assert requirements, f"Optional dependency group '{extra_name}' is empty"
+            for requirement in requirements:
+                assert isinstance(
+                    requirement, str
+                ), f"Expected string requirement in extra '{extra_name}'"
+                parsed = Requirement(requirement)
+                parsed_requirements.add(parsed.name.lower())
+
+        print(parsed_requirements)
         print(
-            f"All {len(optional_deps)} optional dependencies are correctly specified in extras"
+            f"Validated {len(parsed_requirements)} optional dependencies across {len(optional_deps)} extras groups"
         )
 
     except Exception as e:
@@ -102,11 +95,13 @@ import requests
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    # Install the local litellm packages in development mode
+    # Sync the local litellm packages into the project environment
     server_process = None
     try:
-        subprocess.run(["pip", "install", "-e", ".[proxy]"])
-        subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
+        subprocess.run(
+            ["uv", "sync", "--frozen", "--group", "proxy-dev", "--extra", "proxy", "--extra", "extra_proxy"],
+            check=True,
+        )
         
         # Ensure Prisma client is generated
         try:
@@ -115,7 +110,7 @@ def test_litellm_proxy_server_config_no_general_settings():
             print(f"Running prisma generate from: {project_root}")
             
             result = subprocess.run(
-                ["prisma", "generate"], 
+                ["uv", "run", "--no-sync", "prisma", "generate"], 
                 capture_output=True, 
                 text=True, 
                 check=True,
