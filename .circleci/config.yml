@@ -20,7 +20,7 @@ commands:
     steps:
       - run:
           name: "Install local version of litellm-enterprise"
-          command: true
+          command: "true"
   setup_litellm_test_deps:
     steps:
       - checkout
@@ -2858,7 +2858,7 @@ jobs:
             python --version
       - run:
           name: Prepare uv
-          command: true
+          command: "true"
       - run:
           name: Install dockerize
           command: |
@@ -2899,7 +2899,7 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
           name: Setup litellm-enterprise
-          command: true
+          command: "true"
       - run:
           name: Generate Prisma client
           command: |
