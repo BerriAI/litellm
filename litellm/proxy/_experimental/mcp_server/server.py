@@ -1871,13 +1871,21 @@ if MCP_AVAILABLE:
         # registry paths (if local_tool / else fallback) bypass that, so
         # we fire the hook here for those paths only to avoid double
         # invocation.
-        async def _fire_pre_call_hook_for_local_path() -> None:
+        async def _fire_pre_call_hook_for_local_path() -> Optional[Dict[str, Any]]:
+            """Fire pre_call_hook and return hook-modified arguments (if any).
+
+            Returns the modified arguments dict when the hook changes them,
+            or None when nothing was modified.  Matches the behaviour of
+            MCPServerManager.pre_call_tool_check (mcp_server_manager.py).
+            """
+            nonlocal arguments
+
             from litellm.proxy.proxy_server import (
                 proxy_logging_obj as _proxy_log_obj,
             )
 
             if not _proxy_log_obj or not user_api_key_auth:
-                return
+                return None
 
             # Extract bearer token from raw headers (same as
             # MCPServerManager.pre_call_tool_check lines 1945-1949)
@@ -1915,11 +1923,23 @@ if MCP_AVAILABLE:
             _synth = _proxy_log_obj._convert_mcp_to_llm_format(
                 _mcp_req, _pre_hook_kwargs
             )
-            await _proxy_log_obj.pre_call_hook(
+            modified_data = await _proxy_log_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_auth,
                 data=_synth,
                 call_type=CallTypes.call_mcp_tool.value,
             )
+
+            # Apply hook modifications (same as pre_call_tool_check)
+            if modified_data:
+                modified_kwargs = (
+                    _proxy_log_obj._convert_mcp_hook_response_to_kwargs(
+                        modified_data, _pre_hook_kwargs
+                    )
+                )
+                if modified_kwargs.get("arguments") != (arguments or {}):
+                    arguments = modified_kwargs["arguments"]
+
+            return None
 
         # --- End pre-call hook helper ---
 
