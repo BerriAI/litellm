@@ -24,8 +24,6 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
-    _get_cost_per_unit,
-    _get_sorted_input_token_threshold_keys,
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
     calculate_cost_component,
@@ -2056,6 +2054,10 @@ def batch_cost_calculator(
             skips the global litellm.get_model_info() lookup so that
             deployment-specific pricing is used.
     """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        _get_cost_per_unit,
+        _get_sorted_input_token_threshold_keys,
+    )
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider
