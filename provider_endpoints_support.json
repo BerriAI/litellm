@@ -71,8 +71,8 @@
       "url": "https://docs.litellm.ai/docs/providers/avian",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
-        "responses": false,
+        "messages": true,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
@@ -80,7 +80,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": false
+        "a2a": false,
+        "interactions": false
       }
     },
     "aiml": {
