@@ -18,6 +18,7 @@ from inspect import iscoroutinefunction
 from threading import Thread
 
 from litellm.exceptions import Timeout
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
 def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
@@ -53,11 +54,17 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
                 result = future.result(timeout=local_timeout_duration)
             except futures.TimeoutError:
                 thread.stop_loop()
-                model = args[0] if len(args) > 0 else kwargs["model"]
+                model = args[0] if len(args) > 0 else kwargs.get("model")
+                llm_provider = "openai"
+                if model:
+                    try:
+                        _, llm_provider, _, _ = get_llm_provider(model)
+                    except Exception:
+                        pass  # keep default "openai" on error
                 raise exception_to_raise(
                     f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
-                    model=model,  # [TODO]: replace with logic for parsing out llm provider from model name
-                    llm_provider="openai",
+                    model=model,
+                    llm_provider=llm_provider,
                 )
             thread.stop_loop()
             return result
@@ -75,11 +82,17 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
                 )
                 return value
             except asyncio.TimeoutError:
-                model = args[0] if len(args) > 0 else kwargs["model"]
+                model = args[0] if len(args) > 0 else kwargs.get("model")
+                llm_provider = "openai"
+                if model:
+                    try:
+                        _, llm_provider, _, _ = get_llm_provider(model)
+                    except Exception:
+                        pass  # keep default "openai" on error
                 raise exception_to_raise(
                     f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
-                    model=model,  # [TODO]: replace with logic for parsing out llm provider from model name
-                    llm_provider="openai",
+                    model=model,
+                    llm_provider=llm_provider,
                 )
 
         if iscoroutinefunction(func):
