@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from typing import Tuple
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -53,8 +53,6 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     with patch(
         "litellm.proxy.auth.user_api_key_auth.can_key_call_model", new_callable=AsyncMock
     ) as mock_can_key, patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ), patch(
         "litellm.proxy.proxy_server.general_settings",
         {},
     ):
@@ -88,7 +86,12 @@ async def test_custom_auth_honors_key_level_model_access_restriction_allowed_wit
             route="/v1/chat/completions",
             parent_otel_span=None,
         )
-        mock_can_key.assert_awaited_once()
+        mock_can_key.assert_awaited_once_with(
+            model="gpt-4o-mini",
+            llm_model_list=ANY,
+            valid_token=valid_token,
+            llm_router=ANY,
+        )
 
 
 @pytest.mark.asyncio
