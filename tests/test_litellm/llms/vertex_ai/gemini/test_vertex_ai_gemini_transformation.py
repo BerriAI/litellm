@@ -3,6 +3,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
+    _process_gemini_media,
     _transform_request_body,
     check_if_part_exists_in_parts,
     _get_highest_media_resolution,
@@ -1812,3 +1813,39 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_process_gemini_media_files_api_uri_no_mime_type_required():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24907.
+
+    Gemini Files API URIs (https://generativelanguage.googleapis.com/v1beta/files/*)
+    must be forwarded as file_data without attempting to resolve a mime type from the
+    URL. The URL has no file extension and the endpoint returns 403 for unauthenticated
+    requests, so any attempt to download or sniff the mime type raises an error.
+    """
+    gemini_file_uri = (
+        "https://generativelanguage.googleapis.com/v1beta/files/37eh7rsw1vfe"
+    )
+
+    part = _process_gemini_media(image_url=gemini_file_uri)
+
+    assert "file_data" in part
+    assert part["file_data"]["file_uri"] == gemini_file_uri
+    # mime_type must NOT be set — the Files API already knows the type
+    assert part["file_data"].get("mime_type") is None
+
+
+def test_process_gemini_media_files_api_uri_with_explicit_format():
+    """
+    When the caller explicitly provides a format/mime type for a Gemini Files API URI,
+    it should still be forwarded as file_data (not attempted as an inline download).
+    """
+    gemini_file_uri = (
+        "https://generativelanguage.googleapis.com/v1beta/files/n1vhxa28lyaw"
+    )
+
+    part = _process_gemini_media(image_url=gemini_file_uri, format="text/plain")
+
+    assert "file_data" in part
+    assert part["file_data"]["file_uri"] == gemini_file_uri

@@ -208,6 +208,14 @@ def _process_gemini_media(
             return _apply_gemini_3_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
+        elif "https://generativelanguage.googleapis.com/v1beta/files/" in image_url:
+            # Gemini Files API URI — mime type is already known by the API,
+            # no need to resolve it from the URL (which would cause a 403).
+            file_data = FileDataType(file_uri=image_url)
+            part = {"file_data": file_data}
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
