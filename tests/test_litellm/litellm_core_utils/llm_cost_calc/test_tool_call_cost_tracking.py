@@ -139,6 +139,53 @@ def test_get_cost_for_anthropic_web_search():
     assert cost > 0.0
 
 
+def test_get_cost_for_anthropic_web_search_with_model_response():
+    """
+    Test that Anthropic web search cost is tracked when a real ModelResponse is passed
+    with usage.server_tool_use.web_search_requests set.
+
+    Regression test: the ModelResponse branch in response_object_includes_web_search_call
+    was only checking url_citation annotations and prompt_tokens_details.web_search_requests,
+    missing the Anthropic-specific usage.server_tool_use.web_search_requests field.
+    """
+    from litellm.types.utils import Choices, Message, ServerToolUse, Usage
+
+    model = "claude-sonnet-4-5-20250929"
+    response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(content="Test response", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+    )
+    usage = Usage(
+        completion_tokens=395,
+        prompt_tokens=46448,
+        total_tokens=46843,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+    response.usage = usage
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    ), "Expected web search call to be detected in ModelResponse with server_tool_use"
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=response,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0.0, f"Expected non-zero web search cost, got {cost}"
+
+
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
 )

@@ -324,6 +324,7 @@ class StandardBuiltInToolCostTracking:
                 return True
             # Fallback: Check usage object for providers that use usage instead of annotations
             # (e.g., Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests)
+            # (e.g., Anthropic uses usage.server_tool_use.web_search_requests)
             if usage is not None:
                 if (
                     hasattr(usage, "prompt_tokens_details")
@@ -333,6 +334,12 @@ class StandardBuiltInToolCostTracking:
                     )
                     and hasattr(usage.prompt_tokens_details, "web_search_requests")
                     and usage.prompt_tokens_details.web_search_requests is not None
+                ):
+                    return True
+                if (
+                    hasattr(usage, "server_tool_use")
+                    and usage.server_tool_use is not None
+                    and usage.server_tool_use.web_search_requests is not None
                 ):
                     return True
             return False
