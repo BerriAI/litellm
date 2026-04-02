@@ -230,7 +230,11 @@ async def _perform_health_check(
             if _model_id:
                 cleaned["model_id"] = _model_id
                 if "exception" in is_healthy:
-                    exceptions_by_model_id[_model_id] = is_healthy["exception"]
+                    exc = is_healthy["exception"]
+                    exceptions_by_model_id[_model_id] = exc
+                    # Store integer status code so shared-cache readers can
+                    # reconstruct the transient-error filter without the exception object.
+                    cleaned["exception_status"] = getattr(exc, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
         else:
             cleaned = _clean_endpoint_data(litellm_params, details)
@@ -238,6 +242,7 @@ async def _perform_health_check(
                 cleaned["model_id"] = _model_id
                 if isinstance(is_healthy, Exception):
                     exceptions_by_model_id[_model_id] = is_healthy
+                    cleaned["exception_status"] = getattr(is_healthy, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
