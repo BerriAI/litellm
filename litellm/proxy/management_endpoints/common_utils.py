@@ -399,10 +399,23 @@ async def _upsert_budget_and_membership(
             budget_duration=budget_duration
         )
 
-    new_budget = await tx.litellm_budgettable.create(
-        data=create_data,
-        include={"team_membership": True},
-    )
+    if existing_budget_id is not None:
+        # Update in-place: patch only the fields that were supplied so we don't
+        # overwrite fields the caller didn't touch (e.g. keep max_budget when
+        # only budget_duration changes).  Exclude created_by — that's set once.
+        update_data = {k: v for k, v in create_data.items() if k != "created_by"}
+        await tx.litellm_budgettable.update(
+            where={"budget_id": existing_budget_id},
+            data=update_data,
+        )
+        budget_id_to_connect = existing_budget_id
+    else:
+        new_budget = await tx.litellm_budgettable.create(
+            data=create_data,
+            include={"team_membership": True},
+        )
+        budget_id_to_connect = new_budget.budget_id
+
     # upsert the team membership with the new/updated budget
     await tx.litellm_teammembership.upsert(
         where={
@@ -416,12 +429,12 @@ async def _upsert_budget_and_membership(
                 "user_id": user_id,
                 "team_id": team_id,
                 "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
+                    "connect": {"budget_id": budget_id_to_connect},
                 },
             },
             "update": {
                 "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
+                    "connect": {"budget_id": budget_id_to_connect},
                 },
             },
         },

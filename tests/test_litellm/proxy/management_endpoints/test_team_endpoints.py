@@ -6627,3 +6627,81 @@ async def test_create_team_member_budget_table_with_duration():
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_updates_existing_budget():
+    """
+    When existing_budget_id is provided, _upsert_budget_and_membership must UPDATE
+    the existing budget row rather than creating a new one — otherwise each call
+    silently orphans the previous LiteLLM_BudgetTable row.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+
+    mock_tx = MagicMock()
+    mock_tx.litellm_budgettable.update = AsyncMock()
+    mock_tx.litellm_budgettable.create = AsyncMock()
+    mock_tx.litellm_teammembership.upsert = AsyncMock()
+
+    await _upsert_budget_and_membership(
+        tx=mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        max_budget=50.0,
+        existing_budget_id="budget-existing-123",
+        user_api_key_dict=mock_user,
+    )
+
+    # Must update, not create
+    mock_tx.litellm_budgettable.update.assert_awaited_once()
+    mock_tx.litellm_budgettable.create.assert_not_awaited()
+
+    # Membership must be connected to the existing budget id
+    upsert_call = mock_tx.litellm_teammembership.upsert.call_args
+    connect_id = upsert_call.kwargs["data"]["update"]["litellm_budget_table"]["connect"]["budget_id"]
+    assert connect_id == "budget-existing-123"
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_creates_new_budget_when_none():
+    """
+    When existing_budget_id is None, _upsert_budget_and_membership must CREATE
+    a new budget row and connect it to the membership.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+
+    mock_new_budget = MagicMock()
+    mock_new_budget.budget_id = "budget-new-456"
+
+    mock_tx = MagicMock()
+    mock_tx.litellm_budgettable.update = AsyncMock()
+    mock_tx.litellm_budgettable.create = AsyncMock(return_value=mock_new_budget)
+    mock_tx.litellm_teammembership.upsert = AsyncMock()
+
+    await _upsert_budget_and_membership(
+        tx=mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        max_budget=100.0,
+        existing_budget_id=None,
+        user_api_key_dict=mock_user,
+    )
+
+    # Must create, not update
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
+    mock_tx.litellm_budgettable.update.assert_not_awaited()
+
+    # Membership must be connected to the newly created budget id
+    upsert_call = mock_tx.litellm_teammembership.upsert.call_args
+    connect_id = upsert_call.kwargs["data"]["update"]["litellm_budget_table"]["connect"]["budget_id"]
+    assert connect_id == "budget-new-456"
