@@ -2249,6 +2249,7 @@ def _schedule_background_health_check_db_save(
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    exceptions_by_model_id: Optional[dict] = None,
 ) -> None:
     """
     Write deployment health states to the router's health state cache
@@ -2259,6 +2260,8 @@ def _write_health_state_to_router_cache(
     from litellm.router_utils.router_callbacks.track_deployment_metrics import (
         increment_deployment_failures_for_current_minute,
     )
+
+    _exceptions: dict = exceptions_by_model_id or {}
 
     try:
         if llm_router is None or not llm_router.enable_health_check_routing:
@@ -2271,7 +2274,10 @@ def _write_health_state_to_router_cache(
             _effective_unhealthy = [
                 ep
                 for ep in unhealthy_endpoints
-                if getattr(ep.get("exception"), "status_code", 500) not in (429, 408)
+                if getattr(
+                    _exceptions.get(ep.get("model_id")), "status_code", 500
+                )
+                not in (429, 408)
             ]
 
         states = build_deployment_health_states(
@@ -2291,7 +2297,7 @@ def _write_health_state_to_router_cache(
             if not model_id:
                 continue
 
-            original_exception = endpoint.get("exception")
+            original_exception = _exceptions.get(model_id)
             if original_exception is None:
                 continue
 
