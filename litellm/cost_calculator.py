@@ -629,36 +629,6 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
-_BEDROCK_GOVCLOUD_REGIONS = frozenset({"us-gov-east-1", "us-gov-west-1"})
-_BEDROCK_INFERENCE_PROFILE_PREFIXES = (
-    "us.",
-    "eu.",
-    "apac.",
-    "jp.",
-    "au.",
-    "global.",
-)
-
-
-def _bedrock_litellm_model_has_inference_profile_prefix(model: Optional[str]) -> bool:
-    """
-    True when the LiteLLM model string uses a Bedrock inference profile id
-    (e.g. us.anthropic.claude-3-haiku...) under bedrock/, not the bare anthropic.* id.
-    """
-    if not model or not model.startswith("bedrock/"):
-        return False
-    rest = model[len("bedrock/") :]
-    if "/" not in rest:
-        model_id = rest
-    else:
-        first, remainder = rest.split("/", 1)
-        if any(first.startswith(p) for p in _BEDROCK_INFERENCE_PROFILE_PREFIXES):
-            model_id = first
-        else:
-            model_id = remainder.split("/")[-1]
-    return any(model_id.startswith(p) for p in _BEDROCK_INFERENCE_PROFILE_PREFIXES)
-
-
 def _select_model_name_for_cost_calc(
     model: Optional[str],
     completion_response: Optional[Any],
@@ -670,10 +640,8 @@ def _select_model_name_for_cost_calc(
     """
     1. If custom pricing is true, return received model name
     2. If base_model is set (e.g. for azure models), return that
-    3. Else resolve from completion response / request model (Bedrock: prefer the
-       request model when it uses an inference-profile id like us.anthropic.* and the
-       region is not GovCloud, so cost matches model_cost; GovCloud still uses the
-       response model id + region prefix for bedrock/us-gov-*/anthropic.* keys)
+    3. If completion response has model set return that
+    4. Check if model is passed in return that
     """
 
     return_model: Optional[str] = None
@@ -717,32 +685,11 @@ def _select_model_name_for_cost_calc(
     ):
         region_name = hidden_params.get("region_name", None)
 
-    if return_model is None:
-        gov_region = region_name in _BEDROCK_GOVCLOUD_REGIONS
-        prefer_request_bedrock_profile = (
-            custom_llm_provider == "bedrock"
-            and not gov_region
-            and model is not None
-            and _bedrock_litellm_model_has_inference_profile_prefix(model)
-        )
-        if prefer_request_bedrock_profile:
-            return_model = model
-        elif gov_region and custom_llm_provider == "bedrock":
-            # For GovCloud: use the base model id (without inference-profile
-            # prefix) so the region prefix is added below, matching
-            # "bedrock/us-gov-*/anthropic.*" keys in model_cost.
-            base = completion_response_model or model or ""
-            if base.startswith("bedrock/"):
-                base = base[len("bedrock/"):]
-            for p in _BEDROCK_INFERENCE_PROFILE_PREFIXES:
-                if base.startswith(p):
-                    base = base[len(p):]
-                    break
-            return_model = base
-        elif completion_response_model is not None:
-            return_model = completion_response_model
-        elif model is not None:
-            return_model = model
+    if return_model is None and completion_response_model is not None:
+        return_model = completion_response_model
+
+    if return_model is None and model is not None:
+        return_model = model
 
     if (
         return_model is not None
