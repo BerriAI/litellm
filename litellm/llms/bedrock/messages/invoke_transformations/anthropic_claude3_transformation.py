@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -460,8 +461,15 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        # Filter out beta headers that Bedrock Invoke doesn't support
+        # Uses centralized configuration from anthropic_beta_headers_config.json
+        filtered_beta_list = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set),
+            provider="bedrock",
+        )
+
+        if filtered_beta_list:
+            anthropic_messages_request["anthropic_beta"] = filtered_beta_list
 
         return anthropic_messages_request
 

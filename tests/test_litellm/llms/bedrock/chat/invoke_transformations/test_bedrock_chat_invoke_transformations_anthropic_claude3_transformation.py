@@ -319,71 +319,80 @@ def test_opus_4_5_model_detection():
             f"Should not detect {model} as Opus 4.5"
 
 
-# def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
-#     """
-#     Test that unsupported beta headers are filtered out for Bedrock Invoke API.
-    
-#     Bedrock Invoke API only supports a specific whitelist of beta flags and returns
-#     "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
-#     This test ensures unsupported headers are filtered while keeping supported ones.
-    
-#     Fixes: https://github.com/BerriAI/litellm/issues/16726
-#     """
-#     config = AmazonAnthropicClaudeConfig()
-    
-#     messages = [{"role": "user", "content": "test"}]
-    
-#     # Test 1: structured-outputs beta header (unsupported)
-#     headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
-    
-#     result = config.transform_request(
-#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-#         messages=messages,
-#         optional_params={},
-#         litellm_params={},
-#         headers=headers,
-#     )
-    
-#     # Verify structured-outputs beta is filtered out
-#     anthropic_beta = result.get("anthropic_beta", [])
-#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
-#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
-    
-#     # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
-#     headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
-    
-#     result = config.transform_request(
-#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-#         messages=messages,
-#         optional_params={},
-#         litellm_params={},
-#         headers=headers,
-#     )
-    
-#     # Verify mcp-servers beta is filtered out
-#     anthropic_beta = result.get("anthropic_beta", [])
-#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
-#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
-    
-#     # Test 3: Mix of supported and unsupported beta headers
-#     headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
-    
-#     result = config.transform_request(
-#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
-#         messages=messages,
-#         optional_params={},
-#         litellm_params={},
-#         headers=headers,
-#     )
-    
-#     # Verify only supported betas are kept
-#     anthropic_beta = result.get("anthropic_beta", [])
-#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
-#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
-#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
-#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
-#     assert any("computer-use" in beta for beta in anthropic_beta), \
-#         f"computer-use beta should be kept, got: {anthropic_beta}"
+def test_unsupported_beta_headers_filtered_for_bedrock_invoke():
+    """
+    Test that unsupported beta headers are filtered out for Bedrock Invoke API.
+
+    Bedrock Invoke API only supports a specific set of beta flags and returns
+    "invalid beta flag" error for others (e.g., advanced-tool-use, mcp-servers).
+    This test ensures unsupported headers are filtered while keeping supported ones.
+
+    Regression test for commit 2ec0072008 which accidentally removed the
+    filter_and_transform_beta_headers call.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/16726
+    """
+    config = AmazonAnthropicClaudeConfig()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    # Test 1: advanced-tool-use beta header (unsupported on bedrock invoke,
+    # maps to null in anthropic_beta_headers_config.json for bedrock_converse
+    # and maps to tool-search-tool for bedrock invoke)
+    headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert not any("mcp-servers" in beta for beta in anthropic_beta), (
+        f"mcp-servers beta should be filtered out for bedrock invoke, got: {anthropic_beta}"
+    )
+
+    # Test 2: Mix of supported and unsupported beta headers
+    headers = {
+        "anthropic-beta": "computer-use-2025-01-24,mcp-servers-2025-12-04,interleaved-thinking-2025-05-14"
+    }
+
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert not any("mcp-servers" in beta for beta in anthropic_beta), (
+        f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+    )
+    assert any("computer-use" in beta for beta in anthropic_beta), (
+        f"computer-use beta should be kept, got: {anthropic_beta}"
+    )
+    assert any("interleaved-thinking" in beta for beta in anthropic_beta), (
+        f"interleaved-thinking beta should be kept, got: {anthropic_beta}"
+    )
+
+    # Test 3: Only unsupported headers → anthropic_beta should be absent
+    headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert len(anthropic_beta) == 0 or "anthropic_beta" not in result, (
+        f"All unsupported betas should be filtered out, got: {anthropic_beta}"
+    )
 
 
 def test_output_config_removed_from_bedrock_chat_invoke_request():
