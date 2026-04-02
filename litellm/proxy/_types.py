@@ -884,9 +884,9 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
-    model_max_budget: Optional[
-        dict
-    ] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -938,6 +938,7 @@ class LiteLLMKeyType(str, enum.Enum):
     MANAGEMENT = "management"  # Can call management routes (user/team/key management)
     READ_ONLY = "read_only"  # Can only call info/read routes
     DEFAULT = "default"  # Uses default allowed routes
+    JWT_CLIENT = "jwt_client"  # JWT-mapped service identity — LLM API routes only, no key management
 
 
 class GenerateKeyRequest(KeyRequestBase):
@@ -953,6 +954,10 @@ class GenerateKeyRequest(KeyRequestBase):
     rotation_interval: Optional[str] = Field(
         default=None,
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
+    )
+    key_rotation_email: Optional[str] = Field(
+        default=None,
+        description="Email to notify when key is rotated. Overrides key owner email. Useful for service accounts.",
     )
     organization_id: Optional[str] = None
     project_id: Optional[str] = None
@@ -1008,6 +1013,7 @@ class UpdateKeyRequest(KeyRequestBase):
     temp_budget_expiry: Optional[datetime] = None
     auto_rotate: Optional[bool] = None
     rotation_interval: Optional[str] = None
+    key_rotation_email: Optional[str] = None
     organization_id: Optional[str] = None
 
     @model_validator(mode="after")
@@ -1028,9 +1034,9 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
-    grace_period: Optional[
-        str
-    ] = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
+    grace_period: Optional[str] = (
+        None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
+    )
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
@@ -1540,12 +1546,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
@@ -1568,12 +1574,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -1663,15 +1669,15 @@ class NewTeamRequest(TeamBase):
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
     model_tpm_limit: Optional[Dict[str, int]] = None
-    team_member_budget: Optional[
-        float
-    ] = None  # allow user to set a budget for all team members
-    team_member_rpm_limit: Optional[
-        int
-    ] = None  # allow user to set RPM limit for all team members
-    team_member_tpm_limit: Optional[
-        int
-    ] = None  # allow user to set TPM limit for all team members
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
+    )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
@@ -1768,9 +1774,9 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
-    callback_type: Optional[
-        Literal["success", "failure", "success_and_failure"]
-    ] = "success_and_failure"
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -2110,9 +2116,9 @@ class ConfigList(LiteLLMPydanticObjectBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
-    nested_fields: Optional[
-        List[FieldDetail]
-    ] = None  # For nested dictionary or Pydantic fields
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2360,6 +2366,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+    key_rotation_email: Optional[str] = (
+        None  # Override email for rotation notifications
+    )
     router_settings: Optional[dict] = None
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2396,6 +2405,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_model_aliases: Optional[Dict] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+    team_budget_reset_at: Optional[datetime] = None
     team_object_permission_id: Optional[str] = None
 
     # Team Member Specific Params
@@ -2468,11 +2478,12 @@ class UserAPIKeyAuth(
     user_email: Optional[str] = None
     user_spend: Optional[float] = None
     user_max_budget: Optional[float] = None
+    user_budget_reset_at: Optional[datetime] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
-    created_by_user: Optional[
-        Any
-    ] = None  # Expanded created_by user when expand=user is used
+    created_by_user: Optional[Any] = (
+        None  # Expanded created_by user when expand=user is used
+    )
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
@@ -2611,9 +2622,9 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    user: Optional[
-        Any
-    ] = None  # You might want to replace 'Any' with a more specific type if available
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     user_email: Optional[str] = None
 
@@ -3764,9 +3775,9 @@ class TeamModelDeleteRequest(BaseModel):
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
-    max_budget_in_organization: Optional[
-        float
-    ] = None  # Users max budget within the organization
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
 
 
 class OrganizationMemberDeleteRequest(MemberDeleteRequest):
@@ -3846,6 +3857,7 @@ class KeyHealthResponse(TypedDict, total=False):
 class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     jwt_claim_name: str
     jwt_claim_value: str
+    issuer: str = ""
     key: str
     description: Optional[str] = None
 
@@ -3865,12 +3877,77 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     id: str
     jwt_claim_name: str
     jwt_claim_value: str
+    issuer: str = ""
     description: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
+    # Virtual key fields — populated by info/unified endpoints
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
+    key_alias: Optional[str] = None
+    spend: Optional[float] = None
+    expires: Optional[datetime] = None
+    # Cleartext key — only populated on creation (never returned again)
+    key: Optional[str] = None
+
+
+class UpdateJWTClientRequest(LiteLLMPydanticObjectBase):
+    """Request body for POST /jwt_client/update.
+
+    Uses a request body (not query params) so that callers can explicitly set
+    fields to null/unlimited — e.g. ``{"max_budget": null}`` clears the budget.
+    Fields absent from the body are left unchanged (exclude_unset semantics).
+    """
+
+    id: str
+    # Mapping-level fields
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    # Virtual key fields — null means "clear / set unlimited"
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class CreateJWTClientRequest(LiteLLMPydanticObjectBase):
+    """Single-call request to create a virtual key + JWT mapping atomically."""
+
+    jwt_claim_name: str
+    jwt_claim_value: str
+    issuer: str = ""
+    description: Optional[str] = None
+    # Virtual key configuration
+    models: Optional[list] = []
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
+    key_alias: Optional[str] = None
+    duration: Optional[str] = None
+    metadata: Optional[dict] = {}
+
+
+class JWTClientAutoRegisterDefaults(LiteLLMPydanticObjectBase):
+    """Default virtual key settings applied when auto-registering unknown JWT clients."""
+
+    models: Optional[list] = None
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    team_id: Optional[str] = None
 
 
 class SpecialHeaders(enum.Enum):
@@ -4017,9 +4094,9 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     Maps provider names to their budget configs.
     """
 
-    providers: Dict[
-        str, ProviderBudgetResponseObject
-    ] = {}  # Dictionary mapping provider names to their budget configurations
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
 
 
 class ProxyStateVariables(TypedDict):
@@ -4163,9 +4240,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
-    object_id_jwt_field: Optional[
-        str
-    ] = None  # can be either user / team, inferred from the role mapping
+    object_id_jwt_field: Optional[str] = (
+        None  # can be either user / team, inferred from the role mapping
+    )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
@@ -4197,6 +4274,21 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    unregistered_jwt_client_behavior: Literal[
+        "reject", "fallback_team_mapping", "auto_register"
+    ] = Field(
+        default="fallback_team_mapping",
+        description=(
+            "Behavior when a JWT arrives with no virtual-key mapping. "
+            "'reject' → 403. "
+            "'fallback_team_mapping' → standard JWT team auth (default). "
+            "'auto_register' → create a mapping + virtual key on first encounter."
+        ),
+    )
+    auto_register_defaults: Optional["JWTClientAutoRegisterDefaults"] = Field(
+        default=None,
+        description="Default virtual key settings used when auto_register creates keys for unknown JWT clients.",
     )
     #########################################################
 

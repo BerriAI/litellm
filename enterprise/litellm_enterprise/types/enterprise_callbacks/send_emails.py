@@ -26,6 +26,7 @@ class SendKeyCreatedEmailEvent(WebhookEvent):
 class SendKeyRotatedEmailEvent(WebhookEvent):
     virtual_key: str
     key_alias: Optional[str] = None
+    key_rotation_email: Optional[str] = None
     """
     The virtual key that was rotated
     this will be sk-123xxx, since we will be emailing this to the user to start using the new key

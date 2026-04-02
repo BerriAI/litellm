@@ -453,6 +453,8 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json["allowed_routes"] = ["management_routes"]
     elif key_type == LiteLLMKeyType.READ_ONLY:
         data_json["allowed_routes"] = ["info_routes"]
+    elif key_type == LiteLLMKeyType.JWT_CLIENT:
+        data_json["allowed_routes"] = ["llm_api_routes"]
     return data_json
 
 
@@ -732,9 +734,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         request_type="key", **data_json, table_name="key"
     )
 
-    response[
-        "soft_budget"
-    ] = data.soft_budget  # include the user-input soft budget in the response
+    response["soft_budget"] = (
+        data.soft_budget
+    )  # include the user-input soft budget in the response
 
     response = GenerateKeyResponse(**response)
 
@@ -1181,6 +1183,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+    - key_rotation_email: Optional[str] - Email to notify when this key is rotated. Leave empty to use the key owner's email.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
@@ -2070,6 +2073,7 @@ async def update_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
+    - key_rotation_email: Optional[str] - Email to notify when this key is rotated. Leave empty to use the key owner's email.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
@@ -2115,6 +2119,19 @@ async def update_key_fn(
             token=data.key,
             prisma_client=prisma_client,
         )
+
+        # JWT-bound keys can only be modified by proxy admins
+        _key_metadata = existing_key_row.metadata or {}
+        if isinstance(_key_metadata, str):
+            _key_metadata = json.loads(_key_metadata)
+        if (
+            _key_metadata.get("jwt_bound")
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="JWT-bound keys can only be modified by proxy admins",
+            )
 
         await _validate_update_key_data(
             data=data,
@@ -2783,6 +2800,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
     auto_rotate: Optional[bool] = None,
     rotation_interval: Optional[str] = None,
+    key_rotation_email: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
 ):
@@ -2912,6 +2930,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             auto_rotate=auto_rotate or False,
             rotation_interval=rotation_interval,
         )
+
+        if key_rotation_email is not None:
+            key_data["key_rotation_email"] = key_rotation_email
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
@@ -3103,6 +3124,15 @@ async def can_modify_verification_token(
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
 
+    # 1b. JWT-bound keys cannot be modified by non-admin sessions
+    key_metadata = key_info.metadata or {}
+    if isinstance(key_metadata, str):
+        import json as _json
+
+        key_metadata = _json.loads(key_metadata)
+    if key_metadata.get("jwt_bound"):
+        return False
+
     # 2. Internal jobs service account can modify any key (for auto-rotation)
     if user_api_key_dict.api_key == LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME:
         return True
@@ -3175,10 +3205,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             if len(_keys_being_deleted) == 0:
@@ -3378,9 +3408,9 @@ async def _rotate_master_key(  # noqa: PLR0915
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -4020,11 +4050,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -4107,10 +4137,10 @@ async def _fetch_user_team_objects(
     if complete_user_info is None or not complete_user_info.teams:
         return []
 
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []

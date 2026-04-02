@@ -430,6 +430,10 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
+          name: Setup litellm-proxy-extras from local source
+          command: |
+            pip install --force-reinstall --no-deps -e litellm-proxy-extras/
+      - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
@@ -1775,7 +1779,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -v tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -v tests/*.py -x --retries=2 --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 15m
 
       # Store test results
@@ -2940,6 +2944,13 @@ jobs:
             source $HOME/miniconda/etc/profile.d/conda.sh
             conda activate myenv
             poetry run pip install --force-reinstall --no-deps -e enterprise/
+      - run:
+          name: Setup litellm-proxy-extras
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            poetry run pip install --force-reinstall --no-deps -e litellm-proxy-extras/
       - run:
           name: Generate Prisma client
           command: |

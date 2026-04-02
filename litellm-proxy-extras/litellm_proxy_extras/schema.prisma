@@ -321,11 +321,12 @@ model LiteLLM_MCPServerTable {
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
-  approval_status       String?   @default("active")
-  submitted_by          String?
-  submitted_at          DateTime?
-  reviewed_at           DateTime?
-  review_notes          String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
 
   @@index([approval_status])
 }
@@ -386,6 +387,7 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    key_rotation_email  String?   // Override email for rotation notifications (useful for service accounts)
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
@@ -479,7 +481,8 @@ model LiteLLM_DeletedVerificationToken {
     rotation_interval       String?
     last_rotation_at        DateTime?
     key_rotation_at         DateTime?
-    
+    key_rotation_email      String?
+
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
     deleted_by              String?   @map("deleted_by") // User who deleted the key

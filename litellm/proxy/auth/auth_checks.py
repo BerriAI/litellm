@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
+
 import asyncio
 import re
 import time
@@ -456,9 +457,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -2188,16 +2189,20 @@ async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
     jwt_claim_value: str,
     prisma_client: PrismaClient,
+    issuer: str = "",
 ) -> Optional[str]:
     """
     Lookup a JWT-to-virtual-key mapping from the database.
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
+    The `issuer` parameter (JWT "iss" claim) is used to disambiguate identical
+    claim values across different identity providers.
     """
     mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
+            "issuer": issuer,
             "is_active": True,
         }
     )

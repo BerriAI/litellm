@@ -200,6 +200,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
+  const [keyRotationEmail, setKeyRotationEmail] = useState<string>("");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
@@ -424,6 +425,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (autoRotationEnabled) {
         formValues.auto_rotate = true;
         formValues.rotation_interval = rotationInterval;
+        if (keyRotationEmail.trim()) {
+          formValues.key_rotation_email = keyRotationEmail.trim();
+        }
       }
 
       // Handle duration field for key expiry - convert empty string to null
@@ -1532,6 +1536,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          keyRotationEmail={keyRotationEmail}
+                          onKeyRotationEmailChange={setKeyRotationEmail}
                           isCreateMode={true}
                         />
                       </div>

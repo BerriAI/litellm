@@ -471,7 +471,8 @@ async def _resolve_jwt_to_virtual_key(
         )
         return None
 
-    cache_key = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}"
+    issuer = str(jwt_claims.get("iss", ""))
+    cache_key = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}:{issuer}"
     cached_mapping = await user_api_key_cache.async_get_cache(cache_key)
 
     if cached_mapping == "__NO_MAPPING__":
@@ -492,6 +493,7 @@ async def _resolve_jwt_to_virtual_key(
         jwt_claim_name=virtual_key_claim_field,
         jwt_claim_value=str(claim_value),
         prisma_client=prisma_client,
+        issuer=issuer,
     )
 
     if token_hash is not None:
@@ -507,13 +509,128 @@ async def _resolve_jwt_to_virtual_key(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+    behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
+    if behavior == "reject":
+        raise HTTPException(
+            status_code=403,
+            detail=f"JWT client not registered. No mapping found for claim '{virtual_key_claim_field}' = '{claim_value}'.",
+        )
+    elif behavior == "auto_register":
+        return await _auto_register_jwt_client(
+            jwt_claim_name=virtual_key_claim_field,
+            jwt_claim_value=str(claim_value),
+            issuer=issuer,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            cache_key=cache_key,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     else:
+        # "fallback_team_mapping" — default: fall through to standard JWT auth
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value="__NO_MAPPING__",
             ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
         )
         return None
+
+
+async def _auto_register_jwt_client(
+    jwt_claim_name: str,
+    jwt_claim_value: str,
+    issuer: str,
+    jwt_handler: "JWTHandler",
+    prisma_client: "PrismaClient",
+    user_api_key_cache: DualCache,
+    cache_key: str,
+    parent_otel_span: Optional["Span"],
+    proxy_logging_obj: "ProxyLogging",
+) -> Optional["UserAPIKeyAuth"]:
+    """
+    Auto-register a new JWT client by creating a virtual key + mapping on first encounter.
+    Called when unregistered_jwt_client_behavior == 'auto_register'.
+    """
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    defaults = jwt_handler.litellm_jwtauth.auto_register_defaults
+    jwt_metadata = {
+        "jwt_bound": True,
+        "jwt_claim_name": jwt_claim_name,
+        "jwt_claim_value": jwt_claim_value,
+    }
+    key_data = await generate_key_helper_fn(
+        request_type="key",
+        models=list(defaults.models or []) if defaults else [],
+        metadata=jwt_metadata,
+        key_max_budget=defaults.max_budget if defaults else None,
+        key_budget_duration=defaults.budget_duration if defaults else None,
+        tpm_limit=defaults.tpm_limit if defaults else None,
+        rpm_limit=defaults.rpm_limit if defaults else None,
+        team_id=defaults.team_id if defaults else None,
+        allowed_routes=["llm_api_routes"],
+    )
+
+    cleartext_token: str = key_data["token"]
+    hashed_key = hash_token(cleartext_token)
+
+    try:
+        await prisma_client.db.litellm_jwtkeymapping.create(
+            data={
+                "jwt_claim_name": jwt_claim_name,
+                "jwt_claim_value": jwt_claim_value,
+                "issuer": issuer,
+                "token": hashed_key,
+            }
+        )
+    except Exception as create_exc:
+        # Another concurrent request won the race and already inserted the mapping.
+        # Clean up the orphaned key we just created, then fetch the winning mapping.
+        error_str = str(create_exc).lower()
+        if "unique" in error_str or "p2002" in error_str:
+            try:
+                await prisma_client.db.litellm_verificationtoken.delete(
+                    where={"token": hashed_key}
+                )
+            except Exception:
+                pass
+            winner = await get_jwt_key_mapping_object(
+                jwt_claim_name=jwt_claim_name,
+                jwt_claim_value=jwt_claim_value,
+                prisma_client=prisma_client,
+                issuer=issuer,
+            )
+            if winner is not None:
+                hashed_key = winner
+            else:
+                verbose_proxy_logger.warning(
+                    f"JWT auto-register race: lost insert but winner mapping not found for "
+                    f"{jwt_claim_name}={jwt_claim_value} issuer={issuer!r}"
+                )
+                return None
+        else:
+            verbose_proxy_logger.warning(
+                f"JWT auto-register: failed to create mapping for "
+                f"{jwt_claim_name}={jwt_claim_value} issuer={issuer!r}: {create_exc}"
+            )
+
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=hashed_key,
+        ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+    )
+    return await get_key_object(
+        hashed_token=hashed_key,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -924,9 +1041,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         route=route,
                     )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -1432,6 +1549,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             else:
                 _team_obj = None
 
+            if _team_obj is not None:
+                valid_token.team_budget_reset_at = _team_obj.budget_reset_at
+
             await user_api_key_cache.async_set_cache(
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
@@ -1516,9 +1636,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict[
-                    "end_user_object_permission"
-                ] = _end_user_object.object_permission
+                valid_token_dict["end_user_object_permission"] = (
+                    _end_user_object.object_permission
+                )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1637,6 +1757,7 @@ async def _return_user_api_key_auth_obj(
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
+            user_budget_reset_at=getattr(user_obj, "budget_reset_at", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

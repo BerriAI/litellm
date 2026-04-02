@@ -11,6 +11,8 @@ interface KeyLifecycleSettingsProps {
   onAutoRotationChange: (enabled: boolean) => void;
   rotationInterval: string;
   onRotationIntervalChange: (interval: string) => void;
+  keyRotationEmail?: string;
+  onKeyRotationEmailChange?: (email: string) => void;
   isCreateMode?: boolean; // If true, shows "leave empty to never expire" instead of "-1 to never expire"
   neverExpire?: boolean;
   onNeverExpireChange?: (checked: boolean) => void;
@@ -22,6 +24,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
   onAutoRotationChange,
   rotationInterval,
   onRotationIntervalChange,
+  keyRotationEmail = "",
+  onKeyRotationEmailChange,
   isCreateMode = false,
   neverExpire = false,
   onNeverExpireChange,
@@ -170,8 +174,26 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
         </div>
 
         {autoRotationEnabled && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
+              <span>Rotation Notification Email</span>
+              <Tooltip title="Email to notify when this key is rotated. Leave empty to use the key owner's email. Useful for service accounts.">
+                <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
+              </Tooltip>
+            </label>
+            <TextInput
+              name="key_rotation_email"
+              placeholder="alerts@yourteam.com (optional)"
+              className="w-full"
+              value={keyRotationEmail}
+              onValueChange={(val) => onKeyRotationEmailChange?.(val)}
+            />
+          </div>
+        )}
+
+        {autoRotationEnabled && (
           <div className="bg-blue-50 p-3 rounded-md text-sm text-blue-700">
-            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated
+            When rotation occurs, a notification with the new key will be sent to the configured email (or the key owner if none set). The old key will be deactivated
             after a brief grace period.
           </div>
         )}
