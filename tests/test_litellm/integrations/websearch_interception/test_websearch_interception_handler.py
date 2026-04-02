@@ -337,3 +337,66 @@ async def test_extra_headers_propagated_chat_completion_agentic_loop():
         mock_acompletion.assert_called_once()
         call_kwargs = mock_acompletion.call_args.kwargs
         assert call_kwargs.get("extra_headers") == {"editor-version": "vscode/1.110.0"}
+
+
+@pytest.mark.asyncio
+async def test_none_litellm_params_propagated_agentic_loop():
+    """Test that extra_headers code survives safely if litellm_params is None."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "litellm_params": None
+    }
+
+    with patch(
+        "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate"
+    ) as mock_acreate, patch.object(
+        logger, "_execute_search", return_value="mock search result"
+    ):
+        await logger._execute_agentic_loop(
+            model="gpt-4",
+            messages=[],
+            tool_calls=[{"id": "call_1", "type": "function", "input": {"query": "hello"}}],
+            thinking_blocks=[],
+            anthropic_messages_optional_request_params={},
+            logging_obj=Mock(model_call_details={}),
+            stream=False,
+            kwargs=kwargs,
+        )
+
+        mock_acreate.assert_called_once()
+        call_kwargs = mock_acreate.call_args.kwargs
+        assert "extra_headers" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_none_litellm_params_propagated_chat_completion_agentic_loop():
+    """Test that extra_headers code survives safely if litellm_params is None."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    kwargs = {
+        "litellm_params": None
+    }
+
+    with patch(
+        "litellm.acompletion"
+    ) as mock_acompletion, patch.object(
+        logger, "_execute_search", return_value="mock search result"
+    ):
+        await logger._execute_chat_completion_agentic_loop(
+            model="gpt-4",
+            messages=[],
+            tool_calls=[
+                {"id": "call_1", "type": "function", "function": {"arguments": {"query": "hello"}}}
+            ],
+            optional_params={},
+            logging_obj=Mock(),
+            stream=False,
+            kwargs=kwargs,
+            response_format="openai",
+        )
+
+        mock_acompletion.assert_called_once()
+        call_kwargs = mock_acompletion.call_args.kwargs
+        assert "extra_headers" not in call_kwargs
+
