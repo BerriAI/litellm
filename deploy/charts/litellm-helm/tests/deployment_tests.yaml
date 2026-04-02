@@ -3,6 +3,12 @@ templates:
   - deployment.yaml
   - configmap-litellm.yaml
 tests:
+  - it: should use main-latest tag by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-database:main-latest
   - it: should work
     template: deployment.yaml
     set:
