@@ -3147,7 +3147,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_new_team_standalone_validates_against_user_models():
+async def test_new_team_standalone_validates_against_user_models(monkeypatch):
     """
     Test that /team/new WITHOUT organization_id still validates models against user's personal models.
 
@@ -3158,10 +3158,16 @@ async def test_new_team_standalone_validates_against_user_models():
     - Team is created WITHOUT organization_id and models=['gpt-4']
     - Expected: Should fail with "Model not in allowed user models"
     """
+    import litellm
     from fastapi import Request
 
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Avoid injecting max_budget via global defaults; that path calls get_user_object and
+    # needs cache/DB mocks — this test only covers model validation.
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", None)
 
     # Create non-admin user with restrictive personal models
     non_admin_user = UserAPIKeyAuth(
