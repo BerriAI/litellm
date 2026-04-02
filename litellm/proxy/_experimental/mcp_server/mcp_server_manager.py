@@ -981,6 +981,24 @@ class MCPServerManager:
                 from litellm.constants import MCP_NPM_CACHE_DIR
 
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+            # Defense-in-depth: warn for commands not in the allowlist.
+            # The Pydantic validator blocks new servers; this catches legacy
+            # config/DB records predating the allowlist.
+            if server.command:
+                import os as _os
+
+                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+
+                base_command = _os.path.basename(server.command)
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    verbose_logger.warning(
+                        "MCP stdio command '%s' is not in the allowlist (%s). "
+                        "Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to suppress this warning. "
+                        "A future release may block non-allowlisted commands.",
+                        server.command,
+                        sorted(MCP_STDIO_ALLOWED_COMMANDS),
+                    )
+
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
