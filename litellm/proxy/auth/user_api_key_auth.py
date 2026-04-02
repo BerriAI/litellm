@@ -11,7 +11,7 @@ import asyncio
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -137,6 +137,58 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
                 api_key = match.group(1)
 
     return api_key
+
+
+def _routing_selector_matches_claim(
+    selector_value: Optional[Any], claim_value: Optional[Any]
+) -> bool:
+    if selector_value is None:
+        return True
+
+    selector_list = (
+        [str(v) for v in selector_value]
+        if isinstance(selector_value, list)
+        else [str(selector_value)]
+    )
+
+    if isinstance(claim_value, list):
+        claim_list = [str(v) for v in claim_value]
+        return any(v in claim_list for v in selector_list)
+
+    return str(claim_value) in selector_list if claim_value is not None else False
+
+
+def _matches_routing_override(
+    token_claims: dict, override: "JWTRoutingOverride"
+) -> bool:
+    return (
+        _routing_selector_matches_claim(override.iss, token_claims.get("iss"))
+        and _routing_selector_matches_claim(
+            override.client_id, token_claims.get("client_id")
+        )
+        and _routing_selector_matches_claim(override.aud, token_claims.get("aud"))
+    )
+
+
+def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) -> bool:
+    routing_overrides = jwt_handler.litellm_jwtauth.routing_overrides
+    if not routing_overrides:
+        return False
+
+    token_claims = jwt_handler.get_unverified_claims(token=token)
+    if token_claims is None:
+        return False
+
+    for override in routing_overrides:
+        if override.path == "oauth2" and _matches_routing_override(
+            token_claims=token_claims, override=override
+        ):
+            verbose_proxy_logger.debug(
+                "JWT routing override matched. Routing token to OAuth2 introspection."
+            )
+            return True
+
+    return False
 
 
 def _get_bearer_token(
@@ -649,12 +701,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
                 # - Opaque tokens -> use OAuth2 handler
                 # This allows JWT for users and OAuth2 for M2M on the same instance
-                is_jwt_token = (
+                is_jwt = (
                     jwt_handler.is_jwt(token=api_key)
                     if general_settings.get("enable_jwt_auth", False) is True
                     else False
                 )
-                if not is_jwt_token:
+                # Routing uses unverified JWT claims only to choose auth path.
+                # Final authentication is enforced by the selected validator.
+                route_jwt_to_oauth2 = (
+                    is_jwt
+                    and _should_route_jwt_to_oauth2_override(
+                        token=api_key, jwt_handler=jwt_handler
+                    )
+                )
+                if not is_jwt or route_jwt_to_oauth2:
                     # return UserAPIKeyAuth object
                     # helper to check if the api_key is a valid oauth2 token
                     from litellm.proxy.proxy_server import premium_user
@@ -688,7 +748,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     jwt_claims: Optional[dict]
                     if (
                         jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-                        and not jwt_handler.is_jwt(token=api_key)
+                        and not is_jwt
                     ):
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
