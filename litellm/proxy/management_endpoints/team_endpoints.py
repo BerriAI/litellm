@@ -64,7 +64,6 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
-    get_access_object,
     get_org_object,
     get_team_object,
     get_user_object,
@@ -109,6 +108,16 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 )
 
 router = APIRouter()
+
+
+def _get_access_object(*args, **kwargs):
+    """
+    Lazily import and delegate to `get_access_object` from
+    `litellm.proxy.auth.auth_checks` to avoid module-level cyclic imports.
+    """
+    from litellm.proxy.auth.auth_checks import get_access_object as _inner_get_access_object
+
+    return _inner_get_access_object(*args, **kwargs)
 
 
 class TeamMemberBudgetHandler:
@@ -3368,13 +3377,16 @@ async def _resolve_access_group_resources(
     if _user_api_key_cache is None:
         return empty
 
+    if _prisma_client is None:
+        return empty
+
     models: List[str] = []
     mcp_ids: List[str] = []
     agent_ids: List[str] = []
 
     for ag_id in access_group_ids:
         try:
-            ag = await get_access_object(
+            ag = await _get_access_object(
                 access_group_id=ag_id,
                 prisma_client=_prisma_client,
                 user_api_key_cache=_user_api_key_cache,
