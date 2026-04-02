@@ -721,6 +721,7 @@ openai_compatible_endpoints: List = [
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
     "https://llm.chutes.ai/v1/",
+    "https://api.chuizi.ai/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -770,6 +771,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "chuizi",  # Chuizi.AI - unified AI gateway
     "featherless_ai",
     "nscale",
     "nebius",
@@ -805,6 +807,7 @@ openai_text_completion_compatible_providers: List = (
         "nano-gpt",
         "poe",
         "chutes",
+        "chuizi",
         "v0",
         "lambda_ai",
         "hyperbolic",
