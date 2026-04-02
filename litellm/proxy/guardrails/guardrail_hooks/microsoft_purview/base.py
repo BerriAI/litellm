@@ -1,6 +1,7 @@
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, Dict, List, MutableMapping, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -56,7 +57,9 @@ class PurviewGuardrailBase:
         self._token_cache: Optional[Tuple[str, float]] = None
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
-        self._scope_cache: Dict[str, Tuple[str, Dict, float]] = {}
+        # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
+        self._scope_cache: MutableMapping[str, Tuple[str, Dict, float]] = OrderedDict()
+        self._scope_cache_maxsize = 1000
 
     # ------------------------------------------------------------------
     # OAuth2 token management
@@ -80,6 +83,7 @@ class PurviewGuardrailBase:
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        response.raise_for_status()
         token_data = response.json()
         access_token = token_data["access_token"]
         expires_in = int(token_data.get("expires_in", 3599))
@@ -116,6 +120,7 @@ class PurviewGuardrailBase:
         response = await self.async_handler.post(
             url=url, headers=headers, json=json_body
         )
+        response.raise_for_status()
         response_json: Dict[str, Any] = response.json()
         response_headers = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
@@ -157,6 +162,9 @@ class PurviewGuardrailBase:
         etag = response_headers.get("etag", response_headers.get("ETag", ""))
 
         self._scope_cache[user_id] = (etag, response_json, now)
+        # Evict oldest entry when cache exceeds max size.
+        while len(self._scope_cache) > self._scope_cache_maxsize:
+            self._scope_cache.popitem(last=False)  # type: ignore[attr-defined]
         return etag, response_json
 
     # ------------------------------------------------------------------
