@@ -694,6 +694,7 @@ class LiteLLMRoutes(enum.Enum):
         "/audit",
         "/audit/{id}",
         "/key/aliases",
+        "/concurrent_request_logs",
     ] + info_routes
 
     # All routes accesible by an Org Admin
