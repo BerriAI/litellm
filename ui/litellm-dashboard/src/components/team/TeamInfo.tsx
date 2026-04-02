@@ -655,7 +655,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 && !(info.access_group_models?.length) ? (
+                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
                       <Badge color="red">All proxy models</Badge>
                     ) : (
                       <>
@@ -672,7 +672,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </>
                     )}
                   </div>
-                  {info.access_group_models && info.access_group_models.length > 0 && (
+                  {info.models.length > 0 && !info.models.includes("all-proxy-models") && info.access_group_models && info.access_group_models.length > 0 && (
                     <div className="mt-2">
                       <Text className="text-xs text-gray-500">
                         <span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />Direct

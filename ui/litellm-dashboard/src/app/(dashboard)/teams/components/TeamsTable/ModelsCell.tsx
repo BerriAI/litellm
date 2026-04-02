@@ -16,8 +16,11 @@ interface ModelEntry {
 const ModelsCell = ({ team }: ModelsCellProps) => {
   const [expandedAccordion, setExpandedAccordion] = useState<boolean>(false);
 
+  const isAllModels = !team.models || team.models.length === 0 || team.models.includes("all-proxy-models");
+
   const modelEntries: ModelEntry[] = useMemo(() => {
-    const entries: ModelEntry[] = (team.models || []).map((m) => ({
+    if (isAllModels) return [];
+    const entries: ModelEntry[] = team.models.map((m) => ({
       name: m,
       source: "direct" as const,
     }));
@@ -25,7 +28,7 @@ const ModelsCell = ({ team }: ModelsCellProps) => {
       entries.push({ name: m, source: "access_group" });
     }
     return entries;
-  }, [team.models, team.access_group_models]);
+  }, [team.models, team.access_group_models, isAllModels]);
 
   const renderBadge = (entry: ModelEntry, index: number) => {
     if (entry.name === "all-proxy-models") {
