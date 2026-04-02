@@ -1,4 +1,5 @@
 # Use the provided base image
+# NOTE: This is a dev/branch-specific tag. Update digest when the base image is rebuilt.
 FROM ghcr.io/berriai/litellm:litellm_fwd_server_root_path-dev
 
 # Set the working directory to /app
@@ -18,8 +19,8 @@ RUN apt-get update && apt-get upgrade -y \
         libxslt1.1 \
         libgnutls30 \
         libc6 && \
-    apt-get install -y nodejs npm && \
-    npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    apt-get install -y --no-install-recommends nodejs npm && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -51,7 +52,7 @@ ENV UI_BASE_PATH="/prod/ui"
 
 # Build the UI with the specified UI_BASE_PATH
 WORKDIR /app/ui/litellm-dashboard
-RUN npm install
+RUN npm ci
 RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
 
 # Create the destination directory

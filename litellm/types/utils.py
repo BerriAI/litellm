@@ -58,6 +58,7 @@ from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -132,6 +133,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
+    supports_native_structured_output: Optional[bool]
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
@@ -167,7 +169,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
-    input_cost_per_token: Required[float]
+    input_cost_per_token: Required[Optional[float]]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[
         float
@@ -204,7 +206,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
     input_cost_per_token_batches: Optional[float]
     output_cost_per_token_batches: Optional[float]
-    output_cost_per_token: Required[float]
+    output_cost_per_token: Required[Optional[float]]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     output_cost_per_token_priority: Optional[
         float
@@ -1132,6 +1134,7 @@ class Message(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
@@ -1150,6 +1153,7 @@ class Message(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1181,6 +1185,9 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
+
+        if reasoning_items is not None:
+            init_values["reasoning_items"] = reasoning_items
 
         if annotations is not None:
             init_values["annotations"] = annotations
@@ -1219,6 +1226,11 @@ class Message(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
 
+        if reasoning_items is None:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
+
         add_provider_specific_fields(self, provider_specific_fields)
 
     def get(self, key, default=None):
@@ -1246,6 +1258,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
+    reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
     def __init__(
@@ -1262,6 +1275,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None,
+        reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None,
         annotations: Optional[List[ChatCompletionAnnotation]] = None,
         **params,
     ):
@@ -1294,6 +1308,13 @@ class Delta(SafeAttributeModel, OpenAIObject):
         else:
             # ensure default response matches OpenAI spec
             del self.thinking_blocks
+
+        if reasoning_items is not None:
+            self.reasoning_items = reasoning_items
+        else:
+            # ensure default response matches OpenAI spec
+            if hasattr(self, "reasoning_items"):
+                del self.reasoning_items
 
         # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
         if annotations is not None:
@@ -2488,6 +2509,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]

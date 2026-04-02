@@ -66,8 +66,8 @@ def test_router_azure_acompletion():
         print("Router Test Azure - Acompletion, Acompletion with stream")
 
         # remove api key from env to repro how proxy passes key to router
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ.pop("AZURE_API_KEY", None)
+        old_api_key = os.environ["AZURE_AI_API_KEY"]
+        os.environ.pop("AZURE_AI_API_KEY", None)
 
         model_list = [
             {
@@ -75,8 +75,8 @@ def test_router_azure_acompletion():
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_AI_API_VERSION"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "rpm": 1800,
             },
@@ -85,8 +85,8 @@ def test_router_azure_acompletion():
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_version": os.getenv("AZURE_AI_API_VERSION"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "rpm": 1800,
             },
@@ -126,9 +126,9 @@ def test_router_azure_acompletion():
 
         asyncio.run(test2())
         print("\n Passed Streaming")
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         print(f"FAILED TEST")
         pytest.fail(f"Got unexpected exception on router! - {e}")

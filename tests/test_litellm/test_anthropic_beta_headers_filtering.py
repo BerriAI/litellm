@@ -265,7 +265,7 @@ class TestAnthropicBetaHeadersFiltering:
 
             try:
                 await litellm.acompletion(
-                    model="bedrock/converse/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    model="bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=[{"role": "user", "content": "Hi"}],
                     aws_access_key_id="test",
                     aws_secret_access_key="test",
