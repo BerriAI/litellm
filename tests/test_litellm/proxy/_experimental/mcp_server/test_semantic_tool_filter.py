@@ -192,6 +192,64 @@ async def test_semantic_filter_disabled():
 
 
 @pytest.mark.asyncio
+async def test_semantic_filter_zero_matches_returns_only_non_mcp_tools():
+    """
+    Test that when zero semantic matches are found, only non-MCP tools are returned.
+
+    Given: A mix of MCP tools (prefixed) and built-in tools (not prefixed)
+    When: Semantic filter finds zero matches (e.g., irrelevant query like "hello")
+    Then: Only built-in (non-prefixed) tools should be returned, not all tools
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/24984
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    # Create mock tools: 3 MCP tools (prefixed with server name) and 2 built-in tools
+    mcp_tools = [
+        MCPTool(name="server1-tool_a", description="MCP tool A", inputSchema={"type": "object"}),
+        MCPTool(name="server1-tool_b", description="MCP tool B", inputSchema={"type": "object"}),
+        MCPTool(name="server2-tool_c", description="MCP tool C", inputSchema={"type": "object"}),
+    ]
+    builtin_tools = [
+        MCPTool(name="web_search", description="Search the web", inputSchema={"type": "object"}),
+        MCPTool(name="code_interpreter", description="Run code", inputSchema={"type": "object"}),
+    ]
+    all_tools = mcp_tools + builtin_tools
+
+    # Mock router that returns zero matches for any query
+    mock_router = Mock()
+    mock_router.return_value = []  # No semantic matches
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=5,
+        similarity_threshold=0.1,
+        enabled=True,
+    )
+
+    # Inject a mock router that returns empty matches
+    filter_instance.tool_router = mock_router
+
+    # Filter with a query that matches nothing
+    filtered = await filter_instance.filter_tools(
+        query="hello",
+        available_tools=all_tools,
+    )
+
+    # Should return only non-MCP tools, not all tools
+    assert len(filtered) == 2, f"Expected 2 non-MCP tools, got {len(filtered)}"
+    filtered_names = [t.name for t in filtered]
+    assert "web_search" in filtered_names
+    assert "code_interpreter" in filtered_names
+    # No MCP tools should be returned
+    for name in filtered_names:
+        assert "-" not in name, f"MCP tool {name} should not be returned on zero matches"
+
+
+@pytest.mark.asyncio
 async def test_semantic_filter_empty_tools():
     """
     Test that filter handles empty tool list gracefully.
