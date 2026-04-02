@@ -8,9 +8,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "docker/Dockerfile*"
-      - "containers/**/Dockerfile*"
+      - litellm_v1.82.3.dev.6
   workflow_dispatch:
 
 # No top-level permissions or env
