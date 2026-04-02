@@ -2111,3 +2111,43 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+
+
+class TestThinkingBlocksReasoningContent:
+    """Verify that thinking_blocks also sets reasoning_content."""
+
+    def test_reasoning_content_set_when_thinking_blocks_present(self):
+        """When thinking_blocks are set, reasoning_content should also be populated."""
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        messages = [
+            {
+                "role": "user",
+                "content": "Explain relativity.",
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Let me think step by step..."},
+                    {"type": "text", "text": "Relativity is..."},
+                ],
+            },
+        ]
+        result = adapter.translate_anthropic_messages_to_chat_completion(messages)
+        asst_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(asst_msgs) == 1
+        asst = asst_msgs[0]
+        assert asst.get("thinking_blocks") is not None
+        assert len(asst["thinking_blocks"]) == 1
+        assert asst.get("reasoning_content") == "Let me think step by step..."
+
+    def test_no_reasoning_content_without_thinking(self):
+        """When no thinking blocks, reasoning_content should not be set."""
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi!"}]},
+        ]
+        result = adapter.translate_anthropic_messages_to_chat_completion(messages)
+        asst_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(asst_msgs) == 1
+        assert asst_msgs[0].get("reasoning_content") is None
