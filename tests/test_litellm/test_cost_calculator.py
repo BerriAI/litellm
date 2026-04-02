@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    batch_cost_calculator,
     completion_cost,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
@@ -1752,6 +1753,124 @@ def test_completion_cost_service_tier_for_bedrock():
     )
 
     assert priority_cost > default_cost > flex_cost > 0
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_completion_cost_gpt54_priority_output_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response = ModelResponse(usage=usage, model=model)
+
+    priority_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert priority_cost == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_completion_cost_gpt54_flex_cached_input_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100),
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    flex_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "flex"},
+    )
+
+    assert flex_cost == pytest.approx(0.001888)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_completion_cost_gpt54_flex_long_context_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=272001,
+        completion_tokens=100,
+        total_tokens=272101,
+    )
+    response = ModelResponse(usage=usage, model=model)
+
+    flex_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "flex"},
+    )
+
+    assert flex_cost == pytest.approx(0.6811275)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_batch_cost_calculator_gpt54_cached_input_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100),
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_cost == pytest.approx(0.001138)
+    assert completion_cost_value == pytest.approx(0.00075)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_batch_cost_calculator_gpt54_long_context_pricing(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=272001,
+        completion_tokens=100,
+        total_tokens=272101,
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_cost == pytest.approx(0.6800025)
+    assert completion_cost_value == pytest.approx(0.001125)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
+def test_gpt54_priority_has_no_long_context_pricing_keys(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost[model]
+
+    assert "cache_read_input_token_cost_above_272k_tokens_priority" not in model_info
+    assert "input_cost_per_token_above_272k_tokens_priority" not in model_info
+    assert "output_cost_per_token_above_272k_tokens_priority" not in model_info
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
