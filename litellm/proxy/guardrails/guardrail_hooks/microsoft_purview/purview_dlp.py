@@ -8,6 +8,7 @@ Supports three modes:
 """
 
 import asyncio
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
@@ -117,11 +118,13 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         try:
             etag, _ = await self._compute_protection_scopes(user_id)
+            correlation_id = request_data.get("litellm_call_id") or str(uuid.uuid4())
             response = await self._process_content(
                 user_id=user_id,
                 text=text,
                 activity=activity,
                 etag=etag,
+                correlation_id=correlation_id,
             )
 
             if self._should_block(response):
