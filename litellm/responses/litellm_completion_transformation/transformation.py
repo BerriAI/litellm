@@ -185,9 +185,13 @@ class LiteLLMCompletionResponsesConfig:
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high", "summary": "detailed"}
-                # Preserve the full dict structure for reasoning_effort
-                reasoning_effort = reasoning_param
+                # reasoning can be {"effort": "low|medium|high"} or include "summary"
+                # for OpenAI Responses; providers expect reasoning_effort as a string unless
+                # summary is present (main.py preserves dict for responses_api_bridge).
+                if "summary" in reasoning_param:
+                    reasoning_effort = reasoning_param
+                else:
+                    reasoning_effort = reasoning_param.get("effort")
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
@@ -2124,9 +2128,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
             else:
                 output_details_dict["reasoning_tokens"] = 0
 
