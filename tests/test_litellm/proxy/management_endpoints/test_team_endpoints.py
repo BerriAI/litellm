@@ -6491,3 +6491,166 @@ async def test_create_team_member_budget_table_with_duration():
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _resolve_access_group_resources
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAccessGroupResources:
+    """Tests for the single-pass access group resource resolution helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_access_group_ids(self):
+        """None or empty list should return empty lists for all resource types."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_access_group_resources,
+        )
+
+        result_none = await _resolve_access_group_resources(access_group_ids=None)
+        assert result_none == {
+            "access_group_models": [],
+            "access_group_mcp_server_ids": [],
+            "access_group_agent_ids": [],
+        }
+
+        result_empty = await _resolve_access_group_resources(access_group_ids=[])
+        assert result_empty == {
+            "access_group_models": [],
+            "access_group_mcp_server_ids": [],
+            "access_group_agent_ids": [],
+        }
+
+    @pytest.mark.asyncio
+    async def test_single_access_group(self):
+        """Single access group should return its resources."""
+        from litellm.proxy._types import LiteLLM_AccessGroupTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_access_group_resources,
+        )
+
+        fake_ag = LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="test-group",
+            access_model_names=["gpt-4", "claude-3"],
+            access_mcp_server_ids=["mcp-1"],
+            access_agent_ids=["agent-1", "agent-2"],
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ):
+            with patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ):
+                result = await _resolve_access_group_resources(
+                    access_group_ids=["ag-1"],
+                )
+
+        assert sorted(result["access_group_models"]) == ["claude-3", "gpt-4"]
+        assert result["access_group_mcp_server_ids"] == ["mcp-1"]
+        assert sorted(result["access_group_agent_ids"]) == ["agent-1", "agent-2"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_access_groups_deduplicates(self):
+        """Multiple access groups with overlapping resources should deduplicate."""
+        from litellm.proxy._types import LiteLLM_AccessGroupTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_access_group_resources,
+        )
+
+        ag1 = LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="group-1",
+            access_model_names=["gpt-4", "claude-3"],
+            access_mcp_server_ids=["mcp-1"],
+            access_agent_ids=["agent-1"],
+        )
+        ag2 = LiteLLM_AccessGroupTable(
+            access_group_id="ag-2",
+            access_group_name="group-2",
+            access_model_names=["gpt-4", "gemini"],
+            access_mcp_server_ids=["mcp-1", "mcp-2"],
+            access_agent_ids=["agent-2"],
+        )
+
+        async def fake_get_access_object(access_group_id, **kwargs):
+            return {"ag-1": ag1, "ag-2": ag2}[access_group_id]
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            side_effect=fake_get_access_object,
+        ):
+            with patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ):
+                result = await _resolve_access_group_resources(
+                    access_group_ids=["ag-1", "ag-2"],
+                )
+
+        assert sorted(result["access_group_models"]) == ["claude-3", "gemini", "gpt-4"]
+        assert sorted(result["access_group_mcp_server_ids"]) == ["mcp-1", "mcp-2"]
+        assert sorted(result["access_group_agent_ids"]) == ["agent-1", "agent-2"]
+
+    @pytest.mark.asyncio
+    async def test_missing_access_group_skipped(self):
+        """If an access group doesn't exist, it should be skipped gracefully."""
+        from litellm.proxy._types import LiteLLM_AccessGroupTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_access_group_resources,
+        )
+
+        ag1 = LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="group-1",
+            access_model_names=["gpt-4"],
+            access_mcp_server_ids=[],
+            access_agent_ids=[],
+        )
+
+        async def fake_get_access_object(access_group_id, **kwargs):
+            if access_group_id == "ag-1":
+                return ag1
+            raise HTTPException(status_code=404, detail="Not found")
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            side_effect=fake_get_access_object,
+        ):
+            with patch(
+                "litellm.proxy.proxy_server.user_api_key_cache",
+                MagicMock(),
+            ):
+                result = await _resolve_access_group_resources(
+                    access_group_ids=["ag-1", "ag-missing"],
+                )
+
+        assert result["access_group_models"] == ["gpt-4"]
+        assert result["access_group_mcp_server_ids"] == []
+        assert result["access_group_agent_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_cache_unavailable(self):
+        """If user_api_key_cache is None, should return empty results."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_access_group_resources,
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            None,
+        ):
+            result = await _resolve_access_group_resources(
+                access_group_ids=["ag-1"],
+            )
+
+        assert result == {
+            "access_group_models": [],
+            "access_group_mcp_server_ids": [],
+            "access_group_agent_ids": [],
+        }
