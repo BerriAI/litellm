@@ -21,6 +21,7 @@ ILLEGAL_DISPLAY_PARAMS = [
     "vertex_credentials",
     "aws_access_key_id",
     "aws_secret_access_key",
+    "exception",  # internal; not JSON-serializable, never for display
 ]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
