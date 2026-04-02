@@ -5,8 +5,10 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+import ipaddress
 import json
 import re
+import socket
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlparse
 
@@ -354,6 +356,84 @@ def get_url_domain(url: str) -> Optional[str]:
 
 
 # =============================================================================
+# SSRF Protection
+# =============================================================================
+
+# Hostnames that must always be blocked (cloud metadata endpoints, etc.)
+_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata.goog",
+        "169.254.169.254",
+        "fd00:ec2::254",
+    }
+)
+
+
+def _validate_url_for_ssrf(url: str) -> Optional[str]:
+    """
+    Validate a URL is not targeting internal/private network resources.
+
+    Performs DNS resolution and checks the resolved IP addresses against
+    a blocklist of private, loopback, link-local, and reserved ranges.
+    Also blocks known cloud metadata hostnames.
+
+    Returns:
+        None if URL is safe, or an error message string if blocked.
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if hostname is None:
+            return "URL has no hostname"
+
+        # Normalize: strip trailing dot (e.g. "localhost." → "localhost")
+        hostname = hostname.rstrip(".")
+
+        # Check against known metadata / dangerous hostnames
+        if hostname.lower() in _BLOCKED_HOSTNAMES:
+            return f"Requests to '{hostname}' are not allowed (metadata endpoint)"
+
+        # Resolve hostname to IP addresses and validate each one
+        try:
+            addrinfos = socket.getaddrinfo(
+                hostname, parsed.port or 443, proto=socket.IPPROTO_TCP
+            )
+        except socket.gaierror:
+            return f"Could not resolve hostname: {hostname}"
+
+        for family, _type, _proto, _canonname, sockaddr in addrinfos:
+            ip_str = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+
+            if ip.is_loopback:
+                return f"Requests to loopback addresses are not allowed ({ip_str})"
+            if ip.is_private:
+                return (
+                    f"Requests to private network addresses are not allowed ({ip_str})"
+                )
+            if ip.is_link_local:
+                return (
+                    f"Requests to link-local addresses are not allowed ({ip_str})"
+                )
+            if ip.is_reserved:
+                return (
+                    f"Requests to reserved addresses are not allowed ({ip_str})"
+                )
+            if ip.is_unspecified:
+                return (
+                    f"Requests to unspecified addresses are not allowed ({ip_str})"
+                )
+
+        return None
+    except Exception as e:
+        return f"URL validation failed: {str(e)}"
+
+
+# =============================================================================
 # HTTP Request Primitives (Async)
 # =============================================================================
 
@@ -456,6 +536,14 @@ async def http_request(
     if not is_valid_url(url):
         return _http_error_response(f"Invalid URL: {url}")
 
+    # SSRF protection: block requests to internal/private network targets
+    ssrf_error = _validate_url_for_ssrf(url)
+    if ssrf_error is not None:
+        verbose_proxy_logger.warning(
+            f"Custom code http_request SSRF blocked: {ssrf_error}"
+        )
+        return _http_error_response(f"Blocked: {ssrf_error}")
+
     # Validate and normalize method
     method = method.upper()
     allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -504,11 +592,14 @@ async def _execute_http_request(
     body: Optional[Any],
     timeout: float,
 ) -> httpx.Response:
-    """Execute the HTTP request using the appropriate client method."""
+    """Execute the HTTP request using the appropriate client method.
+
+    Redirects are disabled to prevent SSRF bypass via 302 to internal targets.
+    """
     json_body, data_body = _prepare_http_body(body)
 
     if method == "GET":
-        return await client.get(url=url, headers=headers)
+        return await client.get(url=url, headers=headers, follow_redirects=False)
     elif method == "POST":
         return await client.post(
             url=url, headers=headers, json=json_body, data=data_body, timeout=timeout
