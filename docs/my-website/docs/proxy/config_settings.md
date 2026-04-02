@@ -288,6 +288,7 @@ router_settings:
 | database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
 | disable_error_logs | boolean | If true, suppresses error tracking and storage in the database |
 | enable_health_check_routing | boolean | If true, enables health check-driven request routing to avoid unhealthy deployments |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 | enable_mcp_registry | boolean | If true, enables access to the centralized MCP server registry |
 | enforce_rbac | boolean | If true, enables role-based access control (RBAC) for all proxy operations |
 | forward_llm_provider_auth_headers | boolean | If true, forwards provider-specific auth headers to LLM API calls |
@@ -396,7 +397,6 @@ router_settings:
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
 | enable_health_check_routing | boolean | If true, enables health check-driven deployment filtering to avoid routing requests to unhealthy deployments |
 | health_check_staleness_threshold | integer | Maximum age in seconds for cached health check results before marking deployments as stale |
-| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 
 
 ### environment variables - Reference
