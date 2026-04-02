@@ -62,6 +62,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    _get_agent_ids_from_access_groups,
+    _get_mcp_server_ids_from_access_groups,
+    _get_models_from_access_groups,
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
@@ -3042,6 +3045,14 @@ async def team_info(
                 team_info_response_object=_team_info,
             )
 
+        # Resolve resources inherited from access groups
+        resolved = await _resolve_access_group_resources(
+            access_group_ids=_team_info.access_group_ids,
+        )
+        _team_info.access_group_models = resolved["access_group_models"]
+        _team_info.access_group_mcp_server_ids = resolved["access_group_mcp_server_ids"]
+        _team_info.access_group_agent_ids = resolved["access_group_agent_ids"]
+
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -3332,6 +3343,36 @@ async def _build_team_list_where_conditions(
     return where_conditions
 
 
+async def _resolve_access_group_resources(
+    access_group_ids: Optional[List[str]],
+) -> Dict[str, List[str]]:
+    """
+    Resolve resources inherited from access groups.
+
+    Returns only the access-group-sourced resources (not direct assignments).
+    Keeps them separate so callers can distinguish where each resource comes from.
+    """
+    empty: Dict[str, List[str]] = {
+        "access_group_models": [],
+        "access_group_mcp_server_ids": [],
+        "access_group_agent_ids": [],
+    }
+    if not access_group_ids:
+        return empty
+
+    return {
+        "access_group_models": await _get_models_from_access_groups(
+            access_group_ids=access_group_ids,
+        ),
+        "access_group_mcp_server_ids": await _get_mcp_server_ids_from_access_groups(
+            access_group_ids=access_group_ids,
+        ),
+        "access_group_agent_ids": await _get_agent_ids_from_access_groups(
+            access_group_ids=access_group_ids,
+        ),
+    }
+
+
 def _convert_teams_to_response_models(
     teams: list,
     use_deleted_table: bool,
@@ -3557,6 +3598,19 @@ async def list_team_v2(
 
     # Convert Prisma models to response models with members_count
     team_list = _convert_teams_to_response_models(teams, use_deleted_table)
+
+    # Resolve resources inherited from access groups for each team
+    if not use_deleted_table:
+        for team_item in team_list:
+            if isinstance(team_item, TeamListItem):
+                resolved = await _resolve_access_group_resources(
+                    access_group_ids=team_item.access_group_ids,
+                )
+                team_item.access_group_models = resolved["access_group_models"]
+                team_item.access_group_mcp_server_ids = resolved[
+                    "access_group_mcp_server_ids"
+                ]
+                team_item.access_group_agent_ids = resolved["access_group_agent_ids"]
 
     return {
         "teams": team_list,
