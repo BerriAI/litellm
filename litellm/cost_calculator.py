@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
     _get_cost_per_unit,
+    _get_sorted_input_token_threshold_keys,
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
     calculate_cost_component,
@@ -2116,28 +2117,13 @@ def batch_cost_calculator(
         else ((cache_read_cost / 2) if cache_read_cost is not None else 0.0)
     )
 
-    threshold_keys = sorted(
-        [
-            k
-            for k in model_info
-            if k.startswith("input_cost_per_token_above_")
-            and not any(
-                k.endswith(suffix)
-                for suffix in ("_priority", "_flex", "_batches")
-            )
-        ],
-        reverse=True,
+    threshold_entries = _get_sorted_input_token_threshold_keys(
+        model_info,
+        excluded_suffixes=("_priority", "_flex", "_batches"),
     )
-    for key in threshold_keys:
+    for key, threshold_str, threshold in threshold_entries:
         value = model_info.get(key)
         if value is None:
-            continue
-        try:
-            threshold_str = key.split("_above_")[1].split("_tokens")[0]
-            threshold = float(threshold_str.replace("k", "")) * (
-                1000 if "k" in threshold_str else 1
-            )
-        except (IndexError, ValueError):
             continue
 
         if usage.prompt_tokens <= threshold:

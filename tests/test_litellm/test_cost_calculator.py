@@ -1861,6 +1861,50 @@ def test_batch_cost_calculator_gpt54_long_context_pricing(model):
     assert completion_cost_value == pytest.approx(0.001125)
 
 
+def test_batch_cost_calculator_uses_highest_numeric_threshold():
+    usage = Usage(
+        prompt_tokens=1_100_000,
+        completion_tokens=200,
+        total_tokens=1_100_200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+    model_info = {
+        "key": "gpt-5.4",
+        "litellm_provider": "openai",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 3e-7,
+        "input_cost_per_token_batches": 5e-7,
+        "output_cost_per_token_batches": 1e-6,
+        "cache_read_input_token_cost_batches": 1.5e-7,
+        "input_cost_per_token_above_272k_tokens": 5e-6,
+        "output_cost_per_token_above_272k_tokens": 6e-6,
+        "cache_read_input_token_cost_above_272k_tokens": 7e-7,
+        "input_cost_per_token_above_272k_tokens_batches": 2.5e-6,
+        "output_cost_per_token_above_272k_tokens_batches": 3e-6,
+        "cache_read_input_token_cost_above_272k_tokens_batches": 3.5e-7,
+        "input_cost_per_token_above_1m_tokens": 9e-6,
+        "output_cost_per_token_above_1m_tokens": 1e-5,
+        "cache_read_input_token_cost_above_1m_tokens": 1.1e-6,
+        "input_cost_per_token_above_1m_tokens_batches": 4.5e-6,
+        "output_cost_per_token_above_1m_tokens_batches": 5e-6,
+        "cache_read_input_token_cost_above_1m_tokens_batches": 5.5e-7,
+    }
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model="gpt-5.4",
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+
+    expected_prompt_cost = (1_000_000 * 4.5e-6) + (100_000 * 5.5e-7)
+    expected_completion_cost = 200 * 5e-6
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost_value == pytest.approx(expected_completion_cost)
+
+
 @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.4-2026-03-05"])
 def test_gpt54_priority_has_no_long_context_pricing_keys(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
