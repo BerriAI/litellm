@@ -184,7 +184,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         make_chunk(role="assistant", content=None),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 1 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -202,7 +206,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         ),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 2 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -403,7 +411,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
-    
+
     Azure Model Router returns the request model (e.g., 'azure-model-router') in the first chunk,
     but subsequent chunks contain the actual model (e.g., 'gpt-4.1-nano-2025-04-14').
     This is important for accurate cost calculation.
@@ -414,24 +422,24 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
     ]
-    
+
     result = ChunkProcessor._get_model_from_chunks(
         chunks=chunks, first_chunk_model="azure-model-router"
     )
-    
+
     # Should return the actual model, not the request model
     assert result == "gpt-4.1-nano-2025-04-14"
-    
+
     # Test when all chunks have the same model (non-router case)
     chunks_same_model = [
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
     ]
-    
+
     result_same = ChunkProcessor._get_model_from_chunks(
         chunks=chunks_same_model, first_chunk_model="gpt-4"
     )
-    
+
     # Should return the first chunk's model when all are the same
     assert result_same == "gpt-4"
 
@@ -512,8 +520,8 @@ def test_stream_chunk_builder_anthropic_web_search():
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
-    assert usage.total_tokens == 77    
-    assert usage.server_tool_use['web_search_requests'] == 2
+    assert usage.total_tokens == 77
+    assert usage.server_tool_use["web_search_requests"] == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -603,7 +611,9 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    assert (
+        response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    )
 
 
 def test_streaming_reasoning_tokens_exceeds_completion_tokens():
@@ -722,3 +732,120 @@ def test_streaming_reasoning_tokens_within_completion_tokens_unchanged():
     assert usage.completion_tokens == 150
     assert usage.completion_tokens_details.reasoning_tokens == 80
     assert usage.total_tokens == 200
+
+
+def test_streaming_reasoning_tokens_opt_out_flag(monkeypatch):
+    """
+    When enforce_openai_completion_token_invariant is False, the raw backend
+    values must be preserved even when reasoning_tokens > completion_tokens.
+    """
+    import litellm
+
+    monkeypatch.setattr(litellm, "enforce_openai_completion_token_invariant", False)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-vllm-opt-out",
+        created=1745513206,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=64,
+            prompt_tokens=100,
+            total_tokens=164,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=79
+            ),
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunks = [chunk]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        completion_output="",
+    )
+
+    # With opt-out, raw backend values should be preserved.
+    assert usage.completion_tokens == 64
+    assert usage.completion_tokens_details.reasoning_tokens == 79
+    assert usage.total_tokens == 164
+
+
+def test_streaming_reasoning_tokens_preserves_cache_tokens_in_total():
+    """
+    When the adjustment fires and the response includes cache creation/read
+    tokens, total_tokens must account for those extra token categories.
+    """
+    usage = Usage(
+        completion_tokens=64,
+        prompt_tokens=100,
+        total_tokens=264,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=79),
+        prompt_tokens_details=None,
+    )
+    # Simulate Anthropic-style cache tokens by adding them as public
+    # attributes the way the provider transformation layer does.
+    setattr(usage, "cache_creation_input_tokens", 50)
+    setattr(usage, "cache_read_input_tokens", 50)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-cache-reasoning",
+        created=1745513206,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=usage,
+    )
+
+    chunks = [chunk]
+    processor = ChunkProcessor(chunks=chunks)
+
+    result = processor.calculate_usage(
+        chunks=chunks,
+        model="openai/Qwen/Qwen3.5-397B-A17B-FP8",
+        completion_output="",
+    )
+
+    # completion_tokens adjusted: 64 + 79 = 143
+    assert result.completion_tokens == 143
+    # total_tokens must include prompt + adjusted completion + cache tokens
+    # 100 + 143 + 50 + 50 = 343
+    assert result.total_tokens == 100 + 143 + 50 + 50
