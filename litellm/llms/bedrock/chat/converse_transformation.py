@@ -12,6 +12,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
@@ -1362,11 +1363,16 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
-        # Set anthropic_beta in additional_request_params if we have any beta features
+        # Filter and set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            filtered_beta_list = filter_and_transform_beta_headers(
+                beta_headers=anthropic_beta_list,
+                provider="bedrock_converse",
+            )
+            if filtered_beta_list:
+                additional_request_params["anthropic_beta"] = filtered_beta_list
 
         return bedrock_tools, anthropic_beta_list
 
