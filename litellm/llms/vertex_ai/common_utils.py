@@ -27,6 +27,46 @@ class VertexAIError(BaseLLMException):
         super().__init__(message=message, status_code=status_code, headers=headers)
 
 
+def vertex_request_labels_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Build Vertex/GCP billing labels from LiteLLM ``litellm_params["metadata"]``,
+    using ``requester_metadata`` string key-value pairs (same convention as Gemini).
+    """
+    if not litellm_params or "metadata" not in litellm_params:
+        return None
+    metadata = litellm_params["metadata"]
+    if metadata is None or not isinstance(metadata, dict):
+        return None
+    if "requester_metadata" not in metadata:
+        return None
+    rm = metadata["requester_metadata"]
+    if not isinstance(rm, dict):
+        return None
+    labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+    return labels if labels else None
+
+
+def pop_vertex_request_labels(
+    optional_params: Optional[dict],
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Resolve labels from optional ``labels`` (Gemini-style) and/or
+    ``litellm_params["metadata"]["requester_metadata"]``. Pops ``labels`` from
+    optional_params when present.
+    """
+    labels: Optional[Dict[str, str]] = None
+    if optional_params is not None and "labels" in optional_params:
+        raw = optional_params.pop("labels")
+        if isinstance(raw, dict):
+            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
+    if labels is None:
+        labels = vertex_request_labels_from_litellm_params(litellm_params)
+    return labels if labels else None
+
+
 class VertexAIModelRoute(str, Enum):
     """Enum for Vertex AI model routing"""
 
