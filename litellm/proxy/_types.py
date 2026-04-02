@@ -808,6 +808,7 @@ class LiteLLMRoutes(enum.Enum):
             "/audit",
             "/audit/{id}",
             "/key/aliases",
+            "/concurrent_request_logs",
             "/global/activity",
             "/global/activity/model",
             "/global/activity/cache_hits",
