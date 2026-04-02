@@ -586,7 +586,11 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
-    base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+    base_target_url = (
+        os.getenv("ANTHROPIC_API_BASE")
+        or os.getenv("ANTHROPIC_BASE_URL")
+        or "https://api.anthropic.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction

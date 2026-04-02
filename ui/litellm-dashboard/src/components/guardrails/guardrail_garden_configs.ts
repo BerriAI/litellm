@@ -264,4 +264,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  akto: {
+    provider: "Akto",
+    guardrailNameSuggestion: "Akto Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };

@@ -1,6 +1,6 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 ARG PROXY_EXTRAS_SOURCE=published
 
 # -----------------
@@ -27,7 +27,7 @@ RUN for i in 1 2 3; do \
     nodejs \
     npm && break || sleep 5; \
     done \
-  && pip install --no-cache-dir --upgrade pip build
+  && pip install --no-cache-dir --upgrade pip==26.0.1 build==1.4.2
 
 # Cache Python dependencies
 COPY requirements.txt .
@@ -41,13 +41,19 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
+# NOTE: .npmrc (which has ignore-scripts=true and min-release-age=3d) is temporarily
+# renamed during npm install/ci. This is safe because npm ci installs from
+# package-lock.json with pinned versions + integrity hashes.
 RUN mkdir -p /var/lib/litellm/ui && \
-    npm install -g npm@latest && npm cache clean --force && \
+    mv /app/.npmrc /app/.npmrc.bak && \
+    npm install -g npm@11.12.1 && npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
-    npm install --legacy-peer-deps && \
+    mv .npmrc .npmrc.bak && \
+    npm ci && \
+    mv .npmrc.bak .npmrc && mv /app/.npmrc.bak /app/.npmrc && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
     mkdir -p /var/lib/litellm/assets && \
@@ -106,7 +112,7 @@ RUN for i in 1 2 3; do \
     apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
     done \
   && apk upgrade --no-cache nodejs \
-  && npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
+  && npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
   && GLOBAL="$(npm root -g)" \
   && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \

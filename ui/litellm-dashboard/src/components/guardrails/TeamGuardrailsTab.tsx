@@ -145,7 +145,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   const lines: string[] = [
     "litellm_settings:",
     "  guardrails:",
-    `    - guardrail_name: "${g.name.replace(/"/g, '\\"')}"`,
+    `    - guardrail_name: "${g.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
     "      litellm_params:",
     `        guardrail: ${g.guardrailType ?? "generic_guardrail_api"}`,
     `        mode: ${g.mode ?? "pre_call"}  # or post_call, during_call`,
@@ -160,7 +160,7 @@ function buildEquivalentConfigYaml(g: TeamGuardrail): string {
   if (g.customHeaders.length > 0) {
     lines.push("        headers:  # static headers (sent with every request)");
     for (const h of g.customHeaders) {
-      lines.push(`          ${h.key}: "${String(h.value).replace(/"/g, '\\"')}"`);
+      lines.push(`          ${h.key}: "${String(h.value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
     }
   }
   if (g.extraHeaders.length > 0) {

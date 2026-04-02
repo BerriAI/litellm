@@ -525,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         # user
         "/user/new",
         "/user/update",
+        "/user/bulk_update",
         "/user/delete",
         "/user/info",
         "/user/list",
@@ -1672,6 +1673,7 @@ class NewTeamRequest(TeamBase):
         int
     ] = None  # allow user to set TPM limit for all team members
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    team_member_budget_duration: Optional[str] = None  # e.g. "30d", "1mo"
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2415,6 +2417,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_metadata: Optional[dict] = None
 
     # Project Params
+    project_alias: Optional[str] = None
     project_metadata: Optional[dict] = None
 
     # Time stamps
@@ -3227,6 +3230,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_project_id: Optional[str]
+    user_api_key_project_alias: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -4094,6 +4098,24 @@ class ScopeMapping(OIDCPermissions):
     }
 
 
+class JWTRoutingOverride(BaseModel):
+    """
+    Override default auth routing for JWT-shaped bearer tokens.
+
+    A rule matches when all provided selectors match token claims.
+    If matched, request is routed to the configured auth path.
+    """
+
+    iss: Union[str, List[str]]
+    client_id: Optional[Union[str, List[str]]] = None
+    aud: Optional[Union[str, List[str]]] = None
+    path: Literal["oauth2"] = "oauth2"
+
+    model_config = {
+        "extra": "forbid",
+    }
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4193,6 +4215,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
+        default=None,
+        description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
     )
     #########################################################
 

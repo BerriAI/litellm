@@ -54,9 +54,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
-    # Beta header patterns that are not supported by Bedrock Invoke API
-    # These will be filtered out to prevent 400 "invalid beta flag" errors
-
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)

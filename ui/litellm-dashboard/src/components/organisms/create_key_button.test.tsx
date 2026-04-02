@@ -119,7 +119,7 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
-  const Select = ({ children, onChange, ...props }: { children?: any; onChange?: (value: string) => void }) =>
+  const Select = ({ children, onChange, options, ...props }: { children?: any; onChange?: (value: string) => void; options?: Array<{ value: string; label: string }> }) =>
     React.createElement(
       "select",
       {
@@ -127,6 +127,7 @@ vi.mock("antd", () => {
         onChange: (event: any) => onChange?.(event.target.value),
       },
       children,
+      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
 
   Select.Option = ({ children, ...props }: { children?: any }) =>
@@ -213,19 +214,30 @@ vi.mock("../common_components/PassThroughRoutesSelector", () => ({ default: () =
 vi.mock("../common_components/PremiumLoggingSettings", () => ({ default: () => null }));
 vi.mock("../common_components/RateLimitTypeFormItem", () => ({ default: () => null }));
 vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => null }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: () => ({
+    data: {
+      pages: [{ teams: [
+        { team_id: "team-1", team_alias: "Team One" },
+        { team_id: "team-2", team_alias: "Team Two" },
+      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+    },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+  }),
+}));
 vi.mock("../common_components/team_dropdown", () => ({
-  default: ({ teams, onChange, disabled }: { teams?: any[]; onChange?: (v: string) => void; disabled?: boolean }) => (
+  default: ({ onChange, disabled }: { onChange?: (v: string) => void; disabled?: boolean }) => (
     <select
       data-testid="team-dropdown"
       disabled={disabled}
       onChange={(e) => onChange?.(e.target.value)}
     >
       <option value="">Select team</option>
-      {teams?.map((t: any) => (
-        <option key={t.team_id} value={t.team_id}>
-          {t.team_alias}
-        </option>
-      ))}
+      <option value="team-1">Team One</option>
+      <option value="team-2">Team Two</option>
     </select>
   ),
 }));
@@ -236,6 +248,16 @@ vi.mock("../shared/numerical_input", () => ({ default: () => null }));
 vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
+  useTags: vi.fn().mockReturnValue({
+    data: [
+      { name: "production", description: "Prod tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+      { name: "staging", description: "Staging tag", models: [], created_at: "2026-01-01", updated_at: "2026-01-01" },
+    ],
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
@@ -523,6 +545,21 @@ describe("CreateKey", () => {
       });
 
       expect(formStateRef.current["organization_id"]).toBe("org-1");
+    });
+  });
+
+  describe("tags dropdown", () => {
+    it("should populate tags dropdown with options from useTags hook", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("production")).toBeInTheDocument();
+        expect(screen.getByText("staging")).toBeInTheDocument();
+      });
     });
   });
 });

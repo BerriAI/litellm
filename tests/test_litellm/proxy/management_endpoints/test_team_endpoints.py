@@ -3147,7 +3147,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_new_team_standalone_validates_against_user_models():
+async def test_new_team_standalone_validates_against_user_models(monkeypatch):
     """
     Test that /team/new WITHOUT organization_id still validates models against user's personal models.
 
@@ -3158,10 +3158,16 @@ async def test_new_team_standalone_validates_against_user_models():
     - Team is created WITHOUT organization_id and models=['gpt-4']
     - Expected: Should fail with "Model not in allowed user models"
     """
+    import litellm
     from fastapi import Request
 
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Avoid injecting max_budget via global defaults; that path calls get_user_object and
+    # needs cache/DB mocks — this test only covers model validation.
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", None)
 
     # Create non-admin user with restrictive personal models
     non_admin_user = UserAPIKeyAuth(
@@ -6441,3 +6447,53 @@ async def test_list_team_v1_batches_key_queries():
         assert result[0].keys == [key1, key2]
         assert result[1].team_id == "team-2"
         assert result[1].keys == [key3]
+
+
+def test_new_team_request_accepts_team_member_budget_duration():
+    """Test that NewTeamRequest does not silently drop team_member_budget_duration."""
+    from litellm.proxy._types import NewTeamRequest
+
+    request = NewTeamRequest(
+        team_member_budget=20.0,
+        team_member_budget_duration="30d",
+    )
+    assert request.team_member_budget == 20.0
+    assert request.team_member_budget_duration == "30d"
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_with_duration():
+    """Verify that create_team_member_budget_table passes budget_duration
+    through to the new_budget call when team_member_budget_duration is provided."""
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    mock_budget_response = MagicMock(budget_id="budget-abc")
+    mock_admin = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    data = NewTeamRequest(
+        team_alias="test-team",
+        team_member_budget=20.0,
+        team_member_budget_duration="30d",
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock,
+        return_value=mock_budget_response,
+    ) as mock_new_budget:
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=data,
+            new_team_data_json={"metadata": None},
+            user_api_key_dict=mock_admin,
+            team_member_budget=20.0,
+            team_member_budget_duration="30d",
+        )
+
+        mock_new_budget.assert_awaited_once()
+        budget_request = mock_new_budget.call_args.kwargs["budget_obj"]
+        assert budget_request.budget_duration == "30d"
+        assert budget_request.max_budget == 20.0
+        assert result["metadata"]["team_member_budget_id"] == "budget-abc"
