@@ -5315,11 +5315,16 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        all_deployments = self._get_all_deployments(model_name=original_model_group)
+        _request_team_id: Optional[str] = (
+            kwargs.get("metadata", {}) or {}
+        ).get("user_api_key_team_id")
+        all_deployments = self._get_all_deployments(
+            model_name=original_model_group, team_id=_request_team_id
+        )
         _order_set: set = {
-            d.get("litellm_params", {}).get("order")
+            litellm.utils._get_deployment_order(d)
             for d in all_deployments
-            if d.get("litellm_params", {}).get("order") is not None
+            if litellm.utils._get_deployment_order(d) is not None
         }
         order_values: list = sorted(_order_set)
         if len(order_values) > 1 and not _skip_order_fallback:

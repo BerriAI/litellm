@@ -386,7 +386,7 @@ async def perform_health_check(
                     source,
                     cycle_id,
                 )
-            return [], []
+            return [], [], {}
 
     cycle_start_time = time.monotonic()
     requested_model_count = len(model_list)
