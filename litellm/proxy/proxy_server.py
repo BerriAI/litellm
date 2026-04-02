@@ -2287,6 +2287,12 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
+            if llm_router.health_check_ignore_transient_errors and exception_status in (
+                429,
+                408,
+            ):
+                continue
+
             increment_deployment_failures_for_current_minute(
                 litellm_router_instance=llm_router,
                 deployment_id=model_id,
@@ -3272,6 +3278,7 @@ class ProxyConfig:
             general_settings = {}
         _enable_hc_routing = False
         _hc_staleness = None
+        _hc_ignore_transient = False
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3458,6 +3465,9 @@ class ProxyConfig:
             _hc_staleness = general_settings.get(
                 "health_check_staleness_threshold", None
             )
+            _hc_ignore_transient = general_settings.get(
+                "health_check_ignore_transient_errors", False
+            )
             verbose_proxy_logger.info(
                 "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
                 use_background_health_checks,
@@ -3500,6 +3510,8 @@ class ProxyConfig:
             router_params["enable_health_check_routing"] = True
         if _hc_staleness is not None:
             router_params["health_check_staleness_threshold"] = _hc_staleness
+        if _hc_ignore_transient:
+            router_params["health_check_ignore_transient_errors"] = True
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:

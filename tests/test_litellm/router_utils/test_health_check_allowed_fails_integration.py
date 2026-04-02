@@ -530,3 +530,136 @@ class TestAllDeploymentsInCooldownSafetyNet:
             assert (
                 len(filtered) == 2
             ), "Safety net should return all deployments when all are in cooldown"
+
+
+class TestHealthCheckIgnoreTransientErrors:
+    """
+    When health_check_ignore_transient_errors=True, health check failures with
+    429 or 408 status codes should NOT increment failure counters or trigger cooldown.
+    401, 404, and 5xx errors should still be processed normally.
+    """
+
+    def test_429_skipped_when_flag_enabled(self):
+        """429 from health check does not trigger cooldown when flag is set."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        rate_exc = litellm.RateLimitError(
+            message="Rate limited", model="gpt-4", llm_provider="openai"
+        )
+        assert getattr(rate_exc, "status_code", None) == 429
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            with patch(
+                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
+            ) as mock_cooldown:
+                with patch(
+                    "litellm.router_utils.router_callbacks.track_deployment_metrics.increment_deployment_failures_for_current_minute"
+                ) as mock_increment:
+                    _write_health_state_to_router_cache(
+                        healthy_endpoints=[],
+                        unhealthy_endpoints=unhealthy_endpoints,
+                    )
+                    mock_cooldown.assert_not_called()
+                    mock_increment.assert_not_called()
+
+    def test_408_skipped_when_flag_enabled(self):
+        """408 from health check does not trigger cooldown when flag is set."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=0),
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        timeout_exc = litellm.Timeout(
+            message="Health check timeout exceeded", model="", llm_provider=""
+        )
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "timeout", "exception": timeout_exc},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            with patch(
+                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
+            ) as mock_cooldown:
+                _write_health_state_to_router_cache(
+                    healthy_endpoints=[],
+                    unhealthy_endpoints=unhealthy_endpoints,
+                )
+                mock_cooldown.assert_not_called()
+
+    def test_401_still_triggers_cooldown_when_flag_enabled(self):
+        """Auth errors (401) still trigger cooldown even when flag is set."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(AuthenticationErrorAllowedFails=0),
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=True,
+        )
+
+        auth_exc = litellm.AuthenticationError(
+            message="Invalid key", model="gpt-4", llm_provider="openai"
+        )
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "auth failed", "exception": auth_exc},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            with patch(
+                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
+            ) as mock_cooldown:
+                _write_health_state_to_router_cache(
+                    healthy_endpoints=[],
+                    unhealthy_endpoints=unhealthy_endpoints,
+                )
+                mock_cooldown.assert_called_once()
+
+    def test_429_triggers_cooldown_when_flag_disabled(self):
+        """When flag is False (default), 429 still triggers cooldown."""
+        import litellm.proxy.proxy_server as proxy_module
+        from litellm.proxy.proxy_server import _write_health_state_to_router_cache
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+            enable_health_check_routing=True,
+            health_check_ignore_transient_errors=False,
+        )
+
+        rate_exc = litellm.RateLimitError(
+            message="Rate limited", model="gpt-4", llm_provider="openai"
+        )
+
+        unhealthy_endpoints = [
+            {"model_id": "deploy-1", "error": "rate limited", "exception": rate_exc},
+        ]
+
+        with patch.object(proxy_module, "llm_router", router):
+            with patch(
+                "litellm.router_utils.cooldown_handlers._set_cooldown_deployments"
+            ) as mock_cooldown:
+                _write_health_state_to_router_cache(
+                    healthy_endpoints=[],
+                    unhealthy_endpoints=unhealthy_endpoints,
+                )
+                mock_cooldown.assert_called_once()
