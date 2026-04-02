@@ -28,6 +28,17 @@ def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
     if name in _audit_log_callback_cache:
         return _audit_log_callback_cache[name]
 
+    # First, try resolving via callback_settings (generic_api callbacks like splunk_hec)
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        LoggingCallbackManager,
+    )
+
+    resolved = LoggingCallbackManager._add_custom_callback_generic_api_str(name)
+    if isinstance(resolved, CustomLogger):
+        _audit_log_callback_cache[name] = resolved
+        return resolved
+
+    # Fall back to known custom logger classes
     from litellm.litellm_core_utils.litellm_logging import (
         _init_custom_logger_compatible_class,
     )
