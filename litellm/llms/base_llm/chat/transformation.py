@@ -110,8 +110,9 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
+        thinking_type = non_default_params.get("thinking", {}).get("type")
         return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
+            thinking_type in ("enabled", "adaptive")
             or non_default_params.get("reasoning_effort") is not None
         )
 
