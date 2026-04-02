@@ -4866,12 +4866,39 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
+def _get_deployment_order(deployment: Dict) -> Optional[int]:
+    """
+    Returns the routing order for a deployment.
+
+    Checks litellm_params first (static config), then model_info (dynamic/team
+    models added via API where order lives in model_info, not litellm_params).
+    """
+    order = deployment.get("litellm_params", {}).get("order")
+    if order is None:
+        order = deployment.get("model_info", {}).get("order")
+    return order
+
+
+def _get_order_filtered_deployments(
+    healthy_deployments: List[Dict], target_order: Optional[int] = None
+) -> List:
+    if target_order is not None:
+        filtered = [
+            d
+            for d in healthy_deployments
+            if _get_deployment_order(d) == target_order
+        ]
+        if filtered:
+            return filtered
+        # target_order doesn't match any deployment (e.g., external fallback model) — return all
+        return healthy_deployments
+
+    # Default: pick min order group
     min_order = min(
         (
-            deployment["litellm_params"]["order"]
+            _get_deployment_order(deployment)
             for deployment in healthy_deployments
-            if "order" in deployment["litellm_params"]
+            if _get_deployment_order(deployment) is not None
         ),
         default=None,
     )
@@ -4880,7 +4907,7 @@ def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
         filtered_deployments = [
             deployment
             for deployment in healthy_deployments
-            if deployment["litellm_params"].get("order") == min_order
+            if _get_deployment_order(deployment) == min_order
         ]
 
         return filtered_deployments
