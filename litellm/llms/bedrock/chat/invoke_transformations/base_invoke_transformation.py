@@ -2,6 +2,7 @@ import copy
 import json
 import time
 from functools import partial
+from urllib.parse import quote
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
@@ -610,7 +611,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         Returns:
             str: The double-encoded model ID.
         """
-        return urllib.parse.quote(model_id, safe="")
+        return quote(model_id, safe="")
 
     def convert_messages_to_prompt(
         self, model, messages, provider, custom_prompt_dict

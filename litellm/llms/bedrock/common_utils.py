@@ -478,14 +478,6 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     return model
 
 
-def strip_bedrock_routing_prefix(model: str) -> str:
-    """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
-        if model.startswith(prefix):
-            model = model.split("/", 1)[1]
-    return model
-
-
 def strip_bedrock_throughput_suffix(model: str) -> str:
     """Strip throughput tier suffixes from Bedrock model names."""
     import re
