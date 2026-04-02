@@ -192,7 +192,7 @@ class SharedHealthCheckManager:
         model_list: List[Dict[str, Any]],
         details: bool = True,
         max_concurrency: Optional[int] = None,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Perform health check with shared state coordination.
 
@@ -266,6 +266,7 @@ class SharedHealthCheckManager:
                 return (
                     cached_results.get("healthy_endpoints", []),
                     cached_results.get("unhealthy_endpoints", []),
+                    {},
                 )
 
             # Still no cache, fall back to local health check
