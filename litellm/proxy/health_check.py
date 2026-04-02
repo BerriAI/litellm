@@ -95,7 +95,12 @@ async def run_with_timeout(task, timeout):
     except asyncio.TimeoutError:
         # `asyncio.wait_for()` already cancels only the awaited task on timeout.
         # Do not cancel unrelated sibling health check tasks.
-        return {"error": "Timeout exceeded"}
+        timeout_exception = litellm.Timeout(
+            message="Health check timeout exceeded",
+            model="",
+            llm_provider="",
+        )
+        return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
 async def _run_model_health_check(model: dict):
@@ -218,11 +223,15 @@ async def _perform_health_check(
             cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+            if "exception" in is_healthy:
+                cleaned["exception"] = is_healthy["exception"]
             unhealthy_endpoints.append(cleaned)
         else:
             cleaned = _clean_endpoint_data(litellm_params, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+            if isinstance(is_healthy, Exception):
+                cleaned["exception"] = is_healthy
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints
