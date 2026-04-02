@@ -344,7 +344,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         We return this as a VideoObject with:
         - id: operation name (used for polling)
         - status: "processing"
-        - usage: includes duration_seconds for cost calculation
+        - usage: includes duration_seconds and optional video_resolution for cost calculation
         """
         response_data = raw_response.json()
 
@@ -375,6 +375,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                     usage_data["duration_seconds"] = float(duration)
                 except (ValueError, TypeError):
                     pass
+            res = parameters.get("resolution")
+            if res is not None and str(res).strip() != "":
+                usage_data["video_resolution"] = str(res).strip().lower()
 
         video_obj.usage = usage_data
         return video_obj
