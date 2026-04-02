@@ -1650,7 +1650,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
             "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
             new_callable=AsyncMock,
             return_value=mock_budget_response,
-        ),
+        ) as mock_new_budget,
         patch(
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
@@ -1664,6 +1664,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
             team_member_budget_duration="45d",
         )
 
+        assert mock_new_budget.called
         assert "team_member_budget_id" in result["metadata"]
         assert result["metadata"]["team_member_budget_id"] == "new_budget_456"
 
