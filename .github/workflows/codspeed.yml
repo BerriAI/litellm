@@ -43,4 +43,14 @@ jobs:
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
           mode: simulation
-          run: uv run --frozen --group ci pytest tests/benchmarks/ --codspeed
+          run: >
+            env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+            uv run --frozen
+            --with pytest==8.3.5
+            --with pytest-asyncio==1.2.0
+            --with pytest-codspeed==4.3.0
+            pytest
+            -p pytest_asyncio.plugin
+            -p pytest_codspeed.plugin
+            tests/benchmarks/
+            --codspeed
