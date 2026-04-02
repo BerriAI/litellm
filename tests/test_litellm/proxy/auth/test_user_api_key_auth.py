@@ -2,14 +2,12 @@ import asyncio
 import json
 import os
 import sys
-from typing import Tuple
+from typing import Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,7 +16,18 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import get_api_key, user_api_key_auth
+from starlette.datastructures import URL
+from starlette.requests import Request
+
+from litellm.proxy.auth.user_api_key_auth import (
+    check_api_key_for_custom_headers_or_pass_through_endpoints,
+    get_api_key,
+    user_api_key_auth,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _registered_pass_through_routes,
+)
 
 
 def test_get_api_key():
@@ -67,6 +76,180 @@ def test_get_api_key_with_custom_litellm_key_header(
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+def _make_request(
+    path: str,
+    method: str = "POST",
+    headers: Optional[list] = None,
+) -> Request:
+    """Create a minimal Starlette Request for testing."""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": method,
+        "path": path,
+        "headers": headers or [],
+        "query_string": b"",
+        "scheme": "https",
+        "server": ("testserver", 443),
+        "client": ("testclient", 50000),
+        "root_path": "",
+    }
+    request = Request(scope, receive=receive)
+    request._url = URL(url=path)
+    return request
+
+
+def test_passthrough_no_auth_subpath_from_config_bypasses_auth():
+    """When a passthrough endpoint has include_subpath=True and auth=False,
+    subpath requests should bypass master_key auth."""
+
+    async def _async_test():
+        route = "/chatgpt/responses"
+        request = _make_request(path=route)
+
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route=route,
+            pass_through_endpoints=[
+                {
+                    "path": "/chatgpt",
+                    "target": "https://chatgpt.com/backend-api/codex",
+                    "include_subpath": True,
+                    "auth": False,
+                }
+            ],
+            api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        )
+
+        assert isinstance(result, UserAPIKeyAuth)
+
+    asyncio.run(_async_test())
+
+
+def test_passthrough_no_auth_exact_path_still_works():
+    """Exact path matches should continue to bypass auth as before."""
+
+    async def _async_test():
+        route = "/chatgpt"
+        request = _make_request(path=route)
+
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route=route,
+            pass_through_endpoints=[
+                {
+                    "path": "/chatgpt",
+                    "target": "https://chatgpt.com/backend-api/codex",
+                    "include_subpath": False,
+                    "auth": False,
+                }
+            ],
+            api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        )
+
+        assert isinstance(result, UserAPIKeyAuth)
+
+    asyncio.run(_async_test())
+
+
+def test_passthrough_no_auth_subpath_does_not_match_without_flag():
+    """Without include_subpath=True, subpath requests should NOT bypass auth."""
+
+    async def _async_test():
+        route = "/chatgpt/responses"
+        request = _make_request(path=route)
+
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route=route,
+            pass_through_endpoints=[
+                {
+                    "path": "/chatgpt",
+                    "target": "https://chatgpt.com/backend-api/codex",
+                    "include_subpath": False,
+                    "auth": False,
+                }
+            ],
+            api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        )
+
+        # Should return the api_key string, NOT a UserAPIKeyAuth object
+        assert isinstance(result, str)
+
+    asyncio.run(_async_test())
+
+
+def test_passthrough_path_traversal_does_not_bypass_auth():
+    """Path traversal attempts like /chatgpt/../admin should not match /chatgpt."""
+
+    async def _async_test():
+        route = "/chatgpt/../admin/secret"
+        request = _make_request(path=route)
+
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route=route,
+            pass_through_endpoints=[
+                {
+                    "path": "/chatgpt",
+                    "target": "https://chatgpt.com/backend-api/codex",
+                    "include_subpath": True,
+                    "auth": False,
+                }
+            ],
+            api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        )
+
+        # /chatgpt/../admin/secret normalizes to /admin/secret, should NOT match
+        assert isinstance(result, str)
+
+    asyncio.run(_async_test())
+
+
+def test_passthrough_no_auth_subpath_from_registry_bypasses_auth():
+    """Dynamically registered passthrough routes (e.g. from DB) should also
+    bypass auth when registered without dependencies."""
+
+    async def _async_test():
+        endpoint_id = "test-no-auth-registry"
+        base_path = "/registry-chatgpt"
+        methods_str = "DELETE,GET,PATCH,POST,PUT"
+        route_key = f"{endpoint_id}:subpath:{base_path}:{methods_str}"
+        route = f"{base_path}/responses"
+
+        try:
+            InitPassThroughEndpointHelpers.add_subpath_route(
+                app=MagicMock(),
+                path=base_path,
+                target="https://chatgpt.com/backend-api/codex",
+                custom_headers=None,
+                forward_headers=True,
+                merge_query_params=False,
+                dependencies=None,
+                cost_per_request=0,
+                endpoint_id=endpoint_id,
+            )
+
+            request = _make_request(path=route)
+
+            result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+                request=request,
+                route=route,
+                pass_through_endpoints=None,
+                api_key="eyJhbGciOiJIUzI1NiJ9.payload.signature",
+            )
+
+            assert isinstance(result, UserAPIKeyAuth)
+        finally:
+            _registered_pass_through_routes.pop(route_key, None)
+
+    asyncio.run(_async_test())
 
 
 def test_team_metadata_with_tags_flows_through_jwt_auth():

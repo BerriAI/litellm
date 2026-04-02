@@ -389,7 +389,7 @@ def get_api_key(
         api_key = google_auth_key
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if endpoint.get("path", "") == route:
+            if _pass_through_endpoint_matches_route(endpoint=endpoint, route=route):
                 headers: Optional[dict] = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
@@ -415,9 +415,20 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     if is_mapped_pass_through_route:
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""
+    # Check the registered route registry for no-auth subpath endpoints.
+    # This handles dynamically registered passthrough routes (e.g. from DB)
+    # that are not in the config-based pass_through_endpoints list.
+    no_auth_registered = _get_no_auth_registered_pass_through_route(
+        request=request, route=route
+    )
+    if no_auth_registered is not None:
+        return no_auth_registered
+
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
+            if isinstance(endpoint, dict) and _pass_through_endpoint_matches_route(
+                endpoint=endpoint, route=route
+            ):
                 ## IF AUTH DISABLED
                 if endpoint.get("auth") is not True:
                     return UserAPIKeyAuth()
@@ -445,6 +456,100 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                         ):
                             api_key = request.headers.get(key=header_key)  # type: ignore
     return api_key
+
+
+def _route_matches_pass_through_path(
+    route: str, path: str, include_subpath: bool
+) -> bool:
+    """Check if a request route matches a passthrough endpoint path.
+
+    When include_subpath is True, performs prefix matching so that
+    e.g. route="/chatgpt/responses" matches path="/chatgpt".
+    Normalizes paths to prevent traversal attacks (e.g. /chatgpt/../admin).
+    """
+    import posixpath
+
+    normalized_route = posixpath.normpath(route)
+
+    if normalized_route == path:
+        return True
+
+    if include_subpath:
+        # Ensure consistent trailing-slash handling:
+        # path="/chatgpt" should match route="/chatgpt/foo" but not "/chatgptfoo"
+        normalized_path = path.rstrip("/")
+        if normalized_path == "":
+            # Edge case: path is "/" — avoid matching everything
+            normalized_path = path
+        if normalized_path and normalized_route.startswith(normalized_path + "/"):
+            return True
+
+    return False
+
+
+def _pass_through_endpoint_matches_route(endpoint: dict, route: str) -> bool:
+    """Check if a passthrough endpoint config dict matches the given route.
+
+    Considers both the raw route and the root_path-normalized route.
+    """
+    path = endpoint.get("path")
+    if not isinstance(path, str) or len(path) == 0:
+        return False
+
+    include_subpath = bool(endpoint.get("include_subpath", False))
+    candidate_routes = [route]
+    normalized_route = normalize_route_for_root_path(route)
+    if normalized_route is not None and normalized_route != route:
+        candidate_routes.append(normalized_route)
+
+    for candidate_route in candidate_routes:
+        if _route_matches_pass_through_path(
+            route=candidate_route,
+            path=path,
+            include_subpath=include_subpath,
+        ):
+            return True
+
+    return False
+
+
+def _get_no_auth_registered_pass_through_route(
+    request: Request, route: str
+) -> Optional[UserAPIKeyAuth]:
+    """Check the internal route registry for passthrough endpoints registered
+    without auth dependencies. Returns UserAPIKeyAuth if the route is registered
+    with no auth, None otherwise.
+    """
+    try:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        registered_route = (
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=route,
+                method=request.method,
+            )
+        )
+        if registered_route is None:
+            return None
+
+        dependencies = (
+            registered_route.get("passthrough_params", {}).get("dependencies") or []
+        )
+        if len(dependencies) == 0:
+            return UserAPIKeyAuth()
+    except ImportError:
+        verbose_proxy_logger.debug(
+            "pass_through_endpoints module not available for auth bypass check"
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Unable to inspect registered pass-through route for auth bypass",
+            exc_info=True,
+        )
+
+    return None
 
 
 async def _resolve_jwt_to_virtual_key(
