@@ -312,7 +312,7 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
         #    subpackage, so string-based patch("litellm.responses.main.aresponses") fails.
         # 2. `import litellm.responses.main` is shadowed by the third-party `responses`
         #    library.  Using sys.modules bypasses both.
-        import sys
+        _responses_main = sys.modules["litellm.responses.main"]
 
         _responses_main = sys.modules["litellm.responses.main"]
         with patch.object(
