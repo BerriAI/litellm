@@ -62,6 +62,24 @@ class ChatGPTConfig(OpenAIConfig):
         )
         return {**default_headers, **validated_headers}
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        # The ChatGPT subscription backend rejects system-role messages
+        # unconditionally — it ships its own built-in instructions
+        # (CHATGPT_DEFAULT_INSTRUCTIONS). Strip them so callers using frameworks
+        # that always inject a system prompt (e.g. Claude Code, LangChain) work
+        # without provider-specific configuration.
+        messages = [m for m in (messages or []) if m.get("role") != "system"]
+        return super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
+
     def post_stream_processing(self, stream: Any) -> Any:
         return ChatGPTToolCallNormalizer(stream)
 
