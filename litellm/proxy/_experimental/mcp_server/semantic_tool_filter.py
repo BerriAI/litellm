@@ -149,6 +149,29 @@ class SemanticMCPToolFilter:
             self.tool_router = None
             raise
 
+    def _is_mcp_tool(self, tool: Any) -> bool:
+        """Check if a tool is an MCP tool (registered in the semantic router)."""
+        name, _ = self._extract_tool_info(tool)
+        return name in self._tool_map
+
+    def _separate_mcp_and_non_mcp_tools(
+        self, tools: List[Any]
+    ) -> tuple[List[Any], List[Any]]:
+        """
+        Separate tools into MCP tools and non-MCP tools.
+
+        Returns:
+            Tuple of (mcp_tools, non_mcp_tools)
+        """
+        mcp_tools = []
+        non_mcp_tools = []
+        for tool in tools:
+            if self._is_mcp_tool(tool):
+                mcp_tools.append(tool)
+            else:
+                non_mcp_tools.append(tool)
+        return mcp_tools, non_mcp_tools
+
     async def filter_tools(
         self,
         query: str,
@@ -158,13 +181,16 @@ class SemanticMCPToolFilter:
         """
         Filter tools semantically based on query.
 
+        Only MCP tools (those registered in the semantic router) are filtered.
+        Non-MCP tools are always preserved in the result.
+
         Args:
             query: User query to match against tools
-            available_tools: Full list of available MCP tools
+            available_tools: Full list of available tools (MCP and non-MCP)
             top_k: Override default top_k (optional)
 
         Returns:
-            Filtered and ordered list of tools (up to top_k)
+            Non-MCP tools plus filtered and ordered MCP tools (up to top_k)
         """
         # Early returns for cases where we can't/shouldn't filter
         if not self.enabled:
@@ -183,16 +209,32 @@ class SemanticMCPToolFilter:
             )
             return available_tools
 
-        # Run semantic filtering
+        # Separate MCP tools from non-MCP tools before filtering
+        mcp_tools, non_mcp_tools = self._separate_mcp_and_non_mcp_tools(
+            available_tools
+        )
+
+        # If there are no MCP tools to filter, return everything as-is
+        if not mcp_tools:
+            return available_tools
+
+        # Run semantic filtering on MCP tools only
         try:
             limit = top_k or self.top_k
             matches = self.tool_router(text=query, limit=limit)
             matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
-                return available_tools
+                # No MCP tools matched the query - return only non-MCP tools
+                verbose_logger.debug(
+                    "No MCP tools matched query, returning only non-MCP tools"
+                )
+                return non_mcp_tools
 
-            return self._get_tools_by_names(matched_tool_names, available_tools)
+            filtered_mcp_tools = self._get_tools_by_names(
+                matched_tool_names, mcp_tools
+            )
+            return non_mcp_tools + filtered_mcp_tools
 
         except Exception as e:
             verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
