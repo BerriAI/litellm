@@ -463,8 +463,13 @@ async def vantage_export(
 
     Parameters:
     - limit: Optional limit on number of records to export
-    - start_time_utc: Optional start time for data export
-    - end_time_utc: Optional end time for data export
+    - start_time_utc: Optional start time for data export (UTC). When omitted with
+      sku_breakdown=true, defaults to 1970-01-01 (i.e. all historical data).
+    - end_time_utc: Optional end time for data export (UTC). When omitted with
+      sku_breakdown=true, defaults to now.
+    - sku_breakdown: When true, exports one row per token SKU instead of one row
+      per request. Partial time bounds are allowed: a missing start defaults to
+      epoch and a missing end defaults to now.
 
     Only admin users can perform Vantage exports.
     """
