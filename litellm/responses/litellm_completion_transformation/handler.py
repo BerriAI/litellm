@@ -2,9 +2,10 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, List, Optional, Union
 
 import litellm
+from litellm.responses.compaction import maybe_compact_context
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -109,6 +110,17 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
 
+        context_management = acompletion_args.pop("context_management", None)
+        summary_text: Optional[str] = None
+        if context_management:
+            compacted_messages, summary_text = await maybe_compact_context(
+                messages=acompletion_args["messages"],
+                model=acompletion_args["model"],
+                context_management=context_management,
+                custom_llm_provider=acompletion_args.get("custom_llm_provider"),
+            )
+            acompletion_args["messages"] = compacted_messages
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
@@ -121,6 +133,11 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
                 responses_api_request=responses_api_request,
             )
+
+            if summary_text is not None:
+                responses_api_response.output = _prepend_compaction_output(
+                    summary_text, responses_api_response.output
+                )
 
             return responses_api_response
 
@@ -138,3 +155,14 @@ class LiteLLMCompletionTransformationHandler:
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"
         )
+
+
+def _prepend_compaction_output(
+    summary_text: str, existing_output: List[Any]
+) -> List[Any]:
+    """Prepend a compaction output item before the existing output items."""
+    compaction_item = {
+        "type": "compaction",
+        "content": summary_text,
+    }
+    return [compaction_item] + list(existing_output)

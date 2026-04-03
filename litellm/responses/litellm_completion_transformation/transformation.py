@@ -376,6 +376,16 @@ class LiteLLMCompletionResponsesConfig:
         elif isinstance(input, list):
             existing_tool_call_ids: Set[str] = set()
             for _input in input:
+                if isinstance(_input, dict) and _input.get("type") == "compaction":
+                    messages.clear()
+                    compaction_content = _input.get("content", "")
+                    messages.append(
+                        ChatCompletionSystemMessage(
+                            role="system", content=compaction_content
+                        )
+                    )
+                    continue
+
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                     input_item=_input
                 )
