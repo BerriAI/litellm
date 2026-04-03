@@ -41,6 +41,8 @@ class ComplianceChecker:
             # If no mode specified, default to pre_call
             if g_mode is None and mode == "pre_call":
                 result.append(g)
+            elif isinstance(g_mode, list) and mode in g_mode:
+                result.append(g)
             elif g_mode == mode:
                 result.append(g)
         return result
