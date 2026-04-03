@@ -473,9 +473,8 @@ class VertexBase:
                 mode=mode,
                 model=model,
                 stream=stream,
-                gemini_api_key=gemini_api_key,
             )
-            auth_header = None  # this field is not used for gemin
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
