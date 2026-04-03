@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-04T03:59:14.361787697Z"
+exclude-newer = "2026-03-04T07:07:11.92737292Z"
 exclude-newer-span = "P30D"
 
 [manifest]
@@ -4119,10 +4119,6 @@ ci = [
     { name = "lunary", version = "1.4.37", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pillow", version = "12.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "psycopg", version = "3.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "psycopg-binary", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "psycopg-binary", version = "3.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "psycopg2-binary" },
     { name = "pyarrow", version = "21.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pyarrow", version = "22.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -4148,6 +4144,10 @@ dev = [
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
     { name = "parameterized" },
+    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "psycopg", version = "3.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "psycopg-binary", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "psycopg-binary", version = "3.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -4279,10 +4279,6 @@ ci = [
     { name = "lunary", marker = "python_full_version >= '3.11'", specifier = "==1.4.37" },
     { name = "pillow", marker = "python_full_version < '3.10'", specifier = "==11.3.0" },
     { name = "pillow", marker = "python_full_version >= '3.10'", specifier = "==12.1.1" },
-    { name = "psycopg", marker = "python_full_version < '3.10'", specifier = "==3.2.13" },
-    { name = "psycopg", marker = "python_full_version >= '3.10'", specifier = "==3.3.3" },
-    { name = "psycopg-binary", marker = "python_full_version < '3.10'", specifier = "==3.2.13" },
-    { name = "psycopg-binary", marker = "python_full_version >= '3.10'", specifier = "==3.3.3" },
     { name = "psycopg2-binary", specifier = "==2.9.11" },
     { name = "pyarrow", marker = "python_full_version < '3.10'", specifier = "==21.0.0" },
     { name = "pyarrow", marker = "python_full_version >= '3.10'", specifier = "==22.0.0" },
@@ -4308,6 +4304,10 @@ dev = [
     { name = "opentelemetry-exporter-otlp", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", specifier = "==1.28.0" },
     { name = "parameterized", specifier = "==0.9.0" },
+    { name = "psycopg", marker = "python_full_version < '3.10'", specifier = "==3.2.13" },
+    { name = "psycopg", marker = "python_full_version >= '3.10'", specifier = "==3.3.3" },
+    { name = "psycopg-binary", marker = "python_full_version < '3.10'", specifier = "==3.2.13" },
+    { name = "psycopg-binary", marker = "python_full_version >= '3.10'", specifier = "==3.3.3" },
     { name = "pytest", specifier = "==8.3.5" },
     { name = "pytest-asyncio", specifier = "==1.2.0" },
     { name = "pytest-cov", specifier = "==5.0.0" },

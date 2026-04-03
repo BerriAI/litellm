@@ -125,6 +125,13 @@ dev = [
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.2.0",
     "pytest-postgresql==7.0.2",
+    # pytest-postgresql imports psycopg v3 during pytest startup. Keep the base
+    # package and the binary wheel in the default dev environment so local
+    # pytest works without requiring a system libpq install.
+    "psycopg==3.2.13; python_version < '3.10'",
+    "psycopg==3.3.3; python_version >= '3.10'",
+    "psycopg-binary==3.2.13; python_version < '3.10'",
+    "psycopg-binary==3.3.3; python_version >= '3.10'",
     "pytest-xdist==3.8.0",
     "requests-mock==1.12.1",
     "responses==0.26.0",
@@ -158,13 +165,6 @@ proxy-dev = [
     "nodejs-wheel-binaries==24.13.1",
 ]
 ci = [
-    # pytest-postgresql imports psycopg v3 during pytest startup. Keep the base
-    # package and the binary wheel explicit so uv sync yields a usable driver
-    # without requiring contributors to install libpq separately.
-    "psycopg==3.2.13; python_version < '3.10'",
-    "psycopg==3.3.3; python_version >= '3.10'",
-    "psycopg-binary==3.2.13; python_version < '3.10'",
-    "psycopg-binary==3.3.3; python_version >= '3.10'",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
