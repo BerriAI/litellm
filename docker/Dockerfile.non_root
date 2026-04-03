@@ -46,7 +46,10 @@ ENV LITELLM_NON_ROOT=true
 # package-lock.json with pinned versions + integrity hashes.
 RUN mkdir -p /var/lib/litellm/ui && \
     mv /app/.npmrc /app/.npmrc.bak && \
-    npm install -g npm@11.12.1 && npm cache clean --force && \
+    npm install -g npm@11.12.1 && \
+    npm install -g node-gyp@12.2.0 && \
+    ln -sf /usr/local/lib/node_modules/node-gyp /usr/lib/node_modules/npm/node_modules/node-gyp && \
+    npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
