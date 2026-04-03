@@ -27,7 +27,12 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
         **kwargs,
     ) -> Dict[str, Any]:
         """Handle non-streaming request to AgentCore A2A agent."""
-        litellm_params = kwargs.get("litellm_params", {})
+        litellm_params = kwargs.get("litellm_params")
+        if not litellm_params:
+            raise ValueError(
+                "litellm_params is required for BedrockAgentCoreA2AConfig "
+                "(must contain model with AgentCore ARN)"
+            )
         return await BedrockAgentCoreA2AHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
@@ -42,7 +47,12 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
         **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Handle streaming request to AgentCore A2A agent."""
-        litellm_params = kwargs.get("litellm_params", {})
+        litellm_params = kwargs.get("litellm_params")
+        if not litellm_params:
+            raise ValueError(
+                "litellm_params is required for BedrockAgentCoreA2AConfig "
+                "(must contain model with AgentCore ARN)"
+            )
         async for chunk in BedrockAgentCoreA2AHandler.handle_streaming(
             request_id=request_id,
             params=params,

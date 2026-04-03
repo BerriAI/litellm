@@ -76,9 +76,18 @@ class BedrockAgentCoreA2ATransformation:
             "params": params,
         }
 
+        # Set required AgentCore session headers (normally set by transform_request,
+        # which we skip because it also builds {"prompt": "..."})
+        headers: dict = {}
+        session_id = agentcore_config._get_runtime_session_id(optional_params)
+        headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
+        runtime_user_id = agentcore_config._get_runtime_user_id(optional_params)
+        if runtime_user_id:
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
+
         # Sign the request (SigV4 or JWT depending on api_key presence)
         signed_headers, signed_body = agentcore_config.sign_request(
-            headers={},
+            headers=headers,
             optional_params=optional_params,
             request_data=json_rpc_body,
             api_base=url,

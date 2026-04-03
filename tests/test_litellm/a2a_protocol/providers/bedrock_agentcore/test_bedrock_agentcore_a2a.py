@@ -82,6 +82,34 @@ class TestTransformation:
         )
         assert headers["Authorization"] == "Bearer test-jwt-token"
 
+    def test_session_id_header_set(self):
+        """Verify X-Amzn-Bedrock-AgentCore-Runtime-Session-Id is set."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+        )
+        session_id = headers.get("X-Amzn-Bedrock-AgentCore-Runtime-Session-Id", "")
+        assert len(session_id) >= 33
+
+    def test_custom_session_id_header(self):
+        """Verify custom runtimeSessionId is used when provided."""
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        params_with_session = {**SAMPLE_LITELLM_PARAMS, "runtimeSessionId": "a" * 40}
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=params_with_session,
+        )
+        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "a" * 40
+
     def test_sigv4_auth_when_no_api_key(self):
         """When no api_key, falls through to SigV4 signing."""
         from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -91,16 +119,28 @@ class TestTransformation:
         litellm_params_no_key = {
             "model": SAMPLE_MODEL,
             "custom_llm_provider": "bedrock",
-            # Provide AWS credentials for SigV4
             "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
             "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
             "aws_region_name": "us-west-2",
         }
-        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-            request_id="req-001",
-            params=SAMPLE_PARAMS,
-            litellm_params=litellm_params_no_key,
-        )
+
+        # Mock _sign_request to avoid hitting real botocore credential resolution
+        fake_sigv4_headers = {
+            "Authorization": "AWS4-HMAC-SHA256 Credential=AKIA.../bedrock-agentcore/aws4_request",
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        fake_body = b'{"jsonrpc":"2.0"}'
+
+        with patch(
+            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
+            return_value=(fake_sigv4_headers, fake_body),
+        ):
+            _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                request_id="req-001",
+                params=SAMPLE_PARAMS,
+                litellm_params=litellm_params_no_key,
+            )
         # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
         assert "Authorization" in headers
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
