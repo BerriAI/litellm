@@ -1166,6 +1166,41 @@ def test_get_model_info_shows_supports_computer_use():
     )  # Expecting None due to the default in ModelInfoBase
 
 
+def test_get_model_info_shows_supports_xhigh_reasoning_effort():
+    """
+    Tests that get_model_info correctly returns supports_xhigh_reasoning_effort.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25096
+    where get_model_info omitted reasoning-effort capability fields even
+    though they exist in model_cost.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.4"
+    info = litellm.get_model_info(model)
+    model_cost = litellm.model_cost[model]
+
+    assert info.get("supports_xhigh_reasoning_effort") == model_cost.get(
+        "supports_xhigh_reasoning_effort"
+    ), (
+        f"get_model_info should return supports_xhigh_reasoning_effort={model_cost.get('supports_xhigh_reasoning_effort')!r} "
+        f"for {model!r}, got {info.get('supports_xhigh_reasoning_effort')!r}"
+    )
+    assert info.get("supports_none_reasoning_effort") == model_cost.get(
+        "supports_none_reasoning_effort"
+    ), (
+        f"get_model_info should return supports_none_reasoning_effort={model_cost.get('supports_none_reasoning_effort')!r} "
+        f"for {model!r}, got {info.get('supports_none_reasoning_effort')!r}"
+    )
+    assert info.get("supports_minimal_reasoning_effort") == model_cost.get(
+        "supports_minimal_reasoning_effort"
+    ), (
+        f"get_model_info should return supports_minimal_reasoning_effort={model_cost.get('supports_minimal_reasoning_effort')!r} "
+        f"for {model!r}, got {info.get('supports_minimal_reasoning_effort')!r}"
+    )
+
+
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
