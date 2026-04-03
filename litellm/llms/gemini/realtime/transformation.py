@@ -85,6 +85,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError("api_key is required for Gemini API calls")
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
+        # WebSocket connections do not support custom HTTP headers in all clients,
+        # so the API key must remain as a query parameter here. This is an accepted
+        # limitation; httpx is not used for WebSocket so MaskedHTTPStatusError
+        # already covers the main leak vector.
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
     def map_model_turn_event(
