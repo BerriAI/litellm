@@ -572,7 +572,7 @@ async def test_model_armor_streaming_block_yields_sse_error():
         assert len(result_chunks) == 1
         error_data = json.loads(result_chunks[0].removeprefix("data: "))
         assert "error" in error_data
-        assert error_data["error"]["code"] == 400
+        assert int(error_data["error"]["code"]) == 400
 
 
 @pytest.mark.asyncio

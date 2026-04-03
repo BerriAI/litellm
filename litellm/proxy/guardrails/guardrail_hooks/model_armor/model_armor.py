@@ -760,8 +760,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         error_obj = dict(error_value)
                     else:
                         error_obj = {"message": str(error_value)}
-                    error_obj["code"] = e.status_code
-                    yield f"data: {json.dumps({'error': error_obj})}\n\n"
+                    error_obj["code"] = str(e.status_code)
+                    yield f"data: {json.dumps({'error': error_obj})}\n\n"  # type: ignore[misc]
                     return
                 except Exception as e:
                     verbose_proxy_logger.error(
