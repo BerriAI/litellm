@@ -491,7 +491,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        organization_id: values.organization_id ?? "",
+        ...(values.organization_id !== info.organization_id
+          ? { organization_id: values.organization_id ?? "" }
+          : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
