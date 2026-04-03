@@ -390,8 +390,13 @@ class LiteLLMCompletionResponsesConfig:
                 else:
                     decoded_content = compaction_item.get("content", "")
                 messages.append(
-                    ChatCompletionUserMessage(
-                        role="user", content=decoded_content
+                    ChatCompletionSystemMessage(
+                        role="system",
+                        content=(
+                            "The following is a summary of the prior conversation history, "
+                            "which was compacted to save context space. Treat this as established "
+                            "context, not as a new user message:\n\n" + decoded_content
+                        ),
                     )
                 )
                 if last_compaction_idx > 0:

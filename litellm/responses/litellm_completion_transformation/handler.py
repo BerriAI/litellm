@@ -169,7 +169,6 @@ def _append_compaction_output(
         "type": "compaction",
         "id": "cmp_" + uuid.uuid4().hex,
         "encrypted_content": encoded_content,
-        "created_by": None,
     }
     if existing_output:
         return [existing_output[0], compaction_item] + list(existing_output[1:])
