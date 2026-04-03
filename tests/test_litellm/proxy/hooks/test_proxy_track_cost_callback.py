@@ -166,11 +166,14 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
 
 @pytest.mark.asyncio
-async def test_track_cost_callback_sets_zero_cost_for_aget_responses():
+@pytest.mark.parametrize("call_type", ["aget_responses", "get_responses"])
+async def test_track_cost_callback_sets_zero_cost_for_non_billable_call_types(
+    call_type,
+):
     logger = _ProxyDBLogger()
 
     kwargs = {
-        "call_type": "aget_responses",
+        "call_type": call_type,
         "model": "openai/gpt-4.1",
         "stream": False,
         "litellm_params": {
@@ -183,7 +186,7 @@ async def test_track_cost_callback_sets_zero_cost_for_aget_responses():
         "standard_logging_object": {
             "response_cost": 0.42,
             "request_tags": [],
-            "call_type": "aget_responses",
+            "call_type": call_type,
         },
     }
 
@@ -209,9 +212,9 @@ async def test_track_cost_callback_sets_zero_cost_for_aget_responses():
             end_time=datetime.now(),
         )
 
-        call_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.call_args[
-            1
-        ]
+        call_kwargs = (
+            mock_proxy_logging.db_spend_update_writer.update_database.call_args[1]
+        )
         assert call_kwargs["response_cost"] == 0.0
 
         assert mock_increment_spend_counters.await_count == 1
