@@ -352,7 +352,7 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
-        _body = await _safe_aread_response(e.response)
+        _body = mask_sensitive_info(await _safe_aread_response(e.response))
         raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
     _text = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
