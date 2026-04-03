@@ -95,6 +95,9 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    access_group_models?: string[];
+    access_group_mcp_server_ids?: string[];
+    access_group_agent_ids?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
