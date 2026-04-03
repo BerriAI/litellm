@@ -48,6 +48,9 @@ class ResetBudgetJob:
             ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
             await self.reset_budget_for_litellm_budget_table()
 
+            ### RESET MULTI-WINDOW BUDGETS ###
+            await self.reset_budget_windows()
+
     async def reset_budget_for_litellm_team_members(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
     ):
@@ -549,6 +552,115 @@ class ResetBudgetJob:
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
 
+    async def reset_budget_windows(self) -> None:
+        """
+        For keys and teams with budget_limits, reset any individual windows where
+        reset_at <= now. Only the expired windows are reset; other windows are untouched.
+        """
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+        from litellm.proxy.proxy_server import spend_counter_cache
+
+        now = datetime.utcnow()
+
+        # --- Keys ---
+        try:
+            all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
+                where={"budget_limits": {"not": None}}  # type: ignore[arg-type]
+            )
+            for key in all_keys:
+                raw = key.budget_limits  # type: ignore[attr-defined]
+                if not raw:
+                    continue
+                windows: list = raw if isinstance(raw, list) else json.loads(raw)
+                changed = False
+                for window in windows:
+                    reset_at_str = window.get("reset_at")
+                    if not reset_at_str:
+                        continue
+                    reset_at = datetime.fromisoformat(
+                        reset_at_str.replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    if reset_at <= now:
+                        # Reset this window's counter (keyed by duration, not index)
+                        counter_key = (
+                            f"spend:key:{key.token}:window:{window['budget_duration']}"
+                        )
+                        spend_counter_cache.in_memory_cache.set_cache(
+                            key=counter_key, value=0.0
+                        )
+                        if spend_counter_cache.redis_cache is not None:
+                            try:
+                                await spend_counter_cache.redis_cache.async_set_cache(
+                                    key=counter_key, value=0.0
+                                )
+                            except Exception as redis_err:
+                                verbose_proxy_logger.warning(
+                                    "Failed to reset Redis counter %s: %s",
+                                    counter_key,
+                                    redis_err,
+                                )
+                        window["reset_at"] = get_budget_reset_time(
+                            budget_duration=window["budget_duration"]
+                        ).isoformat()
+                        changed = True
+                if changed:
+                    await self.prisma_client.db.litellm_verificationtoken.update(
+                        where={"token": key.token},
+                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Failed to reset budget windows for keys: %s", e
+            )
+
+        # --- Teams ---
+        try:
+            all_teams = await self.prisma_client.db.litellm_teamtable.find_many(
+                where={"budget_limits": {"not": None}}  # type: ignore[arg-type]
+            )
+            for team in all_teams:
+                raw = team.budget_limits  # type: ignore[attr-defined]
+                if not raw:
+                    continue
+                windows = raw if isinstance(raw, list) else json.loads(raw)
+                changed = False
+                for window in windows:
+                    reset_at_str = window.get("reset_at")
+                    if not reset_at_str:
+                        continue
+                    reset_at = datetime.fromisoformat(
+                        reset_at_str.replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    if reset_at <= now:
+                        counter_key = f"spend:team:{team.team_id}:window:{window['budget_duration']}"
+                        spend_counter_cache.in_memory_cache.set_cache(
+                            key=counter_key, value=0.0
+                        )
+                        if spend_counter_cache.redis_cache is not None:
+                            try:
+                                await spend_counter_cache.redis_cache.async_set_cache(
+                                    key=counter_key, value=0.0
+                                )
+                            except Exception as redis_err:
+                                verbose_proxy_logger.warning(
+                                    "Failed to reset Redis counter %s: %s",
+                                    counter_key,
+                                    redis_err,
+                                )
+                        window["reset_at"] = get_budget_reset_time(
+                            budget_duration=window["budget_duration"]
+                        ).isoformat()
+                        changed = True
+                if changed:
+                    await self.prisma_client.db.litellm_teamtable.update(
+                        where={"team_id": team.team_id},
+                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Failed to reset budget windows for teams: %s", e
+            )
+
     @staticmethod
     async def _reset_budget_common(
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
@@ -570,14 +682,14 @@ class ResetBudgetJob:
             from litellm.proxy.proxy_server import spend_counter_cache
 
             counter_key = None
-            if item_type == "key" and hasattr(item, "token") and item.token is not None:
-                counter_key = f"spend:key:{item.token}"
+            if item_type == "key" and hasattr(item, "token") and item.token is not None:  # type: ignore[union-attr]
+                counter_key = f"spend:key:{item.token}"  # type: ignore[union-attr]
             elif (
                 item_type == "team"
                 and hasattr(item, "team_id")
-                and item.team_id is not None
+                and item.team_id is not None  # type: ignore[union-attr]
             ):
-                counter_key = f"spend:team:{item.team_id}"
+                counter_key = f"spend:team:{item.team_id}"  # type: ignore[union-attr]
 
             if counter_key is not None:
                 # Always reset in-memory (local fallback)
