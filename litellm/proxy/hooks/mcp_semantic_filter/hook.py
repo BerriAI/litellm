@@ -218,22 +218,46 @@ class SemanticToolFilterHook(CustomLogger):
                 )
                 return None
 
+            # Only semantically filter MCP gateway tools — identified by the
+            # "mcp__" name prefix assigned by the LiteLLM proxy. Non-MCP tools
+            # (user-defined function tools, model-specific tool schemas) are
+            # passed through untouched so they are never inadvertently dropped.
+            mcp_tools = []
+            passthrough_tools = []
+            for t in tools:
+                name = (
+                    t.get("function", {}).get("name", "") or t.get("name", "")
+                    if isinstance(t, dict)
+                    else getattr(t, "name", "")
+                )
+                if name.startswith("mcp__"):
+                    mcp_tools.append(t)
+                else:
+                    passthrough_tools.append(t)
+
+            if not mcp_tools:
+                verbose_proxy_logger.debug(
+                    "No MCP tools to filter, skipping semantic filter"
+                )
+                return None
+
             verbose_proxy_logger.debug(
-                f"Applying semantic filter to {len(tools)} tools "
+                f"Applying semantic filter to {len(mcp_tools)} MCP tools "
+                f"({len(passthrough_tools)} non-MCP tools passed through) "
                 f"with query: '{user_query[:50]}...'"
             )
 
-            # Filter tools semantically
+            # Filter MCP tools semantically
             filtered_tools = await self.filter.filter_tools(
                 query=user_query,
-                available_tools=tools,  # type: ignore
+                available_tools=mcp_tools,  # type: ignore
             )
 
-            # Always update tools and emit header (even if count unchanged)
-            data["tools"] = filtered_tools
+            # Recombine: filtered MCP tools + all passthrough tools
+            data["tools"] = filtered_tools + passthrough_tools
 
-            # Store filter stats and tool names for response header
-            filter_stats = f"{original_tool_count}->{len(filtered_tools)}"
+            # Store filter stats and tool names for response header (MCP tools only)
+            filter_stats = f"{len(mcp_tools)}->{len(filtered_tools)}"
             tool_names_csv = self._get_tool_names_csv(filtered_tools)
 
             _metadata_variable_name = self._get_metadata_variable_name(data)
