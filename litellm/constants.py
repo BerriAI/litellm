@@ -1393,6 +1393,10 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# This will run tag spcific tasks at a later time to smooth QPS
+DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes

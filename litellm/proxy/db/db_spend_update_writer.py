@@ -991,19 +991,7 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_org_spend_update_transactions,
         )
 
-        ################## Daily Tag Spend Update Transactions ##################
-        # Aggregate all in memory daily tag spend transactions and commit to db
-        daily_tag_spend_update_transactions = cast(
-            Dict[str, DailyTagSpendTransaction],
-            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_tag_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_tag_spend_update_transactions,
-        )
+        # NOTE: Daily tag spend is committed by a separate scheduler job.
 
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db
@@ -1032,6 +1020,29 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
+
+    async def _commit_daily_tag_spend_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit only tag spend updates to database.
+        This is called by a separate scheduler job at a longer interval.
+        """
+        daily_tag_spend_update_transactions = cast(
+            Dict[str, DailyTagSpendTransaction],
+            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        if daily_tag_spend_update_transactions:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
 
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
