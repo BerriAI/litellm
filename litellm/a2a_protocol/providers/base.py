@@ -3,7 +3,7 @@ Base configuration for A2A protocol providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 
 class BaseA2AProviderConfig(ABC):
@@ -19,7 +19,7 @@ class BaseA2AProviderConfig(ABC):
         self,
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -41,7 +41,7 @@ class BaseA2AProviderConfig(ABC):
         self,
         request_id: str,
         params: Dict[str, Any],
-        api_base: str,
+        api_base: Optional[str] = None,
         **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """

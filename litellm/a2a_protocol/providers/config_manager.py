@@ -39,9 +39,11 @@ class A2AProviderConfigManager:
 
             return PydanticAIProviderConfig()
 
-        # Add more providers here as needed
-        # elif custom_llm_provider == "another_provider":
-        #     from litellm.a2a_protocol.providers.another_provider.config import AnotherProviderConfig
-        #     return AnotherProviderConfig()
+        if custom_llm_provider == "bedrock":
+            from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+                BedrockAgentCoreA2AConfig,
+            )
+
+            return BedrockAgentCoreA2AConfig()
 
         return None
