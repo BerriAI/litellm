@@ -926,6 +926,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
+        # Fix 11: strip large base64 from complete_input_dict (e.g. Vertex AI
+        # inline_data.data fields ~1.3 MB each) before storing in
+        # model_call_details.  The base64 has already been serialised into
+        # request_body_str for the actual API call, so we only need the
+        # truncated copy for logging/callbacks.
+        if additional_args.get("complete_input_dict"):
+            additional_args = {
+                **additional_args,
+                "complete_input_dict": truncate_base64_in_messages(
+                    additional_args["complete_input_dict"]
+                ),
+            }
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if (

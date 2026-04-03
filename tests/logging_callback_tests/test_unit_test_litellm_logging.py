@@ -483,3 +483,77 @@ def test_handle_anthropic_messages_response_no_httpx_response_uses_result():
         )
 
     assert result is not None
+
+
+def test_pre_call_strips_base64_from_complete_input_dict():
+    """
+    Fix 11: _pre_call must strip large base64 from additional_args["complete_input_dict"]
+    (e.g. Vertex AI inline_data.data fields) before storing in model_call_details.
+    Each image request creates ~1.3 MB base64 strings; without this fix they
+    accumulate in model_call_details["additional_args"] for the full Logging
+    object lifetime, causing >600 MB leak at 446+ concurrent image allocs.
+    """
+    import base64
+
+    logging_obj = setup_logging()
+
+    # Simulate a Vertex AI request body with inline_data
+    raw_base64 = base64.b64encode(b"X" * 1_000_000).decode()  # ~1.3 MB base64
+    complete_input_dict = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "inline_data": {
+                            "data": raw_base64,
+                            "mime_type": "image/jpeg",
+                        }
+                    }
+                ],
+            }
+        ]
+    }
+
+    logging_obj._pre_call(
+        input="test",
+        api_key="sk-test",
+        additional_args={
+            "complete_input_dict": complete_input_dict,
+            "api_base": "https://us-central1-aiplatform.googleapis.com",
+        },
+    )
+
+    stored = logging_obj.model_call_details["additional_args"]["complete_input_dict"]
+    stored_data = (
+        stored["contents"][0]["parts"][0]["inline_data"]["data"]
+    )
+    assert stored_data != raw_base64, "base64 should be truncated in stored complete_input_dict"
+    assert "[base64_data truncated" in stored_data or "[" in stored_data, (
+        f"Expected truncation placeholder, got: {stored_data[:80]}"
+    )
+    # Original dict must NOT be mutated
+    assert complete_input_dict["contents"][0]["parts"][0]["inline_data"]["data"] == raw_base64, (
+        "original complete_input_dict must not be mutated by _pre_call"
+    )
+
+
+def test_pre_call_no_complete_input_dict_unchanged():
+    """
+    Fix 11: _pre_call with no complete_input_dict in additional_args should
+    store additional_args unchanged.
+    """
+    logging_obj = setup_logging()
+
+    additional_args = {
+        "api_base": "https://api.openai.com",
+        "headers": {"Authorization": "Bearer sk-test"},
+    }
+    logging_obj._pre_call(
+        input="hello",
+        api_key="sk-test",
+        additional_args=additional_args,
+    )
+    stored = logging_obj.model_call_details["additional_args"]
+    assert stored["api_base"] == "https://api.openai.com"
+    assert "complete_input_dict" not in stored
