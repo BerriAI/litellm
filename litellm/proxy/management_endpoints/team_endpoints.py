@@ -3392,9 +3392,9 @@ async def _resolve_access_group_resources(
                 user_api_key_cache=_user_api_key_cache,
                 proxy_logging_obj=_proxy_logging_obj,
             )
-            models.extend(getattr(ag, "access_model_names", []))
-            mcp_ids.extend(getattr(ag, "access_mcp_server_ids", []))
-            agent_ids.extend(getattr(ag, "access_agent_ids", []))
+            models.extend(ag.access_model_names or [])
+            mcp_ids.extend(ag.access_mcp_server_ids or [])
+            agent_ids.extend(ag.access_agent_ids or [])
         except Exception:
             verbose_proxy_logger.debug(
                 "Could not fetch access group %s for resource resolution",
