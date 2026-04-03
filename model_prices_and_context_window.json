@@ -10342,6 +10342,11 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
+    "brave/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "brave",
+        "mode": "search"
+    },
     "dataforseo/search": {
         "input_cost_per_query": 0.003,
         "litellm_provider": "dataforseo",
