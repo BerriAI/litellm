@@ -27,8 +27,10 @@ RUN apk add --no-cache \
     npm \
     libsndfile
 
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
+    XDG_CACHE_HOME=/app/.cache \
     PATH="/app/.venv/bin:${PATH}"
 
 COPY . .
@@ -77,7 +79,9 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervi
     { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    XDG_CACHE_HOME=/app/.cache \
+    PATH="/app/.venv/bin:${PATH}"
 
 COPY --from=builder /app /app
 
