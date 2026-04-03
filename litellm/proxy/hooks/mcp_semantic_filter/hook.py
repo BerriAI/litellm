@@ -8,7 +8,11 @@ Reduces context window size and improves tool selection accuracy.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
+from litellm.proxy._experimental.mcp_server.utils import (
+    MCP_TOOL_PREFIX_SEPARATOR,
+    get_server_prefix,
+    normalize_server_name,
+)
 from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
     DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD,
@@ -44,11 +48,34 @@ class SemanticToolFilterHook(CustomLogger):
         """
         super().__init__()
         self.filter = semantic_filter
+        self._registered_server_prefixes: Optional[set] = None
 
         verbose_proxy_logger.debug(
             f"Initialized SemanticToolFilterHook with filter: "
             f"enabled={semantic_filter.enabled}, top_k={semantic_filter.top_k}"
         )
+
+    def _get_registered_server_prefixes(self) -> set:
+        """Get the set of known MCP server prefixes from the registry."""
+        if self._registered_server_prefixes is None:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            registry = global_mcp_server_manager.get_registry()
+            self._registered_server_prefixes = {
+                normalize_server_name(get_server_prefix(server))
+                for server in registry.values()
+                if get_server_prefix(server)
+            }
+        return self._registered_server_prefixes
+
+    def _is_mcp_tool(self, tool_name: str) -> bool:
+        """Check if a tool is an MCP tool by validating its prefix against the registry."""
+        if MCP_TOOL_PREFIX_SEPARATOR not in tool_name:
+            return False
+        prefix = tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
+        return normalize_server_name(prefix) in self._get_registered_server_prefixes()
 
     def _should_expand_mcp_tools(self, tools: List[Any]) -> bool:
         """
@@ -231,10 +258,8 @@ class SemanticToolFilterHook(CustomLogger):
                     t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
                 )
 
-            mcp_tools = [t for t in tools if is_tool_name_prefixed(_tool_name(t))]
-            non_mcp_tools = [
-                t for t in tools if not is_tool_name_prefixed(_tool_name(t))
-            ]
+            mcp_tools = [t for t in tools if self._is_mcp_tool(_tool_name(t))]
+            non_mcp_tools = [t for t in tools if not self._is_mcp_tool(_tool_name(t))]
 
             if not mcp_tools:
                 return None
