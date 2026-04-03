@@ -93,6 +93,8 @@ export const mcpServerColumns = (
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
   teamAliasMap?: Map<string, string>,
+  canEditMCP?: boolean,
+  canDeleteMCP?: boolean,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -303,22 +305,26 @@ export const mcpServerColumns = (
     size: 70,
     cell: ({ row }) => (
       <div className="flex items-center gap-1">
-        <Tooltip title="Edit">
-          <button
-            onClick={() => onEdit(row.original.server_id)}
-            className="p-1.5 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-          >
-            <Icon icon={PencilAltIcon} size="sm" />
-          </button>
-        </Tooltip>
-        <Tooltip title="Delete">
-          <button
-            onClick={() => onDelete(row.original.server_id)}
-            className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-          >
-            <Icon icon={TrashIcon} size="sm" />
-          </button>
-        </Tooltip>
+        {canEditMCP && (
+          <Tooltip title="Edit">
+            <button
+              onClick={() => onEdit(row.original.server_id)}
+              className="p-1.5 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+            >
+              <Icon icon={PencilAltIcon} size="sm" />
+            </button>
+          </Tooltip>
+        )}
+        {canDeleteMCP && (
+          <Tooltip title="Delete">
+            <button
+              onClick={() => onDelete(row.original.server_id)}
+              className="p-1.5 rounded-md text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <Icon icon={TrashIcon} size="sm" />
+            </button>
+          </Tooltip>
+        )}
       </div>
     ),
   },

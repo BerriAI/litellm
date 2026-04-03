@@ -65,6 +65,30 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
   const { data: allTeams } = useTeams();
+  const canEditMCP = React.useMemo(() => {
+    if (!allTeams || !userID) return false;
+    return allTeams.some((t) =>
+      t.members_with_roles?.some(
+        (m) => m.user_id === userID && m.extra_permissions?.includes("mcp:update")
+      )
+    );
+  }, [allTeams, userID]);
+  const canCreateMCP = React.useMemo(() => {
+    if (!allTeams || !userID) return false;
+    return allTeams.some((t) =>
+      t.members_with_roles?.some(
+        (m) => m.user_id === userID && m.extra_permissions?.includes("mcp:create")
+      )
+    );
+  }, [allTeams, userID]);
+  const canDeleteMCP = React.useMemo(() => {
+    if (!allTeams || !userID) return false;
+    return allTeams.some((t) =>
+      t.members_with_roles?.some(
+        (m) => m.user_id === userID && m.extra_permissions?.includes("mcp:delete")
+      )
+    );
+  }, [allTeams, userID]);
   const teamAliasMap = React.useMemo(() => {
     const map = new Map<string, string>();
     if (allTeams) {
@@ -183,8 +207,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         recheckServerHealth,
         recheckingServerIds,
         teamAliasMap,
+        isAdminRole(userRole ?? "") || canEditMCP,
+        isAdminRole(userRole ?? "") || canDeleteMCP,
       ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, teamAliasMap],
+    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds, teamAliasMap, canEditMCP, canDeleteMCP],
   );
 
   function handleDelete(server_id: string) {
@@ -203,6 +229,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
+      NotificationsManager.fromBackend(error instanceof Error ? error.message : "Failed to delete MCP server");
     } finally {
       setIsDeletingServer(false);
       setIsDeleteModalOpen(false);
@@ -318,9 +345,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <Text className="text-tremor-content mt-1">Configure and manage your MCP servers</Text>
         </div>
         <div className="flex items-center gap-2">
-          <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
-            + Add New MCP Server
-          </Button>
+          {(isAdminRole(userRole ?? "") || canCreateMCP) && (
+            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+              + Add New MCP Server
+            </Button>
+          )}
         </div>
       </div>
       <MCPDiscovery
@@ -356,6 +385,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 mcpServer={selectedServer}
                 onBack={handleBack}
                 isProxyAdmin={isAdminRole(userRole ?? "")}
+                canEditMCP={canEditMCP}
                 isEditing={editServer}
                 accessToken={accessToken}
                 userID={userID}

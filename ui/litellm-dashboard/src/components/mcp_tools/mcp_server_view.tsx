@@ -16,6 +16,7 @@ interface MCPServerViewProps {
   mcpServer: MCPServer;
   onBack: () => void;
   isProxyAdmin: boolean;
+  canEditMCP: boolean;
   isEditing: boolean;
   accessToken: string | null;
   userRole: string | null;
@@ -28,6 +29,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   onBack,
   isEditing,
   isProxyAdmin,
+  canEditMCP,
   accessToken,
   userRole,
   userID,
@@ -119,7 +121,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {[
             <Tab key="overview">Overview</Tab>,
             <Tab key="tools">MCP Tools</Tab>,
-            ...(isProxyAdmin ? [<Tab key="settings">Settings</Tab>] : []),
+            ...(isProxyAdmin || canEditMCP ? [<Tab key="settings">Settings</Tab>] : []),
           ]}
         </TabList>
 
