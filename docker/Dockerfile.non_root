@@ -42,7 +42,7 @@ ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
 RUN mkdir -p /var/lib/litellm/ui && \
-    mv /app/.npmrc /app/.npmrc.bak && \
+    ( [ -f /app/.npmrc ] && mv /app/.npmrc /app/.npmrc.bak || true ) && \
     npm install -g npm@11.12.1 && \
     npm install -g node-gyp@12.2.0 && \
     ln -sf /usr/local/lib/node_modules/node-gyp /usr/lib/node_modules/npm/node_modules/node-gyp && \
