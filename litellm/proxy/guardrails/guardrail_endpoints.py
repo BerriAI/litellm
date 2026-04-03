@@ -17,7 +17,6 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_team_membership
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
     CustomCodeValidationError,
@@ -616,6 +615,7 @@ async def register_guardrail(
     # Validate team membership for non-admin users when team differs from key
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     if not is_admin and team_id != user_api_key_dict.team_id:
+        from litellm.proxy.auth.auth_checks import get_team_membership
         from litellm.proxy.proxy_server import user_api_key_cache
 
         membership = await get_team_membership(
