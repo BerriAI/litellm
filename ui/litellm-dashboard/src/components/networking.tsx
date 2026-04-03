@@ -3205,6 +3205,7 @@ export const keyAliasesCall = async (
   page: number = 1,
   size: number = 50,
   search?: string,
+  team_id?: string,
 ): Promise<PaginatedKeyAliasResponse> => {
   /**
    * Get key aliases from proxy with pagination and optional search
@@ -3215,6 +3216,7 @@ export const keyAliasesCall = async (
         page: String(page),
         size: String(size),
         ...(search ? { search } : {}),
+        ...(team_id ? { team_id } : {}),
       }),
     );
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
