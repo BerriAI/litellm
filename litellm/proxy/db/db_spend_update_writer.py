@@ -1020,6 +1020,9 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
+        
+        ################## Tool Registry Upserts ##################
+        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
     async def _commit_daily_tag_spend_to_db(
         self,
@@ -1043,9 +1046,6 @@ class DBSpendUpdateWriter:
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
             )
-
-        ################## Tool Registry Upserts ##################
-        await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
     async def _flush_tool_discovery_queue(
         self,
