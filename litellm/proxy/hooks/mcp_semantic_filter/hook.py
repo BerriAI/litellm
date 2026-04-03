@@ -151,7 +151,7 @@ class SemanticToolFilterHook(CustomLogger):
             Modified data dict with filtered tools, or None if no changes
         """
         # Only filter endpoints that support tools
-        if call_type not in ("completion", "acompletion", "aresponses"):
+        if call_type not in ("completion", "acompletion", "aresponses", "anthropic_messages"):
             verbose_proxy_logger.debug(
                 f"Skipping semantic filter for call_type={call_type}"
             )
