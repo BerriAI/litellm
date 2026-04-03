@@ -202,6 +202,45 @@ self.model_call_details["additional_args"] = additional_args
 
 ---
 
+### Fix 11 后验证（✅ 泄漏消除）
+
+> 04:44:06（43.7s）| Heap: **205.878MB** &nbsp;→&nbsp; 04:53:48（624.7s）| Heap: **629.867MB（75% of 840.735MB max）**
+
+**快照 1**（43.7s，低负载）：
+```
+Location          Total Bytes   Own Bytes   Allocs  Module
+aread             57.849MB     57.841MB      11    httpx._models
+text              57.845MB     57.845MB      10    httpx._models
+raw_decode        24.530MB     24.530MB       5    json.decoder
+async_completion 170.262MB          0B      82    litellm.llms.vertex
+```
+
+**快照 2**（624.7s，高并发，heap 图为锯齿形）：
+```
+Location                       Total Bytes   Own Bytes   Allocs
+async_function_with_retries    389.356MB    83.712kB     874   litellm.router
+wrapped_app / middleware 链    217.587MB         0B      702   starlette/fastapi
+_acompletion                   389.353MB    83.712kB     872   litellm.router
+run (asyncio.runners)          629.595MB     5.202MB    2085   asyncio.runners
+```
+
+**`convert_to_anthropic_image_obj` 完全不出现**（Fix 11 前在同等 duration 下持有 606-665MB Own Bytes）。
+
+关键特征变化：
+
+| 指标 | Fix 11 前（862s）| Fix 11 后（624s）|
+|------|---|---|
+| `convert_to_anthropic_image_obj` Own Bytes | 606MB（446 allocs）| **0（不出现）** |
+| 最大单函数 Own Bytes | 606MB | ~57MB（aread，工作集）|
+| Heap vs max 关系 | 89%→86%（持续上升）| **75%（已低于历史峰值，GC 回收中）**|
+| Heap 图形态 | 单调线性增长 | **锯齿形（有波峰有回落）**|
+
+629MB 的构成为并发请求工作集（874 个并发 Vertex 调用 + 702 个 HTTP 请求），heap 图右侧趋于平稳，max 840MB 为历史瞬间峰值，当前已降至 629MB，确认 GC 正常工作。
+
+**结论：Fix 1-11 全部生效后，所有持久累积泄漏模式已消除，剩余内存为随并发数弹性伸缩的有界工作集。**
+
+---
+
 ## 根因分析：数据复制路径
 
 同一份 Vertex AI 图片数据（base64 编码）在处理链路上被**多次复制**，且被多个生命周期较长的对象引用：
@@ -444,6 +483,8 @@ del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
 | **Fix 6-10 后轻负载** | **63.874MB（33.7s）** | **—** | ✅ **极低基线** |
 | **Fix 6-10 后高并发图片压测** | **408MB（162.7s，64+ 并发图片请求）** | **有界** | ✅ **工作集，非泄漏** |
 | Fix 6-10 后持续高并发（含新泄漏）| 1.875GB → 1.853GB（862.7s → 1026.7s）| ~0.36MB/s | ❌ Fix 11 前 |
+| **Fix 11 后高并发压测（43.7s）** | **205.878MB（max = current）** | **—** | ✅ **工作集，无积压** |
+| **Fix 11 后高并发压测（624.7s）** | **629.867MB（75% of 840.735MB max）** | **有界，GC 回收中** | ✅ **稳定** |
 
 ---
 
