@@ -99,8 +99,8 @@ async def maybe_compact_context(
     transcript = _serialize_messages_for_summary(messages)
 
     summarization_messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
         {"role": "user", "content": transcript},
-        {"role": "user", "content": SUMMARIZATION_SYSTEM_PROMPT},
     ]
 
     acompletion_kwargs: Dict[str, Any] = {
