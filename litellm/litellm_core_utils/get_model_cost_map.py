@@ -1,11 +1,10 @@
 """
 Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
-This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
+Remote fetch can be disabled with LITELLM_LOCAL_MODEL_COST_MAP=True (uses the local backup).
 
-```
-export LITELLM_LOCAL_MODEL_COST_MAP=True
-```
+To load the backup map from a file instead of the package copy (e.g. PyInstaller, air-gapped
+deployments), set LITELLM_MODEL_COST_MAP_PATH to a UTF-8 JSON file path.
 """
 
 import json
@@ -35,13 +34,27 @@ class GetModelCostMap:
 
     @staticmethod
     def load_local_model_cost_map() -> dict:
-        """Load the local backup model cost map bundled with the package."""
-        content = json.loads(
+        """Load the local backup model cost map (file or bundled package JSON)."""
+        path = os.getenv("LITELLM_MODEL_COST_MAP_PATH", "").strip()
+        if path:
+            with open(path, encoding="utf-8") as f:
+                content = json.load(f)
+            if not isinstance(content, dict):
+                raise TypeError(
+                    "LITELLM_MODEL_COST_MAP_PATH must point to a JSON object "
+                    f"(got {type(content).__name__})"
+                )
+            if not content:
+                raise ValueError(
+                    "LITELLM_MODEL_COST_MAP_PATH: JSON object must be non-empty"
+                )
+            return content
+
+        return json.loads(
             files("litellm")
             .joinpath("model_prices_and_context_window_backup.json")
             .read_text(encoding="utf-8")
         )
-        return content
 
     @classmethod
     def _get_backup_model_count(cls) -> int:
@@ -248,6 +261,9 @@ def get_model_cost_map(url: str) -> dict:
     1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
     2. Otherwise fetches from ``url``, validates integrity, and falls back
        to the local backup on any failure.
+
+    When ``LITELLM_MODEL_COST_MAP_PATH`` is set, the local backup is read from that
+    file instead of the bundled JSON (applies to both steps above).
 
     Only the backup model count is cached (a single int) for validation.
     The full backup dict is only parsed when it must be *returned* as a
