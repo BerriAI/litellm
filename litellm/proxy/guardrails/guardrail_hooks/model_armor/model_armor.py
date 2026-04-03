@@ -14,6 +14,8 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+import json
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -203,8 +205,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 response.text,
             )
             raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Model Armor API error: {response.text}",
+                status_code=400,
+                detail=f"Model Armor API error (upstream {response.status_code}): {response.text}",
             )
 
         json_response = response.json()
@@ -746,8 +748,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                                 yield chunk
                             return
 
-                except HTTPException:
-                    raise
+                except HTTPException as e:
+                    # Yield error as SSE event so create_response() detects it and
+                    # returns a proper JSON error response with the correct status code.
+                    # (Raising from a generator hits create_response's generic except → 500.)
+                    detail = (
+                        e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+                    )
+                    error_value = detail.get("error", detail)
+                    if isinstance(error_value, dict):
+                        error_obj = dict(error_value)
+                    else:
+                        error_obj = {"message": str(error_value)}
+                    error_obj["code"] = e.status_code
+                    yield f"data: {json.dumps({'error': error_obj})}\n\n"
+                    return
                 except Exception as e:
                     verbose_proxy_logger.error(
                         "Model Armor streaming error: %s", str(e), exc_info=True

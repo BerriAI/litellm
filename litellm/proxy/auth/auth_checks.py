@@ -165,9 +165,24 @@ def _is_model_cost_zero(
                 )
                 return False
 
-            # This model has zero cost explicitly configured
+            # Costs are 0 — verify this is from explicit configuration,
+            # not from defaulted sparse auto-registration entries.
+            # See: https://github.com/BerriAI/litellm/issues/24770
+            safe_name = str(model_name).replace("\n", "").replace("\r", "")
+            if not _is_cost_explicitly_configured(model_name, llm_router):
+                verbose_proxy_logger.debug(
+                    "Model %s has zero cost but no explicit cost "
+                    "configuration in model_cost entry — treating as unknown "
+                    "cost (enforce budget)",
+                    safe_name,
+                )
+                return False
+
             verbose_proxy_logger.debug(
-                f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
+                "Model %s has zero cost explicitly configured (input: %s, output: %s)",
+                safe_name,
+                input_cost,
+                output_cost,
             )
 
         except Exception as e:
@@ -179,6 +194,33 @@ def _is_model_cost_zero(
 
     # All models checked have zero cost
     return True
+
+
+def _is_cost_explicitly_configured(
+    model: str, llm_router: "Router"
+) -> bool:
+    """
+    Check if any deployment in the model group has cost fields explicitly
+    set in its litellm.model_cost entry.
+
+    When Router._create_deployment() registers a model not in the global
+    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
+    fields. _get_model_info_helper() then defaults missing costs to 0.
+    This function detects that scenario by checking the raw model_cost entry.
+    """
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") != model:
+            continue
+        model_id = deployment.get("model_info", {}).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, {})
+        if (
+            "input_cost_per_token" in raw_entry
+            or "output_cost_per_token" in raw_entry
+        ):
+            return True
+    return False
 
 
 async def _run_project_checks(
