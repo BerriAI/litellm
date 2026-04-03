@@ -48,7 +48,6 @@ class SemanticToolFilterHook(CustomLogger):
         """
         super().__init__()
         self.filter = semantic_filter
-        self._registered_server_prefixes: Optional[set] = None
 
         verbose_proxy_logger.debug(
             f"Initialized SemanticToolFilterHook with filter: "
@@ -56,19 +55,20 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
     def _get_registered_server_prefixes(self) -> set:
-        """Get the set of known MCP server prefixes from the registry."""
-        if self._registered_server_prefixes is None:
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
+        """Get the set of known MCP server prefixes from the registry.
 
-            registry = global_mcp_server_manager.get_registry()
-            self._registered_server_prefixes = {
-                normalize_server_name(get_server_prefix(server))
-                for server in registry.values()
-                if get_server_prefix(server)
-            }
-        return self._registered_server_prefixes
+        Queries the registry each time so newly added servers are recognized.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        registry = global_mcp_server_manager.get_registry()
+        return {
+            normalize_server_name(get_server_prefix(server))
+            for server in registry.values()
+            if get_server_prefix(server)
+        }
 
     def _is_mcp_tool(self, tool_name: str) -> bool:
         """Check if a tool is an MCP tool by validating its prefix against the registry."""
@@ -258,8 +258,11 @@ class SemanticToolFilterHook(CustomLogger):
                     t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
                 )
 
-            mcp_tools = [t for t in tools if self._is_mcp_tool(_tool_name(t))]
-            non_mcp_tools = [t for t in tools if not self._is_mcp_tool(_tool_name(t))]
+            mcp_tools, non_mcp_tools = [], []
+            for t in tools:
+                (
+                    mcp_tools if self._is_mcp_tool(_tool_name(t)) else non_mcp_tools
+                ).append(t)
 
             if not mcp_tools:
                 return None
