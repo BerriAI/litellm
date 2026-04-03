@@ -2598,10 +2598,12 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        result = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        result._hidden_params["response_cost"] = 0.0
+        return result
 
     async def async_get_responses(
         self,
@@ -2673,10 +2675,12 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        result = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        result._hidden_params["response_cost"] = 0.0
+        return result
 
     #####################################################################
     ################ LIST RESPONSES INPUT ITEMS HANDLER ###########################
@@ -4495,9 +4499,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4613,9 +4617,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = (
                             await callback.async_run_chat_completion_agentic_loop(
                                 tools=tool_calls,
@@ -5099,7 +5103,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5311,7 +5318,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5551,7 +5561,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
