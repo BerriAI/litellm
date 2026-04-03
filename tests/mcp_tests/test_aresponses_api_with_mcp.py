@@ -13,6 +13,20 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Ha
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse, OpenAIMcpServerTool, ToolParam
 
 
+@pytest.fixture()
+def responses_main_module():
+    """Return the litellm.responses.main module via sys.modules.
+
+    Using sys.modules bypasses two name-collision issues:
+    1. `litellm.responses` resolves to the public `responses` function (not the
+       subpackage), so patch("litellm.responses.main.aresponses") raises AttributeError.
+    2. `import litellm.responses.main` is shadowed by the third-party `responses` library.
+    """
+    import sys
+
+    return sys.modules["litellm.responses.main"]
+
+
 class MockUserAPIKeyAuth:
     """Mock UserAPIKeyAuth for testing"""
     def __init__(self):
@@ -28,6 +42,17 @@ class MockUserAPIKeyAuth:
         self.permissions = {}
         self.metadata = {}
         self.object_permission_id = "test_permission_id"
+
+
+def test_transform_mcp_tools_to_openai_empty_list():
+    """_transform_mcp_tools_to_openai must short-circuit on an empty list.
+
+    The guard `if not mcp_tools: return []` avoids importing
+    litellm.experimental_mcp_client (which imports `mcp`) when there are no
+    tools to transform — important when `mcp` is not installed.
+    """
+    result = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai([])
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -256,7 +281,7 @@ async def test_aresponses_api_with_mcp_mock_integration():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process_tools():
+async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process_tools(responses_main_module):
     """
     Test that MCP auth headers from secret_fields (e.g. x-mcp-linear_config-authorization)
     are passed to _process_mcp_tools_without_openai_transform when using the responses API.
@@ -307,16 +332,8 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
         "_process_mcp_tools_without_openai_transform",
         mock_process,
     ):
-        # patch.object avoids two name-collision issues:
-        # 1. `litellm.responses` resolves to the public `responses` function, not the
-        #    subpackage, so string-based patch("litellm.responses.main.aresponses") fails.
-        # 2. `import litellm.responses.main` is shadowed by the third-party `responses`
-        #    library.  Using sys.modules bypasses both.
-        _responses_main = sys.modules["litellm.responses.main"]
-
-        _responses_main = sys.modules["litellm.responses.main"]
         with patch.object(
-            _responses_main,
+            responses_main_module,
             "aresponses",
             new_callable=AsyncMock,
             return_value=mock_response,
@@ -549,7 +566,7 @@ async def test_mcp_allowed_tools_filtering():
     print("✓ MCP allowed_tools filtering test completed successfully!")
 
 @pytest.mark.asyncio
-async def test_streaming_mcp_events_validation():
+async def test_streaming_mcp_events_validation(responses_main_module):
     """
     Test that MCP streaming events are properly emitted when using streaming with MCP tools.
 
@@ -655,16 +672,8 @@ async def test_streaming_mcp_events_validation():
         "_execute_tool_calls",
         new_callable=AsyncMock,
     ) as mock_execute_tools:
-        # patch.object avoids two name-collision issues:
-        # 1. `litellm.responses` resolves to the public `responses` function, not the
-        #    subpackage, so string-based patch("litellm.responses.main.aresponses") fails.
-        # 2. `import litellm.responses.main` is shadowed by the third-party `responses`
-        #    library.  Using sys.modules bypasses both.
-        import sys
-
-        _responses_main = sys.modules["litellm.responses.main"]
         with patch.object(
-            _responses_main,
+            responses_main_module,
             "aresponses",
             new_callable=AsyncMock,
             return_value=fake_stream,
