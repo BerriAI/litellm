@@ -499,11 +499,17 @@ async def vantage_export(
                 sku_breakdown=True,
             )
             if request.start_time_utc or request.end_time_utc:
+                from datetime import datetime, timezone
+
                 from litellm.integrations.focus.destinations import FocusTimeWindow
 
+                start = request.start_time_utc or datetime(
+                    1970, 1, 1, tzinfo=timezone.utc
+                )
+                end = request.end_time_utc or datetime.now(timezone.utc)
                 window = FocusTimeWindow(
-                    start_time=request.start_time_utc,
-                    end_time=request.end_time_utc,
+                    start_time=start,
+                    end_time=end,
                     frequency="manual",
                 )
                 await engine.export_window(window=window, limit=request.limit)
