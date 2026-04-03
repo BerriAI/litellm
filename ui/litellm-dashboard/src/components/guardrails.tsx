@@ -137,103 +137,105 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
-          <Tab>Guardrail Garden</Tab>
-          <Tab>Guardrails</Tab>
+          {isAdmin && <Tab>Guardrail Garden</Tab>}
+          {isAdmin && <Tab>Guardrails</Tab>}
           <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
           <Tab>Submitted Guardrails</Tab>
         </TabList>
 
         <TabPanels>
-          {/* Guardrail Garden Tab */}
-          <TabPanel>
-            <GuardrailGarden
-              accessToken={accessToken}
-              onGuardrailCreated={handleSuccess}
-            />
-          </TabPanel>
-
-          {/* Existing Guardrails Tab */}
-          <TabPanel>
-            <div className="flex justify-between items-center mb-4">
-              <Dropdown
-                menu={{
-                  items: [
-                    {
-                      key: "provider",
-                      icon: <PlusOutlined />,
-                      label: "Add Provider Guardrail",
-                      onClick: handleAddGuardrail,
-                    },
-                    {
-                      key: "custom_code",
-                      icon: <CodeOutlined />,
-                      label: "Create Custom Code Guardrail",
-                      onClick: handleAddCustomCodeGuardrail,
-                    },
-                  ],
-                }}
-                trigger={["click"]}
-                disabled={!accessToken}
-              >
-                <Button disabled={!accessToken}>
-                  + Add New Guardrail <DownOutlined className="ml-2" />
-                </Button>
-              </Dropdown>
-            </div>
-
-            {selectedGuardrailId ? (
-              <GuardrailInfoView
-                guardrailId={selectedGuardrailId}
-                onClose={() => setSelectedGuardrailId(null)}
+          {isAdmin && (
+            <TabPanel>
+              <GuardrailGarden
                 accessToken={accessToken}
-                isAdmin={isAdmin}
+                onGuardrailCreated={handleSuccess}
               />
-            ) : (
-              <GuardrailTable
-                guardrailsList={guardrailsList}
-                isLoading={isLoading}
-                onDeleteClick={handleDeleteClick}
+            </TabPanel>
+          )}
+
+          {isAdmin && (
+            <TabPanel>
+              <div className="flex justify-between items-center mb-4">
+                <Dropdown
+                  menu={{
+                    items: [
+                      {
+                        key: "provider",
+                        icon: <PlusOutlined />,
+                        label: "Add Provider Guardrail",
+                        onClick: handleAddGuardrail,
+                      },
+                      {
+                        key: "custom_code",
+                        icon: <CodeOutlined />,
+                        label: "Create Custom Code Guardrail",
+                        onClick: handleAddCustomCodeGuardrail,
+                      },
+                    ],
+                  }}
+                  trigger={["click"]}
+                  disabled={!accessToken}
+                >
+                  <Button disabled={!accessToken}>
+                    + Add New Guardrail <DownOutlined className="ml-2" />
+                  </Button>
+                </Dropdown>
+              </div>
+
+              {selectedGuardrailId ? (
+                <GuardrailInfoView
+                  guardrailId={selectedGuardrailId}
+                  onClose={() => setSelectedGuardrailId(null)}
+                  accessToken={accessToken}
+                  isAdmin={isAdmin}
+                />
+              ) : (
+                <GuardrailTable
+                  guardrailsList={guardrailsList}
+                  isLoading={isLoading}
+                  onDeleteClick={handleDeleteClick}
+                  accessToken={accessToken}
+                  onGuardrailUpdated={fetchGuardrails}
+                  isAdmin={isAdmin}
+                  onGuardrailClick={(id) => setSelectedGuardrailId(id)}
+                />
+              )}
+
+              <AddGuardrailForm
+                visible={isAddModalVisible}
+                onClose={handleCloseModal}
                 accessToken={accessToken}
-                onGuardrailUpdated={fetchGuardrails}
-                isAdmin={isAdmin}
-                onGuardrailClick={(id) => setSelectedGuardrailId(id)}
+                onSuccess={handleSuccess}
               />
-            )}
 
-            <AddGuardrailForm
-              visible={isAddModalVisible}
-              onClose={handleCloseModal}
-              accessToken={accessToken}
-              onSuccess={handleSuccess}
-            />
+              <CustomCodeModal
+                visible={isCustomCodeModalVisible}
+                onClose={handleCloseCustomCodeModal}
+                accessToken={accessToken}
+                onSuccess={handleSuccess}
+              />
 
-            <CustomCodeModal
-              visible={isCustomCodeModalVisible}
-              onClose={handleCloseCustomCodeModal}
-              accessToken={accessToken}
-              onSuccess={handleSuccess}
-            />
-
-            <DeleteResourceModal
-              isOpen={isDeleteModalOpen}
-              title="Delete Guardrail"
-              message={`Are you sure you want to delete guardrail: ${guardrailToDelete?.guardrail_name}? This action cannot be undone.`}
-              resourceInformationTitle="Guardrail Information"
-              resourceInformation={[
-                { label: "Name", value: guardrailToDelete?.guardrail_name },
-                { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
-                { label: "Provider", value: providerDisplayName },
-                { label: "Mode", value: guardrailToDelete?.litellm_params.mode },
-                {
-                  label: "Default On",
-                  value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",
-                },
-              ]}
-              onCancel={handleDeleteCancel}
-              onOk={handleDeleteConfirm}
-              confirmLoading={isDeleting}
-            />
-          </TabPanel>
+              <DeleteResourceModal
+                isOpen={isDeleteModalOpen}
+                title="Delete Guardrail"
+                message={`Are you sure you want to delete guardrail: ${guardrailToDelete?.guardrail_name}? This action cannot be undone.`}
+                resourceInformationTitle="Guardrail Information"
+                resourceInformation={[
+                  { label: "Name", value: guardrailToDelete?.guardrail_name },
+                  { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
+                  { label: "Provider", value: providerDisplayName },
+                  { label: "Mode", value: guardrailToDelete?.litellm_params.mode },
+                  {
+                    label: "Default On",
+                    value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",
+                  },
+                ]}
+                onCancel={handleDeleteCancel}
+                onOk={handleDeleteConfirm}
+                confirmLoading={isDeleting}
+              />
+            </TabPanel>
+          )}
 
           {/* Test Playground Tab */}
           <TabPanel>
