@@ -17,6 +17,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import get_team_membership
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
     CustomCodeValidationError,
@@ -542,7 +543,7 @@ class RegisterGuardrailRequest(BaseModel):
         str, Any
     ]  # guardrail, mode, api_base required; api_key, headers, etc. optional
     guardrail_info: Optional[Dict[str, Any]] = None
-    team_id: str
+    team_id: Optional[str] = None
 
     def get_litellm_params_dict(self) -> Dict[str, Any]:
         return dict(self.litellm_params)
@@ -604,28 +605,29 @@ async def register_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    if not request.team_id:
+    # Resolve team_id: prefer request body, fall back to API key's team
+    team_id = request.team_id or user_api_key_dict.team_id
+    if not team_id:
         raise HTTPException(
             status_code=400,
-            detail="team_id is required.",
+            detail="team_id is required. Provide it in the request body or use a team-scoped API key.",
         )
-    team_id = request.team_id
 
-    # Validate the user is a member of the specified team
-    if team_id != user_api_key_dict.team_id:
-        from litellm.proxy.auth.auth_checks import get_team_membership
+    # Validate team membership for non-admin users when team differs from key
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    if not is_admin and team_id != user_api_key_dict.team_id:
         from litellm.proxy.proxy_server import user_api_key_cache
 
         membership = await get_team_membership(
             user_id=user_api_key_dict.user_id or "",
-            team_id=request.team_id,
+            team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
         if membership is None:
             raise HTTPException(
                 status_code=403,
-                detail=f"You are not a member of team {request.team_id!r}",
+                detail=f"You are not a member of team {team_id!r}",
             )
 
     params = request.get_litellm_params_dict()
