@@ -42,7 +42,11 @@ ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
 RUN mkdir -p /var/lib/litellm/ui && \
-    npm install -g npm@latest && npm cache clean --force && \
+    mv /app/.npmrc /app/.npmrc.bak && \
+    npm install -g npm@11.12.1 && \
+    npm install -g node-gyp@12.2.0 && \
+    ln -sf /usr/local/lib/node_modules/node-gyp /usr/lib/node_modules/npm/node_modules/node-gyp && \
+    npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
@@ -133,9 +137,6 @@ COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/
-# Keep enterprise bridge module in runtime so `enterprise.enterprise_hooks`
-# can load and register managed enterprise hooks (e.g. managed_files).
-COPY --from=builder /app/enterprise /app/enterprise
 # Copy prisma_migration.py for Helm migrations job compatibility
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 COPY --from=builder /wheels/ /wheels/
