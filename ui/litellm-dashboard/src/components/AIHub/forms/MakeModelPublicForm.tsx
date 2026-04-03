@@ -210,12 +210,21 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       <div className="space-y-4">
         <Title>Confirm Making Models Public</Title>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </Text>
-        </div>
+        {selectedModels.size === 0 ? (
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+            <Text className="text-sm text-orange-800">
+              <strong>Warning:</strong> No models are selected. Submitting will make all currently public models
+              private — they will no longer be visible on the model hub.
+            </Text>
+          </div>
+        ) : (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <Text className="text-sm text-yellow-800">
+              <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
+              <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
+            </Text>
+          </div>
+        )}
 
         <div className="space-y-3">
           <Text className="font-medium">Models to be made public:</Text>
@@ -252,8 +261,9 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made
-            public
+            {selectedModels.size === 0
+              ? "All currently public models will be made private."
+              : <>Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made public</>}
           </Text>
         </div>
       </div>
@@ -287,7 +297,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
           {currentStep === 1 && (
             <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+              {selectedModels.size === 0 ? "Make All Private" : "Make Public"}
             </Button>
           )}
         </div>
