@@ -4345,6 +4345,9 @@ async def key_aliases(
     search: Optional[str] = Query(
         None, description="Search key aliases (case-insensitive partial match)"
     ),
+    team_id: Optional[str] = Query(
+        None, description="Filter aliases to keys belonging to this team"
+    ),
 ) -> Dict[str, Any]:
     """
     Lists key aliases with pagination and optional search.
@@ -4419,6 +4422,10 @@ async def key_aliases(
         if search:
             query_params.append(f"%{search}%")
             where_parts.append(f"key_alias ILIKE ${len(query_params)}")
+
+        if team_id:
+            query_params.append(team_id)
+            where_parts.append(f"team_id = ${len(query_params)}")
 
         where_sql = " AND ".join(where_parts)
 
