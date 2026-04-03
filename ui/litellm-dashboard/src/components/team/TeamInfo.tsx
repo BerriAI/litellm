@@ -672,14 +672,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </>
                     )}
                   </div>
-                  {info.models.length > 0 && !info.models.includes("all-proxy-models") && info.access_group_models && info.access_group_models.length > 0 && (
-                    <div className="mt-2">
-                      <Text className="text-xs text-gray-500">
-                        <span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1" />Direct
-                        <span className="inline-block w-2 h-2 rounded-full bg-green-500 ml-3 mr-1" />From access group
-                      </Text>
-                    </div>
-                  )}
                 </Card>
 
                 <Card>
