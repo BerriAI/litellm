@@ -932,3 +932,105 @@ class TestTracingFieldsPopulation:
         assert slg["classification"] == classification
         assert slg["detection_method"] == "llm-judge"
         assert slg["confidence_score"] == 0.94
+
+
+class TestLogGuardrailInformationApplyGuardrailEventType:
+    """
+    Tests that the log_guardrail_information decorator infers the correct
+    event_type from input_type when decorating apply_guardrail, so that
+    guardrail_mode is logged as a string (not a GuardrailMode dict), preventing
+    the 'guardrail_mode.replace is not a function' error in the UI.
+    """
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_logs_pre_call_event_type(self):
+        """
+        When apply_guardrail is called with input_type='request', the logged
+        guardrail_mode should be GuardrailEventHooks.pre_call (a string), not
+        a GuardrailMode dict.
+        """
+        from litellm.integrations.custom_guardrail import (
+            CustomGuardrail,
+            log_guardrail_information,
+        )
+        from litellm.types.guardrails import GuardrailEventHooks, Mode
+        from litellm.types.utils import GenericGuardrailAPIInputs
+
+        # Build a Mode object (tags-based routing), which is what custom-code
+        # guardrails use. Without the fix, this becomes a GuardrailMode dict
+        # in the logged data, triggering .replace is not a function in the UI.
+        mode = Mode(tags={}, default="pre_call")
+
+        class _TestGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                return inputs
+
+        guardrail = _TestGuardrail(guardrail_name="test", event_hook=mode)
+        request_data: dict = {"metadata": {}}
+        inputs = GenericGuardrailAPIInputs(texts=["hello"])
+
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        guardrail_mode = slg_list[0]["guardrail_mode"]
+        # Must be a string, not a dict — the UI calls .replace() on this value
+        assert isinstance(guardrail_mode, str), (
+            f"guardrail_mode must be a string, got {type(guardrail_mode)}: {guardrail_mode}"
+        )
+        assert guardrail_mode == GuardrailEventHooks.pre_call
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_logs_post_call_event_type(self):
+        """
+        When apply_guardrail is called with input_type='response', the logged
+        guardrail_mode should be GuardrailEventHooks.post_call (a string).
+        """
+        from litellm.integrations.custom_guardrail import (
+            CustomGuardrail,
+            log_guardrail_information,
+        )
+        from litellm.types.guardrails import GuardrailEventHooks, Mode
+        from litellm.types.utils import GenericGuardrailAPIInputs
+
+        mode = Mode(tags={}, default="post_call")
+
+        class _TestGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                return inputs
+
+        guardrail = _TestGuardrail(guardrail_name="test", event_hook=mode)
+        request_data: dict = {"metadata": {}}
+        inputs = GenericGuardrailAPIInputs(texts=["hello"])
+
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        guardrail_mode = slg_list[0]["guardrail_mode"]
+        assert isinstance(guardrail_mode, str), (
+            f"guardrail_mode must be a string, got {type(guardrail_mode)}: {guardrail_mode}"
+        )
+        assert guardrail_mode == GuardrailEventHooks.post_call

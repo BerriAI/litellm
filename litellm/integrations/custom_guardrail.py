@@ -891,6 +891,14 @@ def log_guardrail_information(func):
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         event_type = _infer_event_type_from_function_name(func.__name__)
 
+        # For apply_guardrail, infer event type from input_type kwarg
+        if event_type is None and func.__name__ == "apply_guardrail":
+            _input_type = kwargs.get("input_type")
+            if _input_type == "request":
+                event_type = GuardrailEventHooks.pre_call
+            elif _input_type == "response":
+                event_type = GuardrailEventHooks.post_call
+
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
@@ -923,6 +931,14 @@ def log_guardrail_information(func):
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
         event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # For apply_guardrail, infer event type from input_type kwarg
+        if event_type is None and func.__name__ == "apply_guardrail":
+            _input_type = kwargs.get("input_type")
+            if _input_type == "request":
+                event_type = GuardrailEventHooks.pre_call
+            elif _input_type == "response":
+                event_type = GuardrailEventHooks.post_call
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
