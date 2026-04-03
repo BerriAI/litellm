@@ -2446,6 +2446,11 @@ async def team_member_update(
             break
 
     ### upsert new budget
+    # budget_duration=None means "not supplied" by default; we need to distinguish
+    # that from the user explicitly sending null to clear a previously-set value.
+    clear_budget_duration = (
+        "budget_duration" in data.model_fields_set and data.budget_duration is None
+    )
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
@@ -2457,6 +2462,7 @@ async def team_member_update(
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
             budget_duration=data.budget_duration,
+            clear_budget_duration=clear_budget_duration,
         )
 
     ### update team member role

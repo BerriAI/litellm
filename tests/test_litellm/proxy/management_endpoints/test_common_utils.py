@@ -486,3 +486,75 @@ class TestSetObjectMetadataField:
         ):
             _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
+
+
+class TestUpsertBudgetAndMembershipClearDuration:
+    """
+    Tests for the clear_budget_duration flag in _upsert_budget_and_membership.
+    Regression for the bug where selecting 'No reset (unlimited)' in the UI
+    could not clear a previously-set budget_duration because null was filtered
+    out before reaching the backend.
+    """
+
+    def _make_tx(self):
+        tx = MagicMock()
+        tx.litellm_budgettable = MagicMock()
+        tx.litellm_budgettable.update = AsyncMock()
+        tx.litellm_budgettable.create = AsyncMock(
+            return_value=MagicMock(budget_id="new-budget-id")
+        )
+        tx.litellm_teammembership = MagicMock()
+        tx.litellm_teammembership.update = AsyncMock()
+        tx.litellm_teammembership.upsert = AsyncMock()
+        return tx
+
+    def _make_auth(self):
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+
+    @pytest.mark.asyncio
+    async def test_clear_budget_duration_sets_null_on_existing_budget(self):
+        """clear_budget_duration=True must null out budget_duration and budget_reset_at."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _upsert_budget_and_membership,
+        )
+
+        tx = self._make_tx()
+        await _upsert_budget_and_membership(
+            tx=tx,
+            team_id="team-1",
+            user_id="user-1",
+            max_budget=None,
+            existing_budget_id="existing-budget-id",
+            user_api_key_dict=self._make_auth(),
+            budget_duration=None,
+            clear_budget_duration=True,
+        )
+
+        tx.litellm_budgettable.update.assert_awaited_once()
+        update_data = tx.litellm_budgettable.update.call_args.kwargs["data"]
+        assert update_data["budget_duration"] is None
+        assert update_data["budget_reset_at"] is None
+
+    @pytest.mark.asyncio
+    async def test_no_clear_flag_does_not_touch_budget_duration(self):
+        """Without clear_budget_duration, omitting budget_duration must not overwrite it."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _upsert_budget_and_membership,
+        )
+
+        tx = self._make_tx()
+        await _upsert_budget_and_membership(
+            tx=tx,
+            team_id="team-1",
+            user_id="user-1",
+            max_budget=50.0,
+            existing_budget_id="existing-budget-id",
+            user_api_key_dict=self._make_auth(),
+            budget_duration=None,
+            clear_budget_duration=False,
+        )
+
+        tx.litellm_budgettable.update.assert_awaited_once()
+        update_data = tx.litellm_budgettable.update.call_args.kwargs["data"]
+        assert "budget_duration" not in update_data
+        assert "budget_reset_at" not in update_data

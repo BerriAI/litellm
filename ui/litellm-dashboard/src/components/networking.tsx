@@ -3893,7 +3893,8 @@ export const teamMemberUpdateCall = async (
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
     }
-    if (formValues.budget_duration !== undefined && formValues.budget_duration !== null) {
+    if (formValues.budget_duration !== undefined) {
+      // Explicitly include null so the backend can clear a previously-set duration.
       requestBody.budget_duration = formValues.budget_duration;
     }
 
