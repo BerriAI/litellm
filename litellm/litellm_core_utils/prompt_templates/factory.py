@@ -107,8 +107,26 @@ def map_system_message_pt(messages: list) -> list:
                 if (
                     next_role == "user" or next_role == "assistant"
                 ):  # Next message is a user or assistant message
-                    # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    # Merge system prompt into the next message.
+                    # Content may be a list of typed blocks (e.g. from Anthropic
+                    # pass-through) rather than a plain string — handle both.
+                    sys_content = m["content"]
+                    if isinstance(sys_content, list):
+                        sys_text = " ".join(
+                            b.get("text", "")
+                            for b in sys_content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    else:
+                        sys_text = sys_content
+
+                    next_content = next_m["content"]
+                    if isinstance(next_content, list):
+                        next_m["content"] = [
+                            {"type": "text", "text": sys_text}
+                        ] + next_content
+                    else:
+                        next_m["content"] = sys_text + " " + next_content
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}
