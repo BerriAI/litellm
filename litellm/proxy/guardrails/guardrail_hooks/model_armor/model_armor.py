@@ -2,6 +2,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     List,
     Literal,
     Optional,
@@ -757,7 +758,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     )
                     error_value = detail.get("error", detail)
                     if isinstance(error_value, dict):
-                        error_obj = dict(error_value)
+                        error_obj: Dict[str, Any] = dict(error_value)
                     else:
                         error_obj = {"message": str(error_value)}
                     error_obj["code"] = str(e.status_code)

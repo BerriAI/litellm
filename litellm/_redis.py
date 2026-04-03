@@ -118,7 +118,7 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
         Access token string for GCP IAM authentication
     """
     try:
-        from google.cloud import iam_credentials_v1
+        from google.cloud import iam_credentials_v1  # type: ignore
     except ImportError:
         raise ImportError(
             "google-cloud-iam is required for GCP IAM Redis authentication. "
