@@ -403,9 +403,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
             response = await self.async_httpx_client.put(
-                url, data=json_string, headers=signed_headers
+                prepped.url, data=json_string, headers=signed_headers
             )
             response.raise_for_status()
         except Exception as e:
@@ -582,8 +581,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 if self.s3_verify is not None
                 else None
             )
-            # Make the request
-            response = httpx_client.put(url, data=json_string, headers=signed_headers)
+            response = httpx_client.put(
+                prepped.url, data=json_string, headers=signed_headers
+            )
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
@@ -674,8 +674,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.get(url, headers=signed_headers)
+            response = await self.async_httpx_client.get(
+                prepped.url, headers=signed_headers
+            )
 
             if response.status_code != 200:
                 verbose_logger.exception(
