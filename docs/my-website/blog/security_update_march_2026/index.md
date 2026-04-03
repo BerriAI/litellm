@@ -17,6 +17,8 @@ import VersionVerificationTable from '@site/src/components/VersionVerificationTa
 > **Status:** Active investigation
 > **Last updated:** March 27, 2026
 
+> **Update (April 2):** Immutable tags are now enabled on [GHCR](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages), preventing tampering of Docker release tags after they are published.
+
 > **Update (March 30):** A new **clean** version of LiteLLM is now available (v1.83.0). This was released by our new [CI/CD v2](https://docs.litellm.ai/blog/ci-cd-v2-improvements) pipeline which added isolated environments, stronger security gates, and safer release separation for LiteLLM.
 
 > **Update (March 27):** Review Townhall updates, including explanation of the incident, what we've done, and what comes next. [Learn more](https://docs.litellm.ai/blog/security-townhall-updates)
