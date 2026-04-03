@@ -33,6 +33,10 @@ def _get_compact_threshold(context_management: List[Dict[str, Any]]) -> Optional
             threshold = entry.get("compact_threshold")
             if threshold is not None:
                 return max(int(threshold), MIN_COMPACT_THRESHOLD)
+            verbose_logger.warning(
+                "compaction: context_management has type='compaction' but no "
+                "compact_threshold — compaction will not trigger"
+            )
             return None
     return None
 

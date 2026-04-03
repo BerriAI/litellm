@@ -62,12 +62,12 @@ class LiteLLMCompletionTransformationHandler:
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
+        completion_args.pop("context_management", None)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
-            **litellm_completion_request,
-            **kwargs,
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -153,6 +153,7 @@ class LiteLLMCompletionTransformationHandler:
                     "custom_llm_provider"
                 ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                compaction_summary_text=summary_text,
             )
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"
