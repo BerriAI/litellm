@@ -13,7 +13,7 @@ sys.path.insert(
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
@@ -1339,9 +1339,6 @@ class TestGetResponsesZeroCost:
         Verify that async_get_responses sets response_cost=0.0 in _hidden_params,
         so the cost pipeline does not re-bill for a retrieval request.
         """
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-
         handler = BaseLLMHTTPHandler()
         config = OpenAIResponsesAPIConfig()
         logging_obj = MagicMock()
