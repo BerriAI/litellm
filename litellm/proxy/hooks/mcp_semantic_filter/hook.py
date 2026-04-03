@@ -245,6 +245,16 @@ class SemanticToolFilterHook(CustomLogger):
                 available_tools=mcp_tools,  # type: ignore
             )
 
+            # If no MCP tools matched and no non-MCP tools exist, fall back
+            # to the first top_k MCP tools to avoid an empty tool list.
+            if not filtered_mcp_tools and not non_mcp_tools:
+                limit = self.filter.top_k
+                filtered_mcp_tools = mcp_tools[:limit]
+                verbose_proxy_logger.warning(
+                    f"No semantic matches and no non-MCP tools — "
+                    f"falling back to first {limit} MCP tools"
+                )
+
             filtered_tools = filtered_mcp_tools + non_mcp_tools
 
             # Always update tools and emit header (even if count unchanged)
