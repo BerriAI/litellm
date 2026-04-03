@@ -7,9 +7,15 @@ import traceback
 
 import pytest
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
+
+def _run_uv(*args: str, **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["uv", *args], check=True, cwd=PROJECT_ROOT, **kwargs)
 
 
 def test_using_litellm():
@@ -23,13 +29,13 @@ def test_using_litellm():
 
 def test_litellm_proxy_server():
     # Sync the local litellm[proxy] dependencies into the project environment
-    subprocess.run(["uv", "sync", "--frozen", "--extra", "proxy"], check=True)
+    _run_uv("sync", "--frozen", "--extra", "proxy")
 
-    # Import the proxy_server module
+    # Import through the uv-managed interpreter that uv sync populated.
     try:
-        import litellm.proxy.proxy_server
-    except ImportError:
-        pytest.fail("Failed to import litellm.proxy_server")
+        _run_uv("run", "--no-sync", "python", "-c", "import litellm.proxy.proxy_server")
+    except subprocess.CalledProcessError:
+        pytest.fail("Failed to import litellm.proxy.proxy_server")
 
     # Assertion to satisfy the test, you can add other checks as needed
     assert True
@@ -98,23 +104,17 @@ def test_litellm_proxy_server_config_no_general_settings():
     # Sync the local litellm packages into the project environment
     server_process = None
     try:
-        subprocess.run(
-            ["uv", "sync", "--frozen", "--group", "proxy-dev", "--extra", "proxy", "--extra", "extra_proxy"],
-            check=True,
-        )
+        _run_uv("sync", "--frozen", "--group", "proxy-dev", "--extra", "proxy", "--extra", "extra_proxy")
         
         # Ensure Prisma client is generated
         try:
-            # Get the project root directory (where schema.prisma is located)
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            print(f"Running prisma generate from: {project_root}")
+            print(f"Running prisma generate from: {PROJECT_ROOT}")
             
-            result = subprocess.run(
-                ["uv", "run", "--no-sync", "prisma", "generate"], 
+            result = _run_uv(
+                "run", "--no-sync", "prisma", "generate",
                 capture_output=True, 
                 text=True, 
-                check=True,
-                cwd=project_root
+                check=True
             )
             print(f"Prisma generate stdout: {result.stdout}")
         except subprocess.CalledProcessError as e:
@@ -124,13 +124,8 @@ def test_litellm_proxy_server_config_no_general_settings():
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
-            [
-                "python",
-                "-m",
-                "litellm.proxy.proxy_cli",
-                "--config",
-                config_fp,
-            ]
+            ["uv", "run", "--no-sync", "python", "-m", "litellm.proxy.proxy_cli", "--config", config_fp],
+            cwd=PROJECT_ROOT,
         )
 
         # Allow some time for the server to start (increased for CI environments)
