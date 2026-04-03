@@ -24,6 +24,13 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+_NON_BILLABLE_PROXY_CALL_TYPES = frozenset({"get_responses", "aget_responses"})
+
+
+def _is_non_billable_proxy_call_type(call_type: Optional[str]) -> bool:
+    return call_type in _NON_BILLABLE_PROXY_CALL_TYPES
+
+
 class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(
@@ -163,9 +170,21 @@ class _ProxyDBLogger(CustomLogger):
                 if sl_object is not None
                 else kwargs.get("response_cost", None)
             )
+            call_type = cast(
+                Optional[str],
+                (
+                    sl_object.get("call_type", None)
+                    if sl_object is not None
+                    else kwargs.get("call_type", None)
+                ),
+            )
             tags: Optional[List[str]] = (
                 sl_object.get("request_tags", None) if sl_object is not None else None
             )
+
+            # Retrieval endpoints like GET /v1/responses/{id} are non-billable.
+            if _is_non_billable_proxy_call_type(call_type):
+                response_cost = 0.0
 
             if response_cost is not None:
                 user_api_key = metadata.get("user_api_key", None)

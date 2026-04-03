@@ -1,9 +1,7 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -14,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.mark.asyncio
@@ -62,7 +59,6 @@ async def test_async_post_call_failure_hook():
 
         # Check the arguments passed to update_database
         call_args = mock_update_database.call_args[1]
-        print("call_args", json.dumps(call_args, indent=4, default=str))
         assert call_args["token"] == "test_api_key"
         assert call_args["response_cost"] == 0.0
         assert call_args["user_id"] == "test_user_id"
@@ -167,6 +163,59 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
         # failed_tracking_alert should NOT be called — this is not an error
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_sets_zero_cost_for_aget_responses():
+    logger = _ProxyDBLogger()
+
+    kwargs = {
+        "call_type": "aget_responses",
+        "model": "openai/gpt-4.1",
+        "stream": False,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "user_api_key_user_id": "test-user",
+                "user_api_key_team_id": "test-team",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.42,
+            "request_tags": [],
+            "call_type": "aget_responses",
+        },
+    }
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+    ) as mock_proxy_logging, patch(
+        "litellm.proxy.proxy_server.increment_spend_counters",
+        new_callable=AsyncMock,
+    ) as mock_increment_spend_counters, patch(
+        "litellm.proxy.proxy_server.update_cache",
+        new_callable=AsyncMock,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance = MagicMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        call_kwargs = mock_proxy_logging.db_spend_update_writer.update_database.call_args[
+            1
+        ]
+        assert call_kwargs["response_cost"] == 0.0
+
+        assert mock_increment_spend_counters.await_count == 1
+        assert mock_increment_spend_counters.await_args.kwargs["response_cost"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -338,7 +387,7 @@ async def test_enrich_failure_metadata_skips_when_no_api_key():
             "user_api_key_team_id": None,
             "user_api_key_team_alias": None,
         }
-        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+        await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         mock_get_key.assert_not_called()
 
 
