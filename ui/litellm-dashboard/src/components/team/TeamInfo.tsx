@@ -491,7 +491,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        organization_id: values.organization_id,
+        ...(values.organization_id !== info.organization_id
+          ? { organization_id: values.organization_id ?? "" }
+          : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
@@ -1077,8 +1079,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Organization ID" name="organization_id">
-                      <Input type="" disabled />
+                    <Form.Item label="Organization" name="organization_id">
+                      <Select
+                        allowClear
+                        placeholder="Select an organization"
+                        showSearch
+                        optionFilterProp="label"
+                        options={userOrganizations.map((org) => ({
+                          value: org.organization_id,
+                          label: org.organization_alias || org.organization_id,
+                        }))}
+                      />
                     </Form.Item>
 
                     <Form.Item label="Logging Settings" name="logging_settings">
