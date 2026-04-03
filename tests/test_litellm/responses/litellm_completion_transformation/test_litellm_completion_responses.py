@@ -2079,3 +2079,167 @@ class TestEnsureOutputItemContentPartAdded:
 
         events = iterator._pending_response_events
         assert len(events) == 2
+
+
+class TestCompactionOutputFormat:
+    """Tests for _append_compaction_output in handler.py"""
+
+    def test_append_compaction_output_format(self):
+        """Compaction item should be at index 1 with encrypted_content, id, created_by."""
+        import base64
+
+        from litellm.responses.litellm_completion_transformation.handler import (
+            _append_compaction_output,
+        )
+
+        summary = "The user repeated the word cats many times."
+        existing_output = [{"type": "message", "role": "assistant", "content": "Hello"}]
+
+        result = _append_compaction_output(summary, existing_output)
+
+        assert len(result) == 2
+        # First item is the assistant message
+        assert result[0]["type"] == "message"
+        # Second item is the compaction
+        compaction = result[1]
+        assert compaction["type"] == "compaction"
+        assert compaction["id"].startswith("cmp_")
+        assert compaction["created_by"] is None
+        assert "content" not in compaction
+        # Verify encrypted_content is base64-encoded summary
+        decoded = base64.b64decode(compaction["encrypted_content"]).decode("utf-8")
+        assert decoded == summary
+
+    def test_append_compaction_output_empty_existing(self):
+        """When existing_output is empty, compaction item is the only element."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            _append_compaction_output,
+        )
+
+        result = _append_compaction_output("summary", [])
+        assert len(result) == 1
+        assert result[0]["type"] == "compaction"
+
+    def test_append_compaction_output_preserves_extra_items(self):
+        """Items after the first in existing_output are preserved after compaction."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            _append_compaction_output,
+        )
+
+        existing = [
+            {"type": "message", "role": "assistant"},
+            {"type": "function_call", "name": "foo"},
+        ]
+        result = _append_compaction_output("summary", existing)
+        assert len(result) == 3
+        assert result[0]["type"] == "message"
+        assert result[1]["type"] == "compaction"
+        assert result[2]["type"] == "function_call"
+
+
+class TestCompactionInputProcessing:
+    """Tests for compaction input handling in transformation.py"""
+
+    def test_compaction_input_processing(self):
+        """Compaction item in input should produce decoded user msg + predecessor + remaining."""
+        import base64
+
+        summary = "Summary of conversation"
+        encrypted = base64.b64encode(summary.encode("utf-8")).decode("utf-8")
+
+        input_items = [
+            {"type": "message", "role": "user", "content": "old msg 1"},
+            {"type": "message", "role": "user", "content": "old msg 2"},
+            {"type": "message", "role": "assistant", "content": "assistant reply"},
+            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted, "created_by": None},
+            {"type": "message", "role": "user", "content": "new question"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        # Should be: [user(decoded_summary), assistant(reply), user(new question)]
+        assert len(messages) == 3
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == summary
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["content"] == "assistant reply"
+        assert messages[2]["role"] == "user"
+        assert messages[2]["content"] == "new question"
+
+    def test_compaction_input_at_index_0(self):
+        """Compaction at index 0 with no predecessor should still work."""
+        import base64
+
+        summary = "Summary"
+        encrypted = base64.b64encode(summary.encode("utf-8")).decode("utf-8")
+
+        input_items = [
+            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted, "created_by": None},
+            {"type": "message", "role": "user", "content": "follow up"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == summary
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "follow up"
+
+    def test_compaction_input_backward_compat(self):
+        """Old format with 'content' field (no encrypted_content) should still work."""
+        input_items = [
+            {"type": "message", "role": "assistant", "content": "prior reply"},
+            {"type": "compaction", "content": "plaintext summary"},
+            {"type": "message", "role": "user", "content": "new msg"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        assert len(messages) == 3
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "plaintext summary"
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["content"] == "prior reply"
+        assert messages[2]["role"] == "user"
+        assert messages[2]["content"] == "new msg"
+
+    def test_multiple_compaction_items_uses_last(self):
+        """When multiple compaction items exist, only the last one matters."""
+        import base64
+
+        old_summary = base64.b64encode(b"old summary").decode("utf-8")
+        new_summary = base64.b64encode(b"new summary").decode("utf-8")
+
+        input_items = [
+            {"type": "message", "role": "user", "content": "ancient msg"},
+            {"type": "message", "role": "assistant", "content": "ancient reply"},
+            {"type": "compaction", "id": "cmp_old", "encrypted_content": old_summary},
+            {"type": "message", "role": "user", "content": "mid msg"},
+            {"type": "message", "role": "assistant", "content": "mid reply"},
+            {"type": "compaction", "id": "cmp_new", "encrypted_content": new_summary},
+            {"type": "message", "role": "user", "content": "latest question"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+
+        # Should use new_summary, keep mid reply (predecessor of last compaction), then latest question
+        assert len(messages) == 3
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "new summary"
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["content"] == "mid reply"
+        assert messages[2]["role"] == "user"
+        assert messages[2]["content"] == "latest question"

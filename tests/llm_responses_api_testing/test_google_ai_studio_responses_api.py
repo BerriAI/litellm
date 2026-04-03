@@ -346,20 +346,25 @@ async def test_mock_google_ai_studio_compaction():
             f"got {len(response.output)}"
         )
 
-        # First output item should be the compaction block
-        compaction_item = response.output[0]
-        if isinstance(compaction_item, dict):
-            assert compaction_item["type"] == "compaction"
-            assert "cats many times" in compaction_item["content"]
-        else:
-            assert getattr(compaction_item, "type", None) == "compaction"
-
-        # Second output item should be the text response
-        text_item = response.output[1]
+        # First output item should be the text response (assistant message)
+        text_item = response.output[0]
         if isinstance(text_item, dict):
             assert text_item.get("type") == "message"
         else:
             assert getattr(text_item, "type", None) == "message"
+
+        # Second output item should be the compaction block
+        import base64
+        compaction_item = response.output[1]
+        if isinstance(compaction_item, dict):
+            assert compaction_item["type"] == "compaction"
+            assert "encrypted_content" in compaction_item
+            decoded = base64.b64decode(compaction_item["encrypted_content"]).decode("utf-8")
+            assert "cats many times" in decoded
+            assert compaction_item["id"].startswith("cmp_")
+            assert compaction_item["created_by"] is None
+        else:
+            assert getattr(compaction_item, "type", None) == "compaction"
 
         print("compaction test passed: response output =", json.dumps(response.output, indent=2, default=str))
 

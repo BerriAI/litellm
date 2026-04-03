@@ -2,6 +2,8 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
+import base64
+import uuid
 from typing import Any, Coroutine, Dict, List, Optional, Union
 
 import litellm
@@ -135,7 +137,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
             if summary_text is not None:
-                responses_api_response.output = _prepend_compaction_output(
+                responses_api_response.output = _append_compaction_output(
                     summary_text, responses_api_response.output
                 )
 
@@ -157,12 +159,17 @@ class LiteLLMCompletionTransformationHandler:
         )
 
 
-def _prepend_compaction_output(
+def _append_compaction_output(
     summary_text: str, existing_output: List[Any]
 ) -> List[Any]:
-    """Prepend a compaction output item before the existing output items."""
+    """Append a compaction output item after the first output item."""
+    encoded_content = base64.b64encode(summary_text.encode("utf-8")).decode("utf-8")
     compaction_item = {
         "type": "compaction",
-        "content": summary_text,
+        "id": "cmp_" + uuid.uuid4().hex,
+        "encrypted_content": encoded_content,
+        "created_by": None,
     }
-    return [compaction_item] + list(existing_output)
+    if existing_output:
+        return [existing_output[0], compaction_item] + list(existing_output[1:])
+    return [compaction_item]
