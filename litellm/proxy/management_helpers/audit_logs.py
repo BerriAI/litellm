@@ -51,11 +51,7 @@ def _build_audit_log_payload(
     if request_data.updated_at is not None:
         updated_at = request_data.updated_at.isoformat()
 
-    table_name_str: str = (
-        request_data.table_name.value
-        if isinstance(request_data.table_name, LitellmTableNames)
-        else str(request_data.table_name)
-    )
+    table_name_str: str = request_data.table_name.value if isinstance(request_data.table_name, LitellmTableNames) else str(request_data.table_name)
 
     return StandardAuditLogPayload(
         id=request_data.id,
@@ -93,9 +89,7 @@ async def _dispatch_audit_log_to_callbacks(
 
     for callback in litellm.audit_log_callbacks:
         try:
-            resolved: Optional[CustomLogger] = (
-                callback if isinstance(callback, CustomLogger) else None
-            )
+            resolved: Optional[CustomLogger] = callback if isinstance(callback, CustomLogger) else None
             if isinstance(callback, str):
                 resolved = _resolve_audit_log_callback(callback)
                 if resolved is None:
@@ -144,7 +138,9 @@ async def create_object_audit_log(
         return
 
     _changed_by = (
-        litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name
+        litellm_changed_by
+        or user_api_key_dict.user_id
+        or litellm_proxy_admin_name
     )
 
     await create_audit_log_for_update(
