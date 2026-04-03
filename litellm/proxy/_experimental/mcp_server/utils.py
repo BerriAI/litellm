@@ -1,7 +1,7 @@
 """
 MCP Server Utilities
 """
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Collection, Dict, Mapping, Optional, Tuple
 
 import os
 import importlib
@@ -100,17 +100,44 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     return prefixed_name, ""
 
 
-def is_tool_name_prefixed(tool_name: str) -> bool:
+def is_tool_name_prefixed(
+    tool_name: str,
+    known_server_names: Optional[Collection[str]] = None,
+) -> bool:
     """
-    Check if tool name has server prefix
+    Check if tool name has a known MCP server prefix.
+
+    When *known_server_names* is provided the function verifies that the
+    substring before the first ``MCP_TOOL_PREFIX_SEPARATOR`` matches one of
+    the registered MCP server names (after normalisation).  This prevents
+    false positives for ordinary tool names that happen to contain the
+    separator character (e.g. ``"text-to-speech"``).
+
+    When *known_server_names* is ``None`` the function falls back to the
+    legacy behaviour of simply checking whether the separator is present.
 
     Args:
-        tool_name: Tool name to check
+        tool_name: Tool name to check.
+        known_server_names: Optional collection of registered MCP server
+            names / aliases to validate the prefix against.
 
     Returns:
-        True if tool name is prefixed, False otherwise
+        True if tool name is prefixed with a known server name, False
+        otherwise.
     """
-    return MCP_TOOL_PREFIX_SEPARATOR in tool_name
+    if MCP_TOOL_PREFIX_SEPARATOR not in tool_name:
+        return False
+
+    if known_server_names is None:
+        # Legacy / fallback behaviour
+        return True
+
+    prefix = tool_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)[0]
+    normalized_prefix = normalize_server_name(prefix)
+    return any(
+        normalize_server_name(name) == normalized_prefix
+        for name in known_server_names
+    )
 
 
 def validate_mcp_server_name(
