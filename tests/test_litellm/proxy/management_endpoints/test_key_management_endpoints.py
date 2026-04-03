@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    _enforce_upperbound_key_params,
     _get_and_validate_existing_key,
     _list_key_helper,
     _persist_deleted_verification_tokens,
@@ -8435,3 +8436,146 @@ class TestKeyAliasSkipValidationOnUnchanged:
 
         # None alias should always pass
         _validate_key_alias_format(None)
+
+
+# --- Tests: _enforce_upperbound_key_params ---
+
+
+def test_enforce_upperbound_rejects_over_limit_on_generate():
+    """Test that key generation is rejected when values exceed upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = GenerateKeyRequest(tpm_limit=5000)
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=True)
+        assert exc_info.value.status_code == 400
+        assert "tpm_limit" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_fills_defaults_on_generate():
+    """Test that None values are filled with upperbound defaults during generation."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100
+        )
+        data = GenerateKeyRequest()  # tpm_limit=None, rpm_limit=None
+        _enforce_upperbound_key_params(data, fill_defaults=True)
+        assert data.tpm_limit == 1000
+        assert data.rpm_limit == 100
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_skips_none_on_update():
+    """Test that None values are NOT filled during update (fill_defaults=False)."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100
+        )
+        data = UpdateKeyRequest(key="sk-test")  # tpm_limit=None, rpm_limit=None
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert data.tpm_limit is None  # should NOT be filled
+        assert data.rpm_limit is None  # should NOT be filled
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_rejects_over_limit_on_update():
+    """Test that key update is rejected when values exceed upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=5000)
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert exc_info.value.status_code == 400
+        assert "tpm_limit" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_allows_within_limit_on_update():
+    """Test that key update passes when values are within upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        # Should not raise
+        assert data.tpm_limit == 500
+        assert data.rpm_limit == 50
+        assert data.max_budget == 5.0
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_duration_over_limit():
+    """Test that duration exceeding upperbound is rejected."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            duration="7d"
+        )
+        data = UpdateKeyRequest(key="sk-test", duration="30d")
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert exc_info.value.status_code == 400
+        assert "duration" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_no_config_is_noop():
+    """Test that no enforcement happens when upperbound params are not configured."""
+    import litellm
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = None
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=999999)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        # Should not raise — no enforcement configured
+        assert data.tpm_limit == 999999
+    finally:
+        litellm.upperbound_key_generate_params = original
