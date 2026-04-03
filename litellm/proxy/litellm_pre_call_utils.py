@@ -9,6 +9,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
@@ -19,7 +20,10 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_clear_request_parsed_body,
+    _safe_get_request_headers,
+)
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -939,13 +943,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ##########################################################
     # Track arrival time for queue time metric
     arrival_time = time.time()
+    # Fix 12a: truncate large base64 payloads in the body copy so that the
+    # full image data does not persist in litellm_params → proxy_server_request
+    # for the entire callback lifetime.  The actual API call uses the original
+    # `data` dict, so this only affects logging/spend-tracking.
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
+        "body": truncate_base64_in_messages(copy.copy(data)),
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
+
+    # Fix 12f: release the cached parsed body from request.scope now that
+    # we have extracted the data into `data` dict.  This frees multi-MB
+    # base64 payloads that would otherwise persist for the request lifetime.
+    _safe_clear_request_parsed_body(request)
 
     safe_add_api_version_from_query_params(data, request)
     _metadata_variable_name = _get_metadata_variable_name(request)

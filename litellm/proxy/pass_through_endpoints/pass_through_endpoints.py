@@ -36,6 +36,7 @@ from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
@@ -544,7 +545,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
-                    "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                    "body": truncate_base64_in_messages(copy.copy(_parsed_body)),  # Fix 12a: truncate base64
                     "headers": request.headers,
                 },
             },

@@ -144,6 +144,19 @@ def _safe_set_request_parsed_body(
         )
 
 
+def _safe_clear_request_parsed_body(request: Optional[Request]) -> None:
+    """
+    Fix 12f: clear the cached parsed body from request.scope so that large
+    payloads (e.g. multi-MB base64 images) don't persist in memory for the
+    entire request lifecycle after the proxy has extracted the data it needs.
+    """
+    try:
+        if request is not None and hasattr(request, "scope"):
+            request.scope.pop("parsed_body", None)
+    except Exception:
+        pass
+
+
 def _safe_get_request_headers(request: Optional[Request]) -> dict:
     """
     [Non-Blocking] Safely get the request headers.

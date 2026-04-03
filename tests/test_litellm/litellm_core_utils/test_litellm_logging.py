@@ -1438,14 +1438,16 @@ async def test_async_success_handler_sets_standard_logging_object_for_pass_throu
     ), "standard_logging_object should not be None for pass-through endpoints"
 
     # Verify that async_complete_streaming_response was set to prevent re-processing
-    # This is consistent with the existing code pattern for regular streaming
+    # This is consistent with the existing code pattern for regular streaming.
+    # After _cleanup_large_data runs, the value is replaced with True (sentinel)
+    # to keep the re-entry guard working while freeing the response object.
     assert "async_complete_streaming_response" in logging_obj.model_call_details, (
         "async_complete_streaming_response should be set to prevent re-processing, "
         "consistent with the existing code pattern"
     )
-    assert (
-        logging_obj.model_call_details["async_complete_streaming_response"] is result
-    ), "async_complete_streaming_response should be set to the result"
+    assert logging_obj.model_call_details["async_complete_streaming_response"], (
+        "async_complete_streaming_response should be truthy to prevent re-processing"
+    )
 
     # Verify that response_cost is set to None (cost calculation not possible for pass-through)
     # This is consistent with the error handling in the non-pass-through code path

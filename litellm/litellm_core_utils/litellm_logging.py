@@ -924,7 +924,14 @@ class Logging(LiteLLMLoggingBaseClass):
         Common helper function across the sync + async pre-call function
         """
 
-        self.model_call_details["input"] = input
+        # Fix 12b: truncate large base64 payloads in input (messages) before
+        # storing in model_call_details.  The actual API call uses the original
+        # input object; this truncated copy is only for logging/callbacks.
+        self.model_call_details["input"] = (
+            truncate_base64_in_messages(input)
+            if isinstance(input, (list, dict))
+            else input
+        )
         self.model_call_details["api_key"] = api_key
         # Fix 11: strip large base64 from complete_input_dict (e.g. Vertex AI
         # inline_data.data fields ~1.3 MB each) before storing in
@@ -949,8 +956,12 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
-        # Log the exact input to the LLM API
-        litellm.error_logs["PRE_CALL"] = locals()
+        # Fix 12c: avoid storing full locals() (which captures input/additional_args
+        # with multi-MB base64 payloads) in the global error_logs dict.
+        litellm.error_logs["PRE_CALL"] = {
+            "model": model,
+            "call_type": getattr(self, "call_type", None),
+        }
         try:
             self._pre_call(
                 input=input,
@@ -1211,9 +1222,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 original_response[:MAX_ORIGINAL_RESPONSE_LOG_CHARS]
                 + f"...[truncated, {len(original_response)} chars total]"
             )
-        litellm.error_logs["POST_CALL"] = locals()
+        # Fix 12c: avoid storing full locals() in global error_logs
+        litellm.error_logs["POST_CALL"] = {
+            "model": getattr(self, "model", None),
+            "call_type": getattr(self, "call_type", None),
+        }
         try:
-            self.model_call_details["input"] = input
+            # Fix 12b: truncate large base64 payloads in input, matching _pre_call.
+            self.model_call_details["input"] = (
+                truncate_base64_in_messages(input)
+                if isinstance(input, (list, dict))
+                else input
+            )
             self.model_call_details["api_key"] = api_key
             self.model_call_details["original_response"] = original_response
             # Fix 11: strip large base64 from complete_input_dict before
@@ -2449,6 +2469,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            self._cleanup_large_data()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2796,6 +2818,53 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
                 pass
+        self._cleanup_large_data()
+
+    def _cleanup_large_data(self):
+        """
+        Fix 12d: release large objects from model_call_details after all
+        callbacks have finished.  At this point the HTTP response has been
+        sent, standard_logging_object has been built, and every callback has
+        had a chance to read the data.  Clearing these fields lets the GC
+        reclaim multi-MB base64 payloads, streaming chunks, and response
+        bodies that would otherwise survive until the Logging object itself
+        is collected.
+        """
+        try:
+            # Heavy fields that are only needed during callback execution
+            _keys_to_pop = (
+                "input",
+                "original_response",
+                "complete_streaming_response",
+                "complete_response",
+                "additional_args",
+                # Note: raw_request_typed_dict is intentionally NOT cleared here
+                # because ahealth_check reads it from model_call_details after
+                # failure handlers run. It's a small dict (headers + URL), not
+                # a memory leak concern.
+            )
+            for key in _keys_to_pop:
+                self.model_call_details.pop(key, None)
+
+            # async_complete_streaming_response is used as a re-entry guard
+            # (presence of the key prevents re-processing). Replace the value
+            # with True to keep the guard working while freeing the response.
+            if "async_complete_streaming_response" in self.model_call_details:
+                self.model_call_details["async_complete_streaming_response"] = True
+
+            # Clear the body copy inside proxy_server_request (spend tracking
+            # has already extracted what it needs by this point).
+            _litellm_params = self.model_call_details.get("litellm_params")
+            if isinstance(_litellm_params, dict):
+                _psr = _litellm_params.get("proxy_server_request")
+                if isinstance(_psr, dict):
+                    _psr.pop("body", None)
+
+            # Clear streaming chunks
+            self.streaming_chunks.clear()
+            self.sync_streaming_chunks.clear()
+        except Exception:
+            pass
 
     def _handle_callback_failure(self, callback: Any):
         """
@@ -3092,6 +3161,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
+        finally:
+            self._cleanup_large_data()
 
     async def async_failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -3156,6 +3227,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+
+        # Fix 12d: release large data after all async failure callbacks have run
+        self._cleanup_large_data()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """

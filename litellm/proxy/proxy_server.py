@@ -58,6 +58,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     CallbackDelete,
@@ -10850,11 +10851,12 @@ async def async_queue_request(
         data = await request.json()  # type: ignore
 
         # Include original request and headers in the data
+        # Fix 12a: truncate large base64 payloads in the body copy
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
             "headers": _safe_get_request_headers(request).copy(),
-            "body": copy.copy(data),  # use copy instead of deepcopy
+            "body": truncate_base64_in_messages(copy.copy(data)),
         }
 
         verbose_proxy_logger.debug("receiving data: %s", data)
