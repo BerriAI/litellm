@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -89,8 +89,9 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith('_websearch_interception')
+        k: v
+        for k, v in kwargs_with_internal_flags.items()
+        if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -100,6 +101,45 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
     assert kwargs_for_followup["max_tokens"] == 1024
+
+
+def test_duplicate_kwargs_filtered_from_followup():
+    """Test that kwargs already in optional_params are deduplicated before follow-up request.
+
+    Regression test for bug where context_management appeared in both
+    optional_params and kwargs, causing: "got multiple values for keyword argument 'context_management'"
+    """
+
+    optional_params_without_max_tokens = {
+        "thinking": {"type": "enabled", "budget_tokens": 5000},
+        "context_management": {"type": "automatic", "max_context_tokens": 50000},
+        "temperature": 0.7,
+    }
+
+    kwargs_for_followup = {
+        "context_management": {"type": "automatic", "max_context_tokens": 50000},
+        "some_other_kwarg": "value",
+        "max_tokens": 1024,
+        "model": "claude-opus-4-6",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    # Apply the same dedup logic used in _execute_agentic_loop
+    explicit_keys = {"max_tokens", "messages", "model"}
+    kwargs_for_followup = {
+        k: v
+        for k, v in kwargs_for_followup.items()
+        if k not in optional_params_without_max_tokens and k not in explicit_keys
+    }
+
+    # context_management should be removed (already in optional_params)
+    assert "context_management" not in kwargs_for_followup
+    # Explicit keys should be removed
+    assert "max_tokens" not in kwargs_for_followup
+    assert "model" not in kwargs_for_followup
+    assert "messages" not in kwargs_for_followup
+    # Non-duplicate kwargs should be preserved
+    assert kwargs_for_followup["some_other_kwarg"] == "value"
 
 
 @pytest.mark.asyncio
@@ -130,12 +170,14 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "other_tool"
         for t in result["tools"]
     )
 
@@ -173,7 +215,8 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -234,7 +277,8 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -267,9 +311,129 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+def _mock_proxy_server(mock_router):
+    """Create a mock proxy_server module with llm_router."""
+    mock_module = Mock()
+    mock_module.llm_router = mock_router
+    return mock_module
+
+
+@pytest.mark.asyncio
+async def test_execute_search_loads_api_key_from_named_tool():
+    """Test that _execute_search loads API key and base from router's named search tool."""
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"], search_tool_name="my-search"
+    )
+
+    mock_router = Mock()
+    mock_router.search_tools = [
+        {
+            "search_tool_name": "my-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "tvly-secret",
+                "api_base": "https://custom.tavily.com",
+            },
+        }
+    ]
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="tavily",
+        api_key="tvly-secret",
+        api_base="https://custom.tavily.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_to_first_tool():
+    """Test that _execute_search uses first available tool when no named tool matches."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    mock_router = Mock()
+    mock_router.search_tools = [
+        {
+            "search_tool_name": "default",
+            "litellm_params": {
+                "search_provider": "google",
+                "api_key": "google-key",
+            },
+        }
+    ]
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="google",
+        api_key="google-key",
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_defaults_to_perplexity():
+    """Test that _execute_search falls back to perplexity when no router search tools."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    mock_router = Mock()
+    mock_router.search_tools = []
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="perplexity",
+    )
