@@ -577,7 +577,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                     delta_usage["input_tokens"] = uncached + cache_creation + cache_read
 
                 if delta_usage:
-                    pending_delta["usage"] = delta_usage  # type: ignore[assignment]
+                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
 
                 yield pending_delta
                 pending_delta = None
