@@ -542,6 +542,7 @@ class RegisterGuardrailRequest(BaseModel):
         str, Any
     ]  # guardrail, mode, api_base required; api_key, headers, etc. optional
     guardrail_info: Optional[Dict[str, Any]] = None
+    team_id: str
 
     def get_litellm_params_dict(self) -> Dict[str, Any]:
         return dict(self.litellm_params)
@@ -603,11 +604,29 @@ async def register_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    if not user_api_key_dict.team_id:
+    if not request.team_id:
         raise HTTPException(
             status_code=400,
-            detail="Registration requires an API key associated with a team. Use a team-scoped key.",
+            detail="team_id is required.",
         )
+    team_id = request.team_id
+
+    # Validate the user is a member of the specified team
+    if team_id != user_api_key_dict.team_id:
+        from litellm.proxy.auth.auth_checks import get_team_membership
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        membership = await get_team_membership(
+            user_id=user_api_key_dict.user_id or "",
+            team_id=request.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You are not a member of team {request.team_id!r}",
+            )
 
     params = request.get_litellm_params_dict()
     if params.get("guardrail") != GENERIC_GUARDRAIL_API:
@@ -673,7 +692,7 @@ async def register_guardrail(
                 "litellm_params": litellm_params_str,
                 "guardrail_info": guardrail_info_str,
                 "status": "pending_review",
-                "team_id": user_api_key_dict.team_id,
+                "team_id": team_id,
                 "submitted_at": now,
                 "created_at": now,
                 "updated_at": now,

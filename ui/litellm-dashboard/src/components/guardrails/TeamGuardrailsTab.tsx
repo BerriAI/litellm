@@ -24,6 +24,7 @@ import {
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import TeamDropdown from "@/components/common_components/team_dropdown";
+import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
 
 type GuardrailStatus = "active" | "pending" | "rejected";
 
@@ -824,6 +825,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   const [searchDebounced, setSearchDebounced] = useState("");
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [submitForm] = Form.useForm();
+  const registerGuardrail = useRegisterGuardrail();
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(search), 300);
@@ -1099,22 +1101,27 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           form={submitForm}
           layout="vertical"
           initialValues={{ mode: "pre_call" }}
-          onFinish={(values) => {
+          onFinish={async (values) => {
             const litellm_params: Record<string, unknown> = {
               guardrail: "generic_guardrail_api",
               mode: values.mode,
               api_base: values.api_base,
               ...(values.extra_litellm_params ? JSON.parse(values.extra_litellm_params) : {}),
             };
-            const payload = {
-              guardrail_name: values.guardrail_name,
-              litellm_params,
-              guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined,
-            };
-            // TODO: call registerGuardrailCall once backend is wired
-            console.log("Submit guardrail:", payload);
-            setIsSubmitModalOpen(false);
-            submitForm.resetFields();
+            try {
+              await registerGuardrail.mutateAsync({
+                team_id: values.team_id,
+                guardrail_name: values.guardrail_name,
+                litellm_params,
+                guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined,
+              });
+              NotificationsManager.success("Guardrail submitted for review");
+              setIsSubmitModalOpen(false);
+              submitForm.resetFields();
+              fetchSubmissions();
+            } catch {
+              // error already handled by networking layer
+            }
           }}
         >
           <Form.Item
