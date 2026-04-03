@@ -1103,10 +1103,10 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           initialValues={{ mode: "pre_call" }}
           onFinish={async (values) => {
             const litellm_params: Record<string, unknown> = {
+              ...(values.extra_litellm_params ? JSON.parse(values.extra_litellm_params) : {}),
               guardrail: "generic_guardrail_api",
               mode: values.mode,
               api_base: values.api_base,
-              ...(values.extra_litellm_params ? JSON.parse(values.extra_litellm_params) : {}),
             };
             try {
               await registerGuardrail.mutateAsync({

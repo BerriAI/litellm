@@ -14,7 +14,7 @@ export interface RegisterGuardrailParams {
   guardrail_name: string;
   litellm_params: Record<string, unknown>;
   guardrail_info?: Record<string, unknown>;
-  team_id: string;
+  team_id?: string;
 }
 
 export interface RegisterGuardrailResponse {
