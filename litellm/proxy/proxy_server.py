@@ -13401,7 +13401,11 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     "/{mcp_server_name}/health",
     methods=["GET", "HEAD"],
 )
-async def dynamic_mcp_health_route(mcp_server_name: str, request: Request):
+async def dynamic_mcp_health_route(
+    mcp_server_name: str,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """Handle health check passthrough for MCP servers like /github_mcp/health"""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,

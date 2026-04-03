@@ -189,6 +189,38 @@ class TestDynamicMcpHealthRoute:
         assert "connection refused" in exc_info.value.detail
 
     @pytest.mark.asyncio
+    async def test_health_route_head_method(self):
+        """HEAD requests are forwarded; response body should be empty."""
+        try:
+            from litellm.proxy.proxy_server import dynamic_mcp_health_route
+        except ImportError:
+            pytest.skip("proxy_server not available")
+
+        mcp_server = _make_server()
+        if mcp_server is None:
+            pytest.skip("MCP types not available")
+
+        upstream_response = MagicMock()
+        upstream_response.content = b""
+        upstream_response.status_code = 200
+        upstream_response.headers = {"content-type": "application/json"}
+
+        mock_http_client = AsyncMock()
+        mock_http_client.get = AsyncMock(return_value=upstream_response)
+
+        with (
+            patch(_MCP_MANAGER_PATH) as mock_manager,
+            patch(_IP_UTILS_PATH) as mock_ip_utils,
+            patch(_HTTP_CLIENT_PATH, return_value=mock_http_client),
+        ):
+            mock_ip_utils.get_mcp_client_ip.return_value = "127.0.0.1"
+            mock_manager.get_mcp_server_by_name.return_value = mcp_server
+
+            response = await dynamic_mcp_health_route("my_mcp", _make_request())
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
     async def test_health_route_forwards_upstream_status_code(self):
         """Non-200 status codes from the upstream server are forwarded as-is."""
         try:
