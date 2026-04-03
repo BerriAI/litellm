@@ -1021,3 +1021,38 @@ class TestLogGuardrailInformationApplyGuardrailEventType:
             f"guardrail_mode must be a string, got {type(guardrail_mode)}: {guardrail_mode}"
         )
         assert guardrail_mode == GuardrailEventHooks.post_call
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_positional_input_type_logs_correct_event_type(self):
+        """
+        When apply_guardrail is called with input_type passed positionally (args[3]),
+        the decorator must still infer the correct event_type. This guards against
+        regressions where only kwargs.get("input_type") is checked.
+        """
+        mode = Mode(tags={}, default="pre_call")
+
+        class _TestGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type,
+                logging_obj=None,
+            ) -> GenericGuardrailAPIInputs:
+                return inputs
+
+        guardrail = _TestGuardrail(guardrail_name="test", event_hook=mode)
+        request_data: dict = {"metadata": {}}
+        inputs = GenericGuardrailAPIInputs(texts=["hello"])
+
+        # Pass input_type positionally — it lands in args[3], not kwargs
+        await guardrail.apply_guardrail(inputs, request_data, "request")
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(slg_list) == 1
+        guardrail_mode = slg_list[0]["guardrail_mode"]
+        assert isinstance(guardrail_mode, str), (
+            f"guardrail_mode must be a string, got {type(guardrail_mode)}: {guardrail_mode}"
+        )
+        assert guardrail_mode == GuardrailEventHooks.pre_call
