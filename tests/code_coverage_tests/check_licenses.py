@@ -1,15 +1,35 @@
 #!/usr/bin/env python3
+import configparser
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import re
 import sys
 import tomllib
-
-import requests
-from packaging.requirements import Requirement
-from pathlib import Path
-import json
 from typing import Dict, List, Optional, Set, Tuple
-import configparser
-import re
-from dataclasses import dataclass
+
+from packaging.requirements import Requirement
+import requests
+
+DEFAULT_TRANSITIVE_PIN_PACKAGES = (
+    "aiofiles",
+    "anyio",
+    "async-generator",
+    "azure-keyvault",
+    "colorlog",
+    "filelock",
+    "grpc-google-iam-v1",
+    "h11",
+    "hf-xet",
+    "jaraco-context",
+    "redis",
+    "requests-toolbelt",
+    "starlette",
+    "tornado",
+    "tzdata",
+    "urllib3",
+    "wheel",
+)
 
 
 @dataclass
@@ -216,7 +236,7 @@ class LicenseChecker:
     def _load_requirements(
         self, requirements_file: Optional[Path] = None
     ) -> List[Requirement]:
-        """Load pinned requirements from a file or from the root pyproject.toml."""
+        """Load pinned requirements from a file or from the repo defaults."""
         try:
             if requirements_file is not None:
                 with open(requirements_file) as f:
@@ -224,12 +244,37 @@ class LicenseChecker:
             else:
                 with open("pyproject.toml", "rb") as f:
                     pyproject = tomllib.load(f)
+                with open("uv.lock", "rb") as f:
+                    lock_data = tomllib.load(f)
 
                 requirement_lines = list(pyproject["project"].get("dependencies", []))
                 for extra_reqs in pyproject["project"].get(
                     "optional-dependencies", {}
                 ).values():
                     requirement_lines.extend(extra_reqs)
+                for group_reqs in pyproject.get("dependency-groups", {}).values():
+                    requirement_lines.extend(group_reqs)
+
+                lock_versions: Dict[str, List[str]] = {}
+                for package in lock_data.get("package", []):
+                    source = package.get("source", {})
+                    if "registry" not in source:
+                        continue
+
+                    normalized_name = self._normalize_package_name(package["name"])
+                    version = package.get("version")
+                    if not version:
+                        continue
+                    versions = lock_versions.setdefault(normalized_name, [])
+                    if version not in versions:
+                        versions.append(version)
+
+                # Preserve the coverage that used to come from requirements.txt for
+                # explicitly pinned transitives/security fixes without broadening the
+                # default check to every package variant in the lockfile.
+                for package_name in DEFAULT_TRANSITIVE_PIN_PACKAGES:
+                    for version in lock_versions.get(package_name, []):
+                        requirement_lines.append(f"{package_name}=={version}")
 
                 # Preserve declaration order while removing duplicates.
                 requirement_lines = list(dict.fromkeys(requirement_lines))
@@ -240,12 +285,12 @@ class LicenseChecker:
                 if line.split("#")[0].strip() and not line.startswith("#")
             ]
         except Exception as e:
-            source = requirements_file or "uv export"
+            source = requirements_file or "pyproject.toml + uv.lock"
             raise RuntimeError(f"Error parsing requirements from {source}: {str(e)}") from e
 
     def check_requirements(self, requirements_file: Optional[Path] = None) -> bool:
-        """Check all packages from a requirements file or the root pyproject."""
-        source = requirements_file or "pyproject.toml"
+        """Check all packages from a requirements file or the default repo deps."""
+        source = requirements_file or "pyproject.toml + uv.lock"
         print(f"\nChecking licenses for packages in {source}...")
 
         try:

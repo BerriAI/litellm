@@ -3,6 +3,8 @@ FROM $UV_IMAGE AS uvbin
 
 FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
+ARG LITELLM_VERSION=1.83.0
+
 WORKDIR /app
 
 COPY --from=uvbin /uv /usr/local/bin/uv
@@ -16,13 +18,18 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:${PATH}"
 
-COPY . .
+COPY schema.prisma .
 
-RUN uv sync --frozen --no-default-groups --no-editable \
-    --extra proxy \
-    --extra proxy-runtime \
-    --extra extra_proxy \
-    --python python
+# This image is specifically for validating/installing the published PyPI
+# artifact, not the checked-out source tree.
+RUN uv venv --python python && \
+    uv pip install --python /app/.venv/bin/python \
+      "litellm[proxy]==${LITELLM_VERSION}" \
+      "prometheus-client==0.20.0" \
+      "langfuse==2.59.7" \
+      "prisma==0.11.0" \
+      "openai==2.24.0" \
+      "ddtrace==2.19.0"
 
 RUN prisma generate --schema=./schema.prisma
 

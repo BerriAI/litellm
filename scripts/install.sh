@@ -75,6 +75,7 @@ fi
 
 # ── uv detection / install ────────────────────────────────────────────────
 UV_BIN=""
+CURRENT_UV_VERSION=""
 for candidate in uv "$HOME/.local/bin/uv"; do
   if command -v "$candidate" >/dev/null 2>&1; then
     UV_BIN="$(command -v "$candidate")"
@@ -85,8 +86,15 @@ for candidate in uv "$HOME/.local/bin/uv"; do
   fi
 done
 
-if [ -z "$UV_BIN" ]; then
+if [ -n "$UV_BIN" ]; then
+  CURRENT_UV_VERSION="$("$UV_BIN" --version 2>/dev/null | awk '{print $2}' | head -1 || true)"
+fi
+
+if [ -z "$UV_BIN" ] || [ "${CURRENT_UV_VERSION:-}" != "$UV_VERSION" ]; then
   header "Installing uv…"
+  if [ -n "${CURRENT_UV_VERSION:-}" ]; then
+    info "Upgrading uv from ${CURRENT_UV_VERSION} to ${UV_VERSION}"
+  fi
   curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_NO_MODIFY_PATH=1 sh \
     || die "uv installation failed. Try manually: curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh"
   UV_BIN="$HOME/.local/bin/uv"
