@@ -222,7 +222,17 @@ members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.uv.build-backend]
 module-root = ""
-source-exclude = ["litellm/proxy/enterprise"]
+source-exclude = [
+    "litellm/proxy/enterprise",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/.mypy_cache",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+]
 
 [tool.isort]
 profile = "black"

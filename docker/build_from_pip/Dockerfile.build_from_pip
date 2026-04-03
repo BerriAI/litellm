@@ -22,14 +22,30 @@ COPY schema.prisma .
 
 # This image is specifically for validating/installing the published PyPI
 # artifact, not the checked-out source tree.
+# Keep the moved proxy-runtime packages explicit until the published PyPI
+# artifact includes that extra; newer releases will simply dedupe these.
 RUN uv venv --python python && \
     uv pip install --python /app/.venv/bin/python \
-      "litellm[proxy]==${LITELLM_VERSION}" \
+      "litellm[proxy,proxy-runtime]==${LITELLM_VERSION}" \
+      "google-cloud-aiplatform==1.133.0" \
+      "google-genai==1.37.0" \
+      "anthropic[vertex]==0.84.0" \
+      "grpcio==1.78.0" \
       "prometheus-client==0.20.0" \
       "langfuse==2.59.7" \
+      "opentelemetry-api==1.28.0" \
+      "opentelemetry-sdk==1.28.0" \
+      "opentelemetry-exporter-otlp==1.28.0" \
+      "ddtrace==2.19.0" \
+      "sentry-sdk==2.21.0" \
+      "mangum==0.17.0" \
+      "azure-ai-contentsafety==1.0.0" \
+      "azure-storage-file-datalake==12.20.0" \
+      "pypdf==6.7.5" \
+      "llm-sandbox==0.3.31" \
+      "detect-secrets==1.5.0" \
       "prisma==0.11.0" \
-      "openai==2.24.0" \
-      "ddtrace==2.19.0"
+      "openai==2.24.0"
 
 RUN prisma generate --schema=./schema.prisma
 
