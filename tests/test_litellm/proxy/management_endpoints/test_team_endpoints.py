@@ -6539,7 +6539,7 @@ class TestResolveAccessGroupResources:
         )
 
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            "litellm.proxy.management_endpoints.team_endpoints._get_access_object",
             new_callable=AsyncMock,
             return_value=fake_ag,
         ):
@@ -6547,9 +6547,13 @@ class TestResolveAccessGroupResources:
                 "litellm.proxy.proxy_server.user_api_key_cache",
                 MagicMock(),
             ):
-                result = await _resolve_access_group_resources(
-                    access_group_ids=["ag-1"],
-                )
+                with patch(
+                    "litellm.proxy.proxy_server.prisma_client",
+                    MagicMock(),
+                ):
+                    result = await _resolve_access_group_resources(
+                        access_group_ids=["ag-1"],
+                    )
 
         assert sorted(result["access_group_models"]) == ["claude-3", "gpt-4"]
         assert result["access_group_mcp_server_ids"] == ["mcp-1"]
@@ -6582,16 +6586,20 @@ class TestResolveAccessGroupResources:
             return {"ag-1": ag1, "ag-2": ag2}[access_group_id]
 
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            "litellm.proxy.management_endpoints.team_endpoints._get_access_object",
             side_effect=fake_get_access_object,
         ):
             with patch(
                 "litellm.proxy.proxy_server.user_api_key_cache",
                 MagicMock(),
             ):
-                result = await _resolve_access_group_resources(
-                    access_group_ids=["ag-1", "ag-2"],
-                )
+                with patch(
+                    "litellm.proxy.proxy_server.prisma_client",
+                    MagicMock(),
+                ):
+                    result = await _resolve_access_group_resources(
+                        access_group_ids=["ag-1", "ag-2"],
+                    )
 
         assert sorted(result["access_group_models"]) == ["claude-3", "gemini", "gpt-4"]
         assert sorted(result["access_group_mcp_server_ids"]) == ["mcp-1", "mcp-2"]
@@ -6619,16 +6627,20 @@ class TestResolveAccessGroupResources:
             raise HTTPException(status_code=404, detail="Not found")
 
         with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_access_object",
+            "litellm.proxy.management_endpoints.team_endpoints._get_access_object",
             side_effect=fake_get_access_object,
         ):
             with patch(
                 "litellm.proxy.proxy_server.user_api_key_cache",
                 MagicMock(),
             ):
-                result = await _resolve_access_group_resources(
-                    access_group_ids=["ag-1", "ag-missing"],
-                )
+                with patch(
+                    "litellm.proxy.proxy_server.prisma_client",
+                    MagicMock(),
+                ):
+                    result = await _resolve_access_group_resources(
+                        access_group_ids=["ag-1", "ag-missing"],
+                    )
 
         assert result["access_group_models"] == ["gpt-4"]
         assert result["access_group_mcp_server_ids"] == []
