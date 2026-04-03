@@ -2550,6 +2550,7 @@ class VertexLLM(VertexBase):
         )
 
         request_body_str = json.dumps(request_body)
+        del request_body  # free ~1.3 MB base64/image; only request_body_str is needed
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(

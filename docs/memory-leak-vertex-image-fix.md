@@ -190,15 +190,19 @@ logging_obj.pre_call(
 )
 ```
 
-`pre_call` → `_pre_call` 将其存入：
+`pre_call` → `_pre_call` 将其存入，**且 `post_call` 再次覆盖**：
 
 ```python
-self.model_call_details["additional_args"] = additional_args
-# additional_args["complete_input_dict"] 持有 base64 字符串引用
+# _pre_call（Fix 11 已截断）
+self.model_call_details["additional_args"] = additional_args  # 截断版本
+
+# transform_response → post_call（覆盖为完整版本！）
+logging_obj.post_call(additional_args={"complete_input_dict": request_data})  # ← 原始 base64
+self.model_call_details["additional_args"] = additional_args  # ← 覆盖截断版本
 ```
 
-`model_call_details` 在 Logging 对象整个生命周期（直到所有异步回调完成）都持有该引用。
-并发请求越多、回调（DB 写入等）越慢，积压的 446+ 个 1.3MB base64 字符串越多。
+Fix 11 修订：在 `_pre_call` 和 `post_call` 两处均截断 `complete_input_dict`。
+并在 streaming 路径中 `json.dumps(request_body)` 后 `del request_body`，提前释放 dict 中的 base64 引用。
 
 ---
 

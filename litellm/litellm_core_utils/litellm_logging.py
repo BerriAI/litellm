@@ -1216,6 +1216,18 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
             self.model_call_details["original_response"] = original_response
+            # Fix 11: strip large base64 from complete_input_dict before
+            # storing, matching the same truncation in _pre_call.  Without
+            # this, post_call overwrites the truncated copy from _pre_call
+            # with the full request body (containing ~1.3 MB inline_data
+            # base64 per image), re-introducing the leak.
+            if additional_args.get("complete_input_dict"):
+                additional_args = {
+                    **additional_args,
+                    "complete_input_dict": truncate_base64_in_messages(
+                        additional_args["complete_input_dict"]
+                    ),
+                }
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
