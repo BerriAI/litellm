@@ -3757,6 +3757,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -3895,6 +3896,10 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
+    }
+    if (formValues.budget_duration !== undefined) {
+      // Explicitly include null so the backend can clear a previously-set duration.
+      requestBody.budget_duration = formValues.budget_duration;
     }
 
     console.log("Final request body:", requestBody);

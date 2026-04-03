@@ -1935,6 +1935,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -3610,6 +3611,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     team_id: str
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
+    total_spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
@@ -3737,6 +3739,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     )
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Budget reset period for this team member (e.g. '24h', '7d', '30d'). Determines how often their individual spend resets.",
     )
 
 

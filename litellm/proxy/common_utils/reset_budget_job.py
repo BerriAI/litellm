@@ -52,13 +52,17 @@ class ResetBudgetJob:
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
     ):
         """
-        Resets the budget for all LiteLLM Team Members if their budget has expired
+        Resets the budget for all LiteLLM Team Members if their budget has expired.
+        Only resets the current-period spend; total_spend is never zeroed so it
+        accumulates as a lifetime usage counter.
         """
         budget_ids = [
             budget.budget_id
             for budget in budgets_to_reset
             if budget.budget_id is not None
         ]
+        if not budget_ids:
+            return
 
         # Reset spend counters for affected team members.
         # Reset Redis directly so a transient failure doesn't leave stale
@@ -658,18 +662,25 @@ class ResetBudgetJob:
 
                 duration_s = duration_in_seconds(duration=budget.budget_duration)
 
-                # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account
-                if (
-                    budget.budget_reset_at is None
-                    and budget.created_at + timedelta(seconds=duration_s) > current_time
-                ):
-                    budget.budget_reset_at = budget.created_at + timedelta(
-                        seconds=duration_s
-                    )
+                if budget.budget_reset_at is None:
+                    # Budget was created without a reset time. Anchor the first
+                    # period to created_at so the reset aligns with when the
+                    # budget was originally set up, not the current wall-clock
+                    # time (which would be proxy-start time when this job runs
+                    # at startup and produce a confusing "resets at startup" display).
+                    anchor = budget.created_at + timedelta(seconds=duration_s)
+                    while anchor <= current_time:
+                        anchor += timedelta(seconds=duration_s)
+                    budget.budget_reset_at = anchor
                 else:
-                    budget.budget_reset_at = current_time + timedelta(
-                        seconds=duration_s
-                    )
+                    # Normal roll-forward: advance from the previous reset time.
+                    # Use a while loop so proxies that were down for multiple
+                    # periods catch up in one pass rather than firing the
+                    # spend-zero operation repeatedly over many scheduler ticks.
+                    while budget.budget_reset_at <= current_time:
+                        budget.budget_reset_at = budget.budget_reset_at + timedelta(
+                            seconds=duration_s
+                        )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error resetting budget_reset_at for budget: %s. Item: %s", e, budget

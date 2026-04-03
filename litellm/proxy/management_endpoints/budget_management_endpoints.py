@@ -173,12 +173,38 @@ async def update_budget(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
+    update_data: dict = {
+        **budget_obj.model_dump(exclude_unset=True),
+        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+    }
+
+    # Recalculate budget_reset_at only when budget_duration is genuinely changing.
+    # We compare against the current DB value so that idempotent calls at proxy
+    # startup (e.g. _update_default_team_member_budget) do not overwrite a
+    # correctly-set future budget_reset_at with "now + duration".
+    # We check budget_obj.budget_duration directly (not model_fields_set) because
+    # internal callers set fields via attribute assignment after construction, which
+    # does not reliably update model_fields_set.
+    if budget_obj.budget_duration is not None and "budget_reset_at" not in update_data:
+        existing = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": budget_obj.budget_id}
+        )
+        existing_duration = existing.budget_duration if existing is not None else None
+        duration_changed = existing_duration != budget_obj.budget_duration
+        reset_at_missing = (
+            existing is None or existing.budget_reset_at is None
+        )
+        if duration_changed or reset_at_missing:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            update_data["budget_duration"] = budget_obj.budget_duration
+            update_data["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=budget_obj.budget_duration
+            )
+
     response = await prisma_client.db.litellm_budgettable.update(
         where={"budget_id": budget_obj.budget_id},
-        data={
-            **budget_obj.model_dump(exclude_unset=True),  # type: ignore
-            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        },  # type: ignore
+        data=update_data,  # type: ignore
     )
 
     return response

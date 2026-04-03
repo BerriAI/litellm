@@ -85,8 +85,8 @@ const MemberModal = <T extends BaseMember>({
       const formData = Object.entries(values).reduce((acc, [key, value]) => {
         if (typeof value === "string") {
           const trimmedValue = value.trim();
-          // For empty strings on optional numeric fields, set to null
-          if (trimmedValue === "" && (key === "max_budget_in_team" || key === "tpm_limit" || key === "rpm_limit")) {
+          // For empty strings on optional fields, set to null
+          if (trimmedValue === "" && (key === "max_budget_in_team" || key === "tpm_limit" || key === "rpm_limit" || key === "budget_duration")) {
             return { ...acc, [key]: null };
           }
           return { ...acc, [key]: trimmedValue };
