@@ -134,7 +134,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
         input_examples_used = self.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
@@ -154,10 +155,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         # Filter out beta headers that Bedrock Invoke doesn't support
         # Uses centralized configuration from anthropic_beta_headers_config.json
-        beta_list = filter_and_transform_beta_headers(
-            beta_headers=list(beta_set),
+        auto_beta_list = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
         )
+        beta_list = sorted(user_beta_set.union(set(auto_beta_list)))
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
 
@@ -204,7 +206,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
         input_examples_used = self.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
@@ -222,10 +225,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        beta_list = filter_and_transform_beta_headers(
-            beta_headers=list(beta_set),
+        auto_beta_list = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
         )
+        beta_list = sorted(user_beta_set.union(set(auto_beta_list)))
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
 
