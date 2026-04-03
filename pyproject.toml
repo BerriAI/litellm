@@ -15,6 +15,7 @@ dependencies = [
     "openai==2.24.0",
     "python-dotenv==1.0.1",
     "tiktoken==0.12.0",
+    "tenacity==8.5.0",
     "importlib-metadata==8.5.0",
     "tokenizers==0.22.2",
     "click==8.1.8",
@@ -22,6 +23,9 @@ dependencies = [
     "aiohttp==3.13.3",
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
+    "google-generativeai==0.8.6",
+    "Pillow==11.3.0; python_version < '3.10'",
+    "Pillow==12.1.1; python_version >= '3.10'",
 ]
 
 [project.urls]
@@ -168,9 +172,7 @@ ci = [
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
-    "tenacity==8.5.0",
     "pytest-retry==1.7.0",
-    "google-generativeai==0.8.6",
     "pyarrow==21.0.0; python_version < '3.10'",
     "pyarrow==22.0.0; python_version >= '3.10'",
     "langchain==0.3.27; python_version < '3.10'",
@@ -184,8 +186,6 @@ ci = [
     "PyGithub==2.8.1",
     "aiodynamo==24.7",
     "argon2-cffi==25.1.0",
-    "Pillow==11.3.0; python_version < '3.10'",
-    "Pillow==12.1.1; python_version >= '3.10'",
     "assemblyai==0.52.4",
     "jsonlines==4.0.0",
     "anthropic==0.84.0",

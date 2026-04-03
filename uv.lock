@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-04T07:07:11.92737292Z"
+exclude-newer = "2026-03-04T21:19:40.9182461Z"
 exclude-newer-span = "P30D"
 
 [manifest]
@@ -4007,13 +4007,17 @@ dependencies = [
     { name = "aiohttp" },
     { name = "click" },
     { name = "fastuuid" },
+    { name = "google-generativeai" },
     { name = "httpx" },
     { name = "importlib-metadata" },
     { name = "jinja2" },
     { name = "jsonschema" },
     { name = "openai" },
+    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pillow", version = "12.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "tenacity" },
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
@@ -4106,7 +4110,6 @@ ci = [
     { name = "blockbuster" },
     { name = "claude-agent-sdk", marker = "python_full_version >= '3.10'" },
     { name = "detect-secrets" },
-    { name = "google-generativeai" },
     { name = "jsonlines" },
     { name = "langchain", version = "0.3.27", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "langchain", version = "1.2.10", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -4117,8 +4120,6 @@ ci = [
     { name = "lunary", version = "1.0.36", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "lunary", version = "1.4.36", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "lunary", version = "1.4.37", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pillow", version = "12.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "psycopg2-binary" },
     { name = "pyarrow", version = "21.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pyarrow", version = "22.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -4128,7 +4129,6 @@ ci = [
     { name = "pyright" },
     { name = "pytest-codspeed" },
     { name = "pytest-retry" },
-    { name = "tenacity" },
     { name = "traceloop-sdk" },
 ]
 dev = [
@@ -4209,6 +4209,7 @@ requires-dist = [
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = "==2.19.1" },
     { name = "google-cloud-kms", marker = "extra == 'extra-proxy'", specifier = "==2.24.2" },
     { name = "google-genai", marker = "extra == 'proxy-runtime'", specifier = "==1.37.0" },
+    { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = "==1.78.0" },
     { name = "grpcio", marker = "extra == 'proxy-runtime'", specifier = "==1.78.0" },
     { name = "gunicorn", marker = "extra == 'proxy'", specifier = "==23.0.0" },
@@ -4230,6 +4231,8 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "orjson", marker = "extra == 'proxy'", specifier = "==3.10.15" },
+    { name = "pillow", marker = "python_full_version < '3.10'", specifier = "==11.3.0" },
+    { name = "pillow", marker = "python_full_version >= '3.10'", specifier = "==12.1.1" },
     { name = "polars", marker = "python_full_version >= '3.10' and extra == 'proxy'", specifier = "==1.38.1" },
     { name = "prisma", marker = "extra == 'extra-proxy'", specifier = "==0.11.0" },
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = "==0.20.0" },
@@ -4248,6 +4251,7 @@ requires-dist = [
     { name = "semantic-router", marker = "python_full_version >= '3.9' and python_full_version < '3.14' and extra == 'semantic-router'", specifier = "==0.1.12" },
     { name = "sentry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==2.21.0" },
     { name = "soundfile", marker = "extra == 'proxy'", specifier = "==0.12.1" },
+    { name = "tenacity", specifier = "==8.5.0" },
     { name = "tiktoken", specifier = "==0.12.0" },
     { name = "tokenizers", specifier = "==0.22.2" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = "==0.33.0" },
@@ -4266,7 +4270,6 @@ ci = [
     { name = "blockbuster", specifier = "==1.5.26" },
     { name = "claude-agent-sdk", marker = "python_full_version >= '3.10'", specifier = "==0.1.44" },
     { name = "detect-secrets", specifier = "==1.5.0" },
-    { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "jsonlines", specifier = "==4.0.0" },
     { name = "langchain", marker = "python_full_version < '3.10'", specifier = "==0.3.27" },
     { name = "langchain", marker = "python_full_version >= '3.10'", specifier = "==1.2.10" },
@@ -4277,8 +4280,6 @@ ci = [
     { name = "lunary", marker = "python_full_version < '3.10'", specifier = "==1.0.36" },
     { name = "lunary", marker = "python_full_version == '3.10.*'", specifier = "==1.4.36" },
     { name = "lunary", marker = "python_full_version >= '3.11'", specifier = "==1.4.37" },
-    { name = "pillow", marker = "python_full_version < '3.10'", specifier = "==11.3.0" },
-    { name = "pillow", marker = "python_full_version >= '3.10'", specifier = "==12.1.1" },
     { name = "psycopg2-binary", specifier = "==2.9.11" },
     { name = "pyarrow", marker = "python_full_version < '3.10'", specifier = "==21.0.0" },
     { name = "pyarrow", marker = "python_full_version >= '3.10'", specifier = "==22.0.0" },
@@ -4288,7 +4289,6 @@ ci = [
     { name = "pyright", specifier = "==1.1.408" },
     { name = "pytest-codspeed", specifier = "==4.3.0" },
     { name = "pytest-retry", specifier = "==1.7.0" },
-    { name = "tenacity", specifier = "==8.5.0" },
     { name = "traceloop-sdk", specifier = "==0.33.12" },
 ]
 dev = [
