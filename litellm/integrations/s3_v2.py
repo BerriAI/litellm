@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
+import re
 from datetime import datetime
 from typing import List, Optional, cast
 
@@ -472,8 +473,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             if user_api_key_alias:
                 prefix_components.append(user_api_key_alias)
 
-        # Construct full prefix path
+        # Construct full prefix path (sanitize characters invalid in S3 keys)
         prefix_path = "/".join(prefix_components)
+        # Replace spaces and other problematic characters to prevent S3 signing errors
+        prefix_path = re.sub(r"[\s]+", "_", prefix_path)
         if prefix_path:
             prefix_path += "/"
 
