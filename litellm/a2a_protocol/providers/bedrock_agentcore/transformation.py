@@ -9,6 +9,7 @@ import json
 from typing import Any, AsyncIterator, Dict, Tuple
 
 from litellm._logging import verbose_logger
+from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
 
 
 class BedrockAgentCoreA2ATransformation:
@@ -40,10 +41,6 @@ class BedrockAgentCoreA2ATransformation:
         Returns:
             Tuple of (url, signed_headers, signed_body_bytes)
         """
-        from litellm.llms.bedrock.chat.agentcore.transformation import (
-            AmazonAgentCoreConfig,
-        )
-
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
         model = litellm_params.get("model", "")

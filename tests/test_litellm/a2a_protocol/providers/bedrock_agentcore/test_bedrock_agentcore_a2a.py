@@ -203,9 +203,22 @@ class TestConfigManager:
             A2AProviderConfigManager,
         )
 
-        config = A2AProviderConfigManager.get_provider_config("bedrock")
+        config = A2AProviderConfigManager.get_provider_config(
+            "bedrock", model=SAMPLE_MODEL
+        )
         assert config is not None
         assert isinstance(config, BedrockAgentCoreA2AConfig)
+
+    def test_bedrock_non_agentcore_returns_none(self):
+        """Non-agentcore bedrock models should fall through to completion bridge."""
+        from litellm.a2a_protocol.providers.config_manager import (
+            A2AProviderConfigManager,
+        )
+
+        config = A2AProviderConfigManager.get_provider_config(
+            "bedrock", model="bedrock/anthropic.claude-3-sonnet"
+        )
+        assert config is None
 
     def test_unknown_provider_returns_none(self):
         from litellm.a2a_protocol.providers.config_manager import (

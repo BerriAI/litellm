@@ -48,7 +48,8 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
@@ -145,7 +146,8 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
