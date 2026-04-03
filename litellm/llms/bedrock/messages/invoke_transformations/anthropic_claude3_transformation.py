@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -436,7 +437,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = anthropic_model_info.get_anthropic_beta_list(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -460,8 +462,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        filtered_auto_betas = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
+            provider="bedrock",
+        )
+        filtered_betas = sorted(user_beta_set.union(set(filtered_auto_betas)))
+        if filtered_betas:
+            anthropic_messages_request["anthropic_beta"] = filtered_betas
 
         return anthropic_messages_request
 
