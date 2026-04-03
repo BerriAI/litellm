@@ -3234,30 +3234,8 @@ jobs:
           command: |
             npx playwright install
       - run:
-          name: Install Neon CLI
-          command: |
-            npm i -g neonctl
-      - run:
-          name: Create Neon branch
-          command: |
-            export EXPIRES_AT=$(date -u -d "+3 hours" +"%Y-%m-%dT%H:%M:%SZ")
-            echo "Expires at: $EXPIRES_AT"
-            neon branches create \
-              --project-id $NEON_PROJECT_ID \
-              --name preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
-              --expires-at $EXPIRES_AT \
-              --parent br-fancy-paper-ad1olsb3 \
-              --api-key $NEON_API_KEY || true
-      - run:
           name: Run Docker container
           command: |
-            E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
-              --project-id $NEON_PROJECT_ID \
-              --api-key $NEON_API_KEY \
-              --branch preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
-              --database-name yuneng-trial-db \
-              --role neondb_owner)
-            echo $E2E_UI_TEST_DATABASE_URL
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
@@ -3531,7 +3509,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      # - e2e_ui_testing: # migrate to dynamic db - currently requires neon cli 
+      # - e2e_ui_testing:
       #     name: e2e_ui_testing_chromium
       #     browser: chromium
       #     context: e2e_ui_tests
