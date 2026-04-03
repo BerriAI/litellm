@@ -64,9 +64,11 @@ class BedrockBatchesHandler:
                 created_at=status_response["submitTime"],
                 in_progress_at=status_response["lastModifiedTime"],
                 completed_at=status_response.get("endTime"),
-                failed_at=status_response.get("endTime")
-                if status_response["status"] == "failed"
-                else None,
+                failed_at=(
+                    status_response.get("endTime")
+                    if status_response["status"] == "failed"
+                    else None
+                ),
                 request_counts=BatchRequestCounts(
                     total=1,
                     completed=1 if status_response["status"] == "completed" else 0,
