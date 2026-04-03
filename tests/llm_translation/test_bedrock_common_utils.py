@@ -51,11 +51,11 @@ class TestStripBedrockThroughputSuffix:
     """Tests for strip_bedrock_throughput_suffix function."""
 
     @pytest.mark.parametrize("input_model,expected", [
-        ("anthropic.claude-3-5-sonnet-20241022-v2:0:51k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
-        ("anthropic.claude-3-5-sonnet-20241022-v2:0:18k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0:18k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
         ("model:1:51k", "model:1"),
         ("model:123:18k", "model:123"),
-        ("anthropic.claude-3-5-sonnet-20241022-v2:0", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
         ("anthropic.claude-3-sonnet", "anthropic.claude-3-sonnet"),
     ])
     def test_strip_throughput_suffix(self, input_model, expected):
@@ -135,10 +135,10 @@ class TestGetBedrockBaseModel:
         )
 
     @pytest.mark.parametrize("input_model,expected", [
-        ("anthropic.claude-3-5-sonnet-20241022-v2:0:51k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
-        ("anthropic.claude-3-5-sonnet-20241022-v2:0:18k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
-        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0:51k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
-        ("us.anthropic.claude-3-5-sonnet-20241022-v2:0:51k", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0:18k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
     ])
     def test_strips_throughput_suffix(self, input_model, expected):
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""

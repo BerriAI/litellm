@@ -114,7 +114,7 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     # Simulate kwargs as they arrive from the router path:
     # custom_llm_provider is at the TOP LEVEL (not nested under litellm_params)
     kwargs = {
-        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
         "tools": [
             {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
@@ -222,7 +222,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
     logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
     kwargs = {
-        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "messages": [{"role": "user", "content": "test"}],
         "tools": [{"type": "web_search_20250305", "name": "web_search"}],
         "litellm_params": {
@@ -238,7 +238,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
         for t in result["tools"]
     )
     # Full kwargs preserved
-    assert result["model"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert result["model"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.asyncio
