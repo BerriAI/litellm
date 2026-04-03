@@ -2,9 +2,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GuardrailTracingDetail
+from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -949,13 +950,6 @@ class TestLogGuardrailInformationApplyGuardrailEventType:
         guardrail_mode should be GuardrailEventHooks.pre_call (a string), not
         a GuardrailMode dict.
         """
-        from litellm.integrations.custom_guardrail import (
-            CustomGuardrail,
-            log_guardrail_information,
-        )
-        from litellm.types.guardrails import GuardrailEventHooks, Mode
-        from litellm.types.utils import GenericGuardrailAPIInputs
-
         # Build a Mode object (tags-based routing), which is what custom-code
         # guardrails use. Without the fix, this becomes a GuardrailMode dict
         # in the logged data, triggering .replace is not a function in the UI.
@@ -997,13 +991,6 @@ class TestLogGuardrailInformationApplyGuardrailEventType:
         When apply_guardrail is called with input_type='response', the logged
         guardrail_mode should be GuardrailEventHooks.post_call (a string).
         """
-        from litellm.integrations.custom_guardrail import (
-            CustomGuardrail,
-            log_guardrail_information,
-        )
-        from litellm.types.guardrails import GuardrailEventHooks, Mode
-        from litellm.types.utils import GenericGuardrailAPIInputs
-
         mode = Mode(tags={}, default="post_call")
 
         class _TestGuardrail(CustomGuardrail):
