@@ -490,6 +490,53 @@ async def get_prompt_versions(
     return ListPromptsResponse(prompts=versioned_prompts)
 
 
+def _get_prompt_template(
+    prompt_spec: PromptSpec, base_prompt_id: str
+) -> Optional[PromptTemplateBase]:
+    """Resolve the raw prompt template from dotprompt content or the in-memory registry."""
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    try:
+        dotprompt_content = prompt_spec.litellm_params.dotprompt_content
+        if dotprompt_content:
+            from litellm.integrations.dotprompt import (
+                _get_prompt_data_from_dotprompt_content,
+            )
+
+            parsed = _get_prompt_data_from_dotprompt_content(dotprompt_content)
+            if parsed:
+                return PromptTemplateBase(
+                    litellm_prompt_id=base_prompt_id,
+                    content=parsed.get("content", ""),
+                    metadata=parsed.get("metadata"),
+                )
+        else:
+            prompt_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
+                prompt_spec.prompt_id
+            )
+            if prompt_callback is not None:
+                integration_name = prompt_callback.integration_name
+                if integration_name == "dotprompt":
+                    from litellm.integrations.dotprompt.dotprompt_manager import (
+                        DotpromptManager,
+                    )
+
+                    if isinstance(prompt_callback, DotpromptManager):
+                        template = (
+                            prompt_callback.prompt_manager.get_all_prompts_as_json()
+                        )
+                        if template is not None and len(template) == 1:
+                            template_id = list(template.keys())[0]
+                            return PromptTemplateBase(
+                                litellm_prompt_id=template_id,
+                                content=template[template_id]["content"],
+                                metadata=template[template_id]["metadata"],
+                            )
+    except Exception:
+        pass
+    return None
+
+
 @router.get(
     "/prompts/{prompt_id}",
     tags=["Prompt Management"],
@@ -626,49 +673,7 @@ async def get_prompt_info(
     )
 
     # Get prompt content
-    prompt_template: Optional[PromptTemplateBase] = None
-    try:
-        # Parse dotprompt_content directly when available (avoids stale in-memory data)
-        dotprompt_content = prompt_spec.litellm_params.dotprompt_content
-        if dotprompt_content:
-            from litellm.integrations.dotprompt import (
-                _get_prompt_data_from_dotprompt_content,
-            )
-
-            parsed = _get_prompt_data_from_dotprompt_content(dotprompt_content)
-            if parsed:
-                prompt_template = PromptTemplateBase(
-                    litellm_prompt_id=base_prompt_id,
-                    content=parsed.get("content", ""),
-                    metadata=parsed.get("metadata"),
-                )
-        else:
-            # Fallback: use in-memory registry callback
-            prompt_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_spec.prompt_id
-            )
-            if prompt_callback is not None:
-                integration_name = prompt_callback.integration_name
-
-                if integration_name == "dotprompt":
-                    from litellm.integrations.dotprompt.dotprompt_manager import (
-                        DotpromptManager,
-                    )
-
-                    if isinstance(prompt_callback, DotpromptManager):
-                        template = (
-                            prompt_callback.prompt_manager.get_all_prompts_as_json()
-                        )
-                        if template is not None and len(template) == 1:
-                            template_id = list(template.keys())[0]
-                            prompt_template = PromptTemplateBase(
-                                litellm_prompt_id=template_id,
-                                content=template[template_id]["content"],
-                                metadata=template[template_id]["metadata"],
-                            )
-
-    except Exception:
-        pass
+    prompt_template = _get_prompt_template(prompt_spec, base_prompt_id)
 
     return PromptInfoResponse(
         prompt_spec=prompt_spec_response,
@@ -1013,6 +1018,22 @@ async def delete_prompt(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _reload_prompt_in_registry(
+    registry: Any, versioned_id: str, updated_prompt_spec: PromptSpec
+) -> PromptSpec:
+    """Remove stale entry and re-initialize the prompt in the in-memory registry."""
+    if versioned_id in registry.IN_MEMORY_PROMPTS:
+        del registry.IN_MEMORY_PROMPTS[versioned_id]
+    if versioned_id in registry.prompt_id_to_custom_prompt:
+        del registry.prompt_id_to_custom_prompt[versioned_id]
+    initialized = registry.initialize_prompt(
+        prompt=updated_prompt_spec, config_file_path=None
+    )
+    if initialized is None:
+        raise HTTPException(status_code=500, detail="Failed to patch prompt")
+    return initialized
+
+
 @router.patch(
     "/prompts/{prompt_id}",
     tags=["Prompt Management"],
@@ -1149,21 +1170,9 @@ async def patch_prompt(
             db_prompt=updated_prompt_db_entry
         )
 
-        # Remove the old prompt from memory
-        if versioned_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS:
-            del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[versioned_id]
-        if versioned_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[versioned_id]
-
-        # Initialize the updated prompt
-        initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
-            prompt=updated_prompt_spec, config_file_path=None
+        return _reload_prompt_in_registry(
+            IN_MEMORY_PROMPT_REGISTRY, versioned_id, updated_prompt_spec
         )
-
-        if initialized_prompt is None:
-            raise HTTPException(status_code=500, detail="Failed to patch prompt")
-
-        return initialized_prompt
 
     except HTTPException as e:
         raise e
