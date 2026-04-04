@@ -1027,7 +1027,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                     }))}
                                   />
                                 </Form.Item>
-                                <Form.Item {...restField} name={[name, "tpm"]}>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "tpm"]}
+                                  rules={[
+                                    {
+                                      validator: async (_, value) => {
+                                        const row = (form.getFieldValue("modelLimits") ?? [])[name] ?? {};
+                                        if (row.model && value == null && row.rpm == null) {
+                                          return Promise.reject(new Error("Set at least one of TPM or RPM"));
+                                        }
+                                        return Promise.resolve();
+                                      },
+                                    },
+                                  ]}
+                                >
                                   <InputNumber placeholder="TPM Limit" min={0} />
                                 </Form.Item>
                                 <Form.Item {...restField} name={[name, "rpm"]}>
