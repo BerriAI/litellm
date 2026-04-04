@@ -1221,6 +1221,59 @@ async def test_register_guardrail_requires_team_id(mocker):
 
 
 @pytest.mark.asyncio
+async def test_register_guardrail_non_admin_cross_team_allowed(mocker):
+    """Non-admin may register for a team in their user.teams list even if the key's team_id differs."""
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    created = mocker.Mock(
+        guardrail_id="g1",
+        guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
+        status="pending_review",
+        submitted_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.create = AsyncMock(return_value=created)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-alpha", "team-beta"]),
+    )
+    req = RegisterGuardrailRequest(
+        guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
+        team_id="team-beta",
+        litellm_params=MOCK_REGISTER_REQUEST.litellm_params,
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha"
+    )
+
+    result = await register_guardrail(req, user)
+
+    assert result.guardrail_id == "g1"
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_non_admin_cross_team_forbidden(mocker):
+    """Non-admin gets 403 when registering for a team they are not a member of."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-alpha"]),
+    )
+    req = RegisterGuardrailRequest(
+        guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
+        team_id="team-other",
+        litellm_params=MOCK_REGISTER_REQUEST.litellm_params,
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_guardrail(req, user)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_register_guardrail_duplicate_name(mocker):
     """Register returns 400 when guardrail_name already exists."""
     mock_prisma = mocker.Mock()

@@ -234,21 +234,21 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                     </>
                   ),
                 },
+                {
+                  key: "playground",
+                  label: "Test Playground",
+                  disabled: !accessToken,
+                  children: (
+                    <GuardrailTestPlayground
+                      guardrailsList={guardrailsList}
+                      isLoading={isLoading}
+                      accessToken={accessToken}
+                      onClose={() => {}}
+                    />
+                  ),
+                },
               ]
             : []),
-          {
-            key: "playground",
-            label: "Test Playground",
-            disabled: !accessToken,
-            children: (
-              <GuardrailTestPlayground
-                guardrailsList={guardrailsList}
-                isLoading={isLoading}
-                accessToken={accessToken}
-                onClose={() => {}}
-              />
-            ),
-          },
           {
             key: "submitted",
             label: "Submitted Guardrails",

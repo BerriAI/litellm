@@ -615,16 +615,8 @@ async def register_guardrail(
     # Validate team membership for non-admin users when team differs from key
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     if not is_admin and team_id != user_api_key_dict.team_id:
-        from litellm.proxy.auth.auth_checks import get_team_membership
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        membership = await get_team_membership(
-            user_id=user_api_key_dict.user_id or "",
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
-        if membership is None:
+        user_team_ids = await _get_user_team_ids(user_api_key_dict)
+        if team_id not in user_team_ids:
             raise HTTPException(
                 status_code=403,
                 detail=f"You are not a member of team {team_id!r}",
