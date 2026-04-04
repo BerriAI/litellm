@@ -379,6 +379,11 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        if route_type == "_aresponses_websocket" and (
+            data.get("model") is None or data.get("model") == ""
+        ):
+            # Codex CLI opens /v1/responses without ?model=...
+            return getattr(litellm, f"{route_type}")(**data)
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [
