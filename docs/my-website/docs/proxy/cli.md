@@ -31,7 +31,7 @@ This page documents all command-line interface (CLI) arguments available for the
     ```
 
 ### --num_workers
-   - **Default:** Number of logical CPUs in the system, or `4` if that cannot be determined
+   - **Default:** `1` (can be overridden via `DEFAULT_NUM_WORKERS_LITELLM_PROXY` environment variable)
    - The number of uvicorn / gunicorn workers to spin up.
    - **Usage:** 
      ```shell
@@ -307,6 +307,20 @@ This page documents all command-line interface (CLI) arguments available for the
      litellm --use_prisma_db_push
      ```
 
+### --enforce_prisma_migration_check
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Exit with error if database migration fails on startup. When enabled, the proxy will not start if Prisma migrations cannot be applied successfully.
+   - **Usage:** 
+     ```shell
+     litellm --enforce_prisma_migration_check
+     ```
+  - **Usage - set Environment Variable:** `ENFORCE_PRISMA_MIGRATION_CHECK`
+    ```shell
+    export ENFORCE_PRISMA_MIGRATION_CHECK=true
+    litellm
+    ```
+
 ## Debugging
 
 ### --debug
@@ -383,6 +397,15 @@ This page documents all command-line interface (CLI) arguments available for the
      ```
 
 ## Other Options
+
+### --setup
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Run the interactive setup wizard to configure providers and generate a config file. This guides you through setting up API keys and model configurations.
+   - **Usage:** 
+     ```shell
+     litellm --setup
+     ```
 
 ### --version
    - **Short form:** `-v`
