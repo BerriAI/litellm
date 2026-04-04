@@ -39,11 +39,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
         Accepts both explicit gpt-5 model names and the ``gpt5_series/`` prefix
         used for manual routing.
+
+        All ``gpt-5*-chat`` variants (gpt-5-chat, gpt-5.1-chat, gpt-5.3-chat, ...)
+        are regular chat models and must NOT be routed through GPT-5 reasoning
+        restrictions.
         """
-        # gpt-5-chat* is a chat model and shouldn't go through GPT-5 reasoning restrictions.
-        return (
-            "gpt-5" in model and "gpt-5-chat" not in model
-        ) or "gpt5_series" in model
+        if "gpt5_series" in model:
+            return True
+        if "gpt-5" not in model:
+            return False
+        model_name = model.split("/")[-1]
+        gpt5_suffix = model_name[model_name.index("gpt-5") + len("gpt-5") :]
+        if "-chat" in gpt5_suffix:
+            return False
+        return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.

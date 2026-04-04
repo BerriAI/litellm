@@ -292,3 +292,55 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
 
+
+class TestAzureGPT5ChatModelExclusion:
+    """Test that all Azure gpt-5*-chat variants are excluded from GPT-5 reasoning routing.
+
+    gpt-5-chat, gpt-5.1-chat, gpt-5.2-chat, gpt-5.3-chat etc. are regular
+    chat models. They must NOT be routed through GPT-5 reasoning-specific
+    parameter restrictions.
+    """
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5-chat",
+            "gpt-5.1-chat",
+            "gpt-5.2-chat",
+            "gpt-5.3-chat",
+            "gpt-5.4-chat",
+            "azure/gpt-5-chat",
+            "azure/gpt-5.1-chat",
+            "azure/gpt-5.3-chat",
+        ],
+    )
+    def test_chat_variants_excluded(
+        self, config: AzureOpenAIGPT5Config, model_name: str
+    ):
+        """All gpt-5*-chat models should NOT be classified as GPT-5 reasoning models."""
+        assert not config.is_model_gpt_5_model(model_name)
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5.1",
+            "gpt-5.3-codex",
+            "gpt-5-codex",
+            "gpt5_series/gpt-5",
+            "gpt5_series/gpt-5-codex",
+            "gpt5_series/my-deployment",
+        ],
+    )
+    def test_reasoning_variants_included(
+        self, config: AzureOpenAIGPT5Config, model_name: str
+    ):
+        """Non-chat GPT-5 models and gpt5_series/ prefixed models should be classified as GPT-5."""
+        assert config.is_model_gpt_5_model(model_name)
+
+    def test_non_gpt5_excluded(self, config: AzureOpenAIGPT5Config):
+        """Non-GPT-5 models should not be classified as GPT-5."""
+        assert not config.is_model_gpt_5_model("gpt-4o")
+        assert not config.is_model_gpt_5_model("o3-mini")
+

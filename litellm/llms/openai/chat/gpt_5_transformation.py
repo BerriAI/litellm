@@ -53,9 +53,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        # gpt-5-chat* behaves like a regular chat model (supports temperature, etc.)
-        # Don't route it through GPT-5 reasoning-specific parameter restrictions.
-        return "gpt-5" in model and "gpt-5-chat" not in model
+        # gpt-5*-chat models behave like regular chat models (supports temperature, etc.)
+        # Don't route them through GPT-5 reasoning-specific parameter restrictions.
+        # We must check for "-chat" after the "gpt-5" prefix to catch all versioned
+        # variants like gpt-5.1-chat, gpt-5.2-chat, gpt-5.3-chat, etc.
+        if "gpt-5" not in model:
+            return False
+        model_name = model.split("/")[-1]
+        gpt5_suffix = model_name[model_name.index("gpt-5") + len("gpt-5") :]
+        if "-chat" in gpt5_suffix:
+            return False
+        return True
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
