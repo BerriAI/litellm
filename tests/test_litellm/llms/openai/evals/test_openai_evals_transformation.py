@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.types.llms.openai_evals import ListRunsResponse, Run
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -189,6 +190,39 @@ def test_transform_update_eval_request(config: OpenAIEvalsConfig):
     assert request_body["metadata"]["key"] == "value"
 
 
+def test_transform_update_eval_request_converts_non_string_metadata(
+    config: OpenAIEvalsConfig,
+):
+    """Test that non-string metadata values (e.g. queue_time_seconds float) are
+    converted to strings before forwarding to OpenAI, which requires all metadata
+    values to be strings.  Regression test for #23329 Bug 1."""
+    update_request = {
+        "name": "Test Eval",
+        "metadata": {
+            "env": "production",
+            "queue_time_seconds": 0.042,
+            "retry_count": 3,
+        },
+    }
+
+    _, _, request_body = config.transform_update_eval_request(
+        eval_id="eval_456",
+        update_request=update_request,
+        api_base="https://api.openai.com",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    # All metadata values must be strings
+    for k, v in request_body["metadata"].items():
+        assert isinstance(v, str), f"metadata[{k!r}] should be str, got {type(v)}"
+    # String values should be preserved as-is
+    assert request_body["metadata"]["env"] == "production"
+    # Float/int values should be stringified
+    assert request_body["metadata"]["queue_time_seconds"] == "0.042"
+    assert request_body["metadata"]["retry_count"] == "3"
+
+
 def test_transform_delete_eval_request(config: OpenAIEvalsConfig):
     """Test transformation of delete eval request"""
     url, headers = config.transform_delete_eval_request(
@@ -255,3 +289,89 @@ def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
 
     assert result.id == "eval_123"
     assert result.object == "eval"
+
+
+def test_list_runs_response_with_missing_criteria_fields(config: OpenAIEvalsConfig):
+    """Test that ListRunsResponse accepts per_testing_criteria_results items
+    that are missing testing_criteria_index and result_counts, matching what
+    OpenAI actually returns.  Regression test for #23329 Bug 2."""
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "id": "evalrun_abc",
+                    "object": "eval.run",
+                    "created_at": 1234567890,
+                    "status": "completed",
+                    "data_source": {"type": "jsonl"},
+                    "eval_id": "eval_123",
+                    "per_testing_criteria_results": [
+                        {
+                            "failed": 1,
+                            "passed": 1,
+                            "sample_id": "550e8400-e29b-41d4-a716-446655440000",
+                        }
+                    ],
+                    "result_counts": {"passed": 1, "failed": 1, "total": 2},
+                }
+            ],
+            "first_id": "evalrun_abc",
+            "last_id": "evalrun_abc",
+            "has_more": False,
+        },
+        request=httpx.Request("GET", "https://api.openai.com/v1/evals/eval_123/runs"),
+    )
+
+    result = config.transform_list_runs_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert len(result.data) == 1
+    run = result.data[0]
+    assert run.id == "evalrun_abc"
+    assert run.per_testing_criteria_results is not None
+    assert len(run.per_testing_criteria_results) == 1
+    # Fields should default to None when missing from OpenAI response
+    assert run.per_testing_criteria_results[0].testing_criteria_index is None
+    assert run.per_testing_criteria_results[0].result_counts is None
+
+
+def test_get_run_response_with_missing_criteria_fields(config: OpenAIEvalsConfig):
+    """Test that Run model accepts per_testing_criteria_results items without
+    testing_criteria_index and result_counts.  Regression test for #23329 Bug 3."""
+    response = httpx.Response(
+        status_code=200,
+        json={
+            "id": "evalrun_xyz",
+            "object": "eval.run",
+            "created_at": 1234567890,
+            "status": "completed",
+            "data_source": {"type": "jsonl"},
+            "eval_id": "eval_456",
+            "per_testing_criteria_results": [
+                {
+                    "failed": 0,
+                    "passed": 2,
+                    "sample_id": "660e8400-e29b-41d4-a716-446655440000",
+                }
+            ],
+            "result_counts": {"passed": 2, "failed": 0, "total": 2},
+        },
+        request=httpx.Request(
+            "GET", "https://api.openai.com/v1/evals/eval_456/runs/evalrun_xyz"
+        ),
+    )
+
+    result = config.transform_get_run_response(
+        raw_response=response,
+        logging_obj=None,  # type: ignore
+    )
+
+    assert result.id == "evalrun_xyz"
+    assert result.status == "completed"
+    assert result.per_testing_criteria_results is not None
+    assert result.per_testing_criteria_results[0].testing_criteria_index is None
+    assert result.per_testing_criteria_results[0].result_counts is None
