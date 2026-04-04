@@ -1897,18 +1897,18 @@ class TestMCPServerManagerReload:
 
         db_row = _make_db_mcp_server("server-1", timestamp)
 
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[db_row]
+        )
         with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_all_mcp_servers",
-            new=AsyncMock(return_value=[db_row]),
-        ) as mock_get_all, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=object(),
+            return_value=mock_prisma,
         ), patch.object(
             manager, "build_mcp_server_from_table", AsyncMock()
         ) as mock_build:
             await manager.reload_servers_from_database()
 
-        mock_get_all.assert_awaited_once()
         mock_build.assert_not_awaited()
         assert manager.registry["server-1"] is existing_server
 
@@ -1940,12 +1940,13 @@ class TestMCPServerManagerReload:
             updated_at=new_timestamp,
         )
 
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[db_row]
+        )
         with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_all_mcp_servers",
-            new=AsyncMock(return_value=[db_row]),
-        ) as mock_get_all, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=object(),
+            return_value=mock_prisma,
         ), patch.object(
             manager,
             "build_mcp_server_from_table",
@@ -1953,7 +1954,6 @@ class TestMCPServerManagerReload:
         ) as mock_build:
             await manager.reload_servers_from_database()
 
-        mock_get_all.assert_awaited_once()
         mock_build.assert_awaited_once_with(db_row)
         assert manager.registry["server-1"] is rebuilt_server
 
