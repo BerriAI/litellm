@@ -206,7 +206,7 @@ jobs:
           merge-multiple: true
 
       - name: Upload to Codecov
-        uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
           directory: coverage-reports
