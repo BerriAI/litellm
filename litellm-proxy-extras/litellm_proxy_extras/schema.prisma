@@ -142,6 +142,7 @@ model LiteLLM_TeamTable {
     policies         String[] @default([])
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
+    default_models  String[] @default([])     // NEW: team-wide defaults
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
@@ -599,6 +600,7 @@ model LiteLLM_TeamMembership {
   team_id    String
   spend      Float    @default(0.0)
   budget_id String?
+  models     String[] @default([])          // NEW: per-user model overrides
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
 }

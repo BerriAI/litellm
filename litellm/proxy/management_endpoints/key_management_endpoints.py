@@ -41,10 +41,12 @@ from litellm.proxy._experimental.mcp_server.db import (
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
+    compute_effective_models,
     _delete_cache_key_object,
     can_team_access_model,
     get_org_object,
     get_project_object,
+    get_team_membership,
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
@@ -647,6 +649,57 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             delattr(data, field)
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+
+    # [TEAM MODEL OVERRIDES] Handle effective team models for the key.
+    # Only applies when a user_id is specified — service/bot keys (no user_id) use
+    # the full team.models pool, preserving pre-feature behavior.
+    if (
+        litellm.team_model_overrides_enabled
+        or os.getenv("TEAM_MODEL_OVERRIDES", "").lower() == "true"
+    ) and team_table is not None and data.user_id:
+        # Read member models from LiteLLM_TeamMembership via the standard cached helper
+        # (NOT from members_with_roles JSON blob which can be stale after /team/member_update).
+        member_models: List[str] = []
+        if prisma_client is not None:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            _membership = await get_team_membership(
+                user_id=data.user_id,
+                team_id=team_table.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if _membership is not None:
+                member_models = _membership.models or []
+        team_default_models = getattr(team_table, "default_models", None) or []
+        team_pool = team_table.models or []
+        effective_models = compute_effective_models(
+            team_defaults=team_default_models,
+            member_models=member_models,
+            team_pool=team_pool,
+        )
+
+        # When effective_models is non-empty, enforce per-member restrictions.
+        # When empty (team.models=[] = "allow all" and no overrides configured),
+        # skip validation — any model is permitted, matching runtime auth behavior.
+        if effective_models:
+            # if 'all-team-models' was requested, restrict it to the effective models
+            if "all-team-models" in (data.models or []):
+                data_json["models"] = effective_models
+            # if explicit models were requested, validate they're a subset of effective set
+            elif data.models:
+                disallowed = set(data.models) - set(effective_models)
+                if disallowed:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Requested models not in user's effective team models. "
+                            f"Disallowed: {sorted(disallowed)}. "
+                            f"Effective models: {sorted(effective_models)}"
+                        },
+                    )
+            # if NO models was requested, runtime auth will compute effective models
+            # from the SQL view join (tm.models + t.default_models), so nothing to store here
 
     data_json = handle_key_type(data, data_json)
 

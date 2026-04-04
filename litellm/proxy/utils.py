@@ -2987,6 +2987,7 @@ class PrismaClient:
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,
+                            t.default_models AS team_default_models,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,
                             t.team_alias AS team_alias,
@@ -2996,6 +2997,7 @@ class PrismaClient:
                             t.organization_id as org_id,
                             p.project_alias AS project_alias,
                             tm.spend AS team_member_spend,
+                            tm.models AS team_member_models,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
                             b.max_budget AS litellm_budget_table_max_budget,
