@@ -110,16 +110,6 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
-def _get_access_object(*args, **kwargs):
-    """
-    Lazily import and delegate to `get_access_object` from
-    `litellm.proxy.auth.auth_checks` to avoid module-level cyclic imports.
-    """
-    from litellm.proxy.auth.auth_checks import get_access_object as _inner_get_access_object
-
-    return _inner_get_access_object(*args, **kwargs)
-
-
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -3053,12 +3043,17 @@ async def team_info(
             )
 
         # Resolve resources inherited from access groups
-        resolved = await _resolve_access_group_resources(
-            access_group_ids=_team_info.access_group_ids,
-        )
-        _team_info.access_group_models = resolved["access_group_models"]
-        _team_info.access_group_mcp_server_ids = resolved["access_group_mcp_server_ids"]
-        _team_info.access_group_agent_ids = resolved["access_group_agent_ids"]
+        if _team_info.access_group_ids:
+            ag_lookup = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
+            models, mcp_ids, agent_ids = set(), set(), set()
+            for ag_id in _team_info.access_group_ids:
+                if ag_id in ag_lookup:
+                    models.update(ag_lookup[ag_id]["models"])
+                    mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
+                    agent_ids.update(ag_lookup[ag_id]["agent_ids"])
+            _team_info.access_group_models = list(models)
+            _team_info.access_group_mcp_server_ids = list(mcp_ids)
+            _team_info.access_group_agent_ids = list(agent_ids)
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
@@ -3350,62 +3345,34 @@ async def _build_team_list_where_conditions(
     return where_conditions
 
 
-async def _resolve_access_group_resources(
-    access_group_ids: Optional[List[str]],
-) -> Dict[str, List[str]]:
+async def _batch_resolve_access_group_resources(
+    all_access_group_ids: List[str],
+) -> Dict[str, Dict[str, List[str]]]:
     """
-    Resolve resources inherited from access groups.
+    Batch-fetch access groups in a single DB query and return a per-group
+    resource map.
 
-    Fetches each access group object once and extracts all three resource
-    fields in a single pass (models, MCP servers, agents).
-
-    Returns only the access-group-sourced resources (not direct assignments).
-    Keeps them separate so callers can distinguish where each resource comes from.
+    Returns {ag_id: {"models": [...], "mcp_server_ids": [...], "agent_ids": [...]}}.
+    Missing/invalid groups are silently omitted.
     """
-    empty: Dict[str, List[str]] = {
-        "access_group_models": [],
-        "access_group_mcp_server_ids": [],
-        "access_group_agent_ids": [],
-    }
-    if not access_group_ids:
-        return empty
-
     from litellm.proxy.proxy_server import prisma_client as _prisma_client
-    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
-    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
-    if _user_api_key_cache is None:
-        return empty
+    if not all_access_group_ids or _prisma_client is None:
+        return {}
 
-    if _prisma_client is None:
-        return empty
+    unique_ids = list(set(all_access_group_ids))
+    rows = await _prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": unique_ids}},
+    )
 
-    models: List[str] = []
-    mcp_ids: List[str] = []
-    agent_ids: List[str] = []
-
-    for ag_id in access_group_ids:
-        try:
-            ag = await _get_access_object(
-                access_group_id=ag_id,
-                prisma_client=_prisma_client,
-                user_api_key_cache=_user_api_key_cache,
-                proxy_logging_obj=_proxy_logging_obj,
-            )
-            models.extend(ag.access_model_names or [])
-            mcp_ids.extend(ag.access_mcp_server_ids or [])
-            agent_ids.extend(ag.access_agent_ids or [])
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Could not fetch access group %s for resource resolution",
-                ag_id,
-            )
-
-    return {
-        "access_group_models": list(set(models)),
-        "access_group_mcp_server_ids": list(set(mcp_ids)),
-        "access_group_agent_ids": list(set(agent_ids)),
-    }
+    result: Dict[str, Dict[str, List[str]]] = {}
+    for row in rows:
+        result[row.access_group_id] = {
+            "models": list(row.access_model_names or []),
+            "mcp_server_ids": list(row.access_mcp_server_ids or []),
+            "agent_ids": list(row.access_agent_ids or []),
+        }
+    return result
 
 
 def _convert_teams_to_response_models(
@@ -3634,27 +3601,29 @@ async def list_team_v2(
     # Convert Prisma models to response models with members_count
     team_list = _convert_teams_to_response_models(teams, use_deleted_table)
 
-    # Resolve resources inherited from access groups for each team
+    # Resolve resources inherited from access groups (single batch query)
     if not use_deleted_table:
         team_items_with_ag = [
             t for t in team_list
             if isinstance(t, TeamListItem) and t.access_group_ids
         ]
         if team_items_with_ag:
-            results = await asyncio.gather(
-                *[
-                    _resolve_access_group_resources(
-                        access_group_ids=t.access_group_ids,
-                    )
-                    for t in team_items_with_ag
-                ]
-            )
-            for team_item, resolved in zip(team_items_with_ag, results):
-                team_item.access_group_models = resolved["access_group_models"]
-                team_item.access_group_mcp_server_ids = resolved[
-                    "access_group_mcp_server_ids"
-                ]
-                team_item.access_group_agent_ids = resolved["access_group_agent_ids"]
+            all_ag_ids = [
+                ag_id
+                for t in team_items_with_ag
+                for ag_id in (t.access_group_ids or [])
+            ]
+            ag_lookup = await _batch_resolve_access_group_resources(all_ag_ids)
+            for team_item in team_items_with_ag:
+                models, mcp_ids, agent_ids = set(), set(), set()
+                for ag_id in (team_item.access_group_ids or []):
+                    if ag_id in ag_lookup:
+                        models.update(ag_lookup[ag_id]["models"])
+                        mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
+                        agent_ids.update(ag_lookup[ag_id]["agent_ids"])
+                team_item.access_group_models = list(models)
+                team_item.access_group_mcp_server_ids = list(mcp_ids)
+                team_item.access_group_agent_ids = list(agent_ids)
 
     return {
         "teams": team_list,
