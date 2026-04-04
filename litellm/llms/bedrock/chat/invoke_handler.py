@@ -855,6 +855,32 @@ class BedrockLLM(BaseAWSLLM):
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
+        if acompletion and provider == "anthropic" and self.is_claude_messages_api_model(
+            model
+        ):
+            if isinstance(client, HTTPHandler):
+                client = None
+            return self._async_anthropic_messages_completion(
+                model=model,
+                messages=messages,
+                endpoint_url=endpoint_url,
+                proxy_endpoint_url=proxy_endpoint_url,
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )  # type: ignore[return-value]
+
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
@@ -1146,6 +1172,95 @@ class BedrockLLM(BaseAWSLLM):
             messages=messages,
             print_verbose=print_verbose,
             encoding=encoding,
+        )
+
+    async def _async_anthropic_messages_completion(
+        self,
+        model: str,
+        messages: list,
+        endpoint_url: str,
+        proxy_endpoint_url: str,
+        credentials,
+        aws_region_name: str,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj: Logging,
+        optional_params: dict,
+        stream,
+        litellm_params=None,
+        logger_fn=None,
+        extra_headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        stream_chunk_size: int = 1024,
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        transformed_request = await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params or {},
+            headers=extra_headers or {},
+        )
+        data = json.dumps(transformed_request)
+
+        headers = {"Content-Type": "application/json"}
+        if extra_headers is not None:
+            headers = {"Content-Type": "application/json", **extra_headers}
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=data,
+            headers=headers,
+        )
+
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
+
+        if stream is True:
+            return await self.async_streaming(
+                model=model,
+                messages=messages,
+                data=data,
+                api_base=proxy_endpoint_url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=True,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=prepped.headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )
+        return await self.async_completion(
+            model=model,
+            messages=messages,
+            data=data,
+            api_base=proxy_endpoint_url,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            stream=stream,  # type: ignore
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=prepped.headers,
+            timeout=timeout,
+            client=client,
         )
 
     async def async_completion(

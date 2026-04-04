@@ -475,10 +475,10 @@ async def test_streaming_handler_with_usage(
 
     response = CustomStreamWrapper(
         completion_stream=completion_stream,
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
         custom_llm_provider="bedrock",
         logging_obj=Logging(
-            model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hey"}],
             stream=True,
             call_type="completion",
@@ -748,7 +748,7 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
 
     response = CustomStreamWrapper(
         completion_stream=completion_stream,
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
         logging_obj=logging_obj,
     )
 
@@ -883,7 +883,7 @@ def test_streaming_handler_with_created_time_propagation(
 
     response = CustomStreamWrapper(
         completion_stream=completion_stream,
-        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
         logging_obj=logging_obj,
     )
 

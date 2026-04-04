@@ -150,8 +150,8 @@ def test_completion_missing_role(openai_api_response):
     "model",
     [
         "gemini/gemini-1.5-flash",
-        "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
         "anthropic/claude-3-5-sonnet",
     ],
 )
@@ -295,7 +295,7 @@ def test_bedrock_latency_optimized_inference():
     with patch.object(client, "post") as mock_post:
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 performanceConfig={"latency": "optimized"},
                 client=client,

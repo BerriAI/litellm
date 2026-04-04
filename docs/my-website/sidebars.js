@@ -453,6 +453,7 @@ const sidebars = {
           items: [
             "proxy/virtual_keys",
             "proxy/token_auth",
+            "proxy/jwt_key_mapping",
             "proxy/service_accounts",
             "proxy/access_control",
             "proxy/cli_sso",
@@ -851,6 +852,7 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/gemini/videos",
+            "providers/gemini/music",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
