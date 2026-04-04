@@ -241,7 +241,7 @@ export default function ModelInfoView({
         return;
       }
 
-      let updatedLitellmParams = {
+      let updatedLitellmParams: Record<string, any> = {
         ...values.litellm_params,
         ...parsedExtraParams,
         model: values.litellm_model_name,
@@ -255,20 +255,35 @@ export default function ModelInfoView({
         stream_timeout: values.stream_timeout,
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
-        tags: values.tags,
       };
+
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
-        updatedLitellmParams.guardrails = values.guardrails;
+      
+      // Only write array fields when non-empty; otherwise remove them so empty
+      // arrays are never injected into litellm_params.
+      // Array.isArray guard must come before .length to avoid TypeError when
+      // the value is null/undefined (e.g. model has no tags/guardrails key).
+      if (Array.isArray(values.tags) && values.tags.length > 0) {
+        updatedLitellmParams.tags = values.tags;
+      } else {
+        delete updatedLitellmParams.tags;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+
+      if (Array.isArray(values.guardrails) && values.guardrails.length > 0) {
+        updatedLitellmParams.guardrails = values.guardrails;
+      } else {
+        delete updatedLitellmParams.guardrails;
+      }
+
+      if (Array.isArray(values.vector_store_ids) && values.vector_store_ids.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
