@@ -149,19 +149,25 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
+            _accepted_call_types = [
+                "acompletion",
+                "completion",
+                "atext_completion",
+                "text_completion",
+                "aembedding",
+                "embeddings",
+                "aimage_generation",
+                "image_generation",
+                "amoderation",
+                "moderation",
+                "atranscription",
+                "audio_transcription",
+            ]
             try:
-                assert call_type in [
-                    "acompletion",
-                    "completion",
-                    "text_completion",
-                    "embeddings",
-                    "image_generation",
-                    "moderation",
-                    "audio_transcription",
-                ]
+                assert call_type in _accepted_call_types
             except Exception:
                 self.print_verbose(
-                    f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
+                    f"Call Type - {call_type}, not in accepted list - {_accepted_call_types}"
                 )
                 return data
             formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
@@ -223,9 +229,15 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         call_type: Literal[
             "acompletion",
             "completion",
+            "atext_completion",
+            "text_completion",
+            "aembedding",
             "embeddings",
+            "aimage_generation",
             "image_generation",
+            "amoderation",
             "moderation",
+            "atranscription",
             "audio_transcription",
         ],
     ) -> Optional[bool]:
