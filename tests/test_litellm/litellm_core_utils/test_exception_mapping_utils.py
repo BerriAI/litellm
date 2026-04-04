@@ -281,6 +281,43 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
             )
 
 
+ollama_rate_limit_test_cases = [
+    # Positive cases — session/rate-limit messages that should map to RateLimitError
+    ('{"error": "you (tom9876) have reached your session usage limit, please wait or upgrade to continue"}', True),
+    ("session usage limit reached", True),
+    ("rate limit exceeded", True),
+    ("Rate Limit: too many requests", True),
+    # Negative case — generic error, not a rate limit
+    ("no such file or directory", False),
+]
+
+
+@pytest.mark.parametrize(
+    "error_message, should_raise_rate_limit", ollama_rate_limit_test_cases
+)
+def test_ollama_rate_limit_error_mapping(error_message, should_raise_rate_limit):
+    """
+    Tests that the exception_type function correctly maps Ollama's
+    session usage limit and rate limit errors to litellm.RateLimitError.
+    """
+    for provider in ("ollama", "ollama_chat"):
+        original_exception = Exception(error_message)
+        if should_raise_rate_limit:
+            with pytest.raises(litellm.RateLimitError):
+                exception_type(
+                    model="llama3",
+                    original_exception=original_exception,
+                    custom_llm_provider=provider,
+                )
+        else:
+            with pytest.raises((litellm.BadRequestError, litellm.APIConnectionError)):
+                exception_type(
+                    model="llama3",
+                    original_exception=original_exception,
+                    custom_llm_provider=provider,
+                )
+
+
 class TestExtractAndRaiseLitellmException:
     """Tests for extract_and_raise_litellm_exception function"""
 
