@@ -163,8 +163,16 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         Map OpenAI parameters to Hosted VLLM format.
         """
         for param, value in non_default_params.items():
-            if param in self.get_supported_openai_params(model):
-                optional_params[param] = value
+            if param not in self.get_supported_openai_params(model):
+                continue
+            # Drop dimensions when drop_params=True and model is not text-embedding-3
+            if (
+                param == "dimensions"
+                and drop_params
+                and "text-embedding-3" not in model
+            ):
+                continue
+            optional_params[param] = value
         return optional_params
 
     def get_error_class(
