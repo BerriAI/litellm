@@ -1,6 +1,6 @@
 """Tests for AutoQueueMiddleware (ASGI integration).
 
-Worker-count guard tests are synchronous; the rest are async integration tests
+Worker-count env parsing is synchronous; the rest are async integration tests
 that exercise the full ASGI request lifecycle through the middleware.
 """
 import asyncio
@@ -55,7 +55,7 @@ async def aqr_factory(redis):
 
 
 # ---------------------------------------------------------------------------
-# Worker-count guard tests (synchronous, use module reload)
+# Worker-count env parsing tests (synchronous, use module reload)
 # ---------------------------------------------------------------------------
 
 
@@ -74,10 +74,10 @@ def _reload_module_with_env(monkeypatch, **env):
     return mod
 
 
-def test_worker_count_guard_raises_on_multiple_workers(monkeypatch):
+def test_worker_count_allows_multiple_workers_in_distributed_mode(monkeypatch):
     mod = _reload_module_with_env(monkeypatch, AUTOQ_ENABLED="true", WEB_CONCURRENCY="2")
-    with pytest.raises(RuntimeError):
-        mod.AutoQueueMiddleware(_make_dummy_app(), aqr=None, enabled=None)
+    mw = mod.AutoQueueMiddleware(_make_dummy_app(), aqr=None, enabled=None)
+    assert isinstance(mw, mod.AutoQueueMiddleware)
 
 
 def test_worker_count_guard_allows_single_worker(monkeypatch):

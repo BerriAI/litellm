@@ -3,8 +3,15 @@
 These verify import-time wiring and env-var gating without booting a real proxy process.
 """
 import importlib
+import os
+import sys
 
 import pytest
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../")))
+for _name in list(sys.modules):
+    if _name == "litellm" or _name.startswith("litellm."):
+        sys.modules.pop(_name, None)
 
 
 def _reload_auto_queue_module(monkeypatch, **env):
@@ -56,3 +63,26 @@ def test_middleware_enabled_flag_respected(monkeypatch):
 
     middleware = module.AutoQueueMiddleware(app, enabled=True)
     assert middleware._enabled is True
+
+
+def test_middleware_boot_allows_multiple_workers_when_enabled(monkeypatch):
+    module = _reload_auto_queue_module(monkeypatch, AUTOQ_ENABLED="true", WEB_CONCURRENCY="4")
+
+    async def app(scope, receive, send):
+        pass
+
+    middleware = module.AutoQueueMiddleware(app, enabled=True)
+    assert middleware._enabled is True
+
+
+def test_proxy_server_wires_auto_queue_reconciler_helpers():
+    proxy_server_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../../../litellm/proxy/proxy_server.py")
+    )
+    source = open(proxy_server_path, "r", encoding="utf-8").read()
+
+    assert "build_auto_queue_reconciler" in source
+    assert "async def _start_auto_queue_reconciler" in source
+    assert "async def _stop_auto_queue_reconciler" in source
+    assert "await _start_auto_queue_reconciler(app)" in source
+    assert "await _stop_auto_queue_reconciler(app)" in source

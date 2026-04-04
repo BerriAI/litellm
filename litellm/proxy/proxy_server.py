@@ -442,6 +442,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.auto_queue_middleware import AUTOQ_ENABLED, AutoQueueMiddleware
+from litellm.proxy.middleware.auto_queue_reconciler import build_auto_queue_reconciler
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -740,6 +741,35 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+def _build_auto_queue_reconciler():
+    return build_auto_queue_reconciler()
+
+
+async def _start_auto_queue_reconciler(app: Optional[FastAPI]) -> None:
+    if not AUTOQ_ENABLED or app is None:
+        return
+
+    reconciler = getattr(app.state, "auto_queue_reconciler", None)
+    if reconciler is None:
+        reconciler = _build_auto_queue_reconciler()
+        app.state.auto_queue_reconciler = reconciler
+    await reconciler.start()
+
+
+async def _stop_auto_queue_reconciler(app: Optional[FastAPI]) -> None:
+    if app is None:
+        return
+
+    reconciler = getattr(app.state, "auto_queue_reconciler", None)
+    if reconciler is None:
+        return
+
+    try:
+        await reconciler.stop()
+    finally:
+        app.state.auto_queue_reconciler = None
+
+
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
@@ -964,6 +994,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
+    await _start_auto_queue_reconciler(app)
 
     # End of startup event
     yield
@@ -996,6 +1027,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
+    await _stop_auto_queue_reconciler(app)
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 

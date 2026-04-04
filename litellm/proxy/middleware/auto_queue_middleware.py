@@ -22,6 +22,7 @@ import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .auto_queue_lease import ActiveLeaseHeartbeat
 from .auto_queue_scripts import AutoQueueRedis, DistributedAutoQueueRedis
 from .auto_queue_state import (
     active_lease_key,
@@ -349,10 +350,6 @@ class AutoQueueMiddleware:
         self._shutting_down = False
         self._enabled = enabled if enabled is not None else AUTOQ_ENABLED
         self._worker_id = f"autoq-worker:{os.getpid()}:{uuid.uuid4().hex}"
-        # Enforce single-process deployment when auto-queue is enabled
-        worker_count = _resolve_worker_count()
-        if self._enabled and worker_count > 1:
-            raise RuntimeError(f"Auto-queue requires single-worker deployment; detected worker_count={worker_count}")
 
     def _ensure_aqr(self) -> AutoQueueRedis:
         """Lazy-init Redis connection on first use (production path)."""
@@ -563,6 +560,7 @@ class AutoQueueMiddleware:
         )
         if decision is None:
             return
+        request_state = decision.request_state
 
         if decision.decision == "queue_full":
             logger.warning(
@@ -601,7 +599,6 @@ class AutoQueueMiddleware:
                     logger.debug("Queued disconnect watcher stopped", exc_info=True)
 
             disconnect_task = asyncio.create_task(_watch_disconnect())
-            request_state = None
             try:
                 request_state = await self._wait_for_distributed_claim(
                     aqr,
@@ -668,6 +665,30 @@ class AutoQueueMiddleware:
                 await _send_json_error(send, status_code, message)
                 return
 
+        heartbeat: Optional[ActiveLeaseHeartbeat] = None
+        redis_client = getattr(aqr, "redis", None)
+        if redis_client is not None and request_state is not None and request_state.claim_token:
+            heartbeat = ActiveLeaseHeartbeat(
+                redis_client,
+                request_id=request_id,
+                worker_id=self._worker_id,
+                claim_token=request_state.claim_token,
+            )
+            heartbeat_started = await self._safe_redis_call(
+                heartbeat.start(),
+                model=model,
+                send=send,
+            )
+            if heartbeat_started is None:
+                return
+            if heartbeat_started is False:
+                logger.warning(
+                    "Rejecting request because active lease heartbeat could not start",
+                    extra={"model": model, "request_id": request_id},
+                )
+                await _send_json_error(send, 503, f"Auto-queue unavailable for model {model}")
+                return
+
         logger.debug("Forwarding request with acquired auto-queue slot", extra={"model": model, "request_id": request_id})
         response_status = 0
         disconnect_event = asyncio.Event()
@@ -703,6 +724,8 @@ class AutoQueueMiddleware:
             raise
         finally:
             await _cancel_task(client_disconnect_task)
+            if heartbeat is not None:
+                await heartbeat.stop()
 
             transfer = await self._safe_redis_call(
                 aqr.release_and_claim_next(model, request_id),
