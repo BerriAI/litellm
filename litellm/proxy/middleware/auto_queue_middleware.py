@@ -23,6 +23,7 @@ from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .auto_queue_logging import (
+    AUTOQ_METADATA_KEY,
     append_autoq_event,
     finalize_autoq_summary,
 )
@@ -567,6 +568,7 @@ class AutoQueueMiddleware:
         request_id = f"{model}-{next(_id_counter)}-{time.monotonic_ns()}"
         queue = self._get_queue(model)
         logger.debug("Processing auto-queue request", extra={"model": model, "request_id": request_id})
+        autoq_logging_data: Dict[str, Any] = {}
 
         if self._shutting_down:
             logger.info("Rejecting request during shutdown", extra={"model": model, "request_id": request_id})
@@ -577,7 +579,7 @@ class AutoQueueMiddleware:
         timeout_seconds = max(float(timeout), 0.0)
         deadline_at_ms = int(time.time() * 1000) + int(timeout_seconds * 1000)
         finalize_autoq_summary(
-            request_data,
+            autoq_logging_data,
             {
                 "request_id": request_id,
                 "model": model,
@@ -587,7 +589,7 @@ class AutoQueueMiddleware:
             },
         )
         append_autoq_event(
-            request_data,
+            autoq_logging_data,
             event="received",
             payload={
                 "model": model,
@@ -612,14 +614,14 @@ class AutoQueueMiddleware:
             return
         request_state = decision.request_state
         finalize_autoq_summary(
-            request_data,
+            autoq_logging_data,
             {
                 "decision": decision.decision,
                 "queued": decision.decision == "queued",
             },
         )
         append_autoq_event(
-            request_data,
+            autoq_logging_data,
             event="decision",
             payload={
                 "decision": decision.decision,
@@ -640,7 +642,7 @@ class AutoQueueMiddleware:
             wake_state = _WakeState()
             queue.add(request_id, wake_state, priority)
             append_autoq_event(
-                request_data,
+                autoq_logging_data,
                 event="queued",
                 payload={
                     "queue_depth": queue.depth,
@@ -689,11 +691,11 @@ class AutoQueueMiddleware:
             if request_state is None:
                 if wake_state.reason == _QueueWakeReason.DISCONNECTED:
                     finalize_autoq_summary(
-                        request_data,
+                        autoq_logging_data,
                         {"claim_state": "cancelled"},
                     )
                     append_autoq_event(
-                        request_data,
+                        autoq_logging_data,
                         event="cancelled",
                         payload={"reason": _QueueWakeReason.DISCONNECTED},
                     )
@@ -707,11 +709,11 @@ class AutoQueueMiddleware:
                     return
                 if wake_state.reason == _QueueWakeReason.SHUTDOWN:
                     finalize_autoq_summary(
-                        request_data,
+                        autoq_logging_data,
                         {"claim_state": "cancelled"},
                     )
                     append_autoq_event(
-                        request_data,
+                        autoq_logging_data,
                         event="cancelled",
                         payload={"reason": _QueueWakeReason.SHUTDOWN},
                     )
@@ -735,11 +737,11 @@ class AutoQueueMiddleware:
                 )
                 queue.remove(request_id, reason=_QueueWakeReason.TIMEOUT)
                 finalize_autoq_summary(
-                    request_data,
+                    autoq_logging_data,
                     {"claim_state": "timed_out"},
                 )
                 append_autoq_event(
-                    request_data,
+                    autoq_logging_data,
                     event="timed_out",
                     payload={"timeout_seconds": timeout_seconds},
                 )
@@ -755,7 +757,7 @@ class AutoQueueMiddleware:
 
             if request_state.state not in {"claimed", "active"}:
                 finalize_autoq_summary(
-                    request_data,
+                    autoq_logging_data,
                     {"claim_state": request_state.state},
                 )
                 logger.warning(
@@ -782,14 +784,14 @@ class AutoQueueMiddleware:
                 0,
             )
         finalize_autoq_summary(
-            request_data,
+            autoq_logging_data,
             {
                 "claim_state": request_state.state if request_state is not None else "unknown",
                 "queue_wait_ms": queue_wait_ms,
             },
         )
         append_autoq_event(
-            request_data,
+            autoq_logging_data,
             event="claim_acquired",
             payload={
                 "claim_state": request_state.state if request_state is not None else "unknown",
@@ -833,13 +835,16 @@ class AutoQueueMiddleware:
 
         logger.debug("Forwarding request with acquired auto-queue slot", extra={"model": model, "request_id": request_id})
         append_autoq_event(
-            request_data,
+            autoq_logging_data,
             event="forwarded",
             payload={
                 "claim_state": request_state.state if request_state is not None else "unknown",
                 "queued": decision.decision == "queued",
             },
         )
+        autoq_metadata = autoq_logging_data.get(AUTOQ_METADATA_KEY)
+        if isinstance(autoq_metadata, dict):
+            scope.setdefault("state", {})[AUTOQ_METADATA_KEY] = autoq_metadata
         body = json.dumps(request_data).encode()
         scope["parsed_body"] = (tuple(request_data.keys()), request_data)
         response_status = 0

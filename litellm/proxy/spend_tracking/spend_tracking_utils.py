@@ -165,9 +165,27 @@ def _merge_request_autoq_metadata(
                 if isinstance(litellm_request_autoq, dict):
                     request_autoq_sources.append(litellm_request_autoq)
 
+            litellm_proxy_server_request = litellm_params.get("proxy_server_request")
+            if isinstance(litellm_proxy_server_request, dict):
+                litellm_proxy_request_body = litellm_proxy_server_request.get("body")
+                if isinstance(litellm_proxy_request_body, dict):
+                    litellm_proxy_request_autoq = litellm_proxy_request_body.get(
+                        "autoq_metadata"
+                    )
+                    if isinstance(litellm_proxy_request_autoq, dict):
+                        request_autoq_sources.append(litellm_proxy_request_autoq)
+
         top_level_autoq_metadata = request_data.get("autoq_metadata")
         if isinstance(top_level_autoq_metadata, dict):
             request_autoq_sources.append(top_level_autoq_metadata)
+
+        proxy_server_request = request_data.get("proxy_server_request")
+        if isinstance(proxy_server_request, dict):
+            proxy_request_body = proxy_server_request.get("body")
+            if isinstance(proxy_request_body, dict):
+                proxy_request_autoq = proxy_request_body.get("autoq_metadata")
+                if isinstance(proxy_request_autoq, dict):
+                    request_autoq_sources.append(proxy_request_autoq)
 
     has_existing = isinstance(existing_autoq_metadata, dict)
     if not has_existing and not request_autoq_sources:

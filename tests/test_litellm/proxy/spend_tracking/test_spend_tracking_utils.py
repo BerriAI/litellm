@@ -1244,12 +1244,15 @@ def test_get_logging_payload_should_include_autoq_metadata_in_spend_logs_metadat
     kwargs = {
         "model": "gpt-4",
         "litellm_call_id": "test-call-id",
-        "autoq_metadata": autoq_metadata,
         "litellm_params": {
             "metadata": {
                 "user_api_key": "test-key",
             },
-            "proxy_server_request": {},
+            "proxy_server_request": {
+                "body": {
+                    "autoq_metadata": autoq_metadata,
+                }
+            },
         },
     }
 

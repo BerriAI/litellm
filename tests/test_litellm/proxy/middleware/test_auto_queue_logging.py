@@ -75,8 +75,9 @@ def test_should_merge_autoq_summary_without_dropping_existing_fields():
 
 
 @pytest.mark.asyncio
-async def test_should_attach_autoq_metadata_to_forwarded_request_body():
+async def test_should_capture_autoq_metadata_for_logging_without_forwarding_it():
     captured_body = {}
+    captured_autoq_metadata = None
     redis = fakeredis.aioredis.FakeRedis()
     aqr = AutoQueueRedis(
         redis=redis,
@@ -87,7 +88,9 @@ async def test_should_attach_autoq_metadata_to_forwarded_request_body():
     )
 
     async def handler(request):
+        nonlocal captured_autoq_metadata
         captured_body.update(json.loads(await request.body()))
+        captured_autoq_metadata = getattr(request.state, "autoq_metadata", None)
         return JSONResponse({"ok": True})
 
     app = Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])])
@@ -106,9 +109,10 @@ async def test_should_attach_autoq_metadata_to_forwarded_request_body():
         await redis.aclose()
 
     assert response.status_code == 200
-    assert AUTOQ_METADATA_KEY in captured_body
+    assert AUTOQ_METADATA_KEY not in captured_body
 
-    autoq_metadata = captured_body[AUTOQ_METADATA_KEY]
+    assert isinstance(captured_autoq_metadata, dict)
+    autoq_metadata = captured_autoq_metadata
     assert [event["event"] for event in autoq_metadata["events"]] == [
         "received",
         "decision",

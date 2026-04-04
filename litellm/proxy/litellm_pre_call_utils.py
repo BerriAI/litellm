@@ -954,6 +954,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "body": copy.copy(data),  # use copy instead of deepcopy
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
+    request_state = request.scope.get("state", {})
+    if isinstance(request_state, dict):
+        autoq_metadata = request_state.get("autoq_metadata")
+        if isinstance(autoq_metadata, dict):
+            data["proxy_server_request"]["body"]["autoq_metadata"] = copy.deepcopy(
+                autoq_metadata
+            )
 
     safe_add_api_version_from_query_params(data, request)
     _metadata_variable_name = _get_metadata_variable_name(request)
