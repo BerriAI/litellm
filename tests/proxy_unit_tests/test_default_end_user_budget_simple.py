@@ -52,21 +52,22 @@ async def test_default_budget_applied_to_end_user_without_budget():
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: default_budget.dict())
     )
-    
+
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
-    
+
     result = await get_end_user_object(
         end_user_id=end_user_id,
         prisma_client=mock_prisma_client,
         user_api_key_cache=mock_cache,
         route="/chat/completions",
     )
-    
+
     # Verify default budget was applied
     assert result is not None
     assert result.litellm_budget_table is not None
@@ -74,7 +75,13 @@ async def test_default_budget_applied_to_end_user_without_budget():
     assert result.litellm_budget_table.max_budget == 10.0
     assert result.litellm_budget_table.rpm_limit == 2
     assert result.litellm_budget_table.tpm_limit == 10
-    
+
+    # Verify budget_id was persisted to DB
+    mock_prisma_client.db.litellm_endusertable.update.assert_called_once_with(
+        where={"user_id": end_user_id},
+        data={"budget_id": default_budget_id},
+    )
+
     litellm.max_end_user_budget_id = None
 
 
@@ -162,14 +169,15 @@ async def test_budget_enforcement_blocks_over_budget_users():
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
     )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: default_budget.dict())
     )
-    
+
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
-    
+
     # Should raise BudgetExceededError
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
         await get_end_user_object(
@@ -182,6 +190,113 @@ async def test_budget_enforcement_blocks_over_budget_users():
     assert "ExceededBudget" in str(exc_info.value)
     assert end_user_id in str(exc_info.value)
     
+    litellm.max_end_user_budget_id = None
+
+
+@pytest.mark.asyncio
+async def test_default_budget_db_persist_failure_is_nonfatal():
+    """
+    If the DB update to persist budget_id fails, the budget should still be
+    applied in-memory for the current request (non-fatal warning).
+    """
+    end_user_id = f"test_user_{uuid.uuid4().hex}"
+    default_budget_id = str(uuid.uuid4())
+    litellm.max_end_user_budget_id = default_budget_id
+
+    default_budget = LiteLLM_BudgetTable(
+        budget_id=default_budget_id,
+        max_budget=10.0,
+    )
+
+    mock_end_user_data = {
+        "user_id": end_user_id,
+        "spend": 1.0,
+        "litellm_budget_table": None,
+        "alias": None,
+        "allowed_model_region": None,
+        "default_model": None,
+        "blocked": False,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=MagicMock(dict=lambda: mock_end_user_data)
+    )
+    # Simulate DB update failure
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        side_effect=Exception("DB connection lost")
+    )
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=MagicMock(dict=lambda: default_budget.model_dump())
+    )
+
+    mock_cache = AsyncMock(spec=DualCache)
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        route="/chat/completions",
+    )
+
+    # Budget should still be applied in-memory despite DB failure
+    assert result is not None
+    assert result.litellm_budget_table is not None
+    assert result.litellm_budget_table.budget_id == default_budget_id
+
+    litellm.max_end_user_budget_id = None
+
+
+@pytest.mark.asyncio
+async def test_explicit_budget_skips_db_update():
+    """
+    End users with an explicit budget should NOT trigger a DB update
+    for the default budget_id.
+    """
+    end_user_id = f"test_user_{uuid.uuid4().hex}"
+    explicit_budget_id = str(uuid.uuid4())
+    default_budget_id = str(uuid.uuid4())
+    litellm.max_end_user_budget_id = default_budget_id
+
+    explicit_budget = LiteLLM_BudgetTable(
+        budget_id=explicit_budget_id,
+        max_budget=100.0,
+    )
+
+    mock_end_user_data = {
+        "user_id": end_user_id,
+        "spend": 10.0,
+        "litellm_budget_table": explicit_budget.model_dump(),
+        "alias": None,
+        "allowed_model_region": None,
+        "default_model": None,
+        "blocked": False,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=MagicMock(dict=lambda: mock_end_user_data)
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=None)
+
+    mock_cache = AsyncMock(spec=DualCache)
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        route="/chat/completions",
+    )
+
+    # Should keep explicit budget, NOT call update
+    assert result is not None
+    assert result.litellm_budget_table.budget_id == explicit_budget_id
+    mock_prisma_client.db.litellm_endusertable.update.assert_not_called()
+
     litellm.max_end_user_budget_id = None
 
 
