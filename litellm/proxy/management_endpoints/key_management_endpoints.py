@@ -4228,13 +4228,19 @@ async def list_keys(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(10, description="Page size", ge=1, le=100),
-    user_id: Optional[str] = Query(None, description="Filter keys by user ID. Supports partial matching (substring, case-insensitive)."),
+    user_id: Optional[str] = Query(
+        None,
+        description="Filter keys by user ID. Supports partial matching (substring, case-insensitive).",
+    ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(
         None, description="Filter keys by organization ID"
     ),
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
-    key_alias: Optional[str] = Query(None, description="Filter keys by key alias. Supports partial matching (substring, case-insensitive)."),
+    key_alias: Optional[str] = Query(
+        None,
+        description="Filter keys by key alias. Supports partial matching (substring, case-insensitive).",
+    ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
