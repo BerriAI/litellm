@@ -1604,6 +1604,9 @@ if TYPE_CHECKING:
     from .llms.voyage.embedding.transformation_contextual import (
         VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig,
     )
+    from .llms.voyage.embedding.transformation_multimodal import (
+        VoyageMultimodalEmbeddingConfig as VoyageMultimodalEmbeddingConfig,
+    )
     from .llms.infinity.embedding.transformation import (
         InfinityEmbeddingConfig as InfinityEmbeddingConfig,
     )
