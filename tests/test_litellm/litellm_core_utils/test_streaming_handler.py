@@ -770,7 +770,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -788,7 +790,9 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
-async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
     """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
 
     Regression test for https://github.com/BerriAI/litellm/issues/20870
@@ -797,7 +801,9 @@ async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_o
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -825,7 +831,9 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_rate_limit(**kwargs):
-        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        raise VertexAIError(
+            status_code=429, message="Resource exhausted.", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -850,7 +858,9 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_bad_request(**kwargs):
-        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+        raise VertexAIError(
+            status_code=400, message="invalid maxOutputTokens", headers=None
+        )
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -1363,6 +1373,7 @@ def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
             chunks.append(_make_chunk(p))
     return chunks
 
+
 _REPETITION_TEST_CASES = [
     # Basic cases
     pytest.param(
@@ -1419,7 +1430,14 @@ _REPETITION_TEST_CASES = [
         id="last_chunk_different_no_raise",
     ),
     pytest.param(
-        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1)
+        + ["different_mid"]
+        + ["same"]
+        * (
+            litellm.REPEATED_STREAMING_CHUNK_LIMIT
+            - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2
+            + 1
+        ),
         False,
         id="middle_chunk_different_no_raise",
     ),
@@ -1429,7 +1447,9 @@ _REPETITION_TEST_CASES = [
         id="last_two_different_no_raise",
     ),
     pytest.param(
-        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
+        + ["diff"],
         True,
         id="in_between_same_and_diff_raise",
     ),
@@ -1455,6 +1475,8 @@ def test_raise_on_model_repetition(
         for chunk in chunks:
             wrapper.chunks.append(chunk)
             wrapper.raise_on_model_repetition()
+
+
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -1536,12 +1558,13 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     last_chunk = collected[-1]
     hidden_usage = last_chunk._hidden_params.get("usage")
     assert hidden_usage is not None, "Expected usage in _hidden_params"
-    assert hidden_usage.prompt_tokens == 20, (
-        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
-    )
-    assert hidden_usage.completion_tokens == 135, (
-        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
-    )
+    assert (
+        hidden_usage.prompt_tokens == 20
+    ), f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    assert (
+        hidden_usage.completion_tokens == 135
+    ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+
 
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
@@ -1615,9 +1638,9 @@ def test_content_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — content was dropped (issue #22098)"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — content was dropped (issue #22098)"
     assert result.choices[0].delta.content == "world!"
 
 
@@ -1669,14 +1692,14 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
 
-    assert result is not None, (
-        "chunk_creator() returned None — tool_use data was dropped"
-    )
+    assert (
+        result is not None
+    ), "chunk_creator() returned None — tool_use data was dropped"
 
     tool_calls = result.choices[0].delta.tool_calls
-    assert tool_calls is not None and len(tool_calls) > 0, (
-        "tool_calls should contain at least one tool call"
-    )
+    assert (
+        tool_calls is not None and len(tool_calls) > 0
+    ), "tool_calls should contain at least one tool call"
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
 
@@ -1826,3 +1849,148 @@ async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteratio
         pass  # expected clean termination
     except RuntimeError as e:
         pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
+
+
+# Azure streaming chunks that reproduce the issue from #24221:
+# When stream_options.include_usage=True, Azure sends an initial chunk with
+# prompt_filter_results and no choices. This caused strip_role_from_delta to
+# be skipped, so no chunk ever received role='assistant'.
+azure_chunks_with_prompt_filter = [
+    # Chunk 1: prompt_filter_results, no choices
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        usage=None,
+    ),
+    # Chunk 2: first content chunk with role='assistant'
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                ),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 3: content
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello"),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 4: finish_reason
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+                logprobs=None,
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 5: final usage chunk, no choices
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_streaming_role_with_include_usage(sync_mode: bool):
+    """
+    Test for issue #24221: Azure streaming with stream_options.include_usage=True
+    should include role='assistant' in the first emitted chunk's delta.
+
+    Azure sends an initial chunk with no choices (prompt_filter_results).
+    When include_usage=True, this chunk is emitted rather than skipped.
+    The fix ensures strip_role_from_delta is called on that chunk so
+    role='assistant' appears in the stream.
+    """
+    completion_stream = ModelResponseListIterator(
+        model_responses=azure_chunks_with_prompt_filter
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="azure/gpt-4",
+        custom_llm_provider="azure",
+        logging_obj=Logging(
+            model="azure/gpt-4",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+        stream_options={"include_usage": True},
+    )
+
+    chunks = []
+    if sync_mode:
+        for chunk in response:
+            chunks.append(chunk)
+    else:
+        async for chunk in response:
+            chunks.append(chunk)
+
+    # Verify role appears in exactly the first emitted chunk
+    assert len(chunks) > 0, "No chunks were yielded"
+    first_chunk = chunks[0]
+    assert (
+        len(first_chunk.choices) > 0
+        and getattr(first_chunk.choices[0].delta, "role", None) == "assistant"
+    ), (
+        f"Expected role='assistant' in the first chunk, got: "
+        f"{first_chunk.choices[0].delta if first_chunk.choices else 'no choices'}"
+    )
+
+    # Verify subsequent chunks do NOT repeat the role
+    for chunk in chunks[1:]:
+        if chunk.choices:
+            assert (
+                getattr(chunk.choices[0].delta, "role", None) != "assistant"
+            ), f"Unexpected role='assistant' in non-first chunk: {chunk.choices[0].delta}"
