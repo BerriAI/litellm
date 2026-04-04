@@ -9309,14 +9309,11 @@ async def _add_access_group_models_to_team_models(
         return team_models
 
     # Single batch fetch for all access groups
-    access_group_rows = (
-        await prisma_client.db.litellm_accessgrouptable.find_many(
-            where={"access_group_id": {"in": list(all_access_group_ids)}}
-        )
+    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(all_access_group_ids)}}
     )
     ag_model_map: Dict[str, List[str]] = {
-        row.access_group_id: row.access_model_names or []
-        for row in access_group_rows
+        row.access_group_id: row.access_model_names or [] for row in access_group_rows
     }
 
     # Second pass: resolve deployments for each eligible team
@@ -9333,9 +9330,7 @@ async def _add_access_group_models_to_team_models(
                 for deployment in deployments:
                     model_id = deployment.get("model_info", {}).get("id", None)
                     if model_id is not None:
-                        team_models.setdefault(model_id, set()).add(
-                            team_object.team_id
-                        )
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
 
     return team_models
 
