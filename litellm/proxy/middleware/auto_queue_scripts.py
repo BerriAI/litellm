@@ -8,8 +8,10 @@ from typing import Optional
 import redis.asyncio as aioredis
 
 from .auto_queue_state import (
+    AUTOQ_ACTIVE_LEASE_KEY_PREFIX,
+    AUTOQ_CLAIM_KEY_PREFIX,
+    AUTOQ_REQUEST_KEY_PREFIX,
     AutoQueueRequestState,
-    active_lease_hash,
     active_key,
     active_lease_key,
     ceiling_key,
@@ -30,6 +32,14 @@ DEFAULT_LEASE_TTL = 60
 
 def current_time_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _decode_script_value(value: object) -> Optional[str]:
+    if value in (None, "", b""):
+        return None
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value)
 
 
 @dataclass(slots=True)
@@ -69,7 +79,6 @@ class DistributedAutoQueueRedis:
         self._scale_down_script = redis.register_script(_LUA_SCALE_DOWN)
         self._admit_or_enqueue_script = redis.register_script(_LUA_ADMIT_OR_ENQUEUE)
         self._release_and_claim_next_script = redis.register_script(_LUA_RELEASE_AND_CLAIM_NEXT)
-        self._activate_claim_script = redis.register_script(_LUA_ACTIVATE_CLAIM)
 
     async def try_acquire(self, model: str) -> bool:
         result = await self._try_acquire_script(
@@ -84,12 +93,6 @@ class DistributedAutoQueueRedis:
             args=[DEFAULT_ACTIVE_KEY_TTL],
         )
         return int(result)
-
-    async def release_and_transfer(self, model: str, has_waiters: bool) -> bool:
-        """Compatibility helper for the current in-process queue middleware."""
-        if has_waiters:
-            return bool(await self.redis.get(active_key(model)))
-        return bool(await self.release(model))
 
     async def on_success(self, model: str) -> None:
         await self._scale_up_script(
@@ -108,11 +111,12 @@ class DistributedAutoQueueRedis:
         pipe.get(active_key(model))
         pipe.get(limit_key(model))
         pipe.get(ceiling_key(model))
-        active_raw, limit_raw, ceiling_raw = await pipe.execute()
+        pipe.zcard(queue_key(model))
+        active_raw, limit_raw, ceiling_raw, queued_raw = await pipe.execute()
         return {
             "active": int(active_raw or 0),
             "limit": int(limit_raw or self.default_max_concurrent),
-            "queued": 0,
+            "queued": int(queued_raw or 0),
             "ceiling": int(ceiling_raw or self.ceiling),
         }
 
@@ -151,12 +155,17 @@ class DistributedAutoQueueRedis:
             ],
         )
         decision = int(result[0])
+        returned_claim_token = _decode_script_value(result[1])
         admitted = decision == 1
         rejected = decision == 2
         if admitted:
             raw_state = await self.redis.hgetall(request_key(request_id))
             state = request_state_from_hash(raw_state)
-            return AdmitDecision(decision="admit_now", claim_token=claim_token, request_state=state)
+            return AdmitDecision(
+                decision="admit_now",
+                claim_token=returned_claim_token or claim_token,
+                request_state=state,
+            )
         if rejected:
             raw_state = await self.redis.hgetall(request_key(request_id))
             return AdmitDecision(decision="queue_full", request_state=request_state_from_hash(raw_state))
@@ -174,76 +183,29 @@ class DistributedAutoQueueRedis:
     ) -> ReleaseTransfer:
         now_ms = current_time_ms()
         claim_token = uuid.uuid4().hex
-        active = int(await self.redis.get(active_key(model)) or 0)
-        if active <= 0 and not allow_missing_active:
-            return ReleaseTransfer(claimed_request_id=None, claim_token=None)
-        if active <= 0:
-            active = 1
-
-        active_after_release = max(0, active - 1)
-        released_request_key = request_key(request_id)
-        released_raw_state = await self.redis.hgetall(released_request_key)
-        if released_raw_state:
-            released_state = request_state_from_hash(released_raw_state)
-            released_state.state = terminal_state
-            released_state.claim_token = None
-            released_state.finished_at_ms = now_ms
-            await self.redis.hset(released_request_key, mapping=request_state_hash(released_state))
-            await self.redis.expire(released_request_key, DEFAULT_DATA_TTL)
-        await self.redis.delete(claim_key(request_id))
-        await self.redis.delete(active_lease_key(request_id))
-        await self.redis.set(active_key(model), active_after_release, ex=DEFAULT_ACTIVE_KEY_TTL)
-
-        if not claim_next:
-            return ReleaseTransfer(claimed_request_id=None, claim_token=None)
-
-        while True:
-            queued = await self.redis.zrange(queue_key(model), 0, 0)
-            if not queued:
-                return ReleaseTransfer(claimed_request_id=None, claim_token=None)
-
-            next_request_id = queued[0].decode() if isinstance(queued[0], bytes) else str(queued[0])
-            await self.redis.zrem(queue_key(model), next_request_id)
-
-            raw_state = await self.redis.hgetall(request_key(next_request_id))
-            if not raw_state:
-                continue
-
-            next_state = request_state_from_hash(raw_state)
-            if next_state.state != "queued":
-                continue
-
-            next_state.state = "claimed"
-            next_state.claim_token = claim_token
-            next_state.claimed_at_ms = now_ms
-            next_state.started_at_ms = None
-            next_state.finished_at_ms = None
-            await self.redis.hset(request_key(next_request_id), mapping=request_state_hash(next_state))
-            await self.redis.expire(request_key(next_request_id), DEFAULT_DATA_TTL)
-            await self.redis.set(claim_key(next_request_id), claim_token, ex=DEFAULT_LEASE_TTL)
-            await self.redis.hset(active_lease_key(next_request_id), mapping=active_lease_hash(next_state.worker_id, claim_token))
-            await self.redis.expire(active_lease_key(next_request_id), DEFAULT_LEASE_TTL)
-            await self.redis.set(active_key(model), active, ex=DEFAULT_ACTIVE_KEY_TTL)
-            return ReleaseTransfer(claimed_request_id=next_request_id, claim_token=claim_token)
-
-    async def activate_claim(self, model: str, request_id: str, claim_token: str) -> bool:
-        now_ms = current_time_ms()
-        raw_state = await self.redis.hgetall(request_key(request_id))
-        if not raw_state:
-            return False
-
-        state = request_state_from_hash(raw_state)
-        if state.state != "claimed" or state.claim_token != claim_token:
-            return False
-
-        state.state = "active"
-        state.started_at_ms = now_ms
-        await self.redis.hset(request_key(request_id), mapping=request_state_hash(state))
-        await self.redis.expire(request_key(request_id), DEFAULT_DATA_TTL)
-
-        active = int(await self.redis.get(active_key(model)) or 0)
-        await self.redis.set(active_key(model), active, ex=DEFAULT_ACTIVE_KEY_TTL)
-        return True
+        result = await self._release_and_claim_next_script(
+            keys=[active_key(model), queue_key(model), request_key(request_id)],
+            args=[
+                DEFAULT_ACTIVE_KEY_TTL,
+                DEFAULT_DATA_TTL,
+                DEFAULT_LEASE_TTL,
+                now_ms,
+                claim_token,
+                request_id,
+                terminal_state,
+                1 if allow_missing_active else 0,
+                1 if claim_next else 0,
+                AUTOQ_REQUEST_KEY_PREFIX,
+                AUTOQ_CLAIM_KEY_PREFIX,
+                AUTOQ_ACTIVE_LEASE_KEY_PREFIX,
+            ],
+        )
+        claimed_request_id = _decode_script_value(result[0])
+        returned_claim_token = _decode_script_value(result[1])
+        return ReleaseTransfer(
+            claimed_request_id=claimed_request_id,
+            claim_token=returned_claim_token,
+        )
 
 
 _LUA_TRY_ACQUIRE = """
@@ -393,6 +355,7 @@ redis.call(
     'claim_token', '',
     'finished_at_ms', now_ms
 )
+redis.call('EXPIRE', KEYS[3], tonumber(ARGV[2]))
 redis.call('DEL', released_claim_key)
 redis.call('DEL', released_active_lease_key)
 
@@ -464,28 +427,6 @@ while true do
         end
     end
 end
-"""
-
-
-_LUA_ACTIVATE_CLAIM = """
-local active = tonumber(redis.call('GET', KEYS[1])) or 0
-local state = redis.call('HGET', KEYS[2], 'state')
-local current_claim = redis.call('HGET', KEYS[2], 'claim_token')
-if state ~= 'claimed' then
-    return 0
-end
-if current_claim ~= ARGV[4] then
-    return 0
-end
-redis.call(
-    'HSET',
-    KEYS[2],
-    'state', 'active',
-    'started_at_ms', tostring(ARGV[3])
-)
-redis.call('SET', KEYS[1], active, 'EX', tonumber(ARGV[1]))
-redis.call('EXPIRE', KEYS[2], tonumber(ARGV[2]))
-return 1
 """
 
 

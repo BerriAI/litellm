@@ -14,6 +14,7 @@ import logging
 import os
 import signal
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +23,14 @@ from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .auto_queue_scripts import AutoQueueRedis, DistributedAutoQueueRedis
+from .auto_queue_state import (
+    active_lease_key,
+    claim_key,
+    queue_key,
+    request_key,
+    request_state_from_hash,
+    request_state_hash,
+)
 
 logger = logging.getLogger("litellm.proxy.middleware.auto_queue")
 
@@ -338,6 +347,7 @@ class AutoQueueMiddleware:
         self._queues: Dict[str, ModelQueue] = {}
         self._shutting_down = False
         self._enabled = enabled if enabled is not None else AUTOQ_ENABLED
+        self._worker_id = f"autoq-worker:{os.getpid()}:{uuid.uuid4().hex}"
         # Enforce single-process deployment when auto-queue is enabled
         worker_count = _resolve_worker_count()
         if self._enabled and worker_count > 1:
@@ -372,65 +382,184 @@ class AutoQueueMiddleware:
             self._queues[model] = ModelQueue(max_depth=self._max_queue_depth)
         return self._queues[model]
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not self._enabled:
-            await self.app(scope, receive, send)
+    async def _load_request_state(self, aqr: AutoQueueRedis, request_id: str):
+        redis_client = getattr(aqr, "redis", None)
+        if redis_client is None:
+            return None
+        raw_state = await redis_client.hgetall(request_key(request_id))
+        if not raw_state:
+            return None
+        return request_state_from_hash(raw_state)
+
+    async def _finalize_locally_queued_request(
+        self,
+        aqr: AutoQueueRedis,
+        *,
+        model: str,
+        request_id: str,
+        terminal_state: str,
+    ) -> None:
+        redis_client = getattr(aqr, "redis", None)
+        if redis_client is None:
             return
 
-        if not _should_queue(scope):
-            await self.app(scope, receive, send)
+        raw_state = await redis_client.hgetall(request_key(request_id))
+        if not raw_state:
             return
 
-        # Buffer body and extract model
-        body = await _buffer_body(receive)
-        try:
-            data = json.loads(body)
-            model = data.get("model", "unknown")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            # Not JSON -- pass through without queuing
-            await self.app(scope, _replay_receive(body), send)
+        state = request_state_from_hash(raw_state)
+        if state.state != "queued":
             return
 
-        await self._process_request(scope, body, model, send, original_receive=receive)
+        state.state = terminal_state
+        state.claim_token = None
+        state.finished_at_ms = int(time.time() * 1000)
+
+        pipe = redis_client.pipeline()
+        pipe.hset(request_key(request_id), mapping=request_state_hash(state))
+        pipe.expire(request_key(request_id), _KEY_TTL)
+        pipe.zrem(queue_key(model), request_id)
+        pipe.delete(claim_key(request_id))
+        pipe.delete(active_lease_key(request_id))
+        await pipe.execute()
+
+    def _wake_local_request(self, model: str, request_id: Optional[str]) -> bool:
+        if not request_id:
+            return False
+        queue = self._queues.get(model)
+        if queue is None or not queue.has_request(request_id):
+            return False
+        queue.remove(request_id, reason=_QueueWakeReason.TRANSFERRED)
+        return True
+
+    async def _wait_for_distributed_claim(
+        self,
+        aqr: AutoQueueRedis,
+        *,
+        model: str,
+        request_id: str,
+        queue: ModelQueue,
+        wake_state: "_WakeState",
+        timeout: float,
+    ):
+        poll_interval = 0.05
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout, 0.0)
+
+        while True:
+            state = await self._load_request_state(aqr, request_id)
+            if state is not None and state.state in {"claimed", "active"}:
+                queue.remove(request_id)
+                return state
+            if state is not None and state.state != "queued":
+                queue.remove(request_id)
+                return state
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+
+            try:
+                await asyncio.wait_for(wake_state.wait(), timeout=min(poll_interval, remaining))
+            except asyncio.TimeoutError:
+                continue
+
+            if wake_state.reason == _QueueWakeReason.TRANSFERRED:
+                continue
+            return None
+
+    async def _abandon_waiting_request(
+        self,
+        aqr: AutoQueueRedis,
+        *,
+        model: str,
+        request_id: str,
+        terminal_state: str,
+        send: Send,
+    ) -> None:
+        state = await self._load_request_state(aqr, request_id)
+        if state is None:
+            return
+
+        if state.state == "queued":
+            await self._safe_redis_call(
+                self._finalize_locally_queued_request(
+                    aqr,
+                    model=model,
+                    request_id=request_id,
+                    terminal_state=terminal_state,
+                ),
+                model=model,
+                send=send,
+            )
+            return
+
+        if state.state in {"claimed", "active"}:
+            transfer = await self._safe_redis_call(
+                aqr.release_and_claim_next(
+                    model,
+                    request_id,
+                    terminal_state=terminal_state,
+                    allow_missing_active=True,
+                ),
+                model=model,
+                send=send,
+            )
+            if transfer is None:
+                return
+            self._wake_local_request(model, transfer.claimed_request_id)
 
     async def _process_request(
         self, scope: Scope, body: bytes, model: str, send: Send,
         original_receive: Optional[Receive] = None,
     ) -> None:
-        """Acquire slot (or queue), forward request, release slot, auto-scale."""
+        """Use distributed Redis state for admission and slot transfer orchestration."""
         aqr = self._ensure_aqr()
         request_id = f"{model}-{next(_id_counter)}-{time.monotonic_ns()}"
         queue = self._get_queue(model)
         logger.debug("Processing auto-queue request", extra={"model": model, "request_id": request_id})
 
-        acquired = await self._safe_redis_call(aqr.try_acquire(model), model=model, send=send)
-        if acquired is None:
+        if self._shutting_down:
+            logger.info("Rejecting request during shutdown", extra={"model": model, "request_id": request_id})
+            await _send_json_error(send, 503, "Server shutting down")
             return
 
-        if not acquired:
-            if self._shutting_down:
-                logger.info("Rejecting queued request during shutdown", extra={"model": model, "request_id": request_id})
-                await _send_json_error(send, 503, "Server shutting down")
-                return
+        timeout, priority = _get_key_config(scope)
+        timeout_seconds = max(float(timeout), 0.0)
+        deadline_at_ms = int(time.time() * 1000) + int(timeout_seconds * 1000)
 
-            if queue.is_full:
-                logger.warning(
-                    "Rejecting request because queue is full",
-                    extra={"model": model, "request_id": request_id, "queue_depth": queue.depth},
-                )
-                await _send_json_error(send, 503, f"Queue full for model {model}")
-                return
+        decision = await self._safe_redis_call(
+            aqr.admit_or_enqueue(
+                model=model,
+                request_id=request_id,
+                priority=priority,
+                deadline_at_ms=deadline_at_ms,
+                worker_id=self._worker_id,
+            ),
+            model=model,
+            send=send,
+        )
+        if decision is None:
+            return
 
-            timeout, priority = _get_key_config(scope)
+        if decision.decision == "queue_full":
+            logger.warning(
+                "Rejecting request because distributed queue is full",
+                extra={"model": model, "request_id": request_id},
+            )
+            await _send_json_error(send, 503, f"Queue full for model {model}")
+            return
+
+        if decision.decision == "queued":
             wake_state = _WakeState()
             queue.add(request_id, wake_state, priority)
             logger.info(
-                "Queued auto-queue request",
+                "Queued auto-queue request in distributed Redis queue",
                 extra={
                     "model": model,
                     "request_id": request_id,
                     "queue_priority": priority,
-                    "queue_timeout": timeout,
+                    "queue_timeout": timeout_seconds,
                     "queue_depth": queue.depth,
                 },
             )
@@ -450,36 +579,71 @@ class AutoQueueMiddleware:
                     logger.debug("Queued disconnect watcher stopped", exc_info=True)
 
             disconnect_task = asyncio.create_task(_watch_disconnect())
-
+            request_state = None
             try:
-                await asyncio.wait_for(wake_state.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
+                request_state = await self._wait_for_distributed_claim(
+                    aqr,
+                    model=model,
+                    request_id=request_id,
+                    queue=queue,
+                    wake_state=wake_state,
+                    timeout=timeout_seconds,
+                )
+            finally:
+                await _cancel_task(disconnect_task)
+
+            if request_state is None:
+                if wake_state.reason == _QueueWakeReason.DISCONNECTED:
+                    await self._abandon_waiting_request(
+                        aqr,
+                        model=model,
+                        request_id=request_id,
+                        terminal_state="cancelled",
+                        send=send,
+                    )
+                    return
+                if wake_state.reason == _QueueWakeReason.SHUTDOWN:
+                    await self._abandon_waiting_request(
+                        aqr,
+                        model=model,
+                        request_id=request_id,
+                        terminal_state="cancelled",
+                        send=send,
+                    )
+                    logger.info(
+                        "Rejecting previously queued request after shutdown wake",
+                        extra={"model": model, "request_id": request_id},
+                    )
+                    await _send_json_error(send, 503, "Server shutting down")
+                    return
+
                 logger.warning(
-                    "Queued request timed out",
-                    extra={"model": model, "request_id": request_id, "queue_timeout": timeout},
+                    "Queued request timed out before distributed claim",
+                    extra={"model": model, "request_id": request_id, "queue_timeout": timeout_seconds},
                 )
                 queue.remove(request_id, reason=_QueueWakeReason.TIMEOUT)
-                await _cancel_task(disconnect_task)
-                await _send_json_error(send, 504, f"Queue timeout after {timeout}s for model {model}")
-                return
-
-            await _cancel_task(disconnect_task)
-
-            if wake_state.reason == _QueueWakeReason.DISCONNECTED:
-                return
-            if wake_state.reason == _QueueWakeReason.SHUTDOWN:
-                logger.info(
-                    "Rejecting previously queued request after shutdown wake",
-                    extra={"model": model, "request_id": request_id},
+                await self._abandon_waiting_request(
+                    aqr,
+                    model=model,
+                    request_id=request_id,
+                    terminal_state="timed_out",
+                    send=send,
                 )
-                await _send_json_error(send, 503, "Server shutting down")
+                await _send_json_error(send, 504, f"Queue timeout after {timeout_seconds}s for model {model}")
                 return
-            if wake_state.reason != _QueueWakeReason.TRANSFERRED:
+
+            if request_state.state not in {"claimed", "active"}:
                 logger.warning(
-                    "Rejecting request due to unexpected queue wake reason",
-                    extra={"model": model, "request_id": request_id, "wake_reason": wake_state.reason},
+                    "Rejecting request due to unexpected distributed queue state",
+                    extra={"model": model, "request_id": request_id, "request_state": request_state.state},
                 )
-                await _send_json_error(send, 503, f"Auto-queue unavailable for model {model}")
+                status_code = 504 if request_state.state == "timed_out" else 503
+                message = (
+                    f"Queue timeout after {timeout_seconds}s for model {model}"
+                    if status_code == 504
+                    else f"Auto-queue unavailable for model {model}"
+                )
+                await _send_json_error(send, status_code, message)
                 return
 
         logger.debug("Forwarding request with acquired auto-queue slot", extra={"model": model, "request_id": request_id})
@@ -518,12 +682,12 @@ class AutoQueueMiddleware:
         finally:
             await _cancel_task(client_disconnect_task)
 
-            transferred = await self._safe_redis_call(
-                aqr.release_and_transfer(model, has_waiters=queue.depth > 0),
+            transfer = await self._safe_redis_call(
+                aqr.release_and_claim_next(model, request_id),
                 model=model,
                 send=send,
             )
-            if transferred is None:
+            if transfer is None:
                 return
 
             if response_status == 429:
@@ -537,11 +701,17 @@ class AutoQueueMiddleware:
                     return
                 logger.debug("Recorded auto-queue success", extra={"model": model, "request_id": request_id})
 
-            if transferred:
-                woke = queue.wake_next()
+            if transfer.claimed_request_id is not None:
+                woke = self._wake_local_request(model, transfer.claimed_request_id)
                 logger.debug(
-                    "Transferred slot to next queued request",
-                    extra={"model": model, "request_id": request_id, "woke_waiter": woke, "queue_depth": queue.depth},
+                    "Transferred slot using distributed claim result",
+                    extra={
+                        "model": model,
+                        "request_id": request_id,
+                        "claimed_request_id": transfer.claimed_request_id,
+                        "woke_waiter": woke,
+                        "queue_depth": queue.depth,
+                    },
                 )
             else:
                 logger.debug(
@@ -588,7 +758,7 @@ class AutoQueueMiddleware:
         if self._aqr:
             for model, q in self._queues.items():
                 info = await self._aqr.get_model_info(model)
-                info["queued"] = q.depth
+                info["local_waiters"] = q.depth
                 models_info[model] = info
         body = json.dumps({"models": models_info}).encode()
         await send({
@@ -624,19 +794,3 @@ class AutoQueueMiddleware:
                 logger.info("Client disconnected before response completed", extra={"model": model})
                 return
             raise
-
-    async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Respond to GET /queue/status with model queue info."""
-        models_info: Dict[str, Any] = {}
-        if self._aqr:
-            for model, q in self._queues.items():
-                info = await self._aqr.get_model_info(model)
-                info["queued"] = q.depth
-                models_info[model] = info
-        body = json.dumps({"models": models_info}).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({"type": "http.response.body", "body": body})

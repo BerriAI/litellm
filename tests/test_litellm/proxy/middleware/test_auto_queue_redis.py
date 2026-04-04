@@ -11,9 +11,17 @@ for _name in list(sys.modules):
 import fakeredis.aioredis
 import pytest
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 import litellm.proxy.middleware.auto_queue_scripts as auto_queue_scripts
-from litellm.proxy.middleware.auto_queue_scripts import DistributedAutoQueueRedis
+from litellm.proxy.middleware.auto_queue_scripts import (
+    AdmitDecision,
+    DistributedAutoQueueRedis,
+    ReleaseTransfer,
+)
 from litellm.proxy.middleware.auto_queue_state import (
     AutoQueueRequestState,
     active_key,
@@ -61,6 +69,10 @@ pytestmark = pytest.mark.asyncio
 async def _redis_int(redis, key: str) -> int:
     raw = await redis.get(key)
     return int(raw or 0)
+
+
+def _future_deadline_ms(offset_ms: int = 10_000) -> int:
+    return auto_queue_scripts.current_time_ms() + offset_ms
 
 
 async def test_try_acquire_is_atomic_under_parallel_contention(aqr_factory, redis):
@@ -155,14 +167,14 @@ async def test_admit_or_enqueue_places_second_request_in_redis_queue(aqr_factory
         model="glm-5.1",
         request_id="req-1",
         priority=10,
-        deadline_at_ms=1_700_000_000_000,
+        deadline_at_ms=_future_deadline_ms(),
         worker_id="worker-a",
     )
     second = await aqr.admit_or_enqueue(
         model="glm-5.1",
         request_id="req-2",
         priority=10,
-        deadline_at_ms=1_700_000_000_500,
+        deadline_at_ms=_future_deadline_ms(20_000),
         worker_id="worker-b",
     )
 
@@ -212,7 +224,7 @@ async def test_admit_or_enqueue_is_atomic_under_parallel_contention(aqr_factory,
             model=model,
             request_id=f"req-{i}",
             priority=10,
-            deadline_at_ms=1_700_000_000_000 + i,
+            deadline_at_ms=_future_deadline_ms(10_000 + i),
             worker_id=f"worker-{i}",
         )
 
@@ -231,14 +243,14 @@ async def test_release_transfers_claim_to_head_of_queue(aqr_factory, redis):
         model="glm-5.1",
         request_id="req-1",
         priority=10,
-        deadline_at_ms=1_700_000_000_000,
+        deadline_at_ms=_future_deadline_ms(),
         worker_id="worker-a",
     )
     await aqr.admit_or_enqueue(
         model="glm-5.1",
         request_id="req-2",
         priority=10,
-        deadline_at_ms=1_700_000_000_500,
+        deadline_at_ms=_future_deadline_ms(20_000),
         worker_id="worker-b",
     )
 
@@ -275,14 +287,14 @@ async def test_release_and_claim_next_skips_stale_queue_members(aqr_factory, red
         model=model,
         request_id="req-1",
         priority=10,
-        deadline_at_ms=1_700_000_000_000,
+        deadline_at_ms=_future_deadline_ms(),
         worker_id="worker-a",
     )
     await aqr.admit_or_enqueue(
         model=model,
         request_id="req-2",
         priority=10,
-        deadline_at_ms=1_700_000_000_500,
+        deadline_at_ms=_future_deadline_ms(20_000),
         worker_id="worker-b",
     )
     await redis.zadd(queue_key(model), {"req-stale": 0})
@@ -295,6 +307,31 @@ async def test_release_and_claim_next_skips_stale_queue_members(aqr_factory, red
     assert request_state_from_hash(await redis.hgetall(request_key("req-2"))).state == "claimed"
 
 
+async def test_release_and_claim_next_uses_registered_lua_script(aqr_factory, monkeypatch):
+    aqr = aqr_factory(default_max_concurrent=1)
+    captured = {}
+
+    async def fake_script(*, keys, args):
+        captured["keys"] = keys
+        captured["args"] = args
+        return ["req-2", "claim-token-2"]
+
+    monkeypatch.setattr(aqr, "_release_and_claim_next_script", fake_script)
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError("release_and_claim_next should not bypass the Lua script")
+
+    for method_name in ("get", "hgetall", "hset", "expire", "delete", "set", "zrange", "zrem"):
+        monkeypatch.setattr(aqr.redis, method_name, _unexpected)
+
+    transfer = await aqr.release_and_claim_next("glm-5.1", "req-1")
+
+    assert transfer == ReleaseTransfer(claimed_request_id="req-2", claim_token="claim-token-2")
+    assert captured["keys"][0] == active_key("glm-5.1")
+    assert captured["keys"][1] == queue_key("glm-5.1")
+    assert captured["keys"][2] == request_key("req-1")
+
+
 async def test_admit_or_enqueue_stores_active_lease_safely_for_quoted_worker_ids(aqr_factory, redis):
     aqr = aqr_factory(default_max_concurrent=1)
     worker_id = 'worker-"quoted\\\\slash"'
@@ -303,7 +340,7 @@ async def test_admit_or_enqueue_stores_active_lease_safely_for_quoted_worker_ids
         model="glm-5.1",
         request_id="req-1",
         priority=10,
-        deadline_at_ms=1_700_000_000_000,
+        deadline_at_ms=_future_deadline_ms(),
         worker_id=worker_id,
     )
 
@@ -313,33 +350,119 @@ async def test_admit_or_enqueue_stores_active_lease_safely_for_quoted_worker_ids
     assert lease[b"claim_token"].decode() == result.claim_token
 
 
-async def test_activate_claim_promotes_claimed_request_to_active(aqr_factory, redis):
+async def test_middleware_waits_for_distributed_claim_without_local_wake(aqr_factory, redis, monkeypatch):
+    module = importlib.import_module("litellm.proxy.middleware.auto_queue_middleware")
+    model = "glm-5.1"
     aqr = aqr_factory(default_max_concurrent=1)
 
-    await aqr.admit_or_enqueue(
-        model="glm-5.1",
-        request_id="req-1",
+    seeded = await aqr.admit_or_enqueue(
+        model=model,
+        request_id="seed-active",
         priority=10,
-        deadline_at_ms=1_700_000_000_000,
-        worker_id="worker-a",
+        deadline_at_ms=auto_queue_scripts.current_time_ms() + 10_000,
+        worker_id="worker-seed",
     )
-    await aqr.admit_or_enqueue(
-        model="glm-5.1",
-        request_id="req-2",
-        priority=10,
-        deadline_at_ms=1_700_000_000_500,
-        worker_id="worker-b",
+    assert seeded.decision == "admit_now"
+
+    async def handler(request):
+        await request.body()
+        return JSONResponse({"ok": True})
+
+    app = module.AutoQueueMiddleware(
+        Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])]),
+        aqr=aqr,
+        enabled=True,
     )
+    monkeypatch.setattr(module, "_get_key_config", lambda scope: (1, 10))
 
-    transfer = await aqr.release_and_claim_next("glm-5.1", "req-1")
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        task = asyncio.create_task(
+            client.post("/v1/chat/completions", json={"model": model, "messages": []})
+        )
 
-    assert transfer.claimed_request_id == "req-2"
-    assert transfer.claim_token is not None
-    activated = await aqr.activate_claim("glm-5.1", "req-2", transfer.claim_token)
+        queued_request_id = None
+        deadline = asyncio.get_running_loop().time() + 1
+        while asyncio.get_running_loop().time() < deadline and queued_request_id is None:
+            for key in await redis.keys("autoq:req:*"):
+                raw_state = await redis.hgetall(key)
+                if not raw_state:
+                    continue
+                state = request_state_from_hash(raw_state)
+                if state.request_id != "seed-active" and state.state == "queued":
+                    queued_request_id = state.request_id
+                    break
+            if queued_request_id is None:
+                await asyncio.sleep(0.01)
 
-    assert activated is True
-    assert await redis.get(active_key("glm-5.1")) == b"1"
-    assert request_state_from_hash(await redis.hgetall(request_key("req-2"))).state == "active"
+        assert queued_request_id is not None
+
+        transfer = await aqr.release_and_claim_next(model, "seed-active")
+        assert transfer.claimed_request_id == queued_request_id
+        response = await asyncio.wait_for(task, timeout=2)
+
+    assert response.status_code == 200
+
+
+async def test_middleware_releases_with_release_and_claim_next(monkeypatch):
+    module = importlib.import_module("litellm.proxy.middleware.auto_queue_middleware")
+    release_calls = []
+
+    class FakeRedisWrapper:
+        redis = None
+
+        async def admit_or_enqueue(self, model, request_id, priority, deadline_at_ms, worker_id):
+            return AdmitDecision(
+                decision="admit_now",
+                claim_token="claim-1",
+                request_state=AutoQueueRequestState(
+                    request_id=request_id,
+                    model=model,
+                    priority=priority,
+                    state="active",
+                    enqueued_at_ms=deadline_at_ms - 1_000,
+                    deadline_at_ms=deadline_at_ms,
+                    worker_id=worker_id,
+                    claim_token="claim-1",
+                    claimed_at_ms=deadline_at_ms - 1_000,
+                    started_at_ms=deadline_at_ms - 1_000,
+                ),
+            )
+
+        async def try_acquire(self, model):
+            return True
+
+        async def release_and_transfer(self, model, has_waiters):
+            raise AssertionError("middleware should not use release_and_transfer")
+
+        async def release_and_claim_next(self, model, request_id, **kwargs):
+            release_calls.append((model, request_id))
+            return ReleaseTransfer(claimed_request_id=None, claim_token=None)
+
+        async def on_success(self, model):
+            return None
+
+    async def handler(request):
+        await request.body()
+        return JSONResponse({"ok": True})
+
+    app = module.AutoQueueMiddleware(
+        Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])]),
+        aqr=FakeRedisWrapper(),
+        enabled=True,
+    )
+    monkeypatch.setattr(module, "_get_key_config", lambda scope: (1, 10))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/v1/chat/completions", json={"model": "glm-5.1", "messages": []})
+
+    assert response.status_code == 200
+    assert len(release_calls) == 1
 
 
 async def test_middleware_preserves_autoq_configuration(monkeypatch):
