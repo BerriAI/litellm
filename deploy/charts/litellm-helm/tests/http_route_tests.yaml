@@ -1,0 +1,136 @@
+suite: HTTPRoute Configuration Tests
+templates:
+  - httproute.yaml
+tests:
+  - it: should not create HTTPRoute by default
+    template: httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create HTTPRoute when enabled
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-gateway"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.parentRefs[0].name
+          value: "my-gateway"
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /
+
+  - it: should map HTTPRoute values correctly
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-gateway"
+      httpRoute.gatewayNamespace: "gateway-ns"
+      httpRoute.hostnames:
+        - litellm.example.com
+      service.port: 4000
+    asserts:
+      - equal:
+          path: spec.hostnames[0]
+          value: litellm.example.com
+      - equal:
+          path: spec.parentRefs[0].namespace
+          value: "gateway-ns"
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 4000
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: RELEASE-NAME-litellm
+
+  - it: should map full parentRefs in HTTPRoute
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-envoy-gateway"
+      httpRoute.gatewayNamespace: "envoy-gateway-system"
+      httpRoute.gatewayGroup: "gateway.networking.k8s.io"
+      httpRoute.gatewayKind: "Gateway"
+      httpRoute.gatewaySectionName: "default"
+    asserts:
+      - equal:
+          path: spec.parentRefs[0].name
+          value: "my-envoy-gateway"
+      - equal:
+          path: spec.parentRefs[0].namespace
+          value: "envoy-gateway-system"
+      - equal:
+          path: spec.parentRefs[0].group
+          value: "gateway.networking.k8s.io"
+      - equal:
+          path: spec.parentRefs[0].kind
+          value: "Gateway"
+      - equal:
+          path: spec.parentRefs[0].sectionName
+          value: "default"
+
+  - it: should add annotations to HTTPRoute
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-gateway"
+      httpRoute.annotations:
+        external-dns.alpha.kubernetes.io/hostname: litellm.example.com
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: litellm.example.com
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  - it: should allow custom matches in HTTPRoute and still render default backendRefs
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-gateway"
+      httpRoute.rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /v1
+    asserts:
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /v1
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 4000
+
+  - it: should allow custom backendRefs in HTTPRoute
+    template: httproute.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.gatewayName: "my-gateway"
+      httpRoute.rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /v1
+          backendRefs:
+            - name: custom-service
+              port: 8080
+    asserts:
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /v1
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: custom-service
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8080
