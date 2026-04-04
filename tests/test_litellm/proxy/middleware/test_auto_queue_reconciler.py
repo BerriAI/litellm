@@ -9,6 +9,7 @@ for _name in list(sys.modules):
 import fakeredis.aioredis
 import pytest
 import pytest_asyncio
+from redis.exceptions import RedisError
 
 from litellm.proxy.middleware.auto_queue_reconciler import AutoQueueReconciler
 from litellm.proxy.middleware.auto_queue_lease import ActiveLeaseHeartbeat
@@ -143,3 +144,31 @@ async def test_reconciler_releases_stale_active_lease_and_claims_next_waiter(aqr
     next_lease = await redis.hgetall(active_lease_key("req-next"))
     assert next_lease[b"worker_id"] == b"worker-b"
     assert next_lease[b"claim_token"] == next_state.claim_token.encode()
+
+
+@pytest.mark.asyncio
+async def test_active_lease_heartbeat_retries_after_transient_refresh_error(monkeypatch, redis):
+    heartbeat = ActiveLeaseHeartbeat(
+        redis=redis,
+        request_id="req-claimed",
+        worker_id="worker-a",
+        claim_token="claim-1",
+        interval_seconds=0.01,
+    )
+    calls = []
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_refresh_once():
+        calls.append("refresh")
+        if len(calls) == 1:
+            raise RedisError("temporary redis failure")
+        return False
+
+    monkeypatch.setattr("litellm.proxy.middleware.auto_queue_lease.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(heartbeat, "refresh_once", fake_refresh_once)
+
+    await heartbeat._run()
+
+    assert calls == ["refresh", "refresh"]

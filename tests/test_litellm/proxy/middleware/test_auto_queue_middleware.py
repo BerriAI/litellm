@@ -6,6 +6,13 @@ that exercise the full ASGI request lifecycle through the middleware.
 import asyncio
 import importlib
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../")))
+for _name in list(sys.modules):
+    if _name == "litellm" or _name.startswith("litellm."):
+        sys.modules.pop(_name, None)
 
 import fakeredis.aioredis
 import pytest
@@ -19,6 +26,8 @@ from litellm.proxy.middleware.auto_queue_middleware import (
     _QueueWakeReason,
     _WakeState,
 )
+from litellm.proxy.middleware.auto_queue_scripts import AdmitDecision, ReleaseTransfer
+from litellm.proxy.middleware.auto_queue_state import AutoQueueRequestState
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +363,105 @@ async def test_downstream_exception_wakes_next_waiter(
     # All slots released
     info = await aqr.get_model_info("gpt-4")
     assert info["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_start_failure_releases_claimed_slot_before_503(monkeypatch):
+    worktree_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+    for _name in list(sys.modules):
+        if _name == "litellm" or _name.startswith("litellm."):
+            sys.modules.pop(_name, None)
+    sys.path.insert(0, worktree_root)
+    module = importlib.import_module("litellm.proxy.middleware.auto_queue_middleware")
+    assert ".worktrees/autoqueue-distributed-queue" in module.__file__
+    release_calls = []
+    monkeypatch.setattr(module, "_id_counter", iter([12]))
+    monkeypatch.setattr(module.time, "monotonic_ns", lambda: 0)
+
+    class FakeHeartbeat:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def start(self):
+            return False
+
+        async def stop(self):
+            return None
+
+    class FakeRedisClient:
+        async def zcard(self, key):
+            return 0
+
+    class FakeRedisWrapper:
+        redis = FakeRedisClient()
+
+        async def admit_or_enqueue(self, model, request_id, priority, deadline_at_ms, worker_id):
+            return AdmitDecision(
+                decision="admit_now",
+                claim_token="claim-1",
+                request_state=AutoQueueRequestState(
+                    request_id=request_id,
+                    model=model,
+                    priority=priority,
+                    state="claimed",
+                    enqueued_at_ms=deadline_at_ms - 1000,
+                    deadline_at_ms=deadline_at_ms,
+                    worker_id=worker_id,
+                    claim_token="claim-1",
+                    claimed_at_ms=deadline_at_ms - 1000,
+                ),
+            )
+
+        async def get_model_info(self, model):
+            return {"active": 1, "limit": 1, "queued": 0, "ceiling": 1}
+
+        async def release_and_claim_next(self, model, request_id, **kwargs):
+            release_calls.append((model, request_id, kwargs))
+            return ReleaseTransfer(
+                claimed_request_id=None,
+                claim_token=None,
+            )
+
+    monkeypatch.setattr(module, "ActiveLeaseHeartbeat", FakeHeartbeat)
+
+    async def app(scope, receive, send):
+        raise AssertionError("downstream app should not be called when heartbeat start fails")
+
+    middleware = module.AutoQueueMiddleware(app, aqr=FakeRedisWrapper(), enabled=True)
+
+    sent = []
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": json.dumps({"model": "gpt-4", "messages": []}).encode(),
+            "more_body": False,
+        }
+
+    async def send(message):
+        sent.append(message)
+
+    await middleware(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "query_string": b"",
+        },
+        receive,
+        send,
+    )
+
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 503
+    assert release_calls == [
+        (
+            "gpt-4",
+            "gpt-4-12-0",
+            {"terminal_state": "cancelled", "allow_missing_active": True},
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -528,6 +528,28 @@ class AutoQueueMiddleware:
                 return
             self._wake_local_request(model, transfer.claimed_request_id)
 
+    async def _cleanup_failed_claimed_request(
+        self,
+        aqr: AutoQueueRedis,
+        *,
+        model: str,
+        request_id: str,
+    ) -> None:
+        try:
+            transfer = await aqr.release_and_claim_next(
+                model,
+                request_id,
+                terminal_state="cancelled",
+                allow_missing_active=True,
+            )
+        except RedisError:
+            logger.exception(
+                "Failed to clean up claimed request after heartbeat startup failure",
+                extra={"model": model, "request_id": request_id},
+            )
+            return
+        self._wake_local_request(model, transfer.claimed_request_id)
+
     async def _process_request(
         self, scope: Scope, body: bytes, model: str, send: Send,
         original_receive: Optional[Receive] = None,
@@ -680,8 +702,18 @@ class AutoQueueMiddleware:
                 send=send,
             )
             if heartbeat_started is None:
+                await self._cleanup_failed_claimed_request(
+                    aqr,
+                    model=model,
+                    request_id=request_id,
+                )
                 return
             if heartbeat_started is False:
+                await self._cleanup_failed_claimed_request(
+                    aqr,
+                    model=model,
+                    request_id=request_id,
+                )
                 logger.warning(
                     "Rejecting request because active lease heartbeat could not start",
                     extra={"model": model, "request_id": request_id},

@@ -104,13 +104,15 @@ class ActiveLeaseHeartbeat:
         try:
             while True:
                 await asyncio.sleep(self.interval_seconds)
-                refreshed = await self.refresh_once()
+                try:
+                    refreshed = await self.refresh_once()
+                except Exception:
+                    logger.exception(
+                        "Active lease heartbeat refresh failed; retrying",
+                        extra={"request_id": self.request_id, "worker_id": self.worker_id},
+                    )
+                    continue
                 if not refreshed:
                     return
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception(
-                "Active lease heartbeat crashed",
-                extra={"request_id": self.request_id, "worker_id": self.worker_id},
-            )
