@@ -117,12 +117,14 @@ def get_secret_from_manager(  # noqa: PLR0915
                 secret_name=secret_name,
                 primary_secret_name=primary_secret_name,
             )
-            print_verbose(f"get_secret_value_response: {secret}")
+            print_verbose(f"get_secret_value_response: [set={secret is not None}]")
 
     elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
         try:
             secret = client.get_secret_from_google_secret_manager(secret_name)
-            print_verbose(f"secret from google secret manager:  {secret}")
+            print_verbose(
+                f"secret from google secret manager: [set={secret is not None}]"
+            )
             if secret is None:
                 raise ValueError(
                     f"No secret found in Google Secret Manager for {secret_name}"

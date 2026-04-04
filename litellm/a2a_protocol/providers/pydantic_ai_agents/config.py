@@ -24,7 +24,8 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         **kwargs,
     ) -> Dict[str, Any]:
         """Handle non-streaming request to Pydantic AI agent."""
-        assert api_base is not None, "api_base is required for Pydantic AI agents"
+        if not api_base:
+            raise ValueError("api_base is required for Pydantic AI agents")
         return await PydanticAIHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
@@ -40,7 +41,8 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Handle streaming request with fake streaming."""
-        assert api_base is not None, "api_base is required for Pydantic AI agents"
+        if not api_base:
+            raise ValueError("api_base is required for Pydantic AI agents")
         async for chunk in PydanticAIHandler.handle_streaming(
             request_id=request_id,
             params=params,
