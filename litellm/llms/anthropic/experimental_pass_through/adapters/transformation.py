@@ -1087,11 +1087,12 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         effort = output_config.get("effort")
-        if not effort:
+        if effort is None:
             return
 
         model = new_kwargs.get("model", "")
         if self.is_anthropic_claude_model(model):
+            # Forward the full output_config dict for native Anthropic handling
             new_kwargs["output_config"] = output_config  # type: ignore
         else:
             # Map Anthropic effort to reasoning_effort for OpenAI models
