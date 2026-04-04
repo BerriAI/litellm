@@ -25,6 +25,7 @@ from litellm.constants import (
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
     BEDROCK_MAX_POLICY_SIZE,
+    BEDROCK_OIDC_SESSION_POLICY_ACTIONS,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -695,12 +696,27 @@ class BaseAWSLLM:
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+        session_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "BedrockLiteLLM",
+                    "Effect": "Allow",
+                    "Action": list(BEDROCK_OIDC_SESSION_POLICY_ACTIONS),
+                    "Resource": "*",
+                    "Condition": {
+                        "Bool": {"aws:SecureTransport": "true"},
+                        "StringLike": {"aws:UserAgent": "litellm/*"},
+                    },
+                }
+            ],
+        }
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
+            "Policy": json.dumps(session_policy),
         }
 
         # Add ExternalId parameter if provided
