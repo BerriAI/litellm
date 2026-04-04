@@ -6,7 +6,9 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
+from pydantic import BaseModel
 
+import litellm
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse
 
@@ -154,6 +156,211 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return f"{api_base}/cortex/inference:complete"
 
+    def _transform_messages(  # noqa: ARG002 - model, is_async unused; accepted for interface compatibility
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> List[AllMessageValues]:
+        """
+        Transform OpenAI messages to Snowflake format.
+
+        Key transformations:
+        1. Assistant messages with tool_calls -> content_list with tool_use blocks
+        2. Tool messages (role: "tool") -> User messages with content_list containing tool_results
+
+        Snowflake uses a format where:
+        - tool_use blocks are in assistant message content_list
+        - tool_results are in user message content_list (not role: "tool")
+
+        Note: is_async parameter is accepted for interface compatibility but not used.
+        Snowflake transformation is synchronous and doesn't require async operations
+        like image URL downloads that the parent class handles.
+        """
+        # Build a map of tool_call_id -> tool_call for looking up function names.
+        # Must handle both dict and Pydantic BaseModel messages/tool_calls.
+        tool_calls_map: Dict[str, Dict[str, Any]] = {}
+        for message in messages:
+            msg = message.model_dump() if isinstance(message, BaseModel) else message
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    tc_dict = tc.model_dump() if isinstance(tc, BaseModel) else tc
+                    if isinstance(tc_dict, dict):
+                        tool_calls_map[tc_dict.get("id", "")] = tc_dict
+
+        transformed: List[Dict[str, Any]] = []
+        pending_tool_messages: List[Dict[str, Any]] = []
+
+        for message in messages:
+            # Handle Pydantic models by converting to dict
+            if isinstance(message, BaseModel):
+                message = message.model_dump()
+            elif not isinstance(message, dict):
+                continue
+
+            role = message.get("role", "")
+
+            # Flush pending tool messages before any non-tool message
+            if role != "tool" and pending_tool_messages:
+                transformed.append(
+                    self._convert_tool_messages_to_user_message(
+                        pending_tool_messages, tool_calls_map
+                    )
+                )
+                pending_tool_messages = []
+
+            if role == "tool":
+                # Collect tool messages to combine into a single user message
+                pending_tool_messages.append(message)
+
+            elif role == "assistant" and message.get("tool_calls"):
+                # Transform assistant message with tool_calls to content_list format
+                transformed.append(self._convert_assistant_tool_message(message))
+
+            else:
+                # Pass through other messages as-is
+                transformed.append(message)
+
+        # Flush any remaining tool messages
+        if pending_tool_messages:
+            transformed.append(
+                self._convert_tool_messages_to_user_message(
+                    pending_tool_messages, tool_calls_map
+                )
+            )
+
+        return transformed  # type: ignore
+
+    def _convert_assistant_tool_message(
+        self, message: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Convert assistant message with tool_calls to Snowflake's content_list format.
+
+        OpenAI format:
+        {
+            "role": "assistant",
+            "content": "I'll check that for you.",
+            "tool_calls": [{"id": "...", "function": {"name": "...", "arguments": "..."}}]
+        }
+
+        Snowflake format:
+        {
+            "role": "assistant",
+            "content_list": [
+                {"type": "text", "text": "I'll check that for you."},
+                {"type": "tool_use", "tool_use": {"tool_use_id": "...", "name": "...", "input": {...}}}
+            ]
+        }
+        """
+        content_list: List[Dict[str, Any]] = []
+
+        # Add text content if present.
+        # Note: Non-text parts (e.g., images) are intentionally dropped because
+        # Snowflake's content_list text blocks only support plain strings.
+        text_content = message.get("content")
+        if isinstance(text_content, list):
+            # Flatten to text only; filter out empty strings from non-text parts
+            text_content = " ".join(
+                part.get("text", "")
+                for part in text_content
+                if isinstance(part, dict) and part.get("text")
+            )
+        if text_content:
+            content_list.append({"type": "text", "text": text_content})
+
+        # Add tool_use blocks. Handle both dict and Pydantic BaseModel tool_calls.
+        for raw_tc in message.get("tool_calls") or []:
+            tool_call = raw_tc.model_dump() if isinstance(raw_tc, BaseModel) else raw_tc
+            if isinstance(tool_call, dict):
+                function = tool_call.get("function", {})
+                # Parse arguments from JSON string to dict
+                arguments_str = function.get("arguments", "{}")
+                try:
+                    arguments = json.loads(arguments_str) if arguments_str else {}
+                except (json.JSONDecodeError, TypeError):
+                    # TypeError if arguments is not a string (e.g., already a dict)
+                    arguments = arguments_str if isinstance(arguments_str, dict) else {}
+
+                content_list.append({
+                    "type": "tool_use",
+                    "tool_use": {
+                        "tool_use_id": tool_call.get("id", ""),
+                        "name": function.get("name", ""),
+                        "input": arguments,
+                    },
+                })
+
+        return {"role": "assistant", "content_list": content_list}
+
+    def _convert_tool_messages_to_user_message(
+        self,
+        tool_messages: List[Dict[str, Any]],
+        tool_calls_map: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Convert tool result messages to a single Snowflake user message with tool_results.
+
+        OpenAI format (multiple messages):
+        [
+            {"role": "tool", "tool_call_id": "...", "content": "result1"},
+            {"role": "tool", "tool_call_id": "...", "content": "result2"}
+        ]
+
+        Snowflake format (single user message):
+        {
+            "role": "user",
+            "content_list": [
+                {"type": "tool_results", "tool_results": {"tool_use_id": "...", "name": "...", "content": [{"type": "text", "text": "result1"}]}},
+                {"type": "tool_results", "tool_results": {"tool_use_id": "...", "name": "...", "content": [{"type": "text", "text": "result2"}]}}
+            ]
+        }
+        """
+        content_list: List[Dict[str, Any]] = []
+
+        for tool_msg in tool_messages:
+            tool_call_id = tool_msg.get("tool_call_id", "")
+            tool_call = tool_calls_map.get(tool_call_id)
+            if tool_call is None:
+                # Fall back to 'name' field on the tool message itself (OpenAI format)
+                function_name = tool_msg.get("name", "")
+                if not function_name:
+                    litellm.utils.verbose_logger.warning(
+                        f"Snowflake: tool_call_id '{tool_call_id}' not found in prior "
+                        "assistant messages and no 'name' field; function name will be empty."
+                    )
+            else:
+                function = tool_call.get("function", {})
+                function_name = function.get("name", "")
+                if not function_name:
+                    litellm.utils.verbose_logger.warning(
+                        f"Snowflake: tool_call_id '{tool_call_id}' found but function name "
+                        "is empty; tool_results block will have name=''."
+                    )
+
+            # Get content - could be string, list, or None
+            content = tool_msg.get("content")
+            if content is None:
+                content = ""
+            elif isinstance(content, list):
+                # Flatten OpenAI multipart tool content to a plain string.
+                # Filter out empty strings from non-text parts (e.g., images).
+                content = " ".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("text")
+                )
+            elif not isinstance(content, str):
+                content = str(content)
+
+            content_list.append({
+                "type": "tool_results",
+                "tool_results": {
+                    "tool_use_id": tool_call_id,
+                    "name": function_name,
+                    "content": [{"type": "text", "text": content}],
+                },
+            })
+
+        return {"role": "user", "content_list": content_list}
+
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Transform OpenAI tool format to Snowflake tool format.
@@ -279,9 +486,18 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         if tool_choice:
             optional_params["tool_choice"] = self._transform_tool_choice(tool_choice)
 
+        # Transform messages from OpenAI format to Snowflake format.
+        # This handles role: "tool" -> role: "user" with tool_results content_list
+        # and assistant messages with tool_calls -> content_list with tool_use blocks.
+        # Note: We call _transform_messages here directly because Snowflake builds
+        # its own request dict (doesn't delegate to super().transform_request()).
+        # This is intentional - Snowflake routes through base_llm_http_handler,
+        # not openai_like handler, so there's no double-transformation risk.
+        transformed_messages = self._transform_messages(messages, model=model)
+
         return {
             "model": model,
-            "messages": messages,
+            "messages": transformed_messages,
             "stream": stream,
             **optional_params,
             **extra_body,
