@@ -381,6 +381,15 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}akto.svg`,
     tags: ["Security", "Safety", "Monitoring"],
   },
+  {
+    id: "xecguard",
+    name: "XecGuard",
+    description: "CyCraft XecGuard AI security platform for prompt injection detection, PII protection, and content bias filtering.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}xecguard.svg`,
+    tags: ["Security", "Prompt Injection", "PII"],
+    providerKey: "Xecguard",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

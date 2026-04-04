@@ -802,6 +802,44 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         </div>
                       )}
 
+                    {/* Provider-specific fields */}
+                    {guardrailProviderSpecificParams &&
+                      (() => {
+                        const currentProvider = Object.keys(guardrail_provider_map).find(
+                          (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
+                        );
+                        if (!currentProvider) return null;
+
+                        const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
+                        const providerFields = guardrailProviderSpecificParams[providerKey];
+                        if (!providerFields) return null;
+
+                        const skipFields = new Set(["ui_friendly_name", "optional_params", "api_key"]);
+
+                        return Object.entries(providerFields)
+                          .filter(([fieldKey]) => !skipFields.has(fieldKey))
+                          .map(([fieldKey, field]: [string, any]) => {
+                            const fieldValue = guardrailData.litellm_params?.[fieldKey];
+                            if (fieldValue === undefined || fieldValue === null) return null;
+
+                            let displayValue: string;
+                            if (typeof fieldValue === "boolean") {
+                              displayValue = fieldValue ? "True" : "False";
+                            } else if (Array.isArray(fieldValue)) {
+                              displayValue = fieldValue.join(", ");
+                            } else {
+                              displayValue = String(fieldValue);
+                            }
+
+                            return (
+                              <div key={fieldKey}>
+                                <Text className="font-medium">{fieldKey}</Text>
+                                <div>{displayValue}</div>
+                              </div>
+                            );
+                          });
+                      })()}
+
                     <div>
                       <Text className="font-medium">Created At</Text>
                       <div>{formatDate(guardrailData.created_at)}</div>
