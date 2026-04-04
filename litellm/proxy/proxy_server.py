@@ -392,6 +392,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     router as mcp_management_router,
 )
+from litellm.proxy.management_endpoints.mcp_usage_endpoints import (
+    router as mcp_usage_router,
+)
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
@@ -13786,6 +13789,7 @@ app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(webrtc_router)
 app.include_router(mcp_management_router)
+app.include_router(mcp_usage_router)
 app.include_router(mcp_byok_oauth_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
