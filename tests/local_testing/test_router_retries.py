@@ -643,6 +643,9 @@ def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
 
 
 def test_no_retry_for_not_found_error_404():
+    """
+    Test that NotFoundError is raised when there is only 1 deployment
+    """
     healthy_deployments = []
 
     router = Router(
@@ -667,13 +670,69 @@ def test_no_retry_for_not_found_error_404():
     )
     try:
         response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
+            error=error,
+            healthy_deployments=healthy_deployments,
+            all_deployments=router.model_list
         )
         pytest.fail(
-            "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
+            "Should have raised an exception - 404 NotFoundError with single deployment should not retry"
         )
     except Exception as e:
         print("got exception", e)
+
+
+def test_retry_for_not_found_error_404_with_multiple_deployments():
+    """
+    Test that NotFoundError allows retry when multiple deployments are available.
+
+    Covers the case where NotFoundError is due to provider-specific issues
+    (e.g., OpenRouter privacy policy, regional restrictions) rather than
+    the model actually not existing.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-oss-20b",
+            "litellm_params": {
+                "model": "openrouter/openai/gpt-oss-20b:free",
+                "api_key": "test-key-1",
+                "order": 1,
+            },
+        },
+        {
+            "model_name": "gpt-oss-20b",
+            "litellm_params": {
+                "model": "openai/openai/gpt-oss-20b",
+                "api_key": "test-key-2",
+                "api_base": "https://integrate.api.nvidia.com/v1",
+                "order": 2,
+            },
+        }
+    ]
+
+    healthy_deployments = [model_list[1]]  # Second deployment is healthy
+
+    router = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    # Simulate NotFoundError from first deployment (e.g., OpenRouter privacy policy)
+    error = litellm.NotFoundError(
+        message='OpenrouterException - {"error":{"message":"No endpoints found matching your data policy (Free model publication)","code":404}}',
+        model="gpt-oss-20b",
+        llm_provider="openrouter",
+    )
+
+    # Should NOT raise - should return True to allow retry with second deployment
+    try:
+        should_retry = router.should_retry_this_error(
+            error=error,
+            healthy_deployments=healthy_deployments,
+            all_deployments=model_list
+        )
+        assert should_retry is True, "should_retry_this_error should return True when multiple deployments exist"
+        print("✓ NotFoundError correctly allows retry with multiple deployments")
+    except Exception as e:
+        pytest.fail(
+            f"NotFoundError should allow retry when multiple deployments are available, but got exception: {e}"
+        )
 
 
 def test_no_retry_for_bad_request_error_400():
