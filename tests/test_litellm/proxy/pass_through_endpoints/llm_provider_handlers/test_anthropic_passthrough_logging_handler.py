@@ -614,4 +614,161 @@ class TestAnthropicBatchPassthroughCostTracking:
             )
             
             # Verify managed files hook was called
-            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files") 
+            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files")
+
+
+class TestAnthropicStreamingMetadataPreservation:
+    """Test that metadata (user_api_key_hash, team_id, etc.) is preserved in streaming kwargs."""
+
+    def setup_method(self):
+        self.start_time = datetime.now()
+        self.end_time = datetime.now()
+        self.mock_chunks = [
+            '{"type": "message_start", "message": {"id": "msg_123", "model": "claude-3-sonnet-20240229"}}',
+            '{"type": "content_block_delta", "delta": {"text": "Hello"}}',
+            '{"type": "message_stop"}',
+        ]
+        self.mock_metadata = {
+            "user_api_key_hash": "sk-test-hash-1234",
+            "user_api_key_alias": "my-test-key",
+            "user_api_key_team_id": "team-abc",
+            "user_api_key_org_id": "org-xyz",
+            "user_api_key_user_id": "user-123",
+        }
+
+    def _create_mock_logging_obj_with_metadata(self):
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "model": "claude-3-sonnet-20240229",
+            "litellm_params": {
+                "metadata": self.mock_metadata.copy(),
+            },
+            "passthrough_logging_payload": {
+                "url": "https://api.anthropic.com/v1/messages",
+                "request_body": {
+                    "model": "claude-3-sonnet-20240229",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                },
+            },
+        }
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        return mock_logging_obj
+
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    @patch.object(
+        AnthropicPassthroughLoggingHandler,
+        "_create_anthropic_response_logging_payload",
+    )
+    def test_streaming_handler_passes_litellm_params_in_kwargs(
+        self, mock_create_payload, mock_build_response
+    ):
+        """Verify that litellm_params with metadata is passed to _create_anthropic_response_logging_payload."""
+        mock_build_response.return_value = MagicMock()
+        mock_create_payload.return_value = {
+            "response_cost": 0.001,
+            "model": "claude-3-sonnet-20240229",
+            "litellm_params": {"metadata": self.mock_metadata.copy()},
+        }
+        logging_obj = self._create_mock_logging_obj_with_metadata()
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-sonnet-20240229"},
+            endpoint_type="messages",
+            start_time=self.start_time,
+            all_chunks=self.mock_chunks,
+            end_time=self.end_time,
+        )
+
+        # Verify _create_anthropic_response_logging_payload was called with kwargs containing litellm_params
+        mock_create_payload.assert_called_once()
+        call_kwargs = mock_create_payload.call_args[1]["kwargs"]
+        assert "litellm_params" in call_kwargs
+        assert "metadata" in call_kwargs["litellm_params"]
+        assert (
+            call_kwargs["litellm_params"]["metadata"]["user_api_key_hash"]
+            == "sk-test-hash-1234"
+        )
+        assert (
+            call_kwargs["litellm_params"]["metadata"]["user_api_key_alias"]
+            == "my-test-key"
+        )
+        assert (
+            call_kwargs["litellm_params"]["metadata"]["user_api_key_team_id"]
+            == "team-abc"
+        )
+
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    @patch.object(
+        AnthropicPassthroughLoggingHandler,
+        "_create_anthropic_response_logging_payload",
+    )
+    def test_streaming_handler_passes_passthrough_logging_payload(
+        self, mock_create_payload, mock_build_response
+    ):
+        """Verify that passthrough_logging_payload is included in kwargs when present."""
+        mock_build_response.return_value = MagicMock()
+        mock_create_payload.return_value = {"response_cost": 0.001}
+        logging_obj = self._create_mock_logging_obj_with_metadata()
+
+        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-sonnet-20240229"},
+            endpoint_type="messages",
+            start_time=self.start_time,
+            all_chunks=self.mock_chunks,
+            end_time=self.end_time,
+        )
+
+        call_kwargs = mock_create_payload.call_args[1]["kwargs"]
+        assert "passthrough_logging_payload" in call_kwargs
+        assert (
+            call_kwargs["passthrough_logging_payload"]["url"]
+            == "https://api.anthropic.com/v1/messages"
+        )
+
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    @patch.object(
+        AnthropicPassthroughLoggingHandler,
+        "_create_anthropic_response_logging_payload",
+    )
+    def test_streaming_handler_without_passthrough_logging_payload(
+        self, mock_create_payload, mock_build_response
+    ):
+        """Verify kwargs still contain litellm_params even when passthrough_logging_payload is absent."""
+        mock_build_response.return_value = MagicMock()
+        mock_create_payload.return_value = {"response_cost": 0.001}
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "model": "claude-3-sonnet-20240229",
+            "litellm_params": {
+                "metadata": self.mock_metadata.copy(),
+            },
+        }
+        logging_obj.litellm_call_id = "test-call-id"
+
+        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-sonnet-20240229"},
+            endpoint_type="messages",
+            start_time=self.start_time,
+            all_chunks=self.mock_chunks,
+            end_time=self.end_time,
+        )
+
+        call_kwargs = mock_create_payload.call_args[1]["kwargs"]
+        assert "litellm_params" in call_kwargs
+        assert "passthrough_logging_payload" not in call_kwargs
