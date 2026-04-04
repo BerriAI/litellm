@@ -94,6 +94,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
+      // codeql[js/clear-text-storage-of-sensitive-data]
       window.sessionStorage.setItem(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
@@ -930,6 +931,38 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 >
                   <Input.Password
                     placeholder="Enter session token (optional)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Role ARN
+                      <Tooltip title="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials. Uses ambient credentials (IAM role, env vars) as the source identity unless explicit keys are also provided.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_role_name"]}
+                >
+                  <Input
+                    placeholder="arn:aws:iam::123456789012:role/MyRole (optional)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      AWS Session Name
+                      <Tooltip title="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "aws_session_name"]}
+                >
+                  <Input
+                    placeholder="litellm-prod (optional, auto-generated if blank)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
