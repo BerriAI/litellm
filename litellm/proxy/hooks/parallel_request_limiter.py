@@ -711,7 +711,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 "global_max_parallel_requests", None
             )
             user_api_key = _metadata.get("user_api_key", None)
-            self.print_verbose(f"user_api_key: {user_api_key}")
+            self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
             if user_api_key is None:
                 return
 
