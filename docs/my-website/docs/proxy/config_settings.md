@@ -201,6 +201,7 @@ router_settings:
 | enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 | enable_key_alias_format_validation | boolean | If true, validates `key_alias` format on `/key/generate` and `/key/update`. Must be 2-255 chars, start/end with alphanumeric, only allow `a-zA-Z0-9_-/.@`. Default `false`. |
 | disable_copilot_system_to_assistant | boolean | **DEPRECATED** - GitHub Copilot API supports system prompts. |
+| default_team_params | object | Default parameters applied to every new team created via `/team/new` (including SSO auto-created teams). Only fills in fields not explicitly set in the request. Sub-fields: `max_budget` (float), `budget_duration` (string, e.g. `"30d"`), `tpm_limit` (integer), `rpm_limit` (integer), `team_member_permissions` (array of strings, e.g. `["/team/daily/activity", "/key/generate"]`), `models` (array of strings — only applied to SSO auto-created teams). |
 
 ### general_settings - Reference
 
