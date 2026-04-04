@@ -453,7 +453,7 @@ def _truncate_base64_in_string(value: str) -> str:
 
 ---
 
-### Fix 9：`model_call_details["original_response"]` 字符数上限
+### Fix 9：`model_call_details["original_response"]` 字符数上限 {#fix9}
 
 **文件**：`litellm/litellm_core_utils/litellm_logging.py` + `litellm/constants.py`
 
@@ -478,30 +478,140 @@ if (
 
 ---
 
-## 待修复：Fix 10 候选（`model_call_details["httpx_response"]`）
+### Fix 10（已修复）：释放 `model_call_details["httpx_response"]`
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
+
+两处代码将完整 `httpx.Response` 对象存入 `model_call_details`，持有 ~12MB 响应体直至 `Logging` 对象被 GC。
+
+修复方式：在 `_handle_google_genai_generate_content_response` 和 `_handle_anthropic_messages_response` 中使用 `.pop("httpx_response")` 替代 `.get()`，使用完立即释放。
+
+---
+
+### Fix 11（已修复）：截断 `complete_input_dict` 中的 `inline_data.data` base64
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
+
+Vertex AI 请求转换后 `complete_input_dict` 含 ~1.3MB/请求的 `inline_data.data` base64 字符串，经 `pre_call` → `additional_args` 存入 `model_call_details`，446+ 并发请求累积 606MB。
+
+修复方式：在 `_pre_call` 和 `post_call` 中均对 `complete_input_dict` 调用 `truncate_base64_in_messages` 截断 base64。streaming 路径中 `json.dumps(request_body)` 后 `del request_body` 提前释放。
+
+---
+
+### Fix 12：全链路截断 base64 + 回调完成后释放大对象
+
+**问题**：memray 分析显示 proxy 进程 12 分钟内从 54MB 增长到 220MB（~4 倍），根因是 base64 图片载荷（数 MB）在请求生命周期内被复制到多个位置且从未释放。
+
+Fix 1-11 逐点修复了各个泄漏源，但仍有多处遗漏路径。Fix 12 从全链路视角系统性修复剩余所有泄漏点。
+
+#### Fix 12a：`proxy_server_request["body"]` 截断 base64
 
 **文件**：
-- `litellm/llms/custom_httpx/llm_http_handler.py:1972`
-- `litellm/llms/gemini/google_genai/transformation.py:358`
+- `litellm/proxy/litellm_pre_call_utils.py`（主入口，所有 proxy 端点）
+- `litellm/proxy/proxy_server.py`（background worker 端点）
+- `litellm/proxy/pass_through_endpoints/pass_through_endpoints.py`（pass-through 端点）
 
-**问题**：两处代码将完整 `httpx.Response` 对象存入 `model_call_details`：
+`add_litellm_data_to_request()` 将 `copy.copy(data)` 存入 `proxy_server_request["body"]`，浅拷贝仍引用原始 base64 字符串。
 
 ```python
-logging_obj.model_call_details["httpx_response"] = response
+# 修复前
+data["proxy_server_request"] = {
+    ...
+    "body": copy.copy(data),        # ← 浅拷贝，引用原始 base64
+}
+
+# 修复后
+data["proxy_server_request"] = {
+    ...
+    "body": truncate_base64_in_messages(copy.copy(data)),  # ← 截断 base64
+}
 ```
 
-`httpx.Response` 持有：
-- `.content`：响应体原始字节（~12MB）
-- `.text`：响应体字符串（如已访问则缓存在对象内）
+#### Fix 12b：`_pre_call`/`post_call` 存储 `input` 时截断 base64
 
-使用方 `_handle_google_genai_generate_content_response`（litellm_logging.py:3420）在 logging 阶段调用 `httpx_response.json()`，每次都重新解析创建新的 ~7.5MB 解析 dict。`httpx_response` 本身则在 `Logging` 对象生命周期内一直持有。
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
 
-**建议修复**：在 `_handle_google_genai_generate_content_response` 使用完后删除该引用：
+`_pre_call` 和 `post_call` 将 `input`（messages 列表/dict，可能含内嵌 base64 图片）直接存入 `model_call_details["input"]`。
+
 ```python
-dict_result = httpx_response.json()
-del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
+# 修复后
+self.model_call_details["input"] = (
+    truncate_base64_in_messages(input)
+    if isinstance(input, (list, dict))
+    else input
+)
 ```
-或在存入时仅保留 `.json()` 的解析结果（截断 base64 后），不存储 httpx Response 对象本身。
+
+#### Fix 12c：`error_logs` 不再存储 `locals()`
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
+
+`pre_call` 和 `post_call` 中 `litellm.error_logs["PRE_CALL"] = locals()` 会将所有函数参数（含多 MB base64 载荷）快照到全局 dict。
+
+```python
+# 修复前
+litellm.error_logs["PRE_CALL"] = locals()
+
+# 修复后
+litellm.error_logs["PRE_CALL"] = {
+    "model": model,
+    "call_type": getattr(self, "call_type", None),
+}
+```
+
+#### Fix 12d：`_cleanup_large_data()` — 回调完成后主动释放大对象
+
+**文件**：`litellm/litellm_core_utils/litellm_logging.py`
+
+新增 `_cleanup_large_data()` 方法，在四个 handler（`success_handler`、`async_success_handler`、`failure_handler`、`async_failure_handler`）的所有回调执行完毕后调用，主动释放 `model_call_details` 中的大字段：
+
+```python
+def _cleanup_large_data(self):
+    _keys_to_pop = (
+        "input",
+        "original_response",
+        "complete_streaming_response",
+        "complete_response",
+        "additional_args",
+    )
+    for key in _keys_to_pop:
+        self.model_call_details.pop(key, None)
+
+    # async_complete_streaming_response 用作重入守卫，
+    # 替换为 True 保持守卫有效同时释放响应对象
+    if "async_complete_streaming_response" in self.model_call_details:
+        self.model_call_details["async_complete_streaming_response"] = True
+
+    # 清除 proxy_server_request 中的 body 副本
+    _litellm_params = self.model_call_details.get("litellm_params")
+    if isinstance(_litellm_params, dict):
+        _psr = _litellm_params.get("proxy_server_request")
+        if isinstance(_psr, dict):
+            _psr.pop("body", None)
+
+    # 清除 streaming chunks
+    self.streaming_chunks.clear()
+    self.sync_streaming_chunks.clear()
+```
+
+**设计要点**：
+- `raw_request_typed_dict` 故意不清除：`ahealth_check` 在 failure handler 之后仍需读取该字段，且它只是小 dict（headers + URL），不是泄漏源
+- `async_complete_streaming_response` 替换为 `True` 而非删除：保持重入守卫功能，避免 `async_success_handler` 被重复处理
+
+#### Fix 12f：清除 `request.scope` 缓存的 parsed body
+
+**文件**：`litellm/proxy/common_utils/http_parsing_utils.py`
+
+新增 `_safe_clear_request_parsed_body()` 函数，在 `litellm_pre_call_utils` 提取完请求数据后清除 `request.scope["parsed_body"]` 缓存，避免多 MB 请求体在整个请求生命周期内驻留。
+
+```python
+def _safe_clear_request_parsed_body(request: Optional[Request]) -> None:
+    try:
+        if request is not None and hasattr(request, "scope"):
+            request.scope.pop("parsed_body", None)
+    except Exception:
+        pass
+```
 
 ---
 
@@ -519,6 +629,7 @@ del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
 | **Fix 11 后高并发压测（43.7s）** | **205.878MB（max = current）** | **—** | ✅ **工作集，无积压** |
 | **Fix 11 后高并发压测（624.7s）** | **629.867MB（75% of 840.735MB max）** | **有界，GC 回收中** | ✅ **稳定** |
 | **Fix 11 后极限压测（3413s→3531s）** | **1.468GB→2.625GB（36%→64% of 4.093GB max）** | **流量突增 ~27 req/s** | ✅ **有界，GC 可回收** |
+| **Fix 12 后（全链路截断 + 回调后释放）** | **预期进一步降低** | **回调结束后大对象立即释放** | ✅ **系统性修复** |
 
 ---
 
@@ -536,6 +647,11 @@ del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
 | `convert_to_anthropic_image_obj` 347MB（早期）| 工作集：str.split 创建 base64 副本，转换后释放 | 无需修复（早期） |
 | `model_call_details["httpx_response"]` | 持久：httpx Response 对象（含 ~12MB 响应体）| Fix 10 |
 | `model_call_details["additional_args"]["complete_input_dict"]` 606MB（446+ allocs）| 持久：Vertex 请求体 `inline_data.data` ~1.3MB/请求，在 Logging 对象存活期积压 | Fix 11 |
+| `proxy_server_request["body"]` 浅拷贝引用原始 base64 | 持久：`copy.copy(data)` 仍引用原始 base64 对象 | Fix 12a |
+| `model_call_details["input"]` 含内嵌 base64 图片 | 持久：messages 列表中 base64 图片在 Logging 对象存活期持有 | Fix 12b |
+| `litellm.error_logs["PRE_CALL"/"POST_CALL"] = locals()` | 持久：全局 dict 快照全部函数参数含 base64 | Fix 12c |
+| `model_call_details` 全部大字段在回调结束后仍驻留 | 持久：input/original_response/streaming_response 等从未主动释放 | Fix 12d |
+| `request.scope["parsed_body"]` 缓存的请求体 | 持久：多 MB 请求体在整个请求生命周期内驻留 | Fix 12f |
 
 ---
 
@@ -561,6 +677,9 @@ del self.model_call_details["httpx_response"]  # 释放 ~12MB 响应体
 | `test_handle_anthropic_messages_response_no_httpx_response_uses_result` | httpx_response 缺失时回退到 `result` | Fix 10 |
 | `test_pre_call_strips_base64_from_complete_input_dict` | `_pre_call` 存储前截断 `complete_input_dict` 中的 inline_data base64 | Fix 11 |
 | `test_pre_call_no_complete_input_dict_unchanged` | 无 `complete_input_dict` 时 additional_args 原样存储 | Fix 11 |
+| `test_async_success_handler_sets_standard_logging_object_for_pass_through_endpoints` | `_cleanup_large_data` 后 `async_complete_streaming_response` 仍为 truthy（重入守卫有效） | Fix 12d |
+| `test_async_success_handler_prevents_reprocessing_for_pass_through_endpoints` | 回调完成后 cleanup 不影响重入守卫 | Fix 12d |
+| `test_ahealth_check_failure_masks_raw_request_headers` | failure cleanup 后 `raw_request_typed_dict` 仍可被 `ahealth_check` 读取 | Fix 12d |
 
 ### `tests/test_litellm/caching/test_caching_handler.py`
 
@@ -600,7 +719,9 @@ MAX_ORIGINAL_RESPONSE_LOG_CHARS = int(os.getenv("MAX_ORIGINAL_RESPONSE_LOG_CHARS
 | `9b9aef5890` | Fix 8：`_BARE_BASE64_RE` 截断裸 base64 字符串 |
 | `cb755d68ef` | Fix 9：`MAX_ORIGINAL_RESPONSE_LOG_CHARS`，`original_response` 字符数上限 |
 | `cd8f9769f3` | Fix 10：`.pop("httpx_response")` 释放 httpx Response 对象（~12MB/次）|
-| *(current)* | Fix 11：`_pre_call` 存储 `complete_input_dict` 前截断 `inline_data.data` base64（~1.3MB/次）|
+| `1bde5c9b93` | Fix 11：`_pre_call` 存储 `complete_input_dict` 前截断 `inline_data.data` base64（~1.3MB/次）|
+| `438ee30833` | Fix 11 修订：`post_call` 也截断 `complete_input_dict` + streaming `del request_body` |
+| `dcea6c2c7c` | Fix 12：全链路截断 base64 + `_cleanup_large_data()` 回调后释放大对象 |
 
 ---
 
@@ -608,8 +729,8 @@ MAX_ORIGINAL_RESPONSE_LOG_CHARS = int(os.getenv("MAX_ORIGINAL_RESPONSE_LOG_CHARS
 
 1. **大文件响应不应进入 logging pipeline**：图片/音频生成类接口响应体可达数百 MB，应在进入 `Logging` 对象之前统一截断。
 
-2. **全局调试 dict 避免持有业务数据**：`litellm.error_logs` 是模块级 dict，高并发下易成内存陷阱。应在存入前清理大字段，或改用固定大小循环缓冲区。
+2. **~~全局调试 dict 避免持有业务数据~~**（✅ Fix 12c 已修复）：`litellm.error_logs` 不再存储 `locals()`，改为仅记录 `model` + `call_type`。
 
-3. **不要把 `httpx.Response` 对象存入 `model_call_details`**：httpx Response 持有完整响应体字节。如需用于 logging，应立即提取所需内容（如解析后截断的 dict），再存入 `model_call_details`，并在使用后删除引用。
+3. **~~不要把 `httpx.Response` 对象存入 `model_call_details`~~**（✅ Fix 10 已修复）：使用完后立即 `.pop()` 释放。
 
-4. **`model_call_details` 生命周期问题**：所有 logging 数据持续保存至所有 callbacks 完成。可考虑在 callbacks 执行完毕后主动 `del` 大字段（`original_response`、`httpx_response`）。
+4. **~~`model_call_details` 生命周期问题~~**（✅ Fix 12d 已修复）：`_cleanup_large_data()` 在四个 handler 的回调全部完成后主动释放 `input`、`original_response`、`complete_streaming_response`、`additional_args` 等大字段，以及 `proxy_server_request.body` 和 streaming chunks。
