@@ -2420,7 +2420,7 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
 
     async def fake_perform_health_check(model_list, details, max_concurrency=None):
         called_model_lists.append(copy.deepcopy(model_list))
-        return (["healthy"], ["unhealthy"])
+        return (["healthy"], ["unhealthy"], {})
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
@@ -2471,7 +2471,7 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
     async def fake_perform_health_check(model_list, details, max_concurrency=None):
         called_model_lists.append(copy.deepcopy(model_list))
-        return (["healthy"], [])
+        return (["healthy"], [], {})
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
