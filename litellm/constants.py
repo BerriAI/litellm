@@ -1344,6 +1344,7 @@ LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
@@ -1396,6 +1397,10 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "true",
     "1",
 ]  # always replace existing jobs
+
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# This will run tag spcific tasks at a later time to smooth QPS
+DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
