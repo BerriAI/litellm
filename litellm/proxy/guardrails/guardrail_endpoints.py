@@ -724,6 +724,30 @@ def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
+    """Return the list of team_ids the caller belongs to (empty list if none)."""
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if not user_api_key_dict.user_id or prisma_client is None:
+        return []
+    user_obj = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if user_obj is None or not user_obj.teams:
+        return []
+    return [t for t in user_obj.teams if t]
+
+
 def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
     guardrail_info = _parse_json_field(row.guardrail_info) or {}
     team_guardrail = row.team_id is not None
@@ -756,27 +780,49 @@ async def list_guardrail_submissions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    List team guardrail submissions (admin only). Returns only guardrails with a team_id.
+    List team guardrail submissions. Returns only guardrails with a team_id.
+
+    Admins see all submissions. Non-admin users see submissions for teams they are
+    a member of.
 
     Status values: pending_review (team-registered, awaiting approval), active (approved), rejected.
 
     Optional filters:
     - status: pending_review | active | rejected
-    - team_id: filter by specific team
+    - team_id: filter by specific team (non-admins must be a member of that team)
     - search: name/description
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    visible_team_ids: Optional[List[str]] = None
+    if not is_admin:
+        visible_team_ids = await _get_user_team_ids(user_api_key_dict)
+        if team_id is not None and team_id not in visible_team_ids:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You are not a member of team {team_id!r}",
+            )
+
     try:
-        # Single query: fetch all team guardrails (team_id is not null)
+        where_clause: Dict[str, Any] = {"team_id": {"not": None}}
+        if visible_team_ids is not None:
+            if not visible_team_ids:
+                # Non-admin with no team memberships: nothing visible.
+                return ListGuardrailSubmissionsResponse(
+                    submissions=[],
+                    summary=GuardrailSubmissionSummary(
+                        total=0, pending_review=0, active=0, rejected=0
+                    ),
+                )
+            where_clause["team_id"] = {"in": visible_team_ids}
+
+        # Single query: fetch team guardrails visible to the caller
         all_team_rows = await prisma_client.db.litellm_guardrailstable.find_many(
-            where={"team_id": {"not": None}},
+            where=where_clause,
             order={"created_at": "desc"},
         )
 
@@ -837,14 +883,13 @@ async def get_guardrail_submission(
     guardrail_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Get a single guardrail submission by id (admin only)."""
+    """Get a single guardrail submission by id. Non-admins may only access submissions for teams they belong to."""
     from litellm.proxy.proxy_server import prisma_client
-
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Admin access required")
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
         row = await prisma_client.db.litellm_guardrailstable.find_unique(
@@ -854,6 +899,13 @@ async def get_guardrail_submission(
             raise HTTPException(
                 status_code=404, detail="Guardrail submission not found"
             )
+        if not is_admin:
+            visible_team_ids = await _get_user_team_ids(user_api_key_dict)
+            if row.team_id is None or row.team_id not in visible_team_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not a member of the team that owns this submission",
+                )
         return _row_to_submission_item(row)
     except HTTPException:
         raise

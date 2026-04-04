@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
-import { Dropdown, Tabs } from "antd";
+import { Button, Dropdown, Tabs } from "antd";
 import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
@@ -240,7 +239,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
           {
             key: "playground",
             label: "Test Playground",
-            disabled: !accessToken || guardrailsList.length === 0,
+            disabled: !accessToken,
             children: (
               <GuardrailTestPlayground
                 guardrailsList={guardrailsList}
