@@ -79,6 +79,7 @@ class DistributedAutoQueueRedis:
         self._scale_down_script = redis.register_script(_LUA_SCALE_DOWN)
         self._admit_or_enqueue_script = redis.register_script(_LUA_ADMIT_OR_ENQUEUE)
         self._release_and_claim_next_script = redis.register_script(_LUA_RELEASE_AND_CLAIM_NEXT)
+        self._abandon_queued_request_script = redis.register_script(_LUA_ABANDON_QUEUED_REQUEST)
 
     async def try_acquire(self, model: str) -> bool:
         result = await self._try_acquire_script(
@@ -206,6 +207,30 @@ class DistributedAutoQueueRedis:
             claimed_request_id=claimed_request_id,
             claim_token=returned_claim_token,
         )
+
+    async def abandon_queued_request(
+        self,
+        model: str,
+        request_id: str,
+        *,
+        terminal_state: str,
+    ) -> bool:
+        now_ms = current_time_ms()
+        result = await self._abandon_queued_request_script(
+            keys=[
+                queue_key(model),
+                request_key(request_id),
+                claim_key(request_id),
+                active_lease_key(request_id),
+            ],
+            args=[
+                DEFAULT_DATA_TTL,
+                now_ms,
+                terminal_state,
+                request_id,
+            ],
+        )
+        return bool(result)
 
 
 _LUA_TRY_ACQUIRE = """
@@ -427,6 +452,27 @@ while true do
         end
     end
 end
+"""
+
+
+_LUA_ABANDON_QUEUED_REQUEST = """
+local state = redis.call('HGET', KEYS[2], 'state')
+if not state or state ~= 'queued' then
+    return 0
+end
+
+redis.call(
+    'HSET',
+    KEYS[2],
+    'state', ARGV[3],
+    'claim_token', '',
+    'finished_at_ms', tostring(ARGV[2])
+)
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[1]))
+redis.call('ZREM', KEYS[1], ARGV[4])
+redis.call('DEL', KEYS[3])
+redis.call('DEL', KEYS[4])
+return 1
 """
 
 

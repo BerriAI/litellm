@@ -367,6 +367,7 @@ class AutoQueueMiddleware:
                 ceiling=CEILING,
                 scale_up_threshold=SCALE_UP_THRESHOLD,
                 scale_down_step=SCALE_DOWN_STEP,
+                max_queue_depth=self._max_queue_depth,
             )
         return self._aqr
 
@@ -398,18 +399,28 @@ class AutoQueueMiddleware:
         model: str,
         request_id: str,
         terminal_state: str,
-    ) -> None:
+    ) -> bool:
+        abandon_queued_request = getattr(aqr, "abandon_queued_request", None)
+        if callable(abandon_queued_request):
+            return bool(
+                await abandon_queued_request(
+                    model,
+                    request_id,
+                    terminal_state=terminal_state,
+                )
+            )
+
         redis_client = getattr(aqr, "redis", None)
         if redis_client is None:
-            return
+            return False
 
         raw_state = await redis_client.hgetall(request_key(request_id))
         if not raw_state:
-            return
+            return False
 
         state = request_state_from_hash(raw_state)
         if state.state != "queued":
-            return
+            return False
 
         state.state = terminal_state
         state.claim_token = None
@@ -422,6 +433,7 @@ class AutoQueueMiddleware:
         pipe.delete(claim_key(request_id))
         pipe.delete(active_lease_key(request_id))
         await pipe.execute()
+        return True
 
     def _wake_local_request(self, model: str, request_id: Optional[str]) -> bool:
         if not request_id:
@@ -447,6 +459,9 @@ class AutoQueueMiddleware:
         deadline = loop.time() + max(timeout, 0.0)
 
         while True:
+            if wake_state.is_set and wake_state.reason != _QueueWakeReason.TRANSFERRED:
+                return None
+
             state = await self._load_request_state(aqr, request_id)
             if state is not None and state.state in {"claimed", "active"}:
                 queue.remove(request_id)
@@ -482,7 +497,7 @@ class AutoQueueMiddleware:
             return
 
         if state.state == "queued":
-            await self._safe_redis_call(
+            finalized = await self._safe_redis_call(
                 self._finalize_locally_queued_request(
                     aqr,
                     model=model,
@@ -492,7 +507,13 @@ class AutoQueueMiddleware:
                 model=model,
                 send=send,
             )
-            return
+            if finalized is None:
+                return
+            if finalized:
+                return
+            state = await self._load_request_state(aqr, request_id)
+            if state is None:
+                return
 
         if state.state in {"claimed", "active"}:
             transfer = await self._safe_redis_call(

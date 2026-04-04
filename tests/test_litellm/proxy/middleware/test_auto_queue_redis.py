@@ -51,6 +51,7 @@ async def aqr_factory(redis):
         ceiling: int = 10,
         scale_up_threshold: int = 3,
         scale_down_step: int = 1,
+        max_queue_depth: int = 100,
     ):
         return DistributedAutoQueueRedis(
             redis=redis,
@@ -58,6 +59,7 @@ async def aqr_factory(redis):
             ceiling=ceiling,
             scale_up_threshold=scale_up_threshold,
             scale_down_step=scale_down_step,
+            max_queue_depth=max_queue_depth,
         )
 
     return _factory
@@ -307,6 +309,39 @@ async def test_release_and_claim_next_skips_stale_queue_members(aqr_factory, red
     assert request_state_from_hash(await redis.hgetall(request_key("req-2"))).state == "claimed"
 
 
+async def test_abandon_queued_request_does_not_overwrite_claimed_state(aqr_factory, redis):
+    aqr = aqr_factory(default_max_concurrent=1)
+    model = "glm-5.1"
+
+    await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-1",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(),
+        worker_id="worker-a",
+    )
+    await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-2",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(20_000),
+        worker_id="worker-b",
+    )
+
+    transfer = await aqr.release_and_claim_next(model, "req-1")
+    assert transfer.claimed_request_id == "req-2"
+
+    abandoned = await aqr.abandon_queued_request(
+        model,
+        "req-2",
+        terminal_state="cancelled",
+    )
+
+    assert abandoned is False
+    assert request_state_from_hash(await redis.hgetall(request_key("req-2"))).state == "claimed"
+    assert await redis.get(claim_key("req-2")) == transfer.claim_token.encode()
+
+
 async def test_release_and_claim_next_uses_registered_lua_script(aqr_factory, monkeypatch):
     aqr = aqr_factory(default_max_concurrent=1)
     captured = {}
@@ -484,7 +519,7 @@ async def test_middleware_preserves_autoq_configuration(monkeypatch):
     async def app(scope, receive, send):
         return None
 
-    middleware = module.AutoQueueMiddleware(app, enabled=False)
+    middleware = module.AutoQueueMiddleware(app, enabled=False, max_queue_depth=17)
     middleware._aqr = None
     middleware._ensure_aqr()
 
@@ -493,3 +528,132 @@ async def test_middleware_preserves_autoq_configuration(monkeypatch):
     assert captured["ceiling"] == 11
     assert captured["scale_up_threshold"] == 13
     assert captured["scale_down_step"] == 3
+    assert captured["max_queue_depth"] == 17
+
+
+@pytest.mark.parametrize(
+    "wake_reason",
+    [
+        "disconnected",
+        "shutdown",
+    ],
+)
+async def test_wait_for_distributed_claim_honors_terminal_wake_reason_before_claim(
+    monkeypatch,
+    wake_reason,
+):
+    module = importlib.import_module("litellm.proxy.middleware.auto_queue_middleware")
+    request_id = "req-1"
+    model = "glm-5.1"
+
+    async def app(scope, receive, send):
+        return None
+
+    middleware = module.AutoQueueMiddleware(app, enabled=False)
+    queue = module.ModelQueue()
+    wake_state = module._WakeState()
+    queue.add(request_id, wake_state, priority=10)
+    queue.remove(request_id, reason=wake_reason)
+
+    async def fake_load_request_state(aqr, queued_request_id):
+        assert queued_request_id == request_id
+        return AutoQueueRequestState(
+            request_id=request_id,
+            model=model,
+            priority=10,
+            state="claimed",
+            enqueued_at_ms=1_700_000_000_000,
+            deadline_at_ms=1_700_000_010_000,
+            worker_id="worker-a",
+            claim_token="claim-1",
+            claimed_at_ms=1_700_000_000_100,
+        )
+
+    monkeypatch.setattr(middleware, "_load_request_state", fake_load_request_state)
+
+    result = await middleware._wait_for_distributed_claim(
+        object(),
+        model=model,
+        request_id=request_id,
+        queue=queue,
+        wake_state=wake_state,
+        timeout=0.1,
+    )
+
+    assert result is None
+
+
+async def test_abandon_waiting_request_releases_claimed_request_when_queue_cleanup_loses_race(
+    monkeypatch,
+):
+    module = importlib.import_module("litellm.proxy.middleware.auto_queue_middleware")
+    observed_calls = []
+
+    class FakeRedisWrapper:
+        redis = None
+
+        async def abandon_queued_request(self, model, request_id, *, terminal_state):
+            observed_calls.append(("abandon_queued_request", model, request_id, terminal_state))
+            return False
+
+        async def release_and_claim_next(self, model, request_id, **kwargs):
+            observed_calls.append(("release_and_claim_next", model, request_id, kwargs))
+            return ReleaseTransfer(claimed_request_id=None, claim_token=None)
+
+    async def app(scope, receive, send):
+        return None
+
+    middleware = module.AutoQueueMiddleware(app, aqr=FakeRedisWrapper(), enabled=False)
+    state_sequence = iter(
+        [
+            AutoQueueRequestState(
+                request_id="req-1",
+                model="glm-5.1",
+                priority=10,
+                state="queued",
+                enqueued_at_ms=1_700_000_000_000,
+                deadline_at_ms=1_700_000_010_000,
+                worker_id="worker-a",
+            ),
+            AutoQueueRequestState(
+                request_id="req-1",
+                model="glm-5.1",
+                priority=10,
+                state="claimed",
+                enqueued_at_ms=1_700_000_000_000,
+                deadline_at_ms=1_700_000_010_000,
+                worker_id="worker-a",
+                claim_token="claim-1",
+                claimed_at_ms=1_700_000_000_100,
+            ),
+        ]
+    )
+
+    async def fake_load_request_state(aqr, request_id):
+        return next(state_sequence, None)
+
+    monkeypatch.setattr(middleware, "_load_request_state", fake_load_request_state)
+
+    async def fake_send(message):
+        return None
+
+    await middleware._abandon_waiting_request(
+        middleware._aqr,
+        model="glm-5.1",
+        request_id="req-1",
+        terminal_state="cancelled",
+        send=fake_send,
+    )
+
+    assert observed_calls == [
+        ("abandon_queued_request", "glm-5.1", "req-1", "cancelled"),
+        (
+            "release_and_claim_next",
+            "glm-5.1",
+            "req-1",
+            {
+                "terminal_state": "cancelled",
+                "allow_missing_active": True,
+            },
+        ),
+    ]
