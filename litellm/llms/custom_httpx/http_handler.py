@@ -468,7 +468,8 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
+            verbose_logger.warning(f"{type(e).__name__} on POST {mask_sensitive_info(url)}: {e}")
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -540,7 +541,8 @@ class AsyncHTTPHandler:
             response = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
+            verbose_logger.warning(f"{type(e).__name__} on PUT {mask_sensitive_info(url)}: {e}")
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -606,7 +608,8 @@ class AsyncHTTPHandler:
             response = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
+            verbose_logger.warning(f"{type(e).__name__} on PATCH {url}: {e}")
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -672,7 +675,8 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
+            verbose_logger.warning(f"{type(e).__name__} on DELETE {url}: {e}")
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
