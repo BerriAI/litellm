@@ -163,25 +163,6 @@ class AktoGuardrail(CustomGuardrail):
         return body
 
     @staticmethod
-    def build_response_body(
-        inputs: GenericGuardrailAPIInputs,
-        request_data: Optional[dict] = None,
-    ) -> Dict[str, Any]:
-        """Build the LLM response body, preferring the actual model response if available."""
-        model_response = request_data.get("response") if request_data else None
-        if model_response is not None and hasattr(model_response, "model_dump"):
-            return model_response.model_dump()
-
-        texts = inputs.get("texts", [])
-        if texts:
-            return {
-                "choices": [
-                    {"message": {"content": t, "role": "assistant"}} for t in texts
-                ]
-            }
-        return {}
-
-    @staticmethod
     def build_tag_metadata(request_data: dict) -> Dict[str, str]:
         """Build tag/metadata dict with user_id and team_id for Akto tracking."""
         tag: Dict[str, str] = {"gen-ai": "Gen AI"}
@@ -201,22 +182,16 @@ class AktoGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
-        *,
-        status_code: int = 200,
-        include_response: bool = False,
     ) -> Dict[str, Any]:
-        """Build the MIRRORING payload for Akto's HTTP proxy endpoint."""
+        """Build the MIRRORING payload for Akto's guardrail validation endpoint.
+
+        Response headers and payload are empty — the guardrail only sends
+        the request for validation, not the response.
+        """
         request_path = self.extract_request_path(request_data)
         request_headers = self.build_request_headers(request_data)
         request_body = self.build_request_body(inputs, request_data)
         tag = self.build_tag_metadata(request_data)
-
-        response_payload = json.dumps({})
-        response_headers: Dict[str, str] = {}
-        if include_response:
-            response_body = self.build_response_body(inputs, request_data)
-            response_payload = json.dumps(response_body)
-            response_headers = {"content-type": "application/json"}
 
         # Extract client IP from proxy headers
         ip = ""
@@ -236,16 +211,16 @@ class AktoGuardrail(CustomGuardrail):
         return {
             "path": request_path,
             "requestHeaders": json.dumps(request_headers),
-            "responseHeaders": json.dumps(response_headers),
+            "responseHeaders": json.dumps({}),
             "method": "POST",
             "requestPayload": json.dumps(request_body),
-            "responsePayload": response_payload,
+            "responsePayload": json.dumps({}),
             "ip": ip,
             "destIp": "127.0.0.1",
             "time": str(int(datetime.now().timestamp() * 1000)),
-            "statusCode": str(status_code),
+            "statusCode": "200",
             "type": "HTTP/1.1",
-            "status": str(status_code),
+            "status": "200",
             "akto_account_id": self.akto_account_id,
             "akto_vxlan_id": self.akto_vxlan_id,
             "is_pending": "false",

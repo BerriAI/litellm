@@ -181,14 +181,13 @@ def test_build_akto_payload(akto_validate, sample_inputs, sample_request_data):
     assert len(payload["time"]) >= 13
 
 
-def test_build_akto_payload_with_response(
+def test_build_akto_payload_response_always_empty(
     akto_validate, sample_inputs, sample_request_data
 ):
-    payload = akto_validate.build_akto_payload(
-        sample_inputs, sample_request_data, include_response=True
-    )
-    resp_body = json.loads(payload["responsePayload"])
-    assert "choices" in resp_body
+    payload = akto_validate.build_akto_payload(sample_inputs, sample_request_data)
+    assert payload["responsePayload"] == json.dumps({})
+    assert payload["responseHeaders"] == json.dumps({})
+    assert payload["statusCode"] == "200"
 
 
 def test_build_akto_payload_custom_ids(sample_request_data):
