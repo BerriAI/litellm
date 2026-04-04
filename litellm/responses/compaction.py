@@ -127,7 +127,7 @@ async def maybe_compact_context(
     if custom_llm_provider is not None:
         acompletion_kwargs["custom_llm_provider"] = custom_llm_provider
     if litellm_metadata is not None:
-        acompletion_kwargs["metadata"] = litellm_metadata
+        acompletion_kwargs["metadata"] = {**litellm_metadata}
 
     summary_response = await litellm.acompletion(**acompletion_kwargs)
 

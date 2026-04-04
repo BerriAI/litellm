@@ -2104,7 +2104,6 @@ class TestCompactionOutputFormat:
         compaction = result[1]
         assert compaction["type"] == "compaction"
         assert compaction["id"].startswith("cmp_")
-        assert compaction["created_by"] is None
         assert "content" not in compaction
         # Verify encrypted_content is base64-encoded summary
         decoded = base64.b64decode(compaction["encrypted_content"]).decode("utf-8")
@@ -2151,7 +2150,7 @@ class TestCompactionInputProcessing:
             {"type": "message", "role": "user", "content": "old msg 1"},
             {"type": "message", "role": "user", "content": "old msg 2"},
             {"type": "message", "role": "assistant", "content": "assistant reply"},
-            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted, "created_by": None},
+            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted, },
             {"type": "message", "role": "user", "content": "new question"},
         ]
 
@@ -2160,10 +2159,10 @@ class TestCompactionInputProcessing:
             responses_api_request={},
         )
 
-        # Should be: [user(decoded_summary), assistant(reply), user(new question)]
+        # Should be: [system(decoded_summary), assistant(reply), user(new question)]
         assert len(messages) == 3
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == summary
+        assert messages[0]["role"] == "system"
+        assert summary in messages[0]["content"]
         assert messages[1]["role"] == "assistant"
         assert messages[1]["content"] == "assistant reply"
         assert messages[2]["role"] == "user"
@@ -2177,7 +2176,7 @@ class TestCompactionInputProcessing:
         encrypted = base64.b64encode(summary.encode("utf-8")).decode("utf-8")
 
         input_items = [
-            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted, "created_by": None},
+            {"type": "compaction", "id": "cmp_abc", "encrypted_content": encrypted},
             {"type": "message", "role": "user", "content": "follow up"},
         ]
 
@@ -2187,8 +2186,8 @@ class TestCompactionInputProcessing:
         )
 
         assert len(messages) == 2
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == summary
+        assert messages[0]["role"] == "system"
+        assert summary in messages[0]["content"]
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "follow up"
 
@@ -2206,8 +2205,8 @@ class TestCompactionInputProcessing:
         )
 
         assert len(messages) == 3
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == "plaintext summary"
+        assert messages[0]["role"] == "system"
+        assert "plaintext summary" in messages[0]["content"]
         assert messages[1]["role"] == "assistant"
         assert messages[1]["content"] == "prior reply"
         assert messages[2]["role"] == "user"
@@ -2237,8 +2236,8 @@ class TestCompactionInputProcessing:
 
         # Should use new_summary, keep mid reply (predecessor of last compaction), then latest question
         assert len(messages) == 3
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == "new summary"
+        assert messages[0]["role"] == "system"
+        assert "new summary" in messages[0]["content"]
         assert messages[1]["role"] == "assistant"
         assert messages[1]["content"] == "mid reply"
         assert messages[2]["role"] == "user"
