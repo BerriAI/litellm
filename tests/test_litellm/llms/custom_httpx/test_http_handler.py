@@ -658,3 +658,49 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         assert req.headers.get("User-Agent") == "Claude Code"
     finally:
         await handler.close()
+
+
+class TestDelHandlerRemoved:
+    """
+    Verify that AsyncHTTPHandler and HTTPHandler do NOT close the underlying
+    httpx client when the wrapper is garbage-collected.
+
+    Prior to this fix, __del__ called self.close(), which propagated into
+    the TCP connection pool and killed in-flight streaming responses whenever
+    the TTL cache evicted a client.  See #24929.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_handler_no_close_on_del(self):
+        """AsyncHTTPHandler should NOT close the httpx client on __del__."""
+        handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=10.0))
+
+        # Grab reference to the underlying client
+        client = handler.client
+
+        # Simulate GC / TTL eviction
+        del handler
+
+        # The client should still be open (not closed by __del__)
+        assert not client.is_closed
+
+        # Cleanup
+        await client.aclose()
+
+    def test_sync_handler_no_close_on_del(self):
+        """HTTPHandler should NOT close the httpx client on __del__."""
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        handler = HTTPHandler(timeout=httpx.Timeout(timeout=10.0))
+
+        # Grab reference to the underlying client
+        client = handler.client
+
+        # Simulate GC / TTL eviction
+        del handler
+
+        # The client should still be open (not closed by __del__)
+        assert not client.is_closed
+
+        # Cleanup
+        client.close()

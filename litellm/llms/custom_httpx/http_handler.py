@@ -725,12 +725,6 @@ class AsyncHTTPHandler:
         response.raise_for_status()
         return response
 
-    def __del__(self) -> None:
-        try:
-            asyncio.get_running_loop().create_task(self.close())
-        except Exception:
-            pass
-
     @staticmethod
     def _create_async_transport(
         ssl_context: Optional[ssl.SSLContext] = None,
@@ -1181,12 +1175,6 @@ class HTTPHandler:
             raise e
         except Exception as e:
             raise e
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
 
     def _create_sync_transport(self) -> Optional[HTTPTransport]:
         """
