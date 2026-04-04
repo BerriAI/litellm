@@ -363,6 +363,9 @@ class LiteLLM_Proxy_MCP_Handler:
         target_format: Literal["responses", "chat"] = "responses",
     ) -> List[Any]:
         """Transform MCP tools to OpenAI-compatible format."""
+        if not mcp_tools:
+            return []
+
         from litellm.experimental_mcp_client.tools import (
             transform_mcp_tool_to_openai_responses_api_tool,
             transform_mcp_tool_to_openai_tool,
