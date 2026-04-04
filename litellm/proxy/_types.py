@@ -2753,6 +2753,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2785,6 +2787,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
