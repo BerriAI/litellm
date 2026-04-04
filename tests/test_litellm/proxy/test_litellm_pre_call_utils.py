@@ -1363,6 +1363,101 @@ async def test_request_guardrails_do_not_override_key_guardrails():
     assert len(requested_guardrails) == 1
 
 
+@pytest.mark.asyncio
+async def test_project_guardrails_merge_with_key_and_team():
+    """
+    Test that project guardrails are merged with key and team guardrails (union semantics).
+    All three levels should contribute to the final guardrails list without duplicates.
+    """
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": ["key-guardrail-1"]},
+        team_metadata={"guardrails": ["team-guardrail-1", "key-guardrail-1"]},
+        project_metadata={"guardrails": ["project-guardrail-1", "team-guardrail-1"]},
+    )
+
+    with patch("litellm.proxy.utils._premium_user_check"):
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    metadata = updated_data.get("metadata", {})
+    guardrails = metadata.get("guardrails", [])
+
+    # All three sources contribute
+    assert "key-guardrail-1" in guardrails
+    assert "team-guardrail-1" in guardrails
+    assert "project-guardrail-1" in guardrails
+    # No duplicates
+    assert guardrails.count("key-guardrail-1") == 1
+    assert guardrails.count("team-guardrail-1") == 1
+
+
+@pytest.mark.asyncio
+async def test_project_guardrails_only():
+    """
+    Test that project guardrails work when key and team have no guardrails configured.
+    """
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={},
+        team_metadata={},
+        project_metadata={"guardrails": ["project-guardrail-1", "project-guardrail-2"]},
+    )
+
+    with patch("litellm.proxy.utils._premium_user_check"):
+        updated_data = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    metadata = updated_data.get("metadata", {})
+    guardrails = metadata.get("guardrails", [])
+
+    assert "project-guardrail-1" in guardrails
+    assert "project-guardrail-2" in guardrails
+    assert len(guardrails) == 2
+
+
 def test_update_model_if_key_alias_exists():
     """
     Test that _update_model_if_key_alias_exists properly updates the model when a key alias exists.
