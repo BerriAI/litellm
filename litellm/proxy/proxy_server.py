@@ -509,7 +509,6 @@ from litellm.proxy.utils import (
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     update_spend,
-    update_daily_tag_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
@@ -6215,6 +6214,8 @@ class ProxyStartupEvent:
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
         tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        from litellm.proxy.utils import update_daily_tag_spend
+
         scheduler.add_job(
             update_daily_tag_spend,
             "interval",
