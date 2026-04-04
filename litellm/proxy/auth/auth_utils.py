@@ -153,12 +153,7 @@ def is_request_body_safe(
     banned_params = ["api_base", "base_url"]
 
     for param in banned_params:
-        if (
-            param in request_body
-            and not check_complete_credentials(  # allow client-credentials to be passed to proxy
-                request_body=request_body
-            )
-        ):
+        if param in request_body:
             if general_settings.get("allow_client_side_credentials") is True:
                 return True
             elif (
@@ -178,6 +173,19 @@ def is_request_body_safe(
             )
 
     return True
+
+
+_PROXY_ONLY_PARAMS = {"mock_response", "input_cost_per_token", "output_cost_per_token"}
+
+
+def strip_banned_request_params(request_body: dict) -> None:
+    for param in _PROXY_ONLY_PARAMS:
+        if param in request_body:
+            verbose_proxy_logger.warning(
+                f"Rejected user-supplied param '{param}' from request body — "
+                "this parameter is reserved for internal proxy use."
+            )
+            request_body.pop(param)
 
 
 async def pre_db_read_auth_checks(
@@ -211,6 +219,7 @@ async def pre_db_read_auth_checks(
             "model", ""
         ),  # [TODO] use model passed in url as well (azure openai routes)
     )
+    strip_banned_request_params(request_data)
 
     # Check 3. Check if IP address is allowed
     is_valid_ip, passed_in_ip = _check_valid_ip(

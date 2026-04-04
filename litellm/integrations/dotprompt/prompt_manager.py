@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 
 
 class PromptTemplate:
@@ -59,7 +60,7 @@ class PromptManager:
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: Dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
-        self.jinja_env = Environment(
+        self.jinja_env = SandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Handlebars-style delimiters to match Dotprompt spec
