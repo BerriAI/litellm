@@ -81,7 +81,9 @@ const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
 // to the backend — use relative URLs (null) so rewrites can intercept them.
 const defaultProxyBaseUrl =
-  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+  process.env.NEXT_PUBLIC_BASE_URL
+    ? process.env.NEXT_PUBLIC_BASE_URL
+    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
     ? "http://localhost:4000"
     : null;
 const defaultServerRootPath = "/";
@@ -123,10 +125,11 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
     return;
   }
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl =
-    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-      ? "http://localhost:4000"
-      : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
+    ? process.env.NEXT_PUBLIC_BASE_URL
+    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+    ? "http://localhost:4000"
+    : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
@@ -2270,6 +2273,19 @@ export const mcpHubPublicServersCall = async () => {
   if (!response.ok) {
     console.error(`mcpHubPublicServersCall failed with status ${response.status}`);
     return [];
+  }
+  return response.json();
+};
+
+export const skillHubPublicCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/skill_hub` : `/public/skill_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    console.error(`skillHubPublicCall failed with status ${response.status}`);
+    return { plugins: [] };
   }
   return response.json();
 };
