@@ -160,6 +160,32 @@ async def test_mcp_route_check_passes_for_team():
 
 
 @pytest.mark.asyncio
+async def test_mcp_route_check_passes_for_team_server_subpaths():
+    """
+    Verify that allowed_routes_check returns True for /v1/mcp/server sub-paths with default settings.
+    Regression test for JWT users accessing /v1/mcp/server/register and similar endpoints.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    jwt_auth = LiteLLM_JWTAuth()
+
+    for route in [
+        "/v1/mcp/server/register",
+        "/v1/mcp/server/health",
+        "/v1/mcp/server/abc/approve",
+    ]:
+        is_allowed = allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_auth,
+        )
+        assert is_allowed is True, (
+            f"Route {route} should be allowed for TEAM role with default settings"
+        )
+
+
+@pytest.mark.asyncio
 async def test_e2e_jwt_team_mcp_permissions_enforced(monkeypatch):
     """
     End-to-end test verifying that team MCP permissions are properly enforced

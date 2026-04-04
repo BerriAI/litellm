@@ -46,6 +46,28 @@ class AlwaysFailGuardrail(CustomGuardrail):
         raise HTTPException(status_code=400, detail="Content policy violation")
 
 
+class HttpStatusGuardrail(CustomGuardrail):
+    """Raises HTTPException with a configurable status (e.g. 503 for API outage)."""
+
+    def __init__(self, guardrail_name: str, status_code: int):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+        )
+        self.status_code = status_code
+        self.calls = 0
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        raise HTTPException(
+            status_code=self.status_code, detail="Simulated HTTP error"
+        )
+
+
 class AlwaysPassGuardrail(CustomGuardrail):
     """Mock guardrail that always passes."""
 
@@ -346,6 +368,125 @@ async def test_guardrail_not_found_uses_on_fail():
         assert result.terminal_action == "block"
         assert result.step_results[0].outcome == "error"
         assert "not found" in result.step_results[0].error_detail
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content():
+    """
+    Policy intervention (400) uses on_fail; technical error (503) uses on_error.
+
+    Primary returns 503 -> on_error: next -> fallback runs -> allow.
+    """
+    primary = HttpStatusGuardrail("primary-mod", status_code=503)
+    fallback = AlwaysPassGuardrail("fallback-filter")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="primary-mod",
+                on_fail="block",
+                on_error="next",
+                on_pass="allow",
+            ),
+            PipelineStep(
+                guardrail="fallback-filter",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [primary, fallback]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "any"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="mod-fallback",
+        )
+
+        assert primary.calls == 1
+        assert fallback.calls == 1
+        assert result.terminal_action == "allow"
+        assert result.step_results[0].outcome == "error"
+        assert result.step_results[0].action_taken == "next"
+        assert result.step_results[1].outcome == "pass"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_on_fail_next_on_content_on_error_block_stops_api_fallback():
+    """
+    Content policy fail (400) uses on_fail: next; API error uses on_error: block (no second step).
+    """
+    primary_content = AlwaysFailGuardrail("strict-mod")
+    primary_api = HttpStatusGuardrail("strict-mod", status_code=503)
+    fallback = AlwaysPassGuardrail("fallback-filter")
+
+    # Content violation: on_fail next -> would reach fallback if we had two steps
+    pipeline_content = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="strict-mod",
+                on_fail="next",
+                on_error="block",
+                on_pass="allow",
+            ),
+            PipelineStep(
+                guardrail="fallback-filter",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [primary_content, fallback]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline_content.steps,
+            mode=pipeline_content.mode,
+            data={"messages": [{"role": "user", "content": "bad"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="test",
+        )
+        assert result.terminal_action == "allow"
+        assert primary_content.calls == 1
+        assert fallback.calls == 1
+    finally:
+        litellm.callbacks = original_callbacks
+
+    # API outage: on_error block -> do not run fallback
+    fallback.calls = 0
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [primary_api, fallback]
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline_content.steps,
+            mode=pipeline_content.mode,
+            data={"messages": [{"role": "user", "content": "ok"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="test",
+        )
+        assert result.terminal_action == "block"
+        assert primary_api.calls == 1
+        assert fallback.calls == 0
+        assert result.step_results[0].outcome == "error"
+        assert result.step_results[0].action_taken == "block"
     finally:
         litellm.callbacks = original_callbacks
 

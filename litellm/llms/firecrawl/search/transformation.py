@@ -159,15 +159,13 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         """
         Transform Firecrawl API response to LiteLLM unified SearchResponse format.
 
-        Firecrawl → LiteLLM mappings:
-        - data.web[].title → SearchResult.title
-        - data.web[].url → SearchResult.url
-        - data.web[].description OR data.web[].markdown → SearchResult.snippet
-        - No date field in web results (set to None)
-        - No last_updated field in Firecrawl response (set to None)
+        Supports both response formats:
 
-        Note: Firecrawl v2 returns results organized by source type (web, images, news).
-        We primarily use web results for the unified format.
+        Firecrawl Cloud (v2):
+            {"data": {"web": [...], "news": [...]}}
+
+        Firecrawl Self-Hosted (v1):
+            {"success": true, "data": [{"url": "...", "title": "...", ...}, ...]}
 
         Args:
             raw_response: Raw httpx response from Firecrawl API
@@ -181,36 +179,52 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         # Transform results to SearchResult objects
         results = []
 
-        # Process web results (primary source)
         data = response_json.get("data", {})
-        web_results = data.get("web", [])
 
-        for result in web_results:
-            # Use markdown if available, otherwise fall back to description
-            snippet = result.get("markdown") or result.get("description", "")
+        if isinstance(data, list):
+            # Self-hosted Firecrawl (v1) format: data is a flat list of results
+            for result in data:
+                snippet = (
+                    result.get("markdown") or result.get("description", "")
+                )
+                search_result = SearchResult(
+                    title=result.get("title", ""),
+                    url=result.get("url", ""),
+                    snippet=snippet,
+                    date=None,
+                    last_updated=None,
+                )
+                results.append(search_result)
+        elif isinstance(data, dict):
+            # Firecrawl Cloud (v2) format: data is a dict with web/news keys
+            web_results = data.get("web", [])
 
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=snippet,
-                date=None,  # Web results don't include date
-                last_updated=None,  # Firecrawl doesn't provide last_updated in response
-            )
-            results.append(search_result)
+            for result in web_results:
+                # Use markdown if available, otherwise fall back to description
+                snippet = result.get("markdown") or result.get("description", "")
 
-        # Process news results if available (they have date field)
-        news_results = data.get("news", [])
-        for result in news_results:
-            snippet = result.get("markdown") or result.get("snippet", "")
+                search_result = SearchResult(
+                    title=result.get("title", ""),
+                    url=result.get("url", ""),
+                    snippet=snippet,
+                    date=None,
+                    last_updated=None,
+                )
+                results.append(search_result)
 
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=snippet,
-                date=result.get("date"),  # News results include date
-                last_updated=None,
-            )
-            results.append(search_result)
+            # Process news results if available (they have date field)
+            news_results = data.get("news", [])
+            for result in news_results:
+                snippet = result.get("markdown") or result.get("snippet", "")
+
+                search_result = SearchResult(
+                    title=result.get("title", ""),
+                    url=result.get("url", ""),
+                    snippet=snippet,
+                    date=result.get("date"),  # News results include date
+                    last_updated=None,
+                )
+                results.append(search_result)
 
         return SearchResponse(
             results=results,

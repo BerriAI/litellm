@@ -346,6 +346,8 @@ class MCPServerManager:
                 aws_session_token=server_config.get("aws_session_token", None),
                 aws_region_name=server_config.get("aws_region_name", None),
                 aws_service_name=server_config.get("aws_service_name", None),
+                aws_role_name=server_config.get("aws_role_name", None),
+                aws_session_name=server_config.get("aws_session_name", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -686,6 +688,8 @@ class MCPServerManager:
             aws_session_token=aws_creds.get("aws_session_token"),
             aws_region_name=aws_creds.get("aws_region_name"),
             aws_service_name=aws_creds.get("aws_service_name"),
+            aws_role_name=aws_creds.get("aws_role_name"),
+            aws_session_name=aws_creds.get("aws_session_name"),
         )
         return new_server
 
@@ -1011,6 +1015,8 @@ class MCPServerManager:
                     aws_session_token=server.aws_session_token,
                     aws_region_name=server.aws_region_name,
                     aws_service_name=server.aws_service_name,
+                    aws_role_name=server.aws_role_name,
+                    aws_session_name=server.aws_session_name,
                 )
 
             return MCPClient(
@@ -1571,6 +1577,8 @@ class MCPServerManager:
             ),
             "aws_region_name": credentials_dict.get("aws_region_name"),
             "aws_service_name": credentials_dict.get("aws_service_name"),
+            "aws_role_name": credentials_dict.get("aws_role_name"),
+            "aws_session_name": credentials_dict.get("aws_session_name"),
         }
 
     def _extract_scopes(self, scopes_value: Any) -> Optional[List[str]]:

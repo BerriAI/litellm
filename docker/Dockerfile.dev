@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11-slim
+ARG LITELLM_BUILD_IMAGE=python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11-slim
+ARG LITELLM_RUNTIME_IMAGE=python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --upgrade pip build
+    && pip install --upgrade pip==26.0.1 build==1.4.2
 
 # Copy requirements first for better layer caching
 COPY requirements.txt .
@@ -75,7 +75,7 @@ RUN apt-get update && apt-get upgrade -y \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
+    && npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
     && GLOBAL="$(npm root -g)" \
     && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
           rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -109,7 +109,7 @@ COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /app/dist/*.whl .
 
 # Install all dependencies in one step with no-cache for smaller image
-RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ && \
+RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && \
     rm -f *.whl && \
     rm -rf /wheels
 

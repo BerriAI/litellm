@@ -171,4 +171,44 @@ jobs:
             --reruns ${{ matrix.test-group.reruns }} \
             --reruns-delay 1 \
             --dist=loadscope \
-            --durations=20
+            --durations=20 \
+            --cov=litellm \
+            --cov-report=xml:coverage-${{ matrix.test-group.name }}.xml \
+            --cov-config=pyproject.toml
+
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: coverage-${{ matrix.test-group.name }}
+          path: coverage-${{ matrix.test-group.name }}.xml
+          retention-days: 1
+
+  upload-coverage:
+    name: Upload coverage to Codecov
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # Required for OIDC tokenless upload
+      pull-requests: write   # Required for Codecov PR comments
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Download all coverage reports
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: coverage-*
+          path: coverage-reports
+          merge-multiple: true
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
+        with:
+          use_oidc: true
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
+          fail_ci_if_error: false

@@ -162,6 +162,140 @@ class TestMCPSigV4Auth:
         assert "x-amz-security-token" in signed_request.headers
 
 
+class TestMCPSigV4AssumeRole:
+    """Tests for STS AssumeRole credential resolution in MCPSigV4Auth."""
+
+    def test_assume_role_with_ambient_credentials(self):
+        """MCPSigV4Auth calls STS AssumeRole when aws_role_name is provided (no explicit keys)."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "ASSUMED_KEY",
+                "SecretAccessKey": "ASSUMED_SECRET",
+                "SessionToken": "ASSUMED_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        with patch("boto3.client", return_value=mock_sts) as mock_boto3:
+            auth = MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_region_name="us-east-1",
+            )
+
+        mock_boto3.assert_called_once_with("sts", region_name="us-east-1")
+        mock_sts.assume_role.assert_called_once()
+        call_kwargs = mock_sts.assume_role.call_args[1]
+        assert call_kwargs["RoleArn"] == "arn:aws:iam::123456789012:role/TestRole"
+        assert call_kwargs["RoleSessionName"].startswith("litellm-mcp-")
+        assert auth.credentials.access_key == "ASSUMED_KEY"
+        assert auth.credentials.secret_key == "ASSUMED_SECRET"
+        assert auth.credentials.token == "ASSUMED_TOKEN"
+
+    def test_assume_role_with_explicit_source_credentials(self):
+        """When aws_role_name + explicit keys are provided, keys are used as STS source identity."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "ASSUMED_KEY",
+                "SecretAccessKey": "ASSUMED_SECRET",
+                "SessionToken": "ASSUMED_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        with patch("boto3.client", return_value=mock_sts) as mock_boto3:
+            auth = MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_access_key_id="SOURCE_KEY",
+                aws_secret_access_key="SOURCE_SECRET",
+                aws_region_name="us-west-2",
+            )
+
+        mock_boto3.assert_called_once_with(
+            "sts",
+            region_name="us-west-2",
+            aws_access_key_id="SOURCE_KEY",
+            aws_secret_access_key="SOURCE_SECRET",
+        )
+        assert auth.credentials.access_key == "ASSUMED_KEY"
+
+    def test_assume_role_with_custom_session_name(self):
+        """Custom aws_session_name is used in the AssumeRole call."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "ASSUMED_KEY",
+                "SecretAccessKey": "ASSUMED_SECRET",
+                "SessionToken": "ASSUMED_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        with patch("boto3.client", return_value=mock_sts):
+            MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_session_name="regeneron-litellm-prod",
+            )
+
+        call_kwargs = mock_sts.assume_role.call_args[1]
+        assert call_kwargs["RoleSessionName"] == "regeneron-litellm-prod"
+
+    def test_assume_role_signing_works(self):
+        """Requests are signed correctly with STS-derived credentials."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+                "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "SessionToken": "STS_SESSION_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        with patch("boto3.client", return_value=mock_sts):
+            auth = MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_region_name="us-east-1",
+                aws_service_name="bedrock-agentcore",
+            )
+
+        request = httpx.Request(
+            method="POST",
+            url="https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/test/invocations",
+            headers={"Content-Type": "application/json"},
+            content=b'{"jsonrpc":"2.0","method":"tools/list","id":1}',
+        )
+
+        signed_request = next(auth.auth_flow(request))
+        assert "Authorization" in signed_request.headers
+        assert "AWS4-HMAC-SHA256" in signed_request.headers["Authorization"]
+        assert "x-amz-security-token" in signed_request.headers
+
+    def test_assume_role_takes_precedence_over_explicit_keys(self):
+        """When both aws_role_name and explicit keys are provided, AssumeRole is used (keys become source identity)."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "ASSUMED_KEY",
+                "SecretAccessKey": "ASSUMED_SECRET",
+                "SessionToken": "ASSUMED_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        with patch("boto3.client", return_value=mock_sts):
+            auth = MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_access_key_id="EXPLICIT_KEY",
+                aws_secret_access_key="EXPLICIT_SECRET",
+            )
+
+        # Credentials should be from AssumeRole, not the explicit keys
+        assert auth.credentials.access_key == "ASSUMED_KEY"
+        assert auth.credentials.secret_key == "ASSUMED_SECRET"
+
+
 class TestMCPClientSigV4Integration:
     """Tests for MCPClient with SigV4 auth wired through."""
 
@@ -318,6 +452,86 @@ class TestMCPServerManagerSigV4:
         client = await manager._create_mcp_client(server=server)
 
         assert client._aws_auth is None
+
+    @pytest.mark.asyncio
+    async def test_load_config_with_aws_role_name(self):
+        """Config loading correctly parses aws_role_name and aws_session_name."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        config = {
+            "agentcore_tools": {
+                "url": "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/test/invocations",
+                "transport": "http",
+                "auth_type": "aws_sigv4",
+                "aws_role_name": "arn:aws:iam::123456789012:role/TestRole",
+                "aws_session_name": "litellm-prod",
+                "aws_region_name": "us-east-1",
+            }
+        }
+
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.aws_role_name == "arn:aws:iam::123456789012:role/TestRole"
+        assert server.aws_session_name == "litellm-prod"
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_with_role_assumption(self):
+        """_create_mcp_client passes aws_role_name to MCPSigV4Auth."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        mock_sts = MagicMock()
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "ASSUMED_KEY",
+                "SecretAccessKey": "ASSUMED_SECRET",
+                "SessionToken": "ASSUMED_TOKEN",
+                "Expiration": "2026-03-30T12:00:00Z",
+            }
+        }
+
+        server = MCPServer(
+            server_id="test-sigv4-role",
+            name="test_sigv4_role",
+            server_name="test_sigv4_role",
+            url="https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/test/invocations",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.aws_sigv4,
+            aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+            aws_region_name="us-east-1",
+        )
+
+        manager = MCPServerManager()
+        with patch("boto3.client", return_value=mock_sts):
+            client = await manager._create_mcp_client(server=server)
+
+        assert client._aws_auth is not None
+        assert isinstance(client._aws_auth, MCPSigV4Auth)
+        mock_sts.assume_role.assert_called_once()
+
+    def test_extract_aws_credentials_includes_role_fields(self):
+        """_extract_aws_credentials extracts aws_role_name and aws_session_name."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        creds = {
+            "aws_access_key_id": "KEY",
+            "aws_region_name": "us-east-1",
+            "aws_role_name": "arn:aws:iam::123456789012:role/TestRole",
+            "aws_session_name": "my-session",
+        }
+
+        result = manager._extract_aws_credentials(creds, credentials_are_encrypted=False)
+        assert result["aws_role_name"] == "arn:aws:iam::123456789012:role/TestRole"
+        assert result["aws_session_name"] == "my-session"
 
 
 class TestSigV4CredentialEncryption:

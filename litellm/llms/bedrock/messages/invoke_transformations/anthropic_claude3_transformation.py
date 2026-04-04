@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -53,9 +54,6 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
-
-    # Beta header patterns that are not supported by Bedrock Invoke API
-    # These will be filtered out to prevent 400 "invalid beta flag" errors
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -439,7 +437,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = anthropic_model_info.get_anthropic_beta_list(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -463,8 +462,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        filtered_auto_betas = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
+            provider="bedrock",
+        )
+        filtered_betas = sorted(user_beta_set.union(set(filtered_auto_betas)))
+        if filtered_betas:
+            anthropic_messages_request["anthropic_beta"] = filtered_betas
 
         return anthropic_messages_request
 
@@ -498,6 +502,12 @@ class AmazonAnthropicClaudeMessagesConfig(
     ):
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
+
+        Bedrock's Anthropic-compatible streaming puts cache usage fields
+        (cache_creation_input_tokens, cache_read_input_tokens) only on
+        message_stop, not on message_start or message_delta. Claude Code's
+        SDK only merges usage from message_delta, so we promote those fields
+        from message_stop onto message_delta before yielding.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -508,8 +518,80 @@ class AmazonAnthropicClaudeMessagesConfig(
             request_body=request_body,
         )
 
-        async for chunk in handler.async_sse_wrapper(completion_stream):
+        patched_stream = self._promote_message_stop_usage(completion_stream)
+
+        async for chunk in handler.async_sse_wrapper(patched_stream):
             yield chunk
+
+    @staticmethod
+    async def _promote_message_stop_usage(
+        completion_stream: AsyncIterator[
+            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
+        ],
+    ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
+        """
+        Promote cache usage fields from message_stop onto message_delta.
+
+        Bedrock reports input_tokens (uncached only) on message_start, and
+        the full breakdown (input_tokens, cache_creation_input_tokens,
+        cache_read_input_tokens) only on message_stop. Claude Code's SDK
+        merges usage from message_start and message_delta but ignores
+        message_stop. This method buffers message_delta and, when
+        message_stop arrives with cache usage, merges those fields into the
+        message_delta usage and also updates the input_tokens on
+        message_delta to include the full count (uncached + cache_creation +
+        cache_read).
+        """
+        _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
+        pending_delta = None
+
+        async for chunk in completion_stream:
+            if not isinstance(chunk, dict):
+                if pending_delta is not None:
+                    yield pending_delta
+                    pending_delta = None
+                yield chunk
+                continue
+
+            chunk_type = chunk.get("type")
+
+            if chunk_type == "message_delta":
+                pending_delta = chunk
+                continue
+
+            if chunk_type == "message_stop" and pending_delta is not None:
+                stop_usage = dict(chunk.get("usage") or {})
+                delta_usage = dict(pending_delta.get("usage") or {})
+
+                for field in _CACHE_FIELDS:
+                    if field in stop_usage:
+                        delta_usage[field] = stop_usage[field]
+
+                raw_input = stop_usage.get("input_tokens")
+                if raw_input is not None:
+                    uncached = raw_input if isinstance(raw_input, int) else 0
+                    raw_cc = delta_usage.get("cache_creation_input_tokens", 0)
+                    cache_creation = raw_cc if isinstance(raw_cc, int) else 0
+                    raw_cr = delta_usage.get("cache_read_input_tokens", 0)
+                    cache_read = raw_cr if isinstance(raw_cr, int) else 0
+                    delta_usage["input_tokens"] = uncached + cache_creation + cache_read
+
+                if delta_usage:
+                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+
+                yield pending_delta
+                pending_delta = None
+                yield chunk
+                continue
+
+            if pending_delta is not None:
+                yield pending_delta
+                pending_delta = None
+
+            yield chunk
+
+        if pending_delta is not None:
+            yield pending_delta
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

@@ -86,7 +86,7 @@ PROVIDERS: List[Dict] = [
         "env_key": "AWS_ACCESS_KEY_ID",
         "key_hint": "AKIA...",
         "test_model": None,  # multi-key auth — skip validation
-        "models": ["bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"],
+        "models": ["bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"],
         "extra_keys": ["AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"],
         "extra_hints": ["your-secret-key", "us-east-1"],
     },

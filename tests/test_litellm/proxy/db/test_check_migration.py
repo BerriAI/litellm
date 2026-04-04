@@ -27,11 +27,13 @@ def test_check_migration_out_of_sync(mocker):
     - 🚨 [IMPORTANT] Does NOT Raise an Exception when the Prisma schema is out of sync with the database.
     - logs an error when the Prisma schema is out of sync with the database.
     """
-    # Mock the logger BEFORE importing the function
-    mock_logger = mocker.patch("litellm._logging.verbose_logger")
-
-    # Import the function after mocking the logger
+    # Import the function first so check_migration module is in sys.modules,
+    # then patch the logger reference in that module directly (not the source
+    # module) so the patch works regardless of import order or xdist worker
+    # assignment.
     from litellm.proxy.db.check_migration import check_prisma_schema_diff
+
+    mock_logger = mocker.patch("litellm.proxy.db.check_migration.verbose_logger")
 
     # Mock the helper function to simulate out-of-sync state
     mock_diff_helper = mocker.patch(

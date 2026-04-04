@@ -375,9 +375,7 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -446,9 +444,7 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -552,9 +548,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -641,9 +635,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -690,7 +684,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -699,6 +693,7 @@ def cleanup_router_config_variables():
     user_custom_auth = None
     user_custom_auth_path = None
     user_custom_key_generate = None
+    user_custom_key_update = None
     user_custom_sso = None
     user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
@@ -709,7 +704,7 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate
+    global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -1537,9 +1532,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional[
-    "ClientSession"
-] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1550,13 +1545,13 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[
-    str
-] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[str] = (
+    []
+)  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1564,6 +1559,7 @@ user_custom_key_generate = None
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
+user_custom_key_update = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -2040,9 +2036,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2252,23 +2248,54 @@ def _schedule_background_health_check_db_save(
     )
 
 
+def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
+    """Return the HTTP status code for an unhealthy endpoint.
+
+    Prefers the live exception object in `exceptions` (direct health check path).
+    Falls back to the `exception_status` integer stored on the endpoint dict
+    (shared-cache path, where exception objects are not available).
+    """
+    model_id = endpoint.get("model_id")
+    exc = exceptions.get(model_id) if model_id else None
+    if exc is not None:
+        return getattr(exc, "status_code", 500)
+    return endpoint.get("exception_status", 500)
+
+
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    exceptions_by_model_id: Optional[dict] = None,
 ) -> None:
     """
     Write deployment health states to the router's health state cache
     for health-check-driven routing. No-op if the feature is disabled.
     """
     from litellm.proxy.health_check import build_deployment_health_states
+    from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+        increment_deployment_failures_for_current_minute,
+    )
+
+    _exceptions: dict = exceptions_by_model_id or {}
 
     try:
         if llm_router is None or not llm_router.enable_health_check_routing:
             return
 
+        # When health_check_ignore_transient_errors is set, treat 429/408
+        # endpoints as healthy so they are not filtered from routing.
+        _effective_unhealthy = unhealthy_endpoints
+        if llm_router.health_check_ignore_transient_errors:
+            _effective_unhealthy = [
+                ep
+                for ep in unhealthy_endpoints
+                if _get_endpoint_exception_status(ep, _exceptions) not in (429, 408)
+            ]
+
         states = build_deployment_health_states(
             healthy_endpoints=healthy_endpoints,
-            unhealthy_endpoints=unhealthy_endpoints,
+            unhealthy_endpoints=_effective_unhealthy,
         )
         if states:
             llm_router.health_state_cache.set_deployment_health_states(states)
@@ -2277,6 +2304,37 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if s.get("is_healthy")),
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
+
+        for endpoint in unhealthy_endpoints:
+            model_id = endpoint.get("model_id")
+            if not model_id:
+                continue
+
+            original_exception = _exceptions.get(model_id)
+            if original_exception is None:
+                continue
+
+            exception_status = getattr(original_exception, "status_code", 500)
+
+            if llm_router.health_check_ignore_transient_errors and exception_status in (
+                429,
+                408,
+            ):
+                continue
+
+            increment_deployment_failures_for_current_minute(
+                litellm_router_instance=llm_router,
+                deployment_id=model_id,
+            )
+
+            _set_cooldown_deployments(
+                litellm_router_instance=llm_router,
+                original_exception=original_exception,
+                exception_status=exception_status,
+                deployment=model_id,
+                time_to_cooldown=llm_router.cooldown_time,
+            )
+
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
@@ -2388,6 +2446,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await shared_health_manager.perform_shared_health_check(
                     model_list=_llm_model_list,
                     details=details_bool,
@@ -2401,6 +2460,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
@@ -2411,6 +2471,7 @@ async def _run_background_health_check():
             (
                 healthy_endpoints,
                 unhealthy_endpoints,
+                _exceptions_by_model_id,
             ) = await _run_direct_health_check_with_instrumentation(
                 _llm_model_list,
                 health_check_details,
@@ -2453,7 +2514,9 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints)
+        _write_health_state_to_router_cache(
+            healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id
+        )
 
         await asyncio.sleep(health_check_interval)
 
@@ -2935,7 +2998,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -3249,6 +3312,7 @@ class ProxyConfig:
             general_settings = {}
         _enable_hc_routing = False
         _hc_staleness = None
+        _hc_ignore_transient = False
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3356,6 +3420,12 @@ class ProxyConfig:
                     value=custom_key_generate, config_file_path=config_file_path
                 )
 
+            custom_key_update = general_settings.get("custom_key_update", None)
+            if custom_key_update is not None:
+                user_custom_key_update = get_instance_fn(
+                    value=custom_key_update, config_file_path=config_file_path
+                )
+
             custom_sso = general_settings.get("custom_sso", None)
             if custom_sso is not None:
                 user_custom_sso = get_instance_fn(
@@ -3435,6 +3505,9 @@ class ProxyConfig:
             _hc_staleness = general_settings.get(
                 "health_check_staleness_threshold", None
             )
+            _hc_ignore_transient = general_settings.get(
+                "health_check_ignore_transient_errors", False
+            )
             verbose_proxy_logger.info(
                 "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
                 use_background_health_checks,
@@ -3477,6 +3550,8 @@ class ProxyConfig:
             router_params["enable_health_check_routing"] = True
         if _hc_staleness is not None:
             router_params["health_check_staleness_threshold"] = _hc_staleness
+        if _hc_ignore_transient:
+            router_params["health_check_ignore_transient_errors"] = True
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:
@@ -5215,10 +5290,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -5600,9 +5675,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -6501,10 +6576,18 @@ class ProxyStartupEvent:
                     KeyRotationManager,
                 )
 
-                # Get prisma_client from global scope
+                # Get prisma_client and proxy_logging_obj from global scope
                 global prisma_client
+                global proxy_logging_obj
                 if prisma_client is not None:
-                    key_rotation_manager = KeyRotationManager(prisma_client)
+                    # Reuse the PodLockManager from db_spend_update_writer
+                    pod_lock_manager = (
+                        proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+                    )
+                    key_rotation_manager = KeyRotationManager(
+                        prisma_client,
+                        pod_lock_manager=pod_lock_manager,
+                    )
                     verbose_proxy_logger.debug(
                         f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)"
                     )
@@ -9229,7 +9312,7 @@ def _add_team_models_to_all_models(
 
     for team_object in team_db_objects_typed:
         if (
-            len(team_object.models) == 0  # empty list = all model access
+            not team_object.models  # None or empty list = all model access
             or SpecialModelNames.all_proxy_models.value in team_object.models
         ):
             model_list = llm_router.get_model_list()
@@ -9260,6 +9343,70 @@ def _add_team_models_to_all_models(
                             team_models.setdefault(model_id, set()).add(
                                 team_object.team_id
                             )
+    return team_models
+
+
+async def _add_access_group_models_to_team_models(
+    team_db_objects_typed: List[LiteLLM_TeamTable],
+    llm_router: Router,
+    prisma_client: PrismaClient,
+    team_models: Dict[str, Set[str]],
+) -> Dict[str, Set[str]]:
+    """
+    Resolve models reachable via team access groups and merge them into team_models.
+
+    Batch-fetches all distinct access groups in a single DB query, then resolves
+    each eligible team's access group models via the pre-fetched map.
+
+    This ensures models associated with a team only through access groups
+    (not directly in team.models) are included in the UI model listing.
+    """
+    # First pass: identify eligible teams and collect all distinct access group IDs
+    eligible_teams: List[LiteLLM_TeamTable] = []
+    all_access_group_ids: Set[str] = set()
+
+    for team_object in team_db_objects_typed:
+        if not team_object.access_group_ids:
+            continue
+
+        # Skip teams with empty models list — they already have access to everything
+        # (handled by _add_team_models_to_all_models)
+        if (
+            not team_object.models
+            or SpecialModelNames.all_proxy_models.value in team_object.models
+        ):
+            continue
+
+        eligible_teams.append(team_object)
+        all_access_group_ids.update(team_object.access_group_ids)
+
+    if not eligible_teams:
+        return team_models
+
+    # Single batch fetch for all access groups
+    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(all_access_group_ids)}}
+    )
+    ag_model_map: Dict[str, List[str]] = {
+        row.access_group_id: row.access_model_names or [] for row in access_group_rows
+    }
+
+    # Second pass: resolve deployments for each eligible team
+    for team_object in eligible_teams:
+        model_names: Set[str] = set()
+        for ag_id in team_object.access_group_ids or []:
+            model_names.update(ag_model_map.get(ag_id, []))
+
+        for model_name in model_names:
+            deployments = llm_router.get_model_list(
+                model_name=model_name, team_id=team_object.team_id
+            )
+            if deployments is not None:
+                for deployment in deployments:
+                    model_id = deployment.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
+
     return team_models
 
 
@@ -9297,6 +9444,14 @@ async def get_all_team_models(
     team_models = _add_team_models_to_all_models(
         team_db_objects_typed=team_db_objects_typed,
         llm_router=llm_router,
+    )
+
+    # Also resolve models reachable via team access groups
+    team_models = await _add_access_group_models_to_team_models(
+        team_db_objects_typed=team_db_objects_typed,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        team_models=team_models,
     )
 
     # convert set to list
@@ -9806,7 +9961,7 @@ async def _filter_models_by_team_id(
     team_accessible_model_ids: Set[str] = set()
 
     if (
-        len(team_object.models) == 0  # empty list = all model access
+        not team_object.models  # empty list = all model access
         or SpecialModelNames.all_proxy_models.value in team_object.models
     ):
         # Team has access to all models
@@ -12550,9 +12705,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
