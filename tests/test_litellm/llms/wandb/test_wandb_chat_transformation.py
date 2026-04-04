@@ -2,7 +2,7 @@
 Unit tests for WandB Inference configuration.
 
 These tests validate the WandbInferenceConfig class which extends OpenAIGPTConfig.
-Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
+Nebius Token Factory is an OpenAI-compatible provider with minor customizations.
 """
 
 import os

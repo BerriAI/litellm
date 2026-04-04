@@ -1,8 +1,8 @@
 """
-Unit tests for Nebius AI Studio configuration.
+Unit tests for Nebius Token Factory configuration.
 
 These tests validate the NebiusConfig class which extends OpenAIGPTConfig.
-Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
+Nebius Token Factory is an OpenAI-compatible provider with minor customizations.
 """
 
 import os
@@ -20,7 +20,7 @@ from litellm.llms.nebius.chat.transformation import NebiusConfig
 
 
 class TestNebiusConfig:
-    """Test class for Nebius AI Studio functionality"""
+    """Test class for Nebius Token Factory functionality"""
 
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
@@ -50,7 +50,7 @@ class TestNebiusConfig:
     @pytest.mark.respx()
     def test_nebius_completion_mock(self, respx_mock):
         """
-        Mock test for Nebius AI Studio completion using the model format from docs.
+        Mock test for Nebius Token Factory completion using the model format from docs.
         This test mocks the actual HTTP request to test the integration properly.
         """
 
@@ -60,11 +60,11 @@ class TestNebiusConfig:
 
         # Set up environment variables for the test
         api_key = "fake-nebius-key"
-        api_base = "https://api.studio.nebius.ai/v1"
+        api_base = "https://api.tokenfactory.nebius.com/v1/"
         model = "nebius/Qwen/Qwen3-4B"
         model_name = "Qwen3-4B"  # The actual model name without provider prefix
 
-        # Mock the HTTP request to the Nebius AI Studio API
+        # Mock the HTTP request to the Nebius Token Factory API
         respx_mock.post(f"{api_base}/chat/completions").respond(
             json={
                 "id": "chatcmpl-123",

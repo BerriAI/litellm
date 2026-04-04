@@ -1,5 +1,5 @@
 """
-Nebius AI Studio Chat Completions API - Transformation
+Nebius Token Factory Chat Completions API - Transformation
 
 This is OpenAI compatible - no translation needed / occurs
 """
