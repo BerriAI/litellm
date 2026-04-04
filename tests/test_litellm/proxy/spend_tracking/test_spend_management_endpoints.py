@@ -440,26 +440,24 @@ async def test_ui_view_spend_logs_preserves_autoq_metadata(client, monkeypatch):
             "spend": 0.05,
             "startTime": datetime.datetime.now(timezone.utc).isoformat(),
             "model": "gpt-4",
-            "metadata": json.dumps(
-                {
-                    "status": "success",
-                    "autoq": {
-                        "summary": {
-                            "request_id": "req-autoq",
-                            "model": "gpt-4",
-                            "queued": True,
-                            "queue_wait_ms": 321,
-                        },
-                        "events": [
-                            {
-                                "event": "queued",
-                                "at_ms": 123,
-                                "payload": {"position": 2},
-                            }
-                        ],
+            "metadata": {
+                "status": "success",
+                "autoq": {
+                    "summary": {
+                        "request_id": "req-autoq",
+                        "model": "gpt-4",
+                        "queued": True,
+                        "queue_wait_ms": 321,
                     },
-                }
-            ),
+                    "events": [
+                        {
+                            "event": "queued",
+                            "at_ms": 123,
+                            "payload": {"position": 2},
+                        },
+                    ],
+                },
+            },
         }
     ]
 
@@ -483,6 +481,7 @@ async def test_ui_view_spend_logs_preserves_autoq_metadata(client, monkeypatch):
         data = response.json()
         metadata = json.loads(data["data"][0]["metadata"])
 
+        assert isinstance(data["data"][0]["metadata"], str)
         assert "autoq" in metadata
         assert metadata["autoq"]["summary"]["queued"] is True
         assert metadata["autoq"]["summary"]["queue_wait_ms"] == 321

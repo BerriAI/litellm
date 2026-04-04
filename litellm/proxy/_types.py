@@ -3285,6 +3285,18 @@ class AutoQueueSpendLogsMetadata(TypedDict, total=False):
     summary: AutoQueueSummary
 
 
+class AutoQueueModelStatus(TypedDict):
+    active: int
+    limit: int
+    queued: int
+    ceiling: int
+    local_waiters: int
+
+
+class AutoQueueStatusResponse(TypedDict):
+    models: Dict[str, AutoQueueModelStatus]
+
+
 class SpendLogsPayload(TypedDict):
     request_id: str
     call_type: str

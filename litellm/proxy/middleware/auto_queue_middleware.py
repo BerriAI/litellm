@@ -16,11 +16,14 @@ import signal
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import AutoQueueModelStatus, AutoQueueStatusResponse
 
 from .auto_queue_logging import (
     AUTOQ_METADATA_KEY,
@@ -987,14 +990,15 @@ class AutoQueueMiddleware:
 
     async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Respond to GET /queue/status with model queue info."""
-        models_info: Dict[str, Any] = {}
+        models_info: Dict[str, "AutoQueueModelStatus"] = {}
         if self._enabled:
             aqr = self._ensure_aqr()
             for model in await self._get_status_models(aqr):
                 info = await aqr.get_model_info(model)
                 info["local_waiters"] = self._queues.get(model).depth if model in self._queues else 0
                 models_info[model] = info
-        body = json.dumps({"models": models_info}).encode()
+        response_payload: "AutoQueueStatusResponse" = {"models": models_info}
+        body = json.dumps(response_payload).encode()
         await send({
             "type": "http.response.start",
             "status": 200,

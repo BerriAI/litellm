@@ -3324,6 +3324,16 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, and ``total_pages``.
     """
+
+    def _normalize_ui_spend_log_metadata(metadata: Any) -> Any:
+        if isinstance(metadata, dict):
+            normalized_metadata = dict(metadata)
+            autoq_metadata = normalized_metadata.get("autoq")
+            if isinstance(autoq_metadata, dict):
+                normalized_metadata["autoq"] = dict(autoq_metadata)
+            return json.dumps(normalized_metadata, default=str)
+        return metadata
+
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
@@ -3362,6 +3372,9 @@ async def _build_ui_spend_logs_response(
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
+            row_dict["metadata"] = _normalize_ui_spend_log_metadata(
+                row_dict.get("metadata")
+            )
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
             enriched.append(row_dict)
         response_data: list = enriched
