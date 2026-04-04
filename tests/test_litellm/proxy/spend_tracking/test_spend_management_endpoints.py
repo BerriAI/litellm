@@ -316,6 +316,7 @@ ignored_keys = [
     "metadata.error_information",
     "metadata.attempted_retries",
     "metadata.max_retries",
+    "metadata.autoq",
 ]
 
 MODEL_LIST = [
@@ -425,6 +426,70 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["user"] == "test_user_1"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_preserves_autoq_metadata(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log-autoq",
+            "request_id": "req-autoq",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": json.dumps(
+                {
+                    "status": "success",
+                    "autoq": {
+                        "summary": {
+                            "request_id": "req-autoq",
+                            "model": "gpt-4",
+                            "queued": True,
+                            "queue_wait_ms": 321,
+                        },
+                        "events": [
+                            {
+                                "event": "queued",
+                                "at_ms": 123,
+                                "payload": {"position": 2},
+                            }
+                        ],
+                    },
+                }
+            ),
+        }
+    ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        metadata = json.loads(data["data"][0]["metadata"])
+
+        assert "autoq" in metadata
+        assert metadata["autoq"]["summary"]["queued"] is True
+        assert metadata["autoq"]["summary"]["queue_wait_ms"] == 321
+        assert metadata["autoq"]["events"][0]["event"] == "queued"
+        assert metadata["autoq"]["events"][0]["payload"]["position"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 # Mock spend logs with distinct values for sorting tests.

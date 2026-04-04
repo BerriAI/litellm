@@ -18,6 +18,8 @@ import fakeredis.aioredis
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from starlette.applications import Starlette
+from starlette.routing import Route
 
 from litellm.proxy.middleware.auto_queue_middleware import (
     AutoQueueMiddleware,
@@ -28,6 +30,12 @@ from litellm.proxy.middleware.auto_queue_middleware import (
 )
 from litellm.proxy.middleware.auto_queue_scripts import AdmitDecision, ReleaseTransfer
 from litellm.proxy.middleware.auto_queue_state import AutoQueueRequestState
+from litellm.proxy.middleware.auto_queue_state import (
+    active_key,
+    ceiling_key,
+    limit_key,
+    queue_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +111,55 @@ def test_invalid_env_fallback_to_one_for_worker_count(monkeypatch):
 # ---------------------------------------------------------------------------
 # Integration tests (async)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queue_status_uses_distributed_redis_counts(
+    aqr_factory, asgi_client_factory, redis
+):
+    """GET /queue/status should expose Redis-backed model counts, not only local queues."""
+    aqr = aqr_factory(default_max_concurrent=2, ceiling=10)
+
+    async def handler(request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse({"ok": True})
+
+    app = AutoQueueMiddleware(
+        Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])]),
+        aqr=aqr,
+        enabled=True,
+    )
+    local_waiter = _WakeState()
+    app._get_queue("gpt-local").add("req-local", local_waiter, priority=3)
+
+    await redis.set(active_key("gpt-remote"), 2)
+    await redis.set(limit_key("gpt-remote"), 5)
+    await redis.set(ceiling_key("gpt-remote"), 9)
+    await redis.zadd(queue_key("gpt-remote"), {"req-1": 1, "req-2": 2, "req-3": 3})
+
+    await redis.set(limit_key("gpt-local"), 4)
+    await redis.set(ceiling_key("gpt-local"), 8)
+
+    client = await asgi_client_factory(app)
+    response = await client.get("/queue/status")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["models"]["gpt-remote"] == {
+        "active": 2,
+        "limit": 5,
+        "queued": 3,
+        "ceiling": 9,
+        "local_waiters": 0,
+    }
+    assert data["models"]["gpt-local"] == {
+        "active": 0,
+        "limit": 4,
+        "queued": 0,
+        "ceiling": 8,
+        "local_waiters": 1,
+    }
 
 
 @pytest.mark.asyncio
