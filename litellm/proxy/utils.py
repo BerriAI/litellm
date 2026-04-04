@@ -3293,7 +3293,7 @@ class PrismaClient:
             if update_key_values is not None:
                 update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
-                print_verbose(f"token: {token}")
+                print_verbose(f"token: [set={token is not None}]")
                 # check if plain text or hash
                 token = _hash_token_if_needed(token=token)
                 db_data["token"] = token

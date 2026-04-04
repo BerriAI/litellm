@@ -289,6 +289,7 @@ router_settings:
 | database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
 | disable_error_logs | boolean | If true, suppresses error tracking and storage in the database |
 | enable_health_check_routing | boolean | If true, enables health check-driven request routing to avoid unhealthy deployments |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 | enable_mcp_registry | boolean | If true, enables access to the centralized MCP server registry |
 | enforce_rbac | boolean | If true, enables role-based access control (RBAC) for all proxy operations |
 | forward_llm_provider_auth_headers | boolean | If true, forwards provider-specific auth headers to LLM API calls |
@@ -397,6 +398,7 @@ router_settings:
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
 | enable_health_check_routing | boolean | If true, enables health check-driven deployment filtering to avoid routing requests to unhealthy deployments |
 | health_check_staleness_threshold | integer | Maximum age in seconds for cached health check results before marking deployments as stale |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 
 
 ### environment variables - Reference
@@ -821,6 +823,7 @@ router_settings:
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_KEY_ROTATION_GRACE_PERIOD | Duration to keep old key valid after rotation (e.g. "24h", "2d"). Default is empty (immediate revoke). Used for scheduled rotations and as fallback when not specified in regenerate request.
+| LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS | TTL in seconds for the distributed lock used by the key rotation job. Default is 600 (10 minutes).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS | Set to `True` to use the local bundled Anthropic beta headers config only, disabling remote fetching. Default is `False`
 | LITELLM_LOCAL_BLOG_POSTS | When set to `True`, uses the local bundled blog posts only, disabling remote fetching from GitHub. Default is `False`
