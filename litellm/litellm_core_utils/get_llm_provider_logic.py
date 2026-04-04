@@ -238,6 +238,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.sambanova.ai/v1":
                         custom_llm_provider = "sambanova"
                         dynamic_api_key = get_secret_str("SAMBANOVA_API_KEY")
+                    elif endpoint == "https://api.intelligence.io.solutions/api/v1":
+                        custom_llm_provider = "io_intelligence"
+                        dynamic_api_key = get_secret_str("IO_INTELLIGENCE_API_KEY")
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret_str("AI21_API_KEY")
@@ -605,6 +608,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.sambanova.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SAMBANOVA_API_KEY")
+    elif custom_llm_provider == "io_intelligence":
+        api_base = (
+            api_base
+            or get_secret("IO_INTELLIGENCE_API_BASE")
+            or "https://api.intelligence.io.solutions/api/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("IO_INTELLIGENCE_API_KEY")
     elif custom_llm_provider == "meta_llama":
         api_base = (
             api_base
