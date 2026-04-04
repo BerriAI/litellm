@@ -31,13 +31,10 @@ else:
 
 from ..credentials import get_token_creator
 from .models import (
-    SAPMessage,
-    SAPAssistantMessage,
-    SAPToolChatMessage,
-    ChatCompletionTool,
     ResponseFormatJSONSchema,
     ResponseFormat,
-    SAPUserMessage,
+    OrchestrationRequest,
+    ChatCompletionTool,
 )
 from .handler import (
     GenAIHubOrchestrationError,
@@ -47,7 +44,7 @@ from .handler import (
 
 
 def validate_dict(data: dict, model) -> dict:
-    return model(**data).model_dump(by_alias=True)
+    return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -208,48 +205,25 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         api_base_ = f"{self.deployment_url}/v2/completion"
         return api_base_
 
-    def transform_request(
+    def _build_prompt_module(
         self,
-        model: str,
-        messages: List[Dict[str, str]],  # type: ignore
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        model_name: str,
+        template_messages: List[Dict[str, str]],
+        params: dict,
     ) -> dict:
-        # Filter out parameters that are not valid model params for SAP Orchestration API
-        # - tools, model_version, deployment_url: handled separately
-        excluded_params = {"tools", "model_version", "deployment_url"}
-
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
         # LangChain agents pass strict=true at top level, which fails for GPT models
         # Anthropic models accept strict, so preserve it for them
-        if model.startswith("gpt"):
-            excluded_params.add("strict")
+        if model_name.startswith("gpt") and "strict" in params:
+            params.pop("strict")
 
-        model_params = {
-            k: v for k, v in optional_params.items() if k not in excluded_params
-        }
+        model_version = params.pop("model_version", "latest")
 
-        model_version = optional_params.pop("model_version", "latest")
-        template = []
-        for message in messages:
-            if message["role"] == "user":
-                template.append(validate_dict(message, SAPUserMessage))
-            elif message["role"] == "assistant":
-                template.append(validate_dict(message, SAPAssistantMessage))
-            elif message["role"] == "tool":
-                template.append(validate_dict(message, SAPToolChatMessage))
-            else:
-                template.append(validate_dict(message, SAPMessage))
-
-        tools_ = optional_params.pop("tools", [])
+        tools_ = params.pop("tools", [])
         tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-        if tools_ != []:
-            tools = {"tools": tools_}
-        else:
-            tools = {}
+        tools = {"tools": tools_} if tools_ else {}
 
-        response_format = model_params.pop("response_format", {})
+        response_format = params.pop("response_format", {})
         resp_type = response_format.get("type", None)
         if resp_type:
             if resp_type == "json_schema":
@@ -259,33 +233,111 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             else:
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
-        model_params.pop("stream", False)
-        stream_config = {}
-        if "stream_options" in model_params:
-            # stream_config["enabled"] = True
-            stream_options = model_params.pop("stream_options", {})
-            stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
-            if "delimiters" in stream_options:
-                stream_config["delimiters"] = stream_options.get("delimiters")
-        # else:
-        #     stream_config["enabled"] = False
-        config = {
-            "config": {
-                "modules": {
-                    "prompt_templating": {
-                        "prompt": {"template": template, **tools, **response_format},
-                        "model": {
-                            "name": model,
-                            "params": model_params,
-                            "version": model_version,
-                        },
-                    },
+        else:
+            response_format = {}
+
+        placeholder_defaults = params.pop("placeholder_defaults", {})
+        placeholder_defaults = (
+            {"defaults": placeholder_defaults} if placeholder_defaults else {}
+        )
+
+        optional_modules = {}
+        optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
+        for module in optional_modules_lst:
+            if params.get(module, None) is not None:
+                optional_modules[module] = params.pop(module)
+
+        return {
+            "prompt_templating": {
+                "prompt": {
+                    "template": template_messages,
+                    **placeholder_defaults,
+                    **tools,
+                    **response_format,
                 },
-                "stream": stream_config,
-            }
+                "model": {
+                    "name": model_name,
+                    "params": params,
+                    "version": model_version,
+                },
+            },
+            **optional_modules,
         }
 
-        return config
+    def transform_request(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],  # type: ignore
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        optional_params = dict(optional_params)
+        optional_params.pop("deployment_url", None)
+
+        template = messages
+
+        optional_params.pop("stream", False)
+        stream_config = {}
+        if "stream_options" in optional_params:
+            stream_options = optional_params.pop("stream_options", {})
+            if "chunk_size" in stream_options:
+                stream_config["chunk_size"] = stream_options.get("chunk_size")
+            if "delimiters" in stream_options:
+                stream_config["delimiters"] = stream_options.get("delimiters")
+
+        placeholder_values = optional_params.pop("placeholder_values", None)
+        placeholder_values = (
+            {"placeholder_values": placeholder_values}
+            if placeholder_values is not None
+            else {}
+        )
+
+        fallback_modules = optional_params.pop("fallback_sap_modules", [])
+
+        modules = [
+            self._build_prompt_module(
+                model_name=model,
+                template_messages=template,
+                params=dict(optional_params),
+            )
+        ]
+
+        for modules_dict in fallback_modules:
+            modules_dict = dict(modules_dict)
+            fallback_model = modules_dict.pop("model", None)
+            if fallback_model is None:
+                raise ValueError(
+                    "Each entry in `fallback_sap_modules` must include a 'model' key."
+                )
+            if fallback_model.startswith("sap/"):
+                fallback_model = fallback_model[4:]
+            fallback_template = modules_dict.pop("messages", [])
+
+            modules.append(
+                self._build_prompt_module(
+                    model_name=fallback_model,
+                    template_messages=fallback_template,
+                    params=modules_dict,
+                )
+            )
+
+        if fallback_modules:
+            modules_payload = modules
+        else:
+            modules_payload = modules[0]  # type: ignore
+
+        request_body = {
+            "config": {
+                "modules": modules_payload,
+                **({"stream": stream_config} if stream_config else {}),
+            },
+            **placeholder_values,
+        }
+
+        body = validate_dict(request_body, OrchestrationRequest)
+
+        return body
 
     def transform_response(
         self,
