@@ -14,8 +14,10 @@ from litellm.llms.base_llm.chat.transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    Function,
     GenericStreamingChunk,
     ModelResponse,
     Usage,
@@ -70,7 +72,7 @@ class CloudflareChatConfig(BaseConfig):
             )
         headers = {
             "accept": "application/json",
-            "content-type": "apbplication/json",
+            "content-type": "application/json",
             "Authorization": "Bearer " + api_key,
         }
         return headers
@@ -95,6 +97,16 @@ class CloudflareChatConfig(BaseConfig):
         return [
             "stream",
             "max_tokens",
+            "max_completion_tokens",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "stop",
+            "seed",
         ]
 
     def map_openai_params(
@@ -147,14 +159,38 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        result = completion_response.get("result") or {}
 
-        prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-        )
+        tool_calls = result.get("tool_calls")
+        if tool_calls:
+            model_response.choices[0].message.tool_calls = [  # type: ignore
+                ChatCompletionMessageToolCall(
+                    id=tc.get("id", f"call_{idx}"),
+                    type="function",
+                    function=Function(
+                        name=tc.get("name", ""),
+                        arguments=tc.get("arguments", ""),
+                    ),
+                )
+                for idx, tc in enumerate(tool_calls)
+            ]
+            model_response.choices[0].finish_reason = "tool_calls"
+        else:
+            model_response.choices[0].message.content = result.get("response", "")  # type: ignore
+
+        # Use usage from response if available, otherwise estimate
+        result_usage = result.get("usage") or {}
+        if result_usage:
+            prompt_tokens = result_usage.get("prompt_tokens", 0)
+            completion_tokens = result_usage.get("completion_tokens", 0)
+        else:
+            prompt_tokens = litellm.utils.get_token_count(
+                messages=messages, model=model
+            )
+            completion_content = model_response["choices"][0]["message"].get(
+                "content", ""
+            )
+            completion_tokens = len(encoding.encode(completion_content))
 
         model_response.created = int(time.time())
         model_response.model = "cloudflare/" + model
@@ -201,6 +237,10 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
 
             if "response" in chunk:
                 text = chunk["response"]
+
+            if chunk.get("finish_reason"):
+                is_finished = True
+                finish_reason = chunk["finish_reason"]
 
             returned_chunk = GenericStreamingChunk(
                 text=text,
