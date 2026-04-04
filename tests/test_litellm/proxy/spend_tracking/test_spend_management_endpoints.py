@@ -17,9 +17,11 @@ sys.path.insert(0, REPO_ROOT)
 
 loaded_litellm = sys.modules.get("litellm")
 loaded_litellm_path = getattr(loaded_litellm, "__file__", None)
-needs_reload = loaded_litellm_path is not None and not os.path.abspath(
-    loaded_litellm_path
-).startswith(REPO_ROOT)
+needs_reload = (
+    loaded_litellm_path is not None
+    and os.path.commonpath([REPO_ROOT, os.path.abspath(loaded_litellm_path)])
+    != REPO_ROOT
+)
 if needs_reload:
     for module_name in tuple(sys.modules):
         if module_name == "litellm" or module_name.startswith("litellm."):
