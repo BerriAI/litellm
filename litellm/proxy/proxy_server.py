@@ -54,6 +54,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    DAILY_TAG_SPEND_BATCH_MULTIPLIER
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -6216,6 +6217,25 @@ class ProxyStartupEvent:
             id="update_spend_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
+        ## Reduces QPS as there are more tags for a single request
+        tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        from litellm.proxy.utils import update_daily_tag_spend
+
+        scheduler.add_job(
+            update_daily_tag_spend,
+            "interval",
+            seconds=tag_spend_update_interval,
+            args=[prisma_client, proxy_logging_obj],
+            id="update_daily_tag_spend_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info(
+            f"Tag spend update job scheduled at {tag_spend_update_interval}s interval "
+            f"({tag_spend_update_interval / batch_writing_interval:.1f}x main job interval)"
         )
 
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
