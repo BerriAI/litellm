@@ -374,11 +374,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _parts.append(_part)
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
-                            file_id = file_element["file"].get("file_id")
-                            format = file_element["file"].get("format")
-                            file_data = file_element["file"].get("file_data")
-                            detail = file_element["file"].get("detail")
-                            video_metadata = file_element["file"].get("video_metadata")
+                            _file_field = file_element.get("file")
+                            if _file_field is None:
+                                raise litellm.BadRequestError(
+                                    message="Content block has type='file' but is missing the required 'file' field",
+                                    model=model,
+                                    llm_provider="vertex_ai",
+                                )
+                            file_id = _file_field.get("file_id")
+                            format = _file_field.get("format")
+                            file_data = _file_field.get("file_data")
+                            detail = _file_field.get("detail")
+                            video_metadata = _file_field.get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
                                 raise Exception(
