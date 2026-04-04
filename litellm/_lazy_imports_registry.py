@@ -214,6 +214,7 @@ LLM_CONFIG_NAMES = (
     "DeepgramAudioTranscriptionConfig",
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
+    "AIHubMixChatConfig",
     "GroqChatConfig",
     "BedrockMantleChatConfig",
     "A2AConfig",
@@ -865,6 +866,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OpenAITextCompletionConfig": (
         "litellm.llms.openai.completion.transformation",
         "OpenAITextCompletionConfig",
+    ),
+    "AIHubMixChatConfig": (
+        ".llms.aihubmix.chat.transformation",
+        "AIHubMixChatConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
     "BedrockMantleChatConfig": (
