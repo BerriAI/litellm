@@ -321,11 +321,12 @@ model LiteLLM_MCPServerTable {
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
-  approval_status       String?   @default("active")
-  submitted_by          String?
-  submitted_at          DateTime?
-  reviewed_at           DateTime?
-  review_notes          String?
+  // BYOM submission lifecycle
+  approval_status  String?   @default("active")
+  submitted_by     String?
+  submitted_at     DateTime?
+  reviewed_at      DateTime?
+  review_notes     String?
 
   @@index([approval_status])
 }
@@ -1001,12 +1002,15 @@ model LiteLLM_PromptTable {
   id String @id @default(uuid())
   prompt_id String
   version Int @default(1)
+  environment String @default("development")
+  created_by String?
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  @@unique([prompt_id, version])
+  @@unique([prompt_id, version, environment])
+  @@index([prompt_id, environment])
   @@index([prompt_id])
 }
 

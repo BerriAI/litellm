@@ -169,7 +169,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
-    input_cost_per_token: Required[float]
+    input_cost_per_token: Required[Optional[float]]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[
         float
@@ -206,7 +206,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
     input_cost_per_token_batches: Optional[float]
     output_cost_per_token_batches: Optional[float]
-    output_cost_per_token: Required[float]
+    output_cost_per_token: Required[Optional[float]]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     output_cost_per_token_priority: Optional[
         float
