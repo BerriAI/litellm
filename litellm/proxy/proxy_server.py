@@ -13851,7 +13851,7 @@ async def _stream_mcp_asgi_response(
     from starlette.responses import StreamingResponse
 
     headers_ready: asyncio.Future = asyncio.get_running_loop().create_future()
-    body_queue: asyncio.Queue = asyncio.Queue()
+    body_queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
 
     async def bridging_send(message):
         if message["type"] == "http.response.start":
