@@ -35,6 +35,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
+from fastapi.exceptions import WebSocketRequestValidationError
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -1140,6 +1141,21 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         ),
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+@app.exception_handler(WebSocketRequestValidationError)
+async def websocket_validation_exception_handler(
+    websocket: WebSocket, exc: WebSocketRequestValidationError
+):
+    verbose_proxy_logger.error(
+        "WebSocket validation error on %s: %s",
+        getattr(websocket, "url", None),
+        exc.errors(),
+    )
+    await websocket.close(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason=safe_dumps(exc.errors()),
     )
 
 

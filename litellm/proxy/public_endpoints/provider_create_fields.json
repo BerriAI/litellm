@@ -210,6 +210,34 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "ChatGPT",
+    "provider_display_name": "ChatGPT",
+    "litellm_provider": "chatgpt",
+    "credential_fields": [
+      {
+        "key": "chatgpt_auth_file_path",
+        "label": "ChatGPT Auth File Path",
+        "placeholder": "/path/to/auth.json",
+        "tooltip": "Absolute path on the proxy host to the ChatGPT/Codex auth JSON file for this credential.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://chatgpt.com/backend-api/codex",
+        "tooltip": "Optional override for the ChatGPT backend API base. Defaults to the standard ChatGPT Codex API base.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "chatgpt/gpt-5.3-codex"
+  },
+  {
     "provider": "Anthropic",
     "provider_display_name": "Anthropic",
     "litellm_provider": "anthropic",

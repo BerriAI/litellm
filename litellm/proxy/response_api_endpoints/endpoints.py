@@ -939,10 +939,6 @@ async def cancel_response(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: str = fastapi.Query(
-        ..., description="The model to use for the responses WebSocket session."
-    ),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     """
     Responses API WebSocket mode endpoint.
@@ -977,10 +973,76 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    data: Dict[str, Any] = {
-        "model": model,
-        "websocket": websocket,
-    }
+    try:
+        user_api_key_dict = await user_api_key_auth_websocket(websocket)
+    except Exception as e:
+        verbose_proxy_logger.exception("Responses WebSocket authentication error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "authentication_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            # The client may disconnect immediately after the failed handshake.
+            pass
+        await websocket.close(code=1008, reason="Authentication failed")
+        return
+
+    initial_client_message: Optional[str] = None
+    resolved_model = cast(Optional[str], websocket.query_params.get("model"))
+    if resolved_model is None:
+        try:
+            initial_client_message = await websocket.receive_text()
+            initial_payload = json.loads(initial_client_message)
+            response_payload = initial_payload.get("response")
+            if isinstance(response_payload, dict) and response_payload:
+                resolved_model = cast(Optional[str], response_payload.get("model"))
+            else:
+                resolved_model = cast(Optional[str], initial_payload.get("model"))
+        except json.JSONDecodeError:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "Invalid JSON in first websocket message",
+                        },
+                    }
+                )
+            )
+            await websocket.close(code=1003, reason="Invalid JSON")
+            return
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Responses WebSocket failed to read initial client message"
+            )
+            await websocket.close(code=1011, reason="Failed to read initial message")
+            return
+
+        if resolved_model is None:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "Model must be provided either in the websocket query string or the first response.create event",
+                        },
+                    }
+                )
+            )
+            await websocket.close(code=1008, reason="Model required")
+            return
+
+    data: Dict[str, Any] = {"model": resolved_model, "websocket": websocket}
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
@@ -994,7 +1056,7 @@ async def responses_websocket_endpoint(
     request._url = websocket.url
 
     async def return_body():
-        return f'{{"model": "{model}"}}'.encode()
+        return json.dumps({"model": resolved_model}).encode()
 
     request.body = return_body  # type: ignore
 
@@ -1016,7 +1078,7 @@ async def responses_websocket_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=model,
+            model=resolved_model,
             route_type="_aresponses_websocket",
         )
     except Exception as e:
@@ -1041,6 +1103,9 @@ async def responses_websocket_endpoint(
     # Phase 2: route to upstream provider
     try:
         data["user_api_key_dict"] = user_api_key_dict
+        data["llm_router"] = llm_router
+        if initial_client_message is not None:
+            data["initial_client_message"] = initial_client_message
         llm_call = await route_request(
             data=data,
             route_type="_aresponses_websocket",

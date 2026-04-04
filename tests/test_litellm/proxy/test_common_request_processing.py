@@ -283,6 +283,67 @@ class TestProxyBaseLLMRequestProcessing:
         assert result_data["model"] == "gpt-3.5-turbo"
         assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
+    @pytest.mark.asyncio
+    async def test_add_litellm_data_to_request_responses_session_id_header_sets_chain_id(
+        self,
+    ):
+        """
+        Test that HTTP /v1/responses requests honor the inbound session_id header
+        instead of falling back to a generated session identifier later in logging.
+        """
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        test_data = {
+            "model": "chatgpt/gpt-5.4",
+            "input": "hello",
+        }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"session_id": "codex-http-session"}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/responses"
+        mock_request.url.__str__.return_value = "http://testserver/v1/responses"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.client = None
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "test_api_key_hash"
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        mock_user_api_key_dict.allowed_model_region = None
+        mock_user_api_key_dict.key_alias = None
+        mock_user_api_key_dict.user_id = None
+        mock_user_api_key_dict.team_id = None
+        mock_user_api_key_dict.metadata = {}
+        mock_user_api_key_dict.team_metadata = None
+        mock_user_api_key_dict.org_id = None
+        mock_user_api_key_dict.team_alias = None
+        mock_user_api_key_dict.end_user_id = None
+        mock_user_api_key_dict.user_email = None
+        mock_user_api_key_dict.request_route = None
+        mock_user_api_key_dict.team_max_budget = None
+        mock_user_api_key_dict.team_spend = None
+        mock_user_api_key_dict.model_max_budget = None
+        mock_user_api_key_dict.parent_otel_span = None
+        mock_user_api_key_dict.team_model_aliases = None
+
+        result_data = await add_litellm_data_to_request(
+            data=test_data,
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=mock_user_api_key_dict,
+            version=None,
+            proxy_config=MagicMock(),
+        )
+
+        assert result_data["litellm_metadata"]["session_id"] == "codex-http-session"
+        assert result_data["litellm_metadata"]["trace_id"] == "codex-http-session"
+        assert result_data["litellm_session_id"] == "codex-http-session"
+        assert result_data["litellm_trace_id"] == "codex-http-session"
+
     def test_get_custom_headers_with_discount_info(self):
         """
         Test that discount information is correctly extracted from logging object

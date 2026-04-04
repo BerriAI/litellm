@@ -3,7 +3,8 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from uuid import uuid4
+from typing import Any, Dict, List, Optional, cast
 
 import httpx
 
@@ -31,10 +32,30 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
-from litellm.types.utils import CallTypes
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
 
+_CHATGPT_PROVIDER_NAME = "chatgpt"
 
+
+def _parse_call_type(call_type: Optional[str]) -> Optional[Any]:
+    if call_type is None:
+        return None
+
+    try:
+        from litellm.types.utils import CallTypes
+
+        return CallTypes(call_type)
+    except (ImportError, TypeError, ValueError):
+        return None
+
+
+def _get_responses_call_type() -> Optional[Any]:
+    try:
+        from litellm.types.utils import CallTypes
+
+        return CallTypes.responses
+    except (AttributeError, ImportError):
+        return None
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -251,19 +272,11 @@ class BaseResponsesAPIStreamingIterator:
         """
         try:
             # Align with chat pipeline: use logging_obj model_call_details + call_type
-            typed_call_type: Optional[CallTypes] = None
-            if self.call_type is not None:
-                try:
-                    typed_call_type = CallTypes(self.call_type)
-                except ValueError:
-                    typed_call_type = None
+            typed_call_type = _parse_call_type(self.call_type)
             if typed_call_type is None:
-                try:
-                    typed_call_type = CallTypes(
-                        getattr(self.logging_obj, "call_type", None)
-                    )
-                except Exception:
-                    typed_call_type = None
+                typed_call_type = _parse_call_type(
+                    getattr(self.logging_obj, "call_type", None)
+                )
 
             request_data = self.request_data or getattr(
                 self.logging_obj, "model_call_details", {}
@@ -329,19 +342,11 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
         try:
-            typed_call_type: Optional[CallTypes] = None
-            if self.call_type is not None:
-                try:
-                    typed_call_type = CallTypes(self.call_type)
-                except ValueError:
-                    typed_call_type = None
+            typed_call_type = _parse_call_type(self.call_type)
         except Exception:
             typed_call_type = None
         if typed_call_type is None:
-            try:
-                typed_call_type = CallTypes.responses
-            except Exception:
-                typed_call_type = None
+            typed_call_type = _get_responses_call_type()
 
         try:
             # Call synchronously; async hook will be executed via asyncio.run in a new loop
@@ -954,10 +959,14 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self.llm_router = kwargs.pop("llm_router", None)
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
             k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
         }
+        self.initial_client_message: Optional[str] = cast(
+            Optional[str], kwargs.get("initial_client_message")
+        )
         # In-memory session history: response_id → full accumulated message list.
         # Keyed by the DECODED (pre-encoding) response ID from response.completed.
         # This avoids the async DB-write race condition where spend logs haven't
@@ -985,12 +994,81 @@ class ManagedResponsesWebSocketHandler:
             )
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
+    @staticmethod
+    def _default_status_for_error_type(error_type: str) -> int:
+        return {
+            "invalid_request_error": 400,
+            "authentication_error": 401,
+            "permission_error": 403,
+            "not_found_error": 404,
+            "timeout_error": 408,
+            "rate_limit_error": 429,
+            "usage_limit_reached": 429,
+            "service_unavailable_error": 503,
+        }.get(error_type, 500)
+
+    @staticmethod
+    def _parse_nested_error_payload(message: str) -> Optional[Dict[str, Any]]:
+        json_start = message.find("{")
+        if json_start == -1:
+            return None
         try:
+            parsed = json.loads(message[json_start:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        error = parsed.get("error")
+        if isinstance(error, dict):
+            return error
+        return None
+
+    @classmethod
+    def _error_payload_from_exception(
+        cls, exc: Exception
+    ) -> tuple[str, str, int, Optional[str]]:
+        message = str(exc)
+        error_type = "server_error"
+        status = getattr(exc, "status_code", None)
+        error_code: Optional[str] = None
+
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            nested_error = body.get("error") if isinstance(body.get("error"), dict) else body
+            if isinstance(nested_error, dict):
+                error_type = nested_error.get("type", error_type)
+                message = nested_error.get("message", message)
+                error_code = nested_error.get("code")
+
+        if error_type == "server_error":
+            nested_error = cls._parse_nested_error_payload(message)
+            if nested_error is not None:
+                error_type = nested_error.get("type", error_type)
+                message = nested_error.get("message", message)
+                error_code = nested_error.get("code")
+
+        if status is None:
+            status = cls._default_status_for_error_type(error_type)
+
+        return message, error_type, int(status), error_code
+
+    async def _send_error(
+        self,
+        message: str,
+        error_type: str = "server_error",
+        status: Optional[int] = None,
+        error_code: Optional[str] = None,
+    ) -> None:
+        try:
+            error_payload: Dict[str, Any] = {
+                "type": "error",
+                "status": status or self._default_status_for_error_type(error_type),
+                "error": {"type": error_type, "message": message},
+            }
+            if error_code is not None:
+                error_payload["error"]["code"] = error_code
             await self.websocket.send_text(
-                json.dumps(
-                    {"type": "error", "error": {"type": error_type, "message": message}}
-                )
+                json.dumps(error_payload)
             )
         except Exception:
             pass
@@ -1105,6 +1183,76 @@ class ManagedResponsesWebSocketHandler:
             return None
         return msg_obj
 
+    def _resolve_proxy_model_deployment(
+        self, event_model: Optional[str]
+    ) -> tuple[Optional[str], Dict[str, Any]]:
+        """
+        Resolve a proxy/router-facing model to the underlying deployment model
+        and return the deployment params to inject into the LLM call.
+        """
+        if not event_model:
+            return None, {}
+
+        try:
+            if self.llm_router is None:
+                return None, {}
+
+            resolved_model_name = event_model
+            alias_item = self.llm_router.model_group_alias.get(event_model)
+            if isinstance(alias_item, str):
+                resolved_model_name = alias_item
+            elif isinstance(alias_item, dict):
+                resolved_model_name = alias_item.get("model", event_model)
+
+            deployment = self.llm_router.get_deployment_by_model_group_name(
+                model_group_name=resolved_model_name
+            )
+            if deployment is None:
+                return None, {}
+
+            deployment_params = deployment.litellm_params.model_dump(exclude_none=True)
+            return deployment_params.get("model"), deployment_params
+        except Exception as exc:
+            verbose_logger.debug(
+                "ManagedResponsesWS: failed to resolve proxy deployment for %s: %s",
+                event_model,
+                exc,
+            )
+            return None, {}
+
+    def _get_provider_name(self, call_kwargs: Dict[str, Any]) -> Optional[str]:
+        provider_name = cast(
+            Optional[str], call_kwargs.get("custom_llm_provider")
+        ) or cast(Optional[str], self.custom_llm_provider)
+        if provider_name is not None:
+            return provider_name
+        if call_kwargs.get("chatgpt_auth_file_path"):
+            return _CHATGPT_PROVIDER_NAME
+        return None
+
+    def _rewrite_event_model_in_message(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize proxy-facing model aliases inside a response.create payload to the
+        underlying deployment model before any later parsing happens.
+        """
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
+            event_model = nested.get("model")
+            resolved_model, deployment_params = self._resolve_proxy_model_deployment(
+                cast(Optional[str], event_model)
+            )
+            if resolved_model:
+                nested["model"] = resolved_model
+            return deployment_params
+
+        event_model = msg_obj.get("model")
+        resolved_model, deployment_params = self._resolve_proxy_model_deployment(
+            cast(Optional[str], event_model)
+        )
+        if resolved_model:
+            msg_obj["model"] = resolved_model
+        return deployment_params
+
     @staticmethod
     def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1123,6 +1271,54 @@ class ManagedResponsesWebSocketHandler:
             for param in _RESPONSE_CREATE_PARAMS
             if param in response_params and response_params[param] is not None
         }
+
+    @staticmethod
+    def _get_event_payload(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
+            return nested
+        return msg_obj
+
+    async def _maybe_handle_noop_warmup(
+        self,
+        msg_obj: Dict[str, Any],
+        model: str,
+        call_kwargs: Dict[str, Any],
+    ) -> bool:
+        payload = self._get_event_payload(msg_obj)
+        generate = payload.get("generate")
+        input_items = call_kwargs.get("input")
+        previous_response_id = call_kwargs.get("previous_response_id")
+        if generate is not False:
+            return False
+        if previous_response_id:
+            return False
+        if input_items not in (None, []):
+            return False
+
+        now = int(time.time())
+        response_id = f"resp_{uuid4().hex}"
+        base_response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": now,
+            "model": self._get_client_visible_model_name(model, call_kwargs),
+            "output": [],
+            "parallel_tool_calls": bool(call_kwargs.get("parallel_tool_calls", True)),
+            "status": "completed",
+            "store": False,
+        }
+        created_event = {
+            "type": "response.created",
+            "response": {**base_response, "status": "in_progress"},
+        }
+        completed_event = {
+            "type": "response.completed",
+            "response": base_response,
+        }
+        await self.websocket.send_text(json.dumps(created_event))
+        await self.websocket.send_text(json.dumps(completed_event))
+        return True
 
     def _apply_history(
         self,
@@ -1150,6 +1346,20 @@ class ManagedResponsesWebSocketHandler:
             # Fall back to DB-based session reconstruction (may work for
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
+
+    @staticmethod
+    def _strip_provider_prefix(model: str, provider_name: Optional[str]) -> str:
+        if provider_name and model.startswith(f"{provider_name}/"):
+            return model[len(provider_name) + 1 :]
+        return model
+
+    def _get_client_visible_model_name(
+        self, model: str, call_kwargs: Dict[str, Any]
+    ) -> str:
+        return self._strip_provider_prefix(model, self._get_provider_name(call_kwargs))
+
+    def _provider_uses_local_history_only(self, call_kwargs: Dict[str, Any]) -> bool:
+        return self._get_provider_name(call_kwargs) == _CHATGPT_PROVIDER_NAME
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], event_model: Optional[str]
@@ -1276,7 +1486,12 @@ class ManagedResponsesWebSocketHandler:
         if msg_obj is None:
             return
 
+        deployment_params = self._rewrite_event_model_in_message(msg_obj)
         call_kwargs = self._build_base_call_kwargs(msg_obj)
+        for key, value in deployment_params.items():
+            if key == "model":
+                continue
+            call_kwargs.setdefault(key, value)
         call_kwargs["stream"] = True
 
         event_model: Optional[str] = call_kwargs.pop("model", None)
@@ -1297,9 +1512,13 @@ class ManagedResponsesWebSocketHandler:
         self._apply_history(
             call_kwargs, previous_response_id, current_messages, prior_history
         )
+        if self._provider_uses_local_history_only(call_kwargs):
+            call_kwargs.pop("previous_response_id", None)
         self._inject_credentials(call_kwargs, event_model)
         self._update_proxy_request(call_kwargs, model)
         call_kwargs.update(self.extra_kwargs)
+        if await self._maybe_handle_noop_warmup(msg_obj, model, call_kwargs):
+            return
 
         try:
             completed_event = await self._stream_and_forward(model, call_kwargs)
@@ -1307,7 +1526,15 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.exception(
                 "ManagedResponsesWS: error processing response.create: %s", exc
             )
-            await self._send_error(str(exc))
+            message, error_type, status, error_code = (
+                self._error_payload_from_exception(exc)
+            )
+            await self._send_error(
+                message,
+                error_type=error_type,
+                status=status,
+                error_code=error_code,
+            )
             return
 
         self._save_turn_history(completed_event, prior_history, current_messages)
@@ -1322,6 +1549,9 @@ class ManagedResponsesWebSocketHandler:
         each one before waiting for the next message.
         """
         try:
+            if self.initial_client_message is not None:
+                await self._process_response_create(self.initial_client_message)
+
             while True:
                 try:
                     message = await self.websocket.receive_text()

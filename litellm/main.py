@@ -1582,6 +1582,7 @@ def completion(  # type: ignore # noqa: PLR0915
             tenant_id=kwargs.get("tenant_id"),
             client_id=kwargs.get("client_id"),
             client_secret=kwargs.get("client_secret"),
+            chatgpt_auth_file_path=kwargs.get("chatgpt_auth_file_path"),
             azure_username=kwargs.get("azure_username"),
             azure_password=kwargs.get("azure_password"),
             azure_scope=kwargs.get("azure_scope"),

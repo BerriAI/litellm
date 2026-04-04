@@ -44,6 +44,12 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Anthropic]);
     });
 
+    it("should map chatgpt provider value to ChatGPT display name and logo", () => {
+      const result = getProviderLogoAndName("chatgpt");
+      expect(result.displayName).toBe(Providers.ChatGPT);
+      expect(result.logo).toBe(providerLogoMap[Providers.ChatGPT]);
+    });
+
     it("should map azure provider value to Azure display name and logo", () => {
       const result = getProviderLogoAndName("azure");
       expect(result.displayName).toBe(Providers.Azure);
@@ -154,6 +160,10 @@ describe("provider_info_helpers", () => {
 
     it("should return watsonx placeholder for Watsonx provider", () => {
       expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return chatgpt placeholder for ChatGPT provider", () => {
+      expect(getPlaceholder(Providers.ChatGPT)).toBe("chatgpt/gpt-5.3-codex");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
