@@ -576,6 +576,16 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
             litellm.ssl_ecdh_curve = original_value
 
 
+@pytest.mark.asyncio
+async def test_async_http_handler_context_manager():
+    """Test that AsyncHTTPHandler can be used as an async context manager"""
+    async with AsyncHTTPHandler() as client:
+        assert client is not None
+        assert isinstance(client, httpx.AsyncClient)
+
+    assert client.is_closed
+
+
 def test_default_user_agent_is_litellm_version(monkeypatch):
     from litellm._version import version
     from litellm.llms.custom_httpx.http_handler import get_default_headers
