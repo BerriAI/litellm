@@ -26,7 +26,7 @@ The simulation script recreates the attack scenario and demonstrates how Auths
 verification catches the unauthorized commit:
 
 ```bash
-pip install auths
+brew tap auths-dev/auths-cli && brew install auths
 python auths_attack_simulation.py
 ```
 

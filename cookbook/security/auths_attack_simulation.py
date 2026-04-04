@@ -19,7 +19,7 @@ Why Auths prevents this:
   without the maintainer's private key stored in their device keychain.
 
 Usage:
-  pip install auths
+  brew tap auths-dev/auths-cli && brew install auths
   python auths_attack_simulation.py
 """
 import os
@@ -124,7 +124,8 @@ def main() -> None:
         print("The 'auths' CLI is not installed.")
         print()
         print("Install it with:")
-        print("  pip install auths")
+        print("  brew tap auths-dev/auths-cli && brew install auths")
+        print("  (or: cargo install auths_cli)")
         print()
         print("Or visit: https://github.com/auths-dev/auths")
         sys.exit(0)
