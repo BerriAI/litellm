@@ -187,7 +187,13 @@ class XecGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.LoggingCallback,
         )
 
-        self.api_key: str = api_key or os.getenv("XECGUARD_SERVICE_TOKEN", "")
+        resolved_key = api_key or os.getenv("XECGUARD_SERVICE_TOKEN", "")
+        if not resolved_key:
+            raise ValueError(
+                "XecGuard: no API key provided. Pass `api_key` or set "
+                "the XECGUARD_SERVICE_TOKEN environment variable."
+            )
+        self.api_key: str = resolved_key
         self.api_base: str = (
             api_base
             or os.getenv("XECGUARD_API_BASE", "https://api-xecguard.cycraft.ai")
