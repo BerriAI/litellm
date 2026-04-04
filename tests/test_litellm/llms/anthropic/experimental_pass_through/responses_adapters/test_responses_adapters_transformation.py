@@ -1043,3 +1043,69 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+class TestThinkingBlockRoundtrip:
+    """Verify that thinking blocks become reasoning items, not output_text."""
+
+    def test_thinking_becomes_reasoning_item(self):
+        """Thinking block in assistant history must become a top-level reasoning item."""
+        messages = [
+            {"role": "user", "content": "Explain quantum entanglement."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Let me reason about this...", "signature": "sig_abc"},
+                    {"type": "text", "text": "Quantum entanglement is..."},
+                ],
+            },
+        ]
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+        # Should have: user message, reasoning item, assistant message
+        types = [item["type"] for item in items]
+        assert "reasoning" in types, f"Expected reasoning item, got types: {types}"
+        assert "output_text" not in str(items) or all(
+            "output_text" in str(item) for item in items if item["type"] == "message" and item["role"] == "assistant"
+        )
+
+        reasoning_item = next(i for i in items if i["type"] == "reasoning")
+        assert reasoning_item["id"] == "sig_abc"
+        assert reasoning_item["summary"][0]["type"] == "summary_text"
+        assert reasoning_item["summary"][0]["text"] == "Let me reason about this..."
+
+    def test_thinking_not_inside_assistant_message(self):
+        """Thinking text must NOT appear as output_text inside the assistant message."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "My internal thought"},
+                    {"type": "text", "text": "My visible response"},
+                ],
+            },
+        ]
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+        # Find the assistant message
+        asst_messages = [i for i in items if i.get("type") == "message" and i.get("role") == "assistant"]
+        assert len(asst_messages) == 1
+        asst_content = asst_messages[0]["content"]
+        # Assistant message should only contain the visible response
+        assert len(asst_content) == 1
+        assert asst_content[0]["text"] == "My visible response"
+
+    def test_empty_thinking_text_skipped(self):
+        """Empty thinking text should not produce a reasoning item."""
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": ""},
+                    {"type": "text", "text": "Hello!"},
+                ],
+            },
+        ]
+        items = _ADAPTER.translate_messages_to_responses_input(messages)
+        types = [item["type"] for item in items]
+        assert "reasoning" not in types

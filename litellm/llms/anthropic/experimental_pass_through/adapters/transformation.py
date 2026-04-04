@@ -657,6 +657,16 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    # Also set reasoning_content so backends that
+                    # rely on it (e.g. Kimi) don't reject the turn
+                    # with "reasoning_content is missing".
+                    reasoning_text = "".join(
+                        block.get("thinking", "")
+                        for block in thinking_blocks
+                        if block.get("type") == "thinking"
+                    )
+                    if reasoning_text:
+                        assistant_message["reasoning_content"] = reasoning_text  # type: ignore
                 new_messages.append(assistant_message)
 
         return new_messages
