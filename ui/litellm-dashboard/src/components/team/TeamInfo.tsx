@@ -95,6 +95,9 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    access_group_models?: string[];
+    access_group_mcp_server_ids?: string[];
+    access_group_agent_ids?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -657,14 +660,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 ? (
+                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
                       <Badge color="red">All proxy models</Badge>
                     ) : (
-                      info.models.map((model, index) => (
-                        <Badge key={index} color="red">
-                          {model}
-                        </Badge>
-                      ))
+                      <>
+                        {info.models.map((model: string, index: number) => (
+                          <Badge key={`direct-${index}`} color="blue">
+                            {model}
+                          </Badge>
+                        ))}
+                        {(info.access_group_models || []).map((model: string, index: number) => (
+                          <Badge key={`ag-${index}`} color="green" title="From access group">
+                            {model}
+                          </Badge>
+                        ))}
+                      </>
                     )}
                   </div>
                 </Card>
