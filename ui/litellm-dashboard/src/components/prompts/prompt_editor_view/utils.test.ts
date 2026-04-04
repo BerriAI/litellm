@@ -339,7 +339,7 @@ User: Hello`,
       },
     };
 
-    expect(() => parseExistingPrompt(apiResponse)).toThrow("No dotprompt_content found in API response");
+    expect(() => parseExistingPrompt(apiResponse)).toThrow("No dotprompt_content or prompt_data found in API response");
   });
 
   it("should throw error for invalid dotprompt format", () => {
@@ -373,6 +373,143 @@ output:
     };
 
     const result = parseExistingPrompt(apiResponse);
+    expect(result.messages).toEqual([
+      { role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" },
+    ]);
+  });
+
+  // Tests for prompt_data fallback
+  it("should parse prompt_data with direct format", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          prompt_data: {
+            content: "User: Hello from prompt_data",
+            metadata: {
+              model: "gpt-4",
+              temperature: 0.8,
+            },
+          },
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.name).toBe("test-prompt");
+    expect(result.model).toBe("gpt-4");
+    expect(result.config.temperature).toBe(0.8);
+    expect(result.messages).toEqual([{ role: "user", content: "Hello from prompt_data" }]);
+  });
+
+  it("should parse prompt_data with nested format", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          prompt_data: {
+            "my-prompt": {
+              content: "User: Hello from nested prompt_data",
+              metadata: {
+                model: "gpt-3.5-turbo",
+                max_tokens: 500,
+              },
+            },
+          },
+        },
+        prompt_id: "my-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.name).toBe("my-prompt");
+    expect(result.model).toBe("gpt-3.5-turbo");
+    expect(result.config.max_tokens).toBe(500);
+    expect(result.messages).toEqual([{ role: "user", content: "Hello from nested prompt_data" }]);
+  });
+
+  it("should prefer dotprompt_content over prompt_data", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          dotprompt_content: `---
+model: gpt-4
+input:
+  schema:
+output:
+  format: text
+---
+
+User: Hello from dotprompt`,
+          prompt_data: {
+            content: "User: Hello from prompt_data",
+            metadata: { model: "gpt-3.5-turbo" },
+          },
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    // Should use dotprompt_content, not prompt_data
+    expect(result.model).toBe("gpt-4");
+    expect(result.messages).toEqual([{ role: "user", content: "Hello from dotprompt" }]);
+  });
+
+  it("should handle prompt_data with developer message", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          prompt_data: {
+            content: "Developer: You are a helpful bot\n\nUser: Hello",
+            metadata: { model: "gpt-4" },
+          },
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.developerMessage).toBe("You are a helpful bot");
+    expect(result.messages).toEqual([{ role: "user", content: "Hello" }]);
+  });
+
+  it("should handle prompt_data with tools", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          prompt_data: {
+            content: "User: What's the weather?",
+            metadata: {
+              model: "gpt-4",
+              tools: [{ type: "function", function: { name: "get_weather", description: "Get weather info" } }],
+            },
+          },
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0].name).toBe("get_weather");
+    expect(result.tools[0].description).toBe("Get weather info");
+  });
+
+  it("should use default values for empty prompt_data", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          prompt_data: {
+            content: "",
+            metadata: {},
+          },
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.model).toBe("gpt-4o");
     expect(result.messages).toEqual([
       { role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" },
     ]);
