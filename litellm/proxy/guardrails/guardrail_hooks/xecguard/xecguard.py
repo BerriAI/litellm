@@ -609,6 +609,13 @@ class XecGuardGuardrail(CustomGuardrail):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Collect the full stream, scan it, then re-emit."""
+        if not self.should_run_guardrail(
+            data=request_data, event_type=GuardrailEventHooks.post_call
+        ):
+            async for chunk in response:
+                yield chunk
+            return
+
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import TextCompletionResponse
