@@ -9,6 +9,7 @@ import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMC
 import NotificationsManager from "../molecules/notifications_manager";
 import { deleteMCPServer } from "../networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
@@ -348,6 +349,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         <TabList className="flex justify-between mt-2 w-full items-center">
           <div className="flex">
             <Tab>All Servers</Tab>
+            <Tab>Toolsets</Tab>
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
@@ -425,6 +427,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 </div>
               </div>
             )}
+          </TabPanel>
+          <TabPanel>
+            <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabPanel>
           <TabPanel>
             <MCPConnect />
