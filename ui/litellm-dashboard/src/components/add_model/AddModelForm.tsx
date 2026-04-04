@@ -85,11 +85,28 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     fetchModelAccessGroups();
   }, [accessToken]);
 
+  const nonProviderIdentifiers = new Set([
+    "AIOHTTP_OPENAI",
+    "CUSTOM_OPENAI",
+    "OPENAI_LIKE",
+    "OpenAI_Text",
+    "OpenAI_Compatible",
+    "OpenAI_Text_Compatible",
+    "ANTHROPIC_TEXT",
+    "AZURE_TEXT",
+    "COHERE_CHAT",
+    "OLLAMA_CHAT",
+    "VERTEX_AI_BETA",
+  ]);
+
   const sortedProviderMetadata: ProviderCreateInfo[] = useMemo(() => {
     if (!providerMetadata) {
       return [];
     }
-    return [...providerMetadata].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
+    const filtered = providerMetadata.filter((provider) => {
+      return !nonProviderIdentifiers.has(provider.provider);
+    });
+    return [...filtered].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
   }, [providerMetadata]);
 
   const providerMetadataErrorText = providerMetadataError
