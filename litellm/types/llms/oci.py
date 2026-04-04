@@ -141,7 +141,7 @@ class OCIResponseUsage(BaseModel):
     """Token usage in the OCI response."""
 
     promptTokens: int
-    completionTokens: int
+    completionTokens: Optional[int] = None
     totalTokens: int
     completionTokensDetails: Optional[OCICompletionTokenDetails] = None
     promptTokensDetails: Optional[OCIPromptTokensDetails] = None
@@ -151,7 +151,7 @@ class OCIResponseChoice(BaseModel):
     """A completion choice in the OCI response."""
 
     index: int
-    message: OCIMessage
+    message: Optional[OCIMessage] = None
     finishReason: Optional[str] = None
     logprobs: Optional[Dict[str, Any]] = None
 

@@ -174,10 +174,15 @@ def load_private_key_from_file(file_path: str):
 def get_vendor_from_model(model: str) -> OCIVendors:
     """
     Extracts the vendor from the model name.
+
+    OCI GenAI API uses two apiFormat values:
+    - "COHERE" for Cohere models (command-r, command-a, etc.)
+    - "GENERIC" for all other models (Meta Llama, xAI Grok, Google Gemini, etc.)
+
     Args:
-        model (str): The model name.
+        model (str): The model name (e.g., "cohere.command-a-03-2025", "meta.llama-3.3-70b-instruct").
     Returns:
-        str: The vendor name.
+        OCIVendors: The vendor enum value.
     """
     vendor = model.split(".")[0].lower()
     if vendor == "cohere":
@@ -456,9 +461,7 @@ class OCIChatConfig(BaseConfig):
         private_key = (
             load_private_key_from_str(oci_key_content)
             if oci_key_content
-            else load_private_key_from_file(oci_key_file)
-            if oci_key_file
-            else None
+            else load_private_key_from_file(oci_key_file) if oci_key_file else None
         )
 
         if private_key is None:
@@ -1014,16 +1017,18 @@ class OCIChatConfig(BaseConfig):
 
         message = model_response.choices[0].message  # type: ignore
         response_message = completion_response.chatResponse.choices[0].message
-        if response_message.content and response_message.content[0].type == "TEXT":
-            message.content = response_message.content[0].text
-        if response_message.toolCalls:
-            message.tool_calls = adapt_tools_to_openai_standard(
-                response_message.toolCalls
-            )
+        if response_message is not None:
+            if response_message.content and response_message.content[0].type == "TEXT":
+                message.content = response_message.content[0].text
+            if response_message.toolCalls:
+                message.tool_calls = adapt_tools_to_openai_standard(
+                    response_message.toolCalls
+                )
 
         usage = Usage(
             prompt_tokens=completion_response.chatResponse.usage.promptTokens,
-            completion_tokens=completion_response.chatResponse.usage.completionTokens,
+            completion_tokens=completion_response.chatResponse.usage.completionTokens
+            or 0,
             total_tokens=completion_response.chatResponse.usage.totalTokens,
         )
         model_response.usage = usage  # type: ignore
