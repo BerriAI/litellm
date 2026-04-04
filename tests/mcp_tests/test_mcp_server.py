@@ -1642,6 +1642,28 @@ def test_add_server_prefix_to_name():
     assert result == "-send_email"
 
 
+def test_is_tool_name_prefixed_with_known_servers():
+    """Ensure is_tool_name_prefixed validates against known server names."""
+    from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
+
+    known = {"zapier_mcp_server", "google_drive"}
+
+    # A properly prefixed MCP tool should be detected
+    assert is_tool_name_prefixed("zapier_mcp_server-send_email", known_server_names=known) is True
+    assert is_tool_name_prefixed("google_drive-list_files", known_server_names=known) is True
+
+    # A non-MCP tool that happens to contain a hyphen must NOT be misclassified
+    assert is_tool_name_prefixed("text-to-speech", known_server_names=known) is False
+    assert is_tool_name_prefixed("my-cool-tool", known_server_names=known) is False
+
+    # Tool with no separator at all
+    assert is_tool_name_prefixed("send_email", known_server_names=known) is False
+
+    # Legacy behaviour: when no known_server_names provided, any hyphen counts
+    assert is_tool_name_prefixed("text-to-speech") is True
+    assert is_tool_name_prefixed("send_email") is False
+
+
 def test_get_server_auth_header_with_alias():
     """Test _get_server_auth_header function with server alias."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (

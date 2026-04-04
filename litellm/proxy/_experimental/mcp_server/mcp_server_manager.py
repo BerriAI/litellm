@@ -2389,7 +2389,17 @@ class MCPServerManager:
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
-        if is_tool_name_prefixed(tool_name):
+        # Build the set of known server names/aliases so that
+        # is_tool_name_prefixed does not misclassify ordinary hyphenated
+        # tool names (e.g. "text-to-speech") as MCP-prefixed.
+        known_server_names: set = set()
+        for server in self.get_registry().values():
+            known_server_names.add(server.name)
+            if hasattr(server, "server_name") and server.server_name:
+                known_server_names.add(server.server_name)
+            if hasattr(server, "alias") and server.alias:
+                known_server_names.add(server.alias)
+        if is_tool_name_prefixed(tool_name, known_server_names=known_server_names):
             (
                 original_tool_name,
                 server_name_from_prefix,
