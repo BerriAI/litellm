@@ -1002,12 +1002,15 @@ model LiteLLM_PromptTable {
   id String @id @default(uuid())
   prompt_id String
   version Int @default(1)
+  environment String @default("development")
+  created_by String?
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  @@unique([prompt_id, version])
+  @@unique([prompt_id, version, environment])
+  @@index([prompt_id, environment])
   @@index([prompt_id])
 }
 
