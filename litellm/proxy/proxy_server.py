@@ -641,9 +641,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1538,9 +1538,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional[
-    "ClientSession"
-] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1551,13 +1551,13 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[
-    str
-] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[str] = (
+    []
+)  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -2042,9 +2042,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2254,23 +2254,54 @@ def _schedule_background_health_check_db_save(
     )
 
 
+def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
+    """Return the HTTP status code for an unhealthy endpoint.
+
+    Prefers the live exception object in `exceptions` (direct health check path).
+    Falls back to the `exception_status` integer stored on the endpoint dict
+    (shared-cache path, where exception objects are not available).
+    """
+    model_id = endpoint.get("model_id")
+    exc = exceptions.get(model_id) if model_id else None
+    if exc is not None:
+        return getattr(exc, "status_code", 500)
+    return endpoint.get("exception_status", 500)
+
+
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    exceptions_by_model_id: Optional[dict] = None,
 ) -> None:
     """
     Write deployment health states to the router's health state cache
     for health-check-driven routing. No-op if the feature is disabled.
     """
     from litellm.proxy.health_check import build_deployment_health_states
+    from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+        increment_deployment_failures_for_current_minute,
+    )
+
+    _exceptions: dict = exceptions_by_model_id or {}
 
     try:
         if llm_router is None or not llm_router.enable_health_check_routing:
             return
 
+        # When health_check_ignore_transient_errors is set, treat 429/408
+        # endpoints as healthy so they are not filtered from routing.
+        _effective_unhealthy = unhealthy_endpoints
+        if llm_router.health_check_ignore_transient_errors:
+            _effective_unhealthy = [
+                ep
+                for ep in unhealthy_endpoints
+                if _get_endpoint_exception_status(ep, _exceptions) not in (429, 408)
+            ]
+
         states = build_deployment_health_states(
             healthy_endpoints=healthy_endpoints,
-            unhealthy_endpoints=unhealthy_endpoints,
+            unhealthy_endpoints=_effective_unhealthy,
         )
         if states:
             llm_router.health_state_cache.set_deployment_health_states(states)
@@ -2279,6 +2310,37 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if s.get("is_healthy")),
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
+
+        for endpoint in unhealthy_endpoints:
+            model_id = endpoint.get("model_id")
+            if not model_id:
+                continue
+
+            original_exception = _exceptions.get(model_id)
+            if original_exception is None:
+                continue
+
+            exception_status = getattr(original_exception, "status_code", 500)
+
+            if llm_router.health_check_ignore_transient_errors and exception_status in (
+                429,
+                408,
+            ):
+                continue
+
+            increment_deployment_failures_for_current_minute(
+                litellm_router_instance=llm_router,
+                deployment_id=model_id,
+            )
+
+            _set_cooldown_deployments(
+                litellm_router_instance=llm_router,
+                original_exception=original_exception,
+                exception_status=exception_status,
+                deployment=model_id,
+                time_to_cooldown=llm_router.cooldown_time,
+            )
+
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to write health state to router cache: %s", str(e)
@@ -2390,6 +2452,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await shared_health_manager.perform_shared_health_check(
                     model_list=_llm_model_list,
                     details=details_bool,
@@ -2403,6 +2466,7 @@ async def _run_background_health_check():
                 (
                     healthy_endpoints,
                     unhealthy_endpoints,
+                    _exceptions_by_model_id,
                 ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
@@ -2413,6 +2477,7 @@ async def _run_background_health_check():
             (
                 healthy_endpoints,
                 unhealthy_endpoints,
+                _exceptions_by_model_id,
             ) = await _run_direct_health_check_with_instrumentation(
                 _llm_model_list,
                 health_check_details,
@@ -2455,7 +2520,9 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints)
+        _write_health_state_to_router_cache(
+            healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id
+        )
 
         await asyncio.sleep(health_check_interval)
 
@@ -3251,6 +3318,7 @@ class ProxyConfig:
             general_settings = {}
         _enable_hc_routing = False
         _hc_staleness = None
+        _hc_ignore_transient = False
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
@@ -3443,6 +3511,9 @@ class ProxyConfig:
             _hc_staleness = general_settings.get(
                 "health_check_staleness_threshold", None
             )
+            _hc_ignore_transient = general_settings.get(
+                "health_check_ignore_transient_errors", False
+            )
             verbose_proxy_logger.info(
                 "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
                 use_background_health_checks,
@@ -3485,6 +3556,8 @@ class ProxyConfig:
             router_params["enable_health_check_routing"] = True
         if _hc_staleness is not None:
             router_params["health_check_staleness_threshold"] = _hc_staleness
+        if _hc_ignore_transient:
+            router_params["health_check_ignore_transient_errors"] = True
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:
@@ -5223,10 +5296,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -5608,9 +5681,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -5952,9 +6025,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -9309,20 +9382,17 @@ async def _add_access_group_models_to_team_models(
         return team_models
 
     # Single batch fetch for all access groups
-    access_group_rows = (
-        await prisma_client.db.litellm_accessgrouptable.find_many(
-            where={"access_group_id": {"in": list(all_access_group_ids)}}
-        )
+    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(all_access_group_ids)}}
     )
     ag_model_map: Dict[str, List[str]] = {
-        row.access_group_id: row.access_model_names or []
-        for row in access_group_rows
+        row.access_group_id: row.access_model_names or [] for row in access_group_rows
     }
 
     # Second pass: resolve deployments for each eligible team
     for team_object in eligible_teams:
         model_names: Set[str] = set()
-        for ag_id in team_object.access_group_ids or [] :
+        for ag_id in team_object.access_group_ids or []:
             model_names.update(ag_model_map.get(ag_id, []))
 
         for model_name in model_names:
@@ -9333,9 +9403,7 @@ async def _add_access_group_models_to_team_models(
                 for deployment in deployments:
                     model_id = deployment.get("model_info", {}).get("id", None)
                     if model_id is not None:
-                        team_models.setdefault(model_id, set()).add(
-                            team_object.team_id
-                        )
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
 
     return team_models
 
@@ -12635,9 +12703,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
