@@ -71,6 +71,8 @@ _SECRET_RE = _build_secret_patterns()
 
 
 def _redact_string(value: str) -> str:
+    if not _ENABLE_SECRET_REDACTION:
+        return value
     return _SECRET_RE.sub(_REDACTED, value)
 
 
@@ -441,7 +443,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(print_statement)  # noqa
+            print(_redact_string(str(print_statement)))  # noqa
     except Exception:
         pass
 
