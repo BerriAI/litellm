@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from litellm.llms.azure_ai.cost_calculator import _is_azure_model_router
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
 
@@ -1398,8 +1399,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1428,3 +1429,295 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+# ===== Azure AI Model Router Dual Spend Tracking Tests =====
+
+
+def test_is_azure_model_router_detects_model_router():
+    """Test _is_azure_model_router correctly identifies model router requests."""
+    # Should detect model_router
+    assert _is_azure_model_router("azure_ai/model_router") is True
+    assert _is_azure_model_router("azure_ai/model-router") is True
+    assert _is_azure_model_router("azure_ai/model_router/my-deployment") is True
+
+    # Should NOT detect non-router models
+    assert _is_azure_model_router("azure_ai/gpt-4") is False
+    assert _is_azure_model_router("openai/gpt-4") is False
+    assert _is_azure_model_router("") is False
+
+
+def test_split_model_router_payload_splits_correctly():
+    """Test _split_model_router_payload correctly splits cost and tokens."""
+    writer = DBSpendUpdateWriter()
+
+    metadata = {
+        "response_model": "azure_ai/gpt-oss-120b",
+        "cost_breakdown": {
+            "additional_costs": {"azure_model_router_flat_cost": 0.00014}
+        },
+    }
+    payload = {
+        "model": "azure_ai/model_router",
+        "custom_llm_provider": "azure_ai",
+        "spend": 0.01014,  # 0.01 base + 0.00014 flat
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "metadata": json.dumps(metadata),
+        "api_key": "test-key",
+        "request_id": "req-123",
+    }
+
+    result = writer._split_model_router_payload(payload)
+    assert result is not None
+    router_payload, actual_payload = result
+
+    # Router payload: flat cost only, no tokens
+    assert router_payload["model"] == "azure_ai/model_router"
+    assert router_payload["spend"] == pytest.approx(0.00014)
+    assert router_payload["prompt_tokens"] == 0
+    assert router_payload["completion_tokens"] == 0
+    assert router_payload["total_tokens"] == 0
+
+    # Actual model payload: base cost, original tokens
+    assert actual_payload["model"] == "azure_ai/gpt-oss-120b"
+    assert actual_payload["spend"] == pytest.approx(0.01)
+    assert actual_payload["prompt_tokens"] == 1000
+    assert actual_payload["completion_tokens"] == 500
+
+
+def test_split_model_router_payload_returns_none_without_response_model():
+    """Test _split_model_router_payload returns None when response_model is missing."""
+    writer = DBSpendUpdateWriter()
+
+    # No response_model in metadata
+    payload = {
+        "model": "azure_ai/model_router",
+        "spend": 0.01,
+        "metadata": json.dumps({}),
+    }
+    assert writer._split_model_router_payload(payload) is None
+
+    # No metadata at all
+    payload_no_meta = {
+        "model": "azure_ai/model_router",
+        "spend": 0.01,
+    }
+    assert writer._split_model_router_payload(payload_no_meta) is None
+
+
+def test_split_model_router_payload_adds_provider_prefix():
+    """Test that response model gets provider prefix if missing."""
+    writer = DBSpendUpdateWriter()
+
+    metadata = {
+        "response_model": "gpt-oss-120b",  # No provider prefix
+        "cost_breakdown": {
+            "additional_costs": {"azure_model_router_flat_cost": 0.00014}
+        },
+    }
+    payload = {
+        "model": "azure_ai/model_router",
+        "custom_llm_provider": "azure_ai",
+        "spend": 0.01014,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "metadata": json.dumps(metadata),
+    }
+
+    result = writer._split_model_router_payload(payload)
+    assert result is not None
+    _, actual_payload = result
+    assert actual_payload["model"] == "azure_ai/gpt-oss-120b"
+
+
+def test_split_model_router_payload_no_cost_breakdown():
+    """Test split when cost_breakdown is missing - router flat cost defaults to 0."""
+    writer = DBSpendUpdateWriter()
+
+    metadata = {
+        "response_model": "azure_ai/gpt-oss-120b",
+        # No cost_breakdown
+    }
+    payload = {
+        "model": "azure_ai/model_router",
+        "custom_llm_provider": "azure_ai",
+        "spend": 0.01,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "metadata": json.dumps(metadata),
+    }
+
+    result = writer._split_model_router_payload(payload)
+    assert result is not None
+    router_payload, actual_payload = result
+
+    # Router gets 0 cost (no flat cost found)
+    assert router_payload["spend"] == 0.0
+    # Actual model gets all cost
+    assert actual_payload["spend"] == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_common_daily_transaction_respects_api_requests_override():
+    """Test that _common_add_spend_log_transaction_to_daily_transaction uses api_requests override."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "user": "test-user",
+        "startTime": "2024-01-15T10:00:00Z",
+        "api_key": "test-key",
+        "model": "azure_ai/gpt-oss-120b",
+        "custom_llm_provider": "azure_ai",
+        "model_group": "test-group",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "spend": 0.01,
+        "metadata": json.dumps({"usage_object": {}}),
+    }
+
+    # Default api_requests (should be 1)
+    result = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload, mock_prisma, "user"
+    )
+    assert result is not None
+    assert result["api_requests"] == 1
+    assert result["successful_requests"] == 1
+
+    # Override api_requests to 0
+    result_zero = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload, mock_prisma, "user", api_requests=0
+    )
+    assert result_zero is not None
+    assert result_zero["api_requests"] == 0
+    assert result_zero["successful_requests"] == 0
+    assert result_zero["failed_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_dual_transactions_for_model_router():
+    """Test that _batch_database_updates emits two daily transaction sets for model router."""
+    writer = DBSpendUpdateWriter()
+
+    # Mock the helper to track calls
+    writer._enqueue_all_daily_transactions = AsyncMock()
+    writer._update_user_db = AsyncMock()
+    writer._update_key_db = AsyncMock()
+    writer._update_team_db = AsyncMock()
+    writer._update_org_db = AsyncMock()
+    writer._update_tag_db = AsyncMock()
+    writer._update_agent_db = AsyncMock()
+
+    metadata = {
+        "response_model": "azure_ai/gpt-oss-120b",
+        "cost_breakdown": {
+            "additional_costs": {"azure_model_router_flat_cost": 0.00014}
+        },
+    }
+    payload = {
+        "model": "azure_ai/model_router",
+        "custom_llm_provider": "azure_ai",
+        "spend": 0.01014,
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "metadata": json.dumps(metadata),
+        "api_key": "test-key",
+        "request_id": "req-123",
+        "user": "test-user",
+        "team_id": "test-team",
+        "agent_id": None,
+        "request_tags": None,
+    }
+
+    mock_prisma = MagicMock()
+
+    await writer._batch_database_updates(
+        response_cost=0.01014,
+        user_id="test-user",
+        hashed_token="test-token",
+        team_id="test-team",
+        org_id="test-org",
+        end_user_id=None,
+        prisma_client=mock_prisma,
+        user_api_key_cache=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload_copy=payload,
+        request_tags=None,
+    )
+
+    # Should be called twice: once for router, once for actual model
+    assert writer._enqueue_all_daily_transactions.call_count == 2
+
+    # First call: router payload (api_requests defaults to None → 1)
+    first_call = writer._enqueue_all_daily_transactions.call_args_list[0]
+    router_payload = first_call[0][0]
+    assert router_payload["model"] == "azure_ai/model_router"
+    assert router_payload["spend"] == pytest.approx(0.00014)
+    assert router_payload["prompt_tokens"] == 0
+    assert first_call[1].get("api_requests") is None  # default (1)
+
+    # Second call: actual model payload (api_requests=0)
+    second_call = writer._enqueue_all_daily_transactions.call_args_list[1]
+    actual_payload = second_call[0][0]
+    assert actual_payload["model"] == "azure_ai/gpt-oss-120b"
+    assert actual_payload["spend"] == pytest.approx(0.01)
+    assert actual_payload["prompt_tokens"] == 1000
+    assert second_call[1].get("api_requests") == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_single_transaction_for_non_router():
+    """Test that _batch_database_updates emits one daily transaction set for non-router models."""
+    writer = DBSpendUpdateWriter()
+
+    writer._enqueue_all_daily_transactions = AsyncMock()
+    writer._update_user_db = AsyncMock()
+    writer._update_key_db = AsyncMock()
+    writer._update_team_db = AsyncMock()
+    writer._update_org_db = AsyncMock()
+    writer._update_tag_db = AsyncMock()
+    writer._update_agent_db = AsyncMock()
+
+    payload = {
+        "model": "azure_ai/gpt-4",
+        "custom_llm_provider": "azure_ai",
+        "spend": 0.05,
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "metadata": json.dumps({}),
+        "api_key": "test-key",
+        "request_id": "req-456",
+        "user": "test-user",
+        "team_id": "test-team",
+        "agent_id": None,
+        "request_tags": None,
+    }
+
+    mock_prisma = MagicMock()
+
+    await writer._batch_database_updates(
+        response_cost=0.05,
+        user_id="test-user",
+        hashed_token="test-token",
+        team_id="test-team",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=mock_prisma,
+        user_api_key_cache=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload_copy=payload,
+        request_tags=None,
+    )
+
+    # Should be called once for non-router model
+    assert writer._enqueue_all_daily_transactions.call_count == 1
+    first_call = writer._enqueue_all_daily_transactions.call_args_list[0]
+    assert first_call[0][0]["model"] == "azure_ai/gpt-4"
+    assert first_call[1].get("api_requests") is None  # default
