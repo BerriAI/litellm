@@ -1082,9 +1082,11 @@ const Teams: React.FC<TeamProps> = ({
                   </Form.Item>
                   {(() => {
                     const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
-                    const isOrgAdmin = userRole !== "Admin";
+                    const isGlobalAdmin = userRole === "Admin";
+                    const isOrgAdmin = !isGlobalAdmin;
                     const isSingleOrg = adminOrgs.length === 1;
                     const hasNoOrgs = adminOrgs.length === 0;
+                    const shouldLockSingleOrgSelection = isOrgAdmin && isSingleOrg;
 
                     return (
                       <>
@@ -1129,7 +1131,7 @@ const Teams: React.FC<TeamProps> = ({
                               : []
                           }
                           help={
-                            isSingleOrg
+                            shouldLockSingleOrgSelection
                               ? "You can only create teams within this organization"
                               : isOrgAdmin
                                 ? "required"
@@ -1139,7 +1141,7 @@ const Teams: React.FC<TeamProps> = ({
                           <Select
                             showSearch
                             allowClear={!isOrgAdmin}
-                            disabled={isSingleOrg}
+                            disabled={shouldLockSingleOrgSelection}
                             placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
                             onChange={(value) => {
                               form.setFieldValue("organization_id", value);
