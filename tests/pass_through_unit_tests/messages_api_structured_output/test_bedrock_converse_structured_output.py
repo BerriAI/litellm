@@ -26,4 +26,4 @@ class TestBedrockConverseStructuredOutput(BaseAnthropicMessagesStructuredOutputT
     """
 
     def get_model(self) -> str:
-        return "bedrock/converse/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        return "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"

@@ -790,6 +790,47 @@ litellm_jwtauth:
   user_roles_jwt_field: "resource_access.your-client.roles"
 ```
 
+## Route JWT-Shaped Machine Tokens to OAuth2
+
+Use this when both are enabled:
+- `enable_jwt_auth: true` for standard JWT validation
+- `enable_oauth2_auth: true` for OAuth2 introspection
+
+If some machine tokens are also JWT-shaped, configure `routing_overrides` to route matching tokens to OAuth2.
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: true
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    routing_overrides:
+      - iss: "machine-issuer.example.com"
+        client_id: "MID_LITELLM"
+        path: "oauth2"
+```
+
+### Matching behavior
+
+- A rule matches when all configured selectors match token claims
+- Supported selectors: `iss` (required), `client_id` (optional), `aud` (optional)
+- Selector values support both string and list forms
+- If no rule matches, LiteLLM continues with standard JWT validation
+
+### List-based override example
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: true
+  litellm_jwtauth:
+    routing_overrides:
+      - iss: ["machine-issuer.example.com", "backup-issuer.example.com"]
+        client_id: ["MID_LITELLM", "MID_BACKUP"]
+        aud: ["api://litellm", "api://fallback"]
+        path: "oauth2"
+```
+
 ## [BETA] Control Access with OIDC Roles
 
 Allow JWT tokens with supported roles to access the proxy.

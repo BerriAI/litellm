@@ -18,7 +18,7 @@ import re
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 import yaml
@@ -487,6 +487,59 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
+def _enforce_upperbound_key_params(
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    fill_defaults: bool = True,
+) -> None:
+    """
+    Enforce upperbound limits on key parameters.
+
+    For key generation (fill_defaults=True): fills None values with upperbound defaults.
+    For key update (fill_defaults=False): only validates explicitly provided values.
+    """
+    if litellm.upperbound_key_generate_params is None:
+        return
+
+    for elem in data:
+        key, value = elem
+        upperbound_value = getattr(
+            litellm.upperbound_key_generate_params, key, None
+        )
+        if upperbound_value is not None:
+            if value is None:
+                if fill_defaults:
+                    setattr(data, key, upperbound_value)
+            else:
+                if key in [
+                    "max_budget",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                ]:
+                    if value > upperbound_value:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                            },
+                        )
+                elif key in ["budget_duration", "duration"]:
+                    upperbound_duration = duration_in_seconds(
+                        duration=upperbound_value
+                    )
+                    if value == "-1":
+                        user_duration = float("inf")
+                    else:
+                        user_duration = duration_in_seconds(duration=value)
+                    if user_duration > upperbound_duration:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                            },
+                        )
+
+
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -537,49 +590,8 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
-    # check if user set default key/generate params on config.yaml
-    if litellm.upperbound_key_generate_params is not None:
-        for elem in data:
-            key, value = elem
-            upperbound_value = getattr(
-                litellm.upperbound_key_generate_params, key, None
-            )
-            if upperbound_value is not None:
-                if value is None:
-                    # Use the upperbound value if user didn't provide a value
-                    setattr(data, key, upperbound_value)
-                else:
-                    # Compare with upperbound for numeric fields
-                    if key in [
-                        "max_budget",
-                        "max_parallel_requests",
-                        "tpm_limit",
-                        "rpm_limit",
-                    ]:
-                        if value > upperbound_value:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                },
-                            )
-                    # Compare durations
-                    elif key in ["budget_duration", "duration"]:
-                        upperbound_duration = duration_in_seconds(
-                            duration=upperbound_value
-                        )
-                        # Handle special case where duration is None or "-1" (never expires)
-                        if value is None or value == "-1":
-                            user_duration = float("inf")  # Infinite duration
-                        else:
-                            user_duration = duration_in_seconds(duration=value)
-                        if user_duration > upperbound_duration:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                },
-                            )
+    # check if user set upperbound key/generate params on config.yaml
+    _enforce_upperbound_key_params(data, fill_defaults=True)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -942,9 +954,9 @@ async def _check_team_key_limits(
         where={"team_id": team_table.team_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
-    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    # data.key may be a raw key (sk-...) or a pre-hashed token_id.
     if isinstance(data, UpdateKeyRequest):
-        hashed_key = hash_token(data.key)
+        hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
         keys=keys,
@@ -1101,9 +1113,9 @@ async def _check_org_key_limits(
         where={"organization_id": org_table.organization_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
-    # key.token is the SHA-256 hash stored in DB; data.key is the raw key string.
+    # data.key may be a raw key (sk-...) or a pre-hashed token_id.
     if isinstance(data, UpdateKeyRequest):
-        hashed_key = hash_token(data.key)
+        hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
         keys=keys,
@@ -1687,6 +1699,7 @@ async def _process_single_key_update(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
+    user_custom_key_update: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """
     Process a single key update with all validations and checks.
@@ -1736,6 +1749,22 @@ async def _process_single_key_update(
         team_id=key_update_item.team_id,
         tags=key_update_item.tags,
     )
+
+    # Custom key update hook
+    if user_custom_key_update is not None:
+        if inspect.iscoroutinefunction(user_custom_key_update):
+            result = await user_custom_key_update(update_key_request)
+        else:
+            raise ValueError("user_custom_key_update must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=message
+            )
+
+    # Enforce upperbound key params on update (don't fill defaults)
+    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
 
     # Get team object and check team limits if team_id is provided
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
@@ -2014,7 +2043,7 @@ async def _validate_update_key_data(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_key_fn(
+async def update_key_fn(  # noqa: PLR0915
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2095,6 +2124,7 @@ async def update_key_fn(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_update,
     )
 
     try:
@@ -2126,6 +2156,21 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        # Custom key update hook
+        if user_custom_key_update is not None:
+            if inspect.iscoroutinefunction(user_custom_key_update):
+                result = await user_custom_key_update(data)
+            else:
+                raise ValueError("user_custom_key_update must be a coroutine")
+            decision = result.get("decision", True)
+            message = result.get("message", "Authentication Failed - Custom Auth Rule")
+            if not decision:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=message
+                )
+
+        # Enforce upperbound key params on update (don't fill defaults)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -2157,7 +2202,7 @@ async def update_key_fn(
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
         await _delete_cache_key_object(
-            hashed_token=hash_token(key),
+            hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -2261,6 +2306,7 @@ async def bulk_update_keys(
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_update,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2304,6 +2350,7 @@ async def bulk_update_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
+                user_custom_key_update=user_custom_key_update,
             )
 
             successful_updates.append(

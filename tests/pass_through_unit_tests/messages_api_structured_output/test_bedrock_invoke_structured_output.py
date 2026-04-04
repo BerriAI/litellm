@@ -29,4 +29,4 @@ class TestBedrockInvokeStructuredOutput(BaseAnthropicMessagesStructuredOutputTes
     """
 
     def get_model(self) -> str:
-        return "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        return "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"

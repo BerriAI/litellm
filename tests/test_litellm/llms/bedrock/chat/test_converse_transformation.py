@@ -225,7 +225,7 @@ def test_transform_tool_call_with_cache_control():
     ]
 
     result = config.transform_request(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -309,10 +309,10 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     config = AmazonConverseConfig()
     system_content_blocks = []
     optional_params = {
-        "anthropic_beta": ["computer-use-2024-10-22"],
+        "anthropic_beta": ["computer-use-2025-01-24"],
         "tools": [
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "name": "computer",
                 "display_height_px": 768,
                 "display_width_px": 1024,
@@ -322,7 +322,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
         "some_other_param": 123,
     }
     data = config._transform_request_helper(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         system_content_blocks=system_content_blocks,
         optional_params=optional_params,
         messages=None,
@@ -330,11 +330,11 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert "additionalModelRequestFields" in data
     fields = data["additionalModelRequestFields"]
     assert "anthropic_beta" in fields
-    assert fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
     # Verify computer tool is included
     assert "tools" in fields
     assert len(fields["tools"]) == 1
-    assert fields["tools"][0]["type"] == "computer_20241022"
+    assert fields["tools"][0]["type"] == "computer_20250124"
 
 
 def test_transform_response_with_computer_use_tool():
@@ -396,7 +396,7 @@ def test_transform_response_with_computer_use_tool():
     optional_params = {
         "tools": [
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "function": {
                     "name": "computer",
                     "parameters": {
@@ -410,7 +410,7 @@ def test_transform_response_with_computer_use_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -497,7 +497,7 @@ def test_transform_response_with_bash_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -610,7 +610,7 @@ def test_transform_response_with_structured_response_being_called():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -758,7 +758,7 @@ async def test_bedrock_bash_tool_acompletion():
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
@@ -798,7 +798,7 @@ async def test_bedrock_computer_use_acompletion():
     # Test with computer use tool
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -823,7 +823,7 @@ async def test_bedrock_computer_use_acompletion():
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
@@ -864,7 +864,7 @@ async def test_transformation_directly():
 
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -880,7 +880,7 @@ async def test_transformation_directly():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -893,7 +893,7 @@ async def test_transformation_directly():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -901,7 +901,7 @@ async def test_transformation_directly():
 
     # Verify tool types
     tool_types = [tool.get("type") for tool in additional_fields["tools"]]
-    assert "computer_20241022" in tool_types
+    assert "computer_20250124" in tool_types
     assert "bash_20241022" in tool_types
 
 
@@ -910,7 +910,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
     config = AmazonConverseConfig()
     system_content_blocks = []
     optional_params = {
-        "anthropic_beta": ["computer-use-2024-10-22"],
+        "anthropic_beta": ["computer-use-2025-01-24"],
         "tools": [
             {
                 "type": "bash_20241022",
@@ -920,7 +920,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
         "some_other_param": 123,
     }
     data = config._transform_request_helper(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         system_content_blocks=system_content_blocks,
         optional_params=optional_params,
         messages=None,
@@ -928,7 +928,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
     assert "additionalModelRequestFields" in data
     fields = data["additionalModelRequestFields"]
     assert "anthropic_beta" in fields
-    assert fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
     # Verify bash tool is included
     assert "tools" in fields
     assert len(fields["tools"]) == 1
@@ -942,7 +942,7 @@ def test_transform_request_with_multiple_tools():
     # Use the exact payload from the user's error
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "function": {
                 "name": "computer",
                 "parameters": {
@@ -984,7 +984,7 @@ def test_transform_request_with_multiple_tools():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -997,7 +997,7 @@ def test_transform_request_with_multiple_tools():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1005,7 +1005,7 @@ def test_transform_request_with_multiple_tools():
 
     # Verify tool types
     tool_types = [tool.get("type") for tool in additional_fields["tools"]]
-    assert "computer_20241022" in tool_types
+    assert "computer_20250124" in tool_types
     assert "bash_20241022" in tool_types
     assert "text_editor_20241022" in tool_types
 
@@ -1019,7 +1019,7 @@ def test_transform_request_with_computer_tool_only():
 
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -1044,7 +1044,7 @@ def test_transform_request_with_computer_tool_only():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -1057,12 +1057,12 @@ def test_transform_request_with_computer_tool_only():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
     assert len(additional_fields["tools"]) == 1
-    assert additional_fields["tools"][0]["type"] == "computer_20241022"
+    assert additional_fields["tools"][0]["type"] == "computer_20250124"
 
 
 def test_transform_request_with_bash_tool_only():
@@ -1080,7 +1080,7 @@ def test_transform_request_with_bash_tool_only():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -1093,7 +1093,7 @@ def test_transform_request_with_bash_tool_only():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1116,7 +1116,7 @@ def test_transform_request_with_text_editor_tool():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -1129,7 +1129,7 @@ def test_transform_request_with_text_editor_tool():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1166,7 +1166,7 @@ def test_transform_request_with_function_tool():
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -1262,17 +1262,17 @@ async def test_assistant_message_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1307,11 +1307,11 @@ async def test_assistant_message_list_content_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1349,11 +1349,11 @@ async def test_tool_message_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1400,11 +1400,11 @@ async def test_tool_message_string_content_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1447,11 +1447,11 @@ async def test_assistant_tool_calls_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1501,11 +1501,11 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -1546,11 +1546,11 @@ async def test_no_cache_control_no_cache_point():
     ]
 
     result = _bedrock_converse_messages_pt(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages, model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+        messages=messages, model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
     )
 
     assert result == async_result
@@ -2108,7 +2108,7 @@ def test_request_metadata_transformation():
 
     # Transform request with requestMetadata
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": request_metadata},
         litellm_params={},
@@ -2134,7 +2134,7 @@ def test_request_metadata_validation():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
@@ -2146,7 +2146,7 @@ def test_request_metadata_validation():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": too_many_items},
             litellm_params={},
@@ -2169,7 +2169,7 @@ def test_request_metadata_key_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
@@ -2184,7 +2184,7 @@ def test_request_metadata_key_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
@@ -2207,7 +2207,7 @@ def test_request_metadata_value_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
@@ -2222,7 +2222,7 @@ def test_request_metadata_value_constraints():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
@@ -2245,7 +2245,7 @@ def test_request_metadata_character_pattern():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
@@ -2280,7 +2280,7 @@ def test_request_metadata_with_other_params():
 
     # Transform request with multiple parameters including request_metadata
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": request_metadata, "tools": tools, "max_tokens": 100, "temperature": 0.7},
         litellm_params={},
@@ -2305,7 +2305,7 @@ def test_request_metadata_empty():
 
     # Empty dict should be allowed
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": {}},
         litellm_params={},
@@ -2324,7 +2324,7 @@ def test_request_metadata_not_provided():
 
     # No requestMetadata provided
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={},
         litellm_params={},
@@ -2358,7 +2358,7 @@ def test_empty_assistant_message_handling():
     # This avoids issues with module reloading during parallel test execution
     with patch.object(factory_module.litellm, "modify_params", True):
         result = _bedrock_converse_messages_pt(
-            messages=messages, model="anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+            messages=messages, model="anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
         )
 
         # Should have 3 messages: user, assistant (with placeholder), user
@@ -2380,7 +2380,7 @@ def test_empty_assistant_message_handling():
         ]
 
         result = _bedrock_converse_messages_pt(
-            messages=messages, model="anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+            messages=messages, model="anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
         )
 
         # Assistant message should have placeholder text instead of whitespace
@@ -2395,7 +2395,7 @@ def test_empty_assistant_message_handling():
         ]
 
         result = _bedrock_converse_messages_pt(
-            messages=messages, model="anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+            messages=messages, model="anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
         )
 
         # Assistant message should have placeholder text instead of empty text
@@ -2410,7 +2410,7 @@ def test_empty_assistant_message_handling():
         ]
 
         result = _bedrock_converse_messages_pt(
-            messages=messages, model="anthropic.claude-3-5-sonnet-20240620-v1:0", llm_provider="bedrock_converse"
+            messages=messages, model="anthropic.claude-haiku-4-5-20251001-v1:0", llm_provider="bedrock_converse"
         )
 
         # Assistant message should keep original content
@@ -2446,7 +2446,7 @@ def test_is_nova_2_model():
     assert config._is_nova_2_model("eu.amazon.nova-pro-v1:0") is False
 
     # Test with completely different models (should return False)
-    assert config._is_nova_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
+    assert config._is_nova_2_model("anthropic.claude-haiku-4-5-20251001-v1:0") is False
     assert config._is_nova_2_model("meta.llama3-70b-instruct-v1:0") is False
     assert config._is_nova_2_model("mistral.mistral-7b-instruct-v0:2") is False
 
@@ -2671,7 +2671,6 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
 
         # Unsupported models -- should fall back to tool-call approach
-        assert not config._supports_native_structured_outputs("anthropic.claude-3-5-sonnet-20241022-v2:0")
         assert not config._supports_native_structured_outputs("anthropic.claude-sonnet-4-20250514-v1:0")
         assert not config._supports_native_structured_outputs("meta.llama3-3-70b-instruct-v1:0")
         assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
@@ -2799,13 +2798,13 @@ def test_translate_response_format_fallback_tool_call():
     optional_params: dict = {}
     result = config._translate_response_format_param(
         value=response_format,
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-3-haiku-20240307-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
         is_thinking_enabled=False,
     )
 
-    # Should use tool-call approach, NOT outputConfig
+    # Should use tool-call approach, NOT outputConfig (model doesn't support native structured outputs)
     assert "outputConfig" not in result
     assert "tools" in result
     assert result["json_mode"] is True
@@ -3191,7 +3190,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 def test_parallel_tool_calls_older_model_drops_disable_flag():
     """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
     config = AmazonConverseConfig()
-    model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    model = "anthropic.claude-3-haiku-20240307-v1:0"
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
@@ -3319,7 +3318,7 @@ def test_transform_response_with_both_json_tool_call_and_real_tool():
     optional_params = {"json_mode": True}
 
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -3397,7 +3396,7 @@ def test_transform_response_does_not_mutate_optional_params():
     optional_params = {"json_mode": True, "other_key": "value"}
 
     config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,

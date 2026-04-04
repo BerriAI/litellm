@@ -2753,6 +2753,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2785,6 +2787,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -4098,6 +4102,24 @@ class ScopeMapping(OIDCPermissions):
     }
 
 
+class JWTRoutingOverride(BaseModel):
+    """
+    Override default auth routing for JWT-shaped bearer tokens.
+
+    A rule matches when all provided selectors match token claims.
+    If matched, request is routed to the configured auth path.
+    """
+
+    iss: Union[str, List[str]]
+    client_id: Optional[Union[str, List[str]]] = None
+    aud: Optional[Union[str, List[str]]] = None
+    path: Literal["oauth2"] = "oauth2"
+
+    model_config = {
+        "extra": "forbid",
+    }
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4197,6 +4219,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
+        default=None,
+        description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
     )
     #########################################################
 

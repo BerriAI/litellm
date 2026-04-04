@@ -11,7 +11,7 @@ import asyncio
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -137,6 +137,58 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
                 api_key = match.group(1)
 
     return api_key
+
+
+def _routing_selector_matches_claim(
+    selector_value: Optional[Any], claim_value: Optional[Any]
+) -> bool:
+    if selector_value is None:
+        return True
+
+    selector_list = (
+        [str(v) for v in selector_value]
+        if isinstance(selector_value, list)
+        else [str(selector_value)]
+    )
+
+    if isinstance(claim_value, list):
+        claim_list = [str(v) for v in claim_value]
+        return any(v in claim_list for v in selector_list)
+
+    return str(claim_value) in selector_list if claim_value is not None else False
+
+
+def _matches_routing_override(
+    token_claims: dict, override: "JWTRoutingOverride"
+) -> bool:
+    return (
+        _routing_selector_matches_claim(override.iss, token_claims.get("iss"))
+        and _routing_selector_matches_claim(
+            override.client_id, token_claims.get("client_id")
+        )
+        and _routing_selector_matches_claim(override.aud, token_claims.get("aud"))
+    )
+
+
+def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) -> bool:
+    routing_overrides = jwt_handler.litellm_jwtauth.routing_overrides
+    if not routing_overrides:
+        return False
+
+    token_claims = jwt_handler.get_unverified_claims(token=token)
+    if token_claims is None:
+        return False
+
+    for override in routing_overrides:
+        if override.path == "oauth2" and _matches_routing_override(
+            token_claims=token_claims, override=override
+        ):
+            verbose_proxy_logger.debug(
+                "JWT routing override matched. Routing token to OAuth2 introspection."
+            )
+            return True
+
+    return False
 
 
 def _get_bearer_token(
@@ -649,12 +701,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
                 # - Opaque tokens -> use OAuth2 handler
                 # This allows JWT for users and OAuth2 for M2M on the same instance
-                is_jwt_token = (
+                is_jwt = (
                     jwt_handler.is_jwt(token=api_key)
                     if general_settings.get("enable_jwt_auth", False) is True
                     else False
                 )
-                if not is_jwt_token:
+                # Routing uses unverified JWT claims only to choose auth path.
+                # Final authentication is enforced by the selected validator.
+                route_jwt_to_oauth2 = (
+                    is_jwt
+                    and _should_route_jwt_to_oauth2_override(
+                        token=api_key, jwt_handler=jwt_handler
+                    )
+                )
+                if not is_jwt or route_jwt_to_oauth2:
                     # return UserAPIKeyAuth object
                     # helper to check if the api_key is a valid oauth2 token
                     from litellm.proxy.proxy_server import premium_user
@@ -688,7 +748,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     jwt_claims: Optional[dict]
                     if (
                         jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-                        and not jwt_handler.is_jwt(token=api_key)
+                        and not is_jwt
                     ):
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
@@ -1193,49 +1253,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 raise Exception(
                     "Key is blocked. Update via `/key/unblock` if you're an admin."
                 )
-            config = valid_token.config
-
-            if config != {}:
-                model_list = config.get("model_list", [])
-                new_model_list = model_list
-                verbose_proxy_logger.debug(
-                    f"\n new llm router model list {new_model_list}"
-                )
-            elif (
-                isinstance(valid_token.models, list)
-                and "all-team-models" in valid_token.models
-            ):
-                # Do not do any validation at this step
-                # the validation will occur when checking the team has access to this model
-                pass
-            else:
-                model = get_model_from_request(request_data, route)
-                fallback_models = cast(
-                    Optional[List[ALL_FALLBACK_MODEL_VALUES]],
-                    request_data.get("fallbacks", None),
-                )
-
-                if model is not None:
-                    await can_key_call_model(
-                        model=model,
-                        llm_model_list=llm_model_list,
-                        valid_token=valid_token,
-                        llm_router=llm_router,
-                    )
-
-                if fallback_models is not None:
-                    for m in fallback_models:
-                        await can_key_call_model(
-                            model=m["model"] if isinstance(m, dict) else m,
-                            llm_model_list=llm_model_list,
-                            valid_token=valid_token,
-                            llm_router=llm_router,
-                        )
-                        await is_valid_fallback_model(
-                            model=m["model"] if isinstance(m, dict) else m,
-                            llm_router=llm_router,
-                            user_model=None,
-                        )
+            await _enforce_key_and_fallback_model_access(
+                valid_token=valid_token,
+                request_data=request_data,
+                route=route,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
@@ -1764,6 +1788,61 @@ async def _lookup_end_user_and_apply_budget(
     return valid_token, end_user_object
 
 
+async def _enforce_key_and_fallback_model_access(
+    *,
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    llm_model_list: Optional[list],
+    llm_router: Optional[Any],
+) -> None:
+    """
+    Key-level model allowlist and client fallbacks (same as standard auth).
+    Not included in common_checks — common_checks enforces team/user/project model access only.
+    """
+    config = valid_token.config
+
+    if config != {}:
+        model_list = config.get("model_list", [])
+        new_model_list = model_list
+        verbose_proxy_logger.debug(
+            f"\n new llm router model list {new_model_list}"
+        )
+    elif (
+        isinstance(valid_token.models, list)
+        and "all-team-models" in valid_token.models
+    ):
+        pass
+    else:
+        model = get_model_from_request(request_data, route)
+        fallback_models = cast(
+            Optional[List[ALL_FALLBACK_MODEL_VALUES]],
+            request_data.get("fallbacks", None),
+        )
+
+        if model is not None:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+
+        if fallback_models is not None:
+            for m in fallback_models:
+                await can_key_call_model(
+                    model=m["model"] if isinstance(m, dict) else m,
+                    llm_model_list=llm_model_list,
+                    valid_token=valid_token,
+                    llm_router=llm_router,
+                )
+                await is_valid_fallback_model(
+                    model=m["model"] if isinstance(m, dict) else m,
+                    llm_router=llm_router,
+                    user_model=None,
+                )
+
+
 async def _run_post_custom_auth_checks(
     valid_token: UserAPIKeyAuth,
     request: Request,
@@ -1773,6 +1852,7 @@ async def _run_post_custom_auth_checks(
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_model_list,
         llm_router,
         model_max_budget_limiter,
         prisma_client,
@@ -1815,6 +1895,15 @@ async def _run_post_custom_auth_checks(
                     else ""
                 ),
             )
+
+    if general_settings.get("custom_auth_run_common_checks", False):
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route=route,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
 
     current_model = request_data.get("model", None)
 
