@@ -4869,7 +4869,7 @@ async def update_daily_tag_spend(
     """
     Separate scheduler job to commit daily tag spend updates.
     
-    Runs at a longer interval (2x default) than the main update_spend job
+    Runs at a longer interval (2.3x default) than the main update_spend job
     to reduce query contention for DailyTagSpend table.
     
     This is called by a dedicated scheduler job and does NOT process:
@@ -4886,11 +4886,18 @@ async def update_daily_tag_spend(
     """
     n_retry_times = 3
     try:
-        await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
-            prisma_client=prisma_client,
-            n_retry_times=n_retry_times,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        else:
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
     except Exception as e:
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 

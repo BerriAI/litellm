@@ -12,31 +12,70 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 async def test_update_daily_tag_spend_delegates_to_tag_commit_writer():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
+    redis_update_buffer = MagicMock()
+    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = False
     proxy_logging_obj.db_spend_update_writer = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
-    await update_daily_tag_spend(prisma_client, proxy_logging_obj)
+    await update_daily_tag_spend(
+        prisma_client,
+        proxy_logging_obj,
+    )
 
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_awaited_once_with(
         prisma_client=prisma_client,
         n_retry_times=3,
         proxy_logging_obj=proxy_logging_obj,
     )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_update_daily_tag_spend_logs_error_and_does_not_raise():
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
+    redis_update_buffer = MagicMock()
+    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = False
     proxy_logging_obj.db_spend_update_writer = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
         side_effect=ValueError("boom")
     )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
 
     with patch("litellm.proxy.utils.verbose_proxy_logger.error") as error_logger:
-        await update_daily_tag_spend(prisma_client, proxy_logging_obj)
+        await update_daily_tag_spend(
+            prisma_client,
+            proxy_logging_obj,
+        )
 
     proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_awaited_once()
     error_logger.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_daily_tag_spend_uses_redis_writer_when_enabled():
+    prisma_client = MagicMock()
+    proxy_logging_obj = MagicMock()
+    redis_update_buffer = MagicMock()
+    redis_update_buffer._should_commit_spend_updates_to_redis.return_value = True
+    proxy_logging_obj.db_spend_update_writer = MagicMock()
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.redis_update_buffer = redis_update_buffer
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
+
+    await update_daily_tag_spend(
+        prisma_client,
+        proxy_logging_obj,
+    )
+
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis.assert_awaited_once_with(
+        prisma_client=prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio
