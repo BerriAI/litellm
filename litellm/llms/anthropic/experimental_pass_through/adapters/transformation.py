@@ -317,6 +317,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "tools",
             "thinking",
             "output_format",
+            "output_config",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -1073,6 +1074,33 @@ class LiteLLMAnthropicMessagesAdapter:
         if response_format:
             new_kwargs["response_format"] = response_format
 
+    def _translate_output_config_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        """Translate output_config.effort to reasoning_effort when applicable."""
+        if "output_config" not in anthropic_message_request:
+            return
+        output_config = anthropic_message_request["output_config"]
+        if not isinstance(output_config, dict):
+            return
+
+        effort = output_config.get("effort")
+        if not effort:
+            return
+
+        model = new_kwargs.get("model", "")
+        if self.is_anthropic_claude_model(model):
+            new_kwargs["output_config"] = output_config  # type: ignore
+        else:
+            # Map Anthropic effort to reasoning_effort for OpenAI models
+            # Effort mapping is generally direct for matching concepts
+            # Anthropic currently doesn't specify exact mapping but 'high'/'low' vs 'high'/'medium'/'low'
+            # are equivalent enough for reasoning_effort API mapping:
+            if "reasoning_effort" not in new_kwargs: # don't overwrite if thinking already populated it
+                new_kwargs["reasoning_effort"] = effort # type: ignore
+
     def _copy_untranslated_anthropic_params(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -1149,6 +1177,13 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
         )
+        ## CONVERT OUTPUT_CONFIG
+        self._translate_output_config_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+
+        ## COPY UNTRANSLATED PARAMS
         self._copy_untranslated_anthropic_params(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,

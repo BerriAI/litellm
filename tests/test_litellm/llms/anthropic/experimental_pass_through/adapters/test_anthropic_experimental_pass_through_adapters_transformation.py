@@ -2111,3 +2111,27 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+
+def test_translate_output_config_to_reasoning_effort():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    
+    # Test setting output_config internally maps to reasoning_effort for generic models
+    anthropic_request = {
+        "model": "openai-response",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "output_config": {"effort": "high"}
+    }
+    
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_request) # type: ignore
+    assert openai_request.get("reasoning_effort") == "high"
+    
+    # Test for claude model it retains output_config
+    anthropic_request_claude = {
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "output_config": {"effort": "medium"}
+    }
+    openai_request_claude, _ = adapter.translate_anthropic_to_openai(anthropic_request_claude) # type: ignore
+    assert openai_request_claude.get("output_config") == {"effort": "medium"}
+    assert "reasoning_effort" not in openai_request_claude
+
