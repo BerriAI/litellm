@@ -28,7 +28,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """Google AI Studio sends api key in query params"""
+        """Google AI Studio uses x-goog-api-key header for authentication."""
+        if api_key:
+            headers["x-goog-api-key"] = api_key
         return headers
 
     @property
@@ -71,7 +73,8 @@ class GeminiModelInfo(BaseLLMModelInfo):
             )
 
         response = litellm.module_level_client.get(
-            url=f"{api_base}{endpoint}?key={api_key}",
+            url=f"{api_base}{endpoint}",
+            headers={"x-goog-api-key": api_key},
         )
 
         if response.status_code != 200:

@@ -59,7 +59,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not api_key:
             raise ValueError("api_key is required")
 
-        url = "{}/{}?key={}".format(api_base, endpoint, api_key)
+        url = "{}/{}".format(api_base, endpoint)
         return url
 
     def get_supported_openai_params(

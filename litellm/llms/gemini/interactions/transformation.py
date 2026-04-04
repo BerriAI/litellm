@@ -66,9 +66,13 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
-        """Google AI Studio uses API key in query params, not headers."""
+        """Google AI Studio uses x-goog-api-key header for authentication."""
         headers = headers or {}
         headers["Content-Type"] = "application/json"
+        if litellm_params:
+            api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+            if api_key:
+                headers["x-goog-api-key"] = api_key
         return headers
 
     def get_complete_url(
@@ -89,11 +93,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 "Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
             )
         
-        query_params = f"key={api_key}"
         if stream:
-            query_params += "&alt=sse"
-        
-        return f"{api_base}/{self.api_version}/interactions?{query_params}"
+            return f"{api_base}/{self.api_version}/interactions?alt=sse"
+
+        return f"{api_base}/{self.api_version}/interactions"
 
     def transform_request(
         self,
@@ -182,10 +185,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> Tuple[str, Dict]:
         """GET /{api_version}/interactions/{interaction_id}"""
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
-        api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
-        if not api_key:
+        if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}", {}
+        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}", {}
 
     def transform_get_interaction_response(
         self,
@@ -213,10 +215,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> Tuple[str, Dict]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
-        api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
-        if not api_key:
+        if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}?key={api_key}", {}
+        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}", {}
 
     def transform_delete_interaction_response(
         self,
@@ -241,10 +242,9 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> Tuple[str, Dict]:
         """POST /{api_version}/interactions/{interaction_id}:cancel (if supported)"""
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
-        api_key = GeminiModelInfo.get_api_key(litellm_params.api_key)
-        if not api_key:
+        if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel?key={api_key}", {}
+        return f"{resolved_api_base}/{self.api_version}/interactions/{interaction_id}:cancel", {}
 
     def transform_cancel_interaction_response(
         self,
