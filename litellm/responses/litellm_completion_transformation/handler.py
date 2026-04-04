@@ -120,6 +120,7 @@ class LiteLLMCompletionTransformationHandler:
                 model=acompletion_args["model"],
                 context_management=context_management,
                 custom_llm_provider=acompletion_args.get("custom_llm_provider"),
+                litellm_metadata=kwargs.get("litellm_metadata"),
             )
             acompletion_args["messages"] = compacted_messages
 

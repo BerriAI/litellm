@@ -12,14 +12,22 @@ import litellm
 from litellm._logging import verbose_logger
 
 SUMMARIZATION_SYSTEM_PROMPT = (
-    "You have written a partial transcript for the initial task above. "
-    "Please write a summary of the transcript. The purpose of this summary is "
-    "to provide continuity so you can continue to make progress towards solving "
-    "the task in a future context, where the raw history above may not be "
-    "accessible and will be replaced with this summary. Write down anything "
-    "that would be helpful, including the state, next steps, learnings etc. "
-    "You must wrap your summary in a <summary></summary> block."
+    "You are a conversation summarizer. The user will provide a transcript of a "
+    "conversation between a user and an assistant. Produce a concise summary that "
+    "captures: (1) what the user asked or talked about, (2) what the assistant "
+    "replied, and (3) any decisions, conclusions, or pending questions. "
+    "Write the summary in plain prose, in the third person (e.g. 'The user asked "
+    "about X. The assistant explained Y.'). Do NOT use XML tags, markdown headers, "
+    "or any special formatting. "
+    "Act like a compression algorithm: use as few words as possible while preserving "
+    "all important information. For simple or repetitive conversations, a few "
+    "sentences may suffice. For complex conversations involving multiple disparate "
+    "tasks, detailed technical decisions, or extensive context, you may use more "
+    "detail. The absolute maximum is 5000 words, but most summaries should be "
+    "significantly shorter than that."
 )
+
+MAX_SUMMARY_TOKENS = 4096
 
 MIN_COMPACT_THRESHOLD = 1000
 
@@ -42,7 +50,7 @@ def _get_compact_threshold(context_management: List[Dict[str, Any]]) -> Optional
 
 
 def _extract_summary(text: str) -> str:
-    """Pull content out of <summary>...</summary> tags, falling back to the full text."""
+    """Extract the summary, stripping any XML-style tags the model may have added."""
     match = re.search(r"<summary>(.*?)</summary>", text, re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -72,6 +80,7 @@ async def maybe_compact_context(
     model: str,
     context_management: List[Dict[str, Any]],
     custom_llm_provider: Optional[str] = None,
+    litellm_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
     Check whether compaction should trigger and, if so, summarize ALL messages.
@@ -86,9 +95,12 @@ async def maybe_compact_context(
     if threshold is None:
         return messages, None
 
-    token_count = litellm.token_counter(model=model, messages=messages)
+    char_count = sum(
+        len(str(msg.get("content", ""))) for msg in messages
+    )
+    token_count = char_count // 4
     verbose_logger.debug(
-        "compaction: token_count=%d, threshold=%d", token_count, threshold
+        "compaction: estimated token_count=%d, threshold=%d", token_count, threshold
     )
 
     if token_count <= threshold:
@@ -110,9 +122,12 @@ async def maybe_compact_context(
     acompletion_kwargs: Dict[str, Any] = {
         "model": model,
         "messages": summarization_messages,
+        "max_tokens": MAX_SUMMARY_TOKENS,
     }
     if custom_llm_provider is not None:
         acompletion_kwargs["custom_llm_provider"] = custom_llm_provider
+    if litellm_metadata is not None:
+        acompletion_kwargs["metadata"] = litellm_metadata
 
     summary_response = await litellm.acompletion(**acompletion_kwargs)
 
