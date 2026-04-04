@@ -466,7 +466,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     onAliasUpdate={setModelGroupAlias}
                   />
                 </TabPanel>
-                <PriceDataManagementTab />
+                {all_admin_roles.includes(userRole) && <PriceDataManagementTab />}
               </TabPanels>
             </TabGroup>
           )}

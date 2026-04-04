@@ -218,6 +218,10 @@ router_settings:
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | reject_clientside_metadata_tags | boolean | If true, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata. |
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
+| cors_allow_origins | Union[str, List[str]] | CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. Existing `LITELLM_CORS_*` env vars take precedence over config values. Restart the proxy after changing any CORS setting. |
+| cors_allow_credentials | boolean | Allow CORS credentials. Defaults to `false` when `cors_allow_origins` is explicitly configured and this setting is unset. Otherwise it preserves the proxy's existing default behavior. Wildcard origins or patterns disable credentials. |
+| cors_allow_methods | Union[str, List[str]] | CORS allowlist methods for the proxy. Defaults to `"*"` when unset. |
+| cors_allow_headers | Union[str, List[str]] | CORS allowlist headers for the proxy. Defaults to `"*"` when unset. |
 | key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
 | master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
 | database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
@@ -796,6 +800,7 @@ router_settings:
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
 | LITELLM_ASSETS_PATH | Path to directory for UI assets and logos. Used when running with read-only filesystem (e.g., Kubernetes). Default is `/var/lib/litellm/assets` in Docker.
 | LITELLM_BLOG_POSTS_URL | Custom URL for fetching LiteLLM blog posts JSON. Default is the GitHub main branch URL
+| LITELLM_CORS_ALLOW_CREDENTIALS | Proxy CORS `Access-Control-Allow-Credentials`. When unset, defaults to `true` if CORS origins were not explicitly configured, otherwise `false`. Set to `true`/`1`/`yes` to allow credentials, or empty/`false` to disallow. Takes precedence over `general_settings.cors_allow_credentials`. Restart the proxy after changing.
 | LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DEPLOYMENT_ENVIRONMENT | Environment name for the deployment (e.g., "production", "staging"). Used as a fallback when OTEL_ENVIRONMENT_NAME is not set. Sets the `environment` tag in telemetry data

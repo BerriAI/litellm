@@ -81,9 +81,22 @@ async def test_google_generate_content_with_slashes_in_model_name(
     try:
         await initialize(config=config_fp)
 
-        with patch("litellm.proxy.proxy_server.llm_router.agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
+        # initialize() sets llm_router on the module object that existed at
+        # import time.  Other tests (test_cors_config) do sys.modules.pop +
+        # re-import of litellm.proxy.proxy_server, creating a new module
+        # where llm_router is still None.  google_generate_content does a
+        # lazy `from litellm.proxy.proxy_server import llm_router` which
+        # reads from the current sys.modules entry.  Copy the router from
+        # the original module (where initialize set it) to the live module.
+        _init_globals = initialize.__globals__
+        _live_mod = sys.modules["litellm.proxy.proxy_server"]
+        if _live_mod.__dict__ is not _init_globals:
+            _live_mod.llm_router = _init_globals.get("llm_router")
+
+        router = _live_mod.llm_router
+        with patch.object(router, "agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
             mock_agenerate_content.return_value = ModelResponse()
-            
+
             await google_generate_content(
                 request=mock_request,
                 model_name="bedrock/claude-sonnet-3.7",

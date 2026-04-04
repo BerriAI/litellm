@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+from litellm.types.utils import StreamingChoices
 
 
 def test_redacted_thinking_content_block_delta():
@@ -1581,3 +1582,167 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def test_convert_str_chunk_to_generic_chunk_valid_json():
+    """Test convert_str_chunk_to_generic_chunk with valid JSON SSE chunk."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Valid SSE JSON chunk
+    chunk = 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should parse successfully and return a ModelResponseStream with content
+    assert result.choices[0].delta.content == "Hello"
+    assert result.id == iterator.response_id
+
+
+def test_convert_str_chunk_to_generic_chunk_binary_input():
+    """Test convert_str_chunk_to_generic_chunk with binary input."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Binary input that needs decoding - use type ignore since function signature says str
+    # but implementation handles bytes
+    chunk = b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)  # type: ignore[arg-type]
+    
+    # Should parse successfully
+    assert result.choices[0].delta.content == "Hello"
+    assert result.id == iterator.response_id
+
+
+def test_convert_str_chunk_to_generic_chunk_multiline_sse():
+    """Test convert_str_chunk_to_generic_chunk with multiline SSE format."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Multiline SSE with event prefix
+    chunk = 'event: message\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should find "data:" and parse successfully
+    assert result.choices[0].delta.content == "Hello"
+    assert result.id == iterator.response_id
+
+
+def test_convert_str_chunk_to_generic_chunk_whitespace_handling():
+    """Test convert_str_chunk_to_generic_chunk with whitespace (tests .strip())."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # With extra whitespace around data
+    chunk = 'data:   {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}   '
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should parse successfully despite whitespace
+    assert result.choices[0].delta.content == "Hello"
+    assert result.id == iterator.response_id
+
+
+def test_convert_str_chunk_to_generic_chunk_find_data_in_middle():
+    """Test convert_str_chunk_to_generic_chunk where data: appears in middle of string."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # data: appears after other text
+    chunk = 'some prefix data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should find data: and parse successfully
+    assert result.choices[0].delta.content == "Hello"
+    assert result.id == iterator.response_id
+
+
+def test_convert_str_chunk_to_generic_chunk_deepseek_done():
+    """Test convert_str_chunk_to_generic_chunk with Deepseek-style [DONE] chunk."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Deepseek sends "data: [DONE]" which is not valid JSON
+    chunk = 'data: [DONE]'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should return empty ModelResponseStream (not crash)
+    assert result.id == iterator.response_id
+    assert len(result.choices) == 1
+    assert result.choices[0] == StreamingChoices()
+
+
+def test_convert_str_chunk_to_generic_chunk_invalid_json():
+    """Test convert_str_chunk_to_generic_chunk with invalid JSON."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Invalid JSON
+    chunk = 'data: {invalid json'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should return empty ModelResponseStream (not crash)
+    assert result.id == iterator.response_id
+    assert len(result.choices) == 1
+    assert result.choices[0] == StreamingChoices()
+
+
+def test_convert_str_chunk_to_generic_chunk_missing_data_prefix():
+    """Test convert_str_chunk_to_generic_chunk without data: prefix."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # No data: prefix
+    chunk = 'something else'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should return empty ModelResponseStream (not crash)
+    assert result.id == iterator.response_id
+    assert len(result.choices) == 1
+    assert result.choices[0] == StreamingChoices()
+
+
+def test_convert_str_chunk_to_generic_chunk_empty_data():
+    """Test convert_str_chunk_to_generic_chunk with empty data."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Empty data
+    chunk = 'data:'
+    result = iterator.convert_str_chunk_to_generic_chunk(chunk)
+    
+    # Should return empty ModelResponseStream (not crash)
+    assert result.id == iterator.response_id
+    assert len(result.choices) == 1
+    assert result.choices[0] == StreamingChoices()
+    
+    # Data with only whitespace
+    chunk2 = 'data: '
+    result2 = iterator.convert_str_chunk_to_generic_chunk(chunk2)
+    # Should return empty ModelResponseStream (not crash)
+    assert result2.id == iterator.response_id
+    assert len(result2.choices) == 1
+    assert result2.choices[0] == StreamingChoices()
+
+
+def test_convert_str_chunk_to_generic_chunk_response_id_consistency():
+    """Test that convert_str_chunk_to_generic_chunk returns consistent response IDs."""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    
+    # Multiple calls should return same response ID
+    chunk1 = 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+    chunk2 = 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"World"}}'
+    
+    result1 = iterator.convert_str_chunk_to_generic_chunk(chunk1)
+    result2 = iterator.convert_str_chunk_to_generic_chunk(chunk2)
+    
+    assert result1.id == result2.id == iterator.response_id

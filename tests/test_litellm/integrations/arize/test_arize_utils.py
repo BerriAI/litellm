@@ -374,3 +374,127 @@ def test_construct_dynamic_arize_headers():
         "arize-space-id": "test_space_key",
         "api_key": "test_api_key"
     }
+
+
+def test_set_usage_outputs_chat_completion_tokens_details():
+    """
+    Test that _set_usage_outputs correctly extracts reasoning_tokens from
+    completion_tokens_details (Chat Completions API) and cached_tokens from
+    prompt_tokens_details.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+    from litellm.types.utils import (
+        CompletionTokensDetailsWrapper,
+        ModelResponse,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    span = MagicMock()
+
+    response_obj = ModelResponse(
+        usage=Usage(
+            total_tokens=200,
+            completion_tokens=120,
+            prompt_tokens=80,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=45
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
+        ),
+        choices=[
+            Choices(
+                message={"role": "assistant", "content": "test"}, finish_reason="stop"
+            )
+        ],
+        model="gpt-4o",
+    )
+
+    _set_usage_outputs(span, response_obj, SpanAttributes)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 200)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 120)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 80)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 45
+    )
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ, 30
+    )
+
+
+def test_set_usage_outputs_responses_api_output_tokens_details():
+    """
+    Test that _set_usage_outputs falls back to output_tokens_details (Responses API)
+    when completion_tokens_details is not present.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+    from litellm.types.llms.openai import (
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+
+    span = MagicMock()
+
+    response_obj = ResponsesAPIResponse(
+        id="response-456",
+        created_at=1625247600,
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=200,
+            total_tokens=300,
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=150),
+        ),
+    )
+
+    _set_usage_outputs(span, response_obj, SpanAttributes)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 300)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 200)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 100)
+    span.set_attribute.assert_any_call(
+        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, 150
+    )
+
+
+def test_set_usage_outputs_no_token_details():
+    """
+    Test that _set_usage_outputs works when neither completion_tokens_details
+    nor prompt_tokens_details are present (basic usage without details).
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.arize._utils import _set_usage_outputs
+    from litellm.types.utils import ModelResponse, Usage
+
+    span = MagicMock()
+
+    response_obj = ModelResponse(
+        usage=Usage(
+            total_tokens=100,
+            completion_tokens=60,
+            prompt_tokens=40,
+        ),
+        choices=[
+            Choices(
+                message={"role": "assistant", "content": "test"}, finish_reason="stop"
+            )
+        ],
+        model="gpt-4o",
+    )
+
+    _set_usage_outputs(span, response_obj, SpanAttributes)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 100)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 60)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
+    # reasoning and cached should NOT be set
+    for call in span.set_attribute.call_args_list:
+        assert call[0][0] != SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING
+        assert call[0][0] != SpanAttributes.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ
