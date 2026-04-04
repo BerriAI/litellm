@@ -19,6 +19,7 @@ from litellm.utils import convert_to_model_response_object
 
 from ..authenticator import Authenticator
 from ..common_utils import (
+    GetAccessTokenError,
     GetAPIKeyError,
     GITHUB_COPILOT_API_BASE,
     get_copilot_default_headers,
@@ -41,7 +42,6 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
 
     def __init__(self) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
 
     def validate_environment(
         self,
@@ -57,9 +57,6 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Validate environment and set up headers for GitHub Copilot API.
         """
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
-
             if not api_key:
                 raise AuthenticationError(
                     model=model,
@@ -67,8 +64,11 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                     message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
                 )
 
-            # Get default headers
-            default_headers = get_copilot_default_headers(api_key)
+            # api_key is the GitHub access token (ghu_xxx). Exchange it for
+            # a short-lived Copilot inference token (cached at module level).
+            authenticator = Authenticator(access_token=api_key)
+            inference_token = authenticator.get_api_key()
+            default_headers = get_copilot_default_headers(inference_token)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
@@ -79,7 +79,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except (GetAPIKeyError, GetAccessTokenError) as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -98,10 +98,12 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            self.authenticator.get_api_base() or api_base or GITHUB_COPILOT_API_BASE
-        )
+        # Use provided api_base or fall back to credential-resolved base or default
+        if api_key:
+            derived_api_base = Authenticator(access_token=api_key).get_api_base()
+            api_base = api_base or derived_api_base or GITHUB_COPILOT_API_BASE
+        else:
+            api_base = api_base or GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

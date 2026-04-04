@@ -1500,6 +1500,7 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+
             model_name = litellm_params["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -2409,6 +2410,17 @@ class Router:
             if credential_tag not in existing_tags:
                 existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
+
+        ## EARLY CREDENTIAL RESOLUTION
+        # Resolve api_key from litellm_credential_name before client selection
+        # or function invocation. Without this, deployments using named
+        # credentials pass api_key=None to cached-client checks and to
+        # downstream litellm functions (whose @client decorator skips
+        # load_credentials_from_list for async requests).
+        if credential_name and not kwargs.get("api_key"):
+            _cred = CredentialAccessor.get_credential_values(credential_name)
+            if _cred.get("api_key"):
+                kwargs["api_key"] = _cred["api_key"]
 
         kwargs["model_info"] = model_info
 

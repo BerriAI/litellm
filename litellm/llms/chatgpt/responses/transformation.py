@@ -21,6 +21,7 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
+    RefreshAccessTokenError,
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
@@ -30,7 +31,6 @@ from ..common_utils import (
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -42,16 +42,32 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
+        if isinstance(litellm_params, dict):
+            _api_key = litellm_params.get("api_key")
+        else:
+            _api_key = getattr(litellm_params, "api_key", None) if litellm_params else None
+        if not _api_key:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="chatgpt",
+                message="ChatGPT API key (refresh token) is required. Please authenticate via the LiteLLM UI.",
+            )
+
+        # _api_key is the refresh token from the credential. Exchange it
+        # for an access token (JWT) via OpenAI's OAuth endpoint — same
+        # flow as openai/codex. The authenticator caches the access token
+        # at module level so subsequent requests reuse it until expiry.
         try:
-            access_token = self.authenticator.get_access_token()
-        except GetAccessTokenError as e:
+            authenticator = Authenticator(refresh_token=_api_key)
+            access_token = authenticator.get_access_token()
+            account_id = authenticator.get_account_id()
+        except (GetAccessTokenError, RefreshAccessTokenError) as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="chatgpt",
                 message=str(e),
             )
 
-        account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(
             access_token, account_id, session_id
@@ -197,7 +213,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        api_base = api_base or CHATGPT_API_BASE
         api_base = api_base.rstrip("/")
         return f"{api_base}/responses"
 

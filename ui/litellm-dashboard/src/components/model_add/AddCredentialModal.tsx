@@ -1,9 +1,14 @@
 import { TextInput } from "@tremor/react";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import { credentialCreateCall } from "@/components/networking";
+import NotificationsManager from "../molecules/notifications_manager";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
+import { useDeviceCodeFlow } from "@/hooks/useDeviceCodeFlow";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -11,11 +16,56 @@ interface AddCredentialsModalProps {
   onCancel: () => void;
   onAddCredential: (values: any) => void;
   uploadProps: UploadProps;
+  initialCredentialName?: string;
+  initialProvider?: string;
 }
 
-const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
+const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps, initialCredentialName, initialProvider }) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const { accessToken } = useAuthorized();
+  const { data: providerMetadata } = useProviderFields();
+
+  const deviceCodeProviderInfo = useMemo(() => {
+    if (!providerMetadata) return null;
+    const info = providerMetadata.find(
+      (p) =>
+        p.provider === selectedProvider ||
+        p.provider_display_name === Providers[selectedProvider as keyof typeof Providers],
+    );
+    if (info?.auth_flow === "device_code") return info;
+    return null;
+  }, [selectedProvider, providerMetadata]);
+  const isDeviceCodeProvider = deviceCodeProviderInfo != null;
+
+  const handleDeviceCodeSuccess = useCallback(
+    async (apiKey: string, litellmProvider: string) => {
+      const credentialName = form.getFieldValue("credential_name");
+      if (!credentialName) {
+        form.validateFields(["credential_name"]);
+        throw new Error("Credential name required");
+      }
+      if (!accessToken) throw new Error("No access token");
+      await credentialCreateCall(accessToken, {
+        credential_name: credentialName,
+        credential_values: { api_key: apiKey },
+        credential_info: { custom_llm_provider: litellmProvider },
+      });
+    },
+    [form, accessToken],
+  );
+
+  const { state: deviceCodeState, start: startDeviceCode, reset: resetDeviceCode, renderUI: renderDeviceCodeFlow } = useDeviceCodeFlow({
+    accessToken,
+    providerInfo: deviceCodeProviderInfo,
+    onSuccess: handleDeviceCodeSuccess,
+  });
+
+  const handleCancel = () => {
+    resetDeviceCode();
+    onCancel();
+    form.resetFields();
+  };
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -28,14 +78,54 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
     form.resetFields();
   };
 
+  const handleStartDeviceCode = async () => {
+    const credentialName = form.getFieldValue("credential_name");
+    if (!credentialName) {
+      form.validateFields(["credential_name"]);
+      return;
+    }
+    await startDeviceCode();
+  };
+
+  const handleSuccessClose = () => {
+    resetDeviceCode();
+    onCancel();
+    form.resetFields();
+  };
+
+  const renderDeviceCodeSection = () => {
+    if (deviceCodeState.phase === "idle") {
+      return (
+        <div className="text-center py-4">
+          <Typography.Text className="block mb-4">
+            {deviceCodeProviderInfo?.provider_display_name || "Provider"} uses OAuth Device Code authorization. Click below to start.
+          </Typography.Text>
+          <Button type="primary" onClick={handleStartDeviceCode}>
+            Start {deviceCodeProviderInfo?.provider_display_name || "Provider"} Authorization
+          </Button>
+        </div>
+      );
+    }
+    if (deviceCodeState.phase === "success") {
+      return (
+        <div className="text-center py-4">
+          <Typography.Text className="block mb-4" type="success" style={{ fontSize: "1.1rem" }}>
+            Credential created successfully!
+          </Typography.Text>
+          <Button type="primary" onClick={handleSuccessClose}>
+            Done
+          </Button>
+        </div>
+      );
+    }
+    return renderDeviceCodeFlow();
+  };
+
   return (
     <Modal
       title="Add New Credential"
       open={open}
-      onCancel={() => {
-        onCancel();
-        form.resetFields();
-      }}
+      onCancel={handleCancel}
       footer={null}
       width={600}
     >
@@ -61,6 +151,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
             onChange={(value) => {
               setSelectedProvider(value as Providers);
               form.setFieldValue("custom_llm_provider", value);
+              resetDeviceCode();
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
@@ -89,27 +180,30 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
           </AntdSelect>
         </Form.Item>
 
-        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        {isDeviceCodeProvider ? (
+          renderDeviceCodeSection()
+        ) : (
+          <>
+            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
 
-        {/* Modal Footer */}
-        <div className="flex justify-between items-center">
-          <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
-          </Tooltip>
+            {/* Modal Footer */}
+            <div className="flex justify-between items-center">
+              <Tooltip title="Get help on our github">
+                <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
+              </Tooltip>
 
-          <div>
-            <Button
-              onClick={() => {
-                onCancel();
-                form.resetFields();
-              }}
-              style={{ marginRight: 10 }}
-            >
-              Cancel
-            </Button>
-            <Button htmlType="submit">{"Add Credential"}</Button>
-          </div>
-        </div>
+              <div>
+                <Button
+                  onClick={handleCancel}
+                  style={{ marginRight: 10 }}
+                >
+                  Cancel
+                </Button>
+                <Button htmlType="submit">{"Add Credential"}</Button>
+              </div>
+            </div>
+          </>
+        )}
       </Form>
     </Modal>
   );

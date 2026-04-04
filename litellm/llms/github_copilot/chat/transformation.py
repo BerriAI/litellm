@@ -8,8 +8,10 @@ from litellm.types.llms.openai import AllMessageValues
 from ..authenticator import Authenticator
 from ..common_utils import (
     GITHUB_COPILOT_API_BASE,
+    GetAccessTokenError,
     GetAPIKeyError,
     get_copilot_default_headers,
+    get_copilot_static_headers,
 )
 
 
@@ -21,7 +23,6 @@ class GithubCopilotConfig(OpenAIConfig):
         custom_llm_provider: str = "openai",
     ) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
 
     def _get_openai_compatible_provider_info(
         self,
@@ -30,10 +31,17 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        # If no api_key is provided we're being called at router registration time
+        # (before litellm_credential_name has been resolved). Return the default
+        # base and defer auth to request time rather than raising here and causing
+        # the deployment to be silently dropped from the router.
+        if not api_key:
+            return GITHUB_COPILOT_API_BASE, None, custom_llm_provider
+        authenticator = Authenticator(access_token=api_key)
+        dynamic_api_base = authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
-        except GetAPIKeyError as e:
+            dynamic_api_key = authenticator.get_api_key()
+        except (GetAPIKeyError, GetAccessTokenError) as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -82,13 +90,12 @@ class GithubCopilotConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        # Add Copilot-specific headers (editor-version, user-agent, etc.)
-        try:
-            copilot_api_key = self.authenticator.get_api_key()
-            copilot_headers = get_copilot_default_headers(copilot_api_key)
+        if api_key:
+            # get_copilot_default_headers already includes static headers.
+            copilot_headers = get_copilot_default_headers(api_key)
             validated_headers = {**copilot_headers, **validated_headers}
-        except GetAPIKeyError:
-            pass  # Will be handled later in the request flow
+        else:
+            validated_headers = {**get_copilot_static_headers(), **validated_headers}
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)

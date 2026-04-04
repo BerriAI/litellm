@@ -2,12 +2,15 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Path
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -113,6 +116,29 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
+async def _fetch_github_login(api_key: str) -> Optional[str]:
+    """
+    Call GET https://api.github.com/user with the given GitHub access token
+    and return the login name, or None if the call fails.
+    """
+    try:
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SSO_HANDLER
+        )
+        resp = await async_client.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {api_key}",
+                "Accept": "application/json",
+            },
+        )
+        if resp.status_code == 200:
+            return resp.json().get("login")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Could not fetch GitHub user info: {e}")
+    return None
+
+
 @router.get(
     "/credentials",
     dependencies=[Depends(user_api_key_auth)],
@@ -127,14 +153,37 @@ async def get_credentials(
     [BETA] endpoint. This might change unexpectedly.
     """
     try:
-        masked_credentials = [
-            {
-                "credential_name": credential.credential_name,
-                "credential_values": _get_masked_values(credential.credential_values),
-                "credential_info": credential.credential_info,
-            }
-            for credential in litellm.credential_list
-        ]
+        # Batch-fetch GitHub logins in parallel to avoid N+1 sequential HTTP calls.
+        copilot_keys: list[tuple[int, str]] = []
+        for i, credential in enumerate(litellm.credential_list):
+            info = credential.credential_info or {}
+            if info.get("custom_llm_provider") == "github_copilot":
+                api_key = (credential.credential_values or {}).get("api_key")
+                if api_key:
+                    copilot_keys.append((i, api_key))
+
+        logins: dict[int, Optional[str]] = {}
+        if copilot_keys:
+            results = await asyncio.gather(
+                *(_fetch_github_login(key) for _, key in copilot_keys)
+            )
+            logins = {idx: login for (idx, _), login in zip(copilot_keys, results)}
+
+        masked_credentials = []
+        for i, credential in enumerate(litellm.credential_list):
+            credential_info = dict(credential.credential_info or {})
+            github_login = logins.get(i)
+            if github_login:
+                credential_info = {**credential_info, "github_login": github_login}
+            masked_credentials.append(
+                {
+                    "credential_name": credential.credential_name,
+                    "credential_values": _get_masked_values(
+                        credential.credential_values
+                    ),
+                    "credential_info": credential_info,
+                }
+            )
         return {"success": True, "credentials": masked_credentials}
     except Exception as e:
         return handle_exception_on_proxy(e)

@@ -50,13 +50,13 @@ class TestGitHubCopilotAuthenticator:
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
-        headers = authenticator._get_github_headers()
+        headers = Authenticator.get_github_headers()
         assert "accept" in headers
         assert "editor-version" in headers
         assert "user-agent" in headers
         assert "content-type" in headers
-        
-        headers_with_token = authenticator._get_github_headers("test-token")
+
+        headers_with_token = Authenticator.get_github_headers("test-token")
         assert headers_with_token["authorization"] == "token test-token"
 
     def test_get_access_token_from_file(self, authenticator):
@@ -67,24 +67,18 @@ class TestGitHubCopilotAuthenticator:
             token = authenticator.get_access_token()
             assert token == mock_token
 
-    def test_get_access_token_login(self, authenticator):
-        """Test logging in to get an access token."""
-        mock_token = "mock-access-token"
-        
-        with patch.object(authenticator, "_login", return_value=mock_token), \
-             patch("builtins.open", mock_open()), \
-             patch("builtins.open", side_effect=IOError) as mock_read:
-            token = authenticator.get_access_token()
-            assert token == mock_token
-            authenticator._login.assert_called_once()
+    def test_get_access_token_no_file_raises(self, authenticator):
+        """Test that GetAccessTokenError is raised when no access-token file exists."""
+        with patch("builtins.open", side_effect=IOError):
+            with pytest.raises(GetAccessTokenError) as exc_info:
+                authenticator.get_access_token()
+            assert "https://docs.litellm.ai/docs/providers/github_copilot" in str(exc_info.value)
 
-    def test_get_access_token_failure(self, authenticator):
-        """Test that an exception is raised after multiple login failures."""
-        with patch.object(authenticator, "_login", side_effect=GetDeviceCodeError(message="Test error", status_code=400)), \
-             patch("builtins.open", side_effect=IOError):
+    def test_get_access_token_empty_file_raises(self, authenticator):
+        """Test that GetAccessTokenError is raised when the access-token file is empty."""
+        with patch("builtins.open", mock_open(read_data="")):
             with pytest.raises(GetAccessTokenError):
                 authenticator.get_access_token()
-            assert authenticator._login.call_count == 3
 
     def test_get_api_key_from_file(self, authenticator):
         """Test retrieving an API key from a file."""
@@ -179,6 +173,16 @@ class TestGitHubCopilotAuthenticator:
             authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
 
+    def test_get_github_headers_static(self):
+        """Test that get_github_headers works as a static method."""
+        headers = Authenticator.get_github_headers()
+        assert "accept" in headers
+        assert "content-type" in headers
+        assert "authorization" not in headers
+
+        headers_with_token = Authenticator.get_github_headers("my-token")
+        assert headers_with_token["authorization"] == "token my-token"
+
     def test_get_api_base_from_file(self, authenticator):
         """Test retrieving the API base endpoint from a file."""
         mock_api_key_data = json.dumps({
@@ -189,3 +193,108 @@ class TestGitHubCopilotAuthenticator:
         with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
             api_base = authenticator.get_api_base()
             assert api_base == "https://api.enterprise.githubcopilot.com"
+
+
+class TestAuthenticatorCredentialMode:
+    """Tests for credential mode (injected access token)."""
+
+    def test_init_credential_mode_no_file_io(self):
+        """Credential mode should not create any directories."""
+        auth = Authenticator(access_token="test-token")
+        assert auth._injected_access_token == "test-token"
+        assert not hasattr(auth, "token_dir")
+
+    def test_get_access_token_returns_injected(self):
+        """get_access_token returns the injected token directly."""
+        auth = Authenticator(access_token="my-github-token")
+        assert auth.get_access_token() == "my-github-token"
+
+    def test_get_api_key_credential_mode(self):
+        """get_api_key in credential mode calls _refresh_api_key and caches."""
+        import litellm.llms.github_copilot.authenticator as auth_module
+
+        access_token = "my-github-token-caching-test"
+        # Clear any stale cache entry before the test
+        auth_module._credential_api_key_cache.pop(access_token, None)
+
+        auth = Authenticator(access_token=access_token)
+        future_time = (datetime.now() + timedelta(hours=1)).timestamp()
+        mock_api_key_info = {"token": "copilot-api-key", "expires_at": future_time}
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = mock_api_key_info
+        mock_client.get.return_value = mock_response
+
+        with patch(
+            "litellm.llms.github_copilot.authenticator._get_httpx_client",
+            return_value=mock_client,
+        ):
+            api_key = auth.get_api_key()
+            assert api_key == "copilot-api-key"
+
+            # Second call should use cache (no additional HTTP calls)
+            api_key2 = auth.get_api_key()
+            assert api_key2 == "copilot-api-key"
+            assert mock_client.get.call_count == 1  # Only called once
+
+        # Cleanup
+        auth_module._credential_api_key_cache.pop(access_token, None)
+
+    def test_get_api_key_credential_mode_expired_cache(self):
+        """get_api_key re-fetches when cached token is expired."""
+        import litellm.llms.github_copilot.authenticator as auth_module
+
+        past_time = (datetime.now() - timedelta(hours=1)).timestamp()
+        future_time = (datetime.now() + timedelta(hours=1)).timestamp()
+        access_token = "my-github-token-expired-test"
+
+        auth = Authenticator(access_token=access_token)
+        # Pre-populate module-level cache with an expired entry
+        auth_module._credential_api_key_cache[access_token] = {
+            "token": "old-key",
+            "expires_at": past_time,
+        }
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"token": "new-key", "expires_at": future_time}
+        mock_client.get.return_value = mock_response
+
+        with patch(
+            "litellm.llms.github_copilot.authenticator._get_httpx_client",
+            return_value=mock_client,
+        ):
+            api_key = auth.get_api_key()
+            assert api_key == "new-key"
+            assert mock_client.get.call_count == 1
+
+        # Cleanup
+        auth_module._credential_api_key_cache.pop(access_token, None)
+
+    def test_get_api_base_credential_mode_no_cache(self):
+        """get_api_base returns None when no cache is available."""
+        import litellm.llms.github_copilot.authenticator as auth_module
+
+        access_token = "my-github-token-no-cache-test"
+        auth = Authenticator(access_token=access_token)
+        # Ensure no stale cache
+        auth_module._credential_api_key_cache.pop(access_token, None)
+        assert auth.get_api_base() is None
+
+    def test_get_api_base_credential_mode_with_cache(self):
+        """get_api_base returns endpoint from module-level cache."""
+        import litellm.llms.github_copilot.authenticator as auth_module
+
+        access_token = "my-github-token-cache-test"
+        auth = Authenticator(access_token=access_token)
+        auth_module._credential_api_key_cache[access_token] = {
+            "token": "test",
+            "endpoints": {"api": "https://custom.copilot.api"},
+        }
+        assert auth.get_api_base() == "https://custom.copilot.api"
+
+        # Cleanup
+        auth_module._credential_api_key_cache.pop(access_token, None)

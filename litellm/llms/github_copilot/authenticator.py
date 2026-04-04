@@ -19,64 +19,76 @@ from .common_utils import (
 
 # Constants
 GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+
+# Module-level cache for copilot inference tokens in credential mode.
+# Key = GitHub access_token, value = api_key_info dict (token + expires_at).
+# Mirrors the file-based api-key.json pattern but kept in memory so that
+# per-request Authenticator instances share the cached token.
+_credential_api_key_cache: Dict[str, Dict[str, Any]] = {}
 GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
 
 
 class Authenticator:
-    def __init__(self) -> None:
-        """Initialize the GitHub Copilot authenticator with configurable token paths."""
-        # Token storage paths
-        self.token_dir = os.getenv(
-            "GITHUB_COPILOT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/github_copilot"),
-        )
-        self.access_token_file = os.path.join(
-            self.token_dir,
-            os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
-        )
-        self.api_key_file = os.path.join(
-            self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
-        )
-        self._ensure_token_dir()
+    def __init__(self, access_token: Optional[str] = None) -> None:
+        """Initialize the GitHub Copilot authenticator.
+
+        Args:
+            access_token: If provided, the authenticator operates in
+                *credential mode* — it uses this token directly instead of
+                the file-based device-code flow.  When ``None`` (the
+                default), the existing file-based behaviour is preserved.
+        """
+        self._injected_access_token = access_token
+
+        if access_token is None:
+            # File-based mode (backward compatible)
+            self.token_dir = os.getenv(
+                "GITHUB_COPILOT_TOKEN_DIR",
+                os.path.expanduser("~/.config/litellm/github_copilot"),
+            )
+            self.access_token_file = os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+            )
+            self.api_key_file = os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+            )
+            self._ensure_token_dir()
 
     def get_access_token(self) -> str:
         """
-        Login to Copilot with retry 3 times.
+        Return the GitHub access token.
+
+        In credential mode, returns the injected token directly.
+        In file-based mode (SDK), reads from the access-token file on disk.
 
         Returns:
             str: The GitHub access token.
 
         Raises:
-            GetAccessTokenError: If unable to obtain an access token after retries.
+            GetAccessTokenError: If no access token is available.
         """
+        if self._injected_access_token is not None:
+            return self._injected_access_token
+
         try:
             with open(self.access_token_file, "r") as f:
                 access_token = f.read().strip()
                 if access_token:
                     return access_token
         except IOError:
-            verbose_logger.warning(
-                "No existing access token found or error reading file"
-            )
-
-        for attempt in range(3):
-            verbose_logger.debug(f"Access token acquisition attempt {attempt + 1}/3")
-            try:
-                access_token = self._login()
-                try:
-                    with open(self.access_token_file, "w") as f:
-                        f.write(access_token)
-                except IOError:
-                    verbose_logger.error("Error saving access token to file")
-                return access_token
-            except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
-                verbose_logger.warning(f"Failed attempt {attempt + 1}: {str(e)}")
-                continue
+            pass  # No file — fall through to auth error below
 
         raise GetAccessTokenError(
-            message="Failed to get access token after 3 attempts",
+            message=(
+                "No GitHub Copilot access token configured. "
+                "Run `litellm --login github_copilot` (SDK) or create a named credential "
+                "via the LiteLLM proxy UI. "
+                "See: https://docs.litellm.ai/docs/providers/github_copilot"
+            ),
             status_code=401,
         )
 
@@ -90,6 +102,9 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
+        if self._injected_access_token is not None:
+            return self._get_api_key_credential_mode()
+
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info = json.load(f)
@@ -139,6 +154,13 @@ class Authenticator:
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
+        if self._injected_access_token is not None:
+            cached = _credential_api_key_cache.get(self._injected_access_token)
+            if cached:
+                endpoints = cached.get("endpoints", {})
+                return endpoints.get("api")
+            return None
+
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info = json.load(f)
@@ -148,6 +170,35 @@ class Authenticator:
         except (IOError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning(f"Error reading API endpoint from file: {str(e)}")
             return None
+
+    def _get_api_key_credential_mode(self) -> str:
+        """Get API key when operating in credential mode (injected access token).
+
+        Uses a module-level cache keyed by access_token so that multiple
+        per-request Authenticator instances share the same cached copilot
+        inference token and avoid redundant GitHub API calls.
+        """
+        cached = _credential_api_key_cache.get(self._injected_access_token)  # type: ignore[arg-type]
+        if cached and cached.get("expires_at", 0) > datetime.now().timestamp():
+            token = cached.get("token")
+            if token:
+                return token
+
+        try:
+            api_key_info = self._refresh_api_key()
+            _credential_api_key_cache[self._injected_access_token] = api_key_info  # type: ignore[index]
+            token = api_key_info.get("token")
+            if not token:
+                raise GetAPIKeyError(
+                    message="API key response missing token",
+                    status_code=401,
+                )
+            return token
+        except RefreshAPIKeyError as e:
+            raise GetAPIKeyError(
+                message=f"Failed to refresh API key: {str(e)}",
+                status_code=401,
+            )
 
     def _refresh_api_key(self) -> Dict[str, Any]:
         """
@@ -160,7 +211,7 @@ class Authenticator:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
         access_token = self.get_access_token()
-        headers = self._get_github_headers(access_token)
+        headers = Authenticator.get_github_headers(access_token)
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -177,6 +228,8 @@ class Authenticator:
                     verbose_logger.warning(
                         f"API key response missing token: {response_json}"
                     )
+            except GetAccessTokenError:
+                raise  # Re-raise with the original helpful message (docs link etc.)
             except httpx.HTTPStatusError as e:
                 verbose_logger.error(
                     f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
@@ -194,9 +247,13 @@ class Authenticator:
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _get_github_headers(self, access_token: Optional[str] = None) -> Dict[str, str]:
+    @staticmethod
+    def get_github_headers(access_token: Optional[str] = None) -> Dict[str, str]:
         """
         Generate standard GitHub headers for API requests.
+
+        This is a static method so it can be imported and used by the SSO
+        endpoint module without instantiating an Authenticator.
 
         Args:
             access_token: Optional access token to include in the headers.
@@ -210,13 +267,11 @@ class Authenticator:
             "editor-plugin-version": "copilot/1.155.0",
             "user-agent": "GithubCopilot/1.155.0",
             "accept-encoding": "gzip,deflate,br",
+            "content-type": "application/json",
         }
 
         if access_token:
             headers["authorization"] = f"token {access_token}"
-
-        if "content-type" not in headers:
-            headers["content-type"] = "application/json"
 
         return headers
 
@@ -234,7 +289,7 @@ class Authenticator:
             sync_client = _get_httpx_client()
             resp = sync_client.post(
                 GITHUB_DEVICE_CODE_URL,
-                headers=self._get_github_headers(),
+                headers=Authenticator.get_github_headers(),
                 json={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
             )
             resp.raise_for_status()
@@ -288,7 +343,7 @@ class Authenticator:
             try:
                 resp = sync_client.post(
                     GITHUB_ACCESS_TOKEN_URL,
-                    headers=self._get_github_headers(),
+                    headers=Authenticator.get_github_headers(),
                     json={
                         "client_id": GITHUB_CLIENT_ID,
                         "device_code": device_code,

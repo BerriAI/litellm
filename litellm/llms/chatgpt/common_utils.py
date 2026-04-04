@@ -230,19 +230,30 @@ def get_chatgpt_user_agent(originator: str) -> str:
     return _safe_header_value(candidate) or DEFAULT_USER_AGENT
 
 
+def get_chatgpt_static_headers() -> dict:
+    """Get static headers required by the ChatGPT API.
+
+    These headers (originator, user-agent, etc.) must be present on every
+    request regardless of whether the access token has been resolved yet.
+    """
+    originator = get_chatgpt_originator()
+    user_agent = get_chatgpt_user_agent(originator)
+    return {
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+        "originator": originator,
+        "user-agent": user_agent,
+    }
+
+
 def get_chatgpt_default_headers(
     access_token: str,
     account_id: Optional[str],
     session_id: Optional[str] = None,
 ) -> dict:
-    originator = get_chatgpt_originator()
-    user_agent = get_chatgpt_user_agent(originator)
     headers = {
+        **get_chatgpt_static_headers(),
         "Authorization": f"Bearer {access_token}",
-        "content-type": "application/json",
-        "accept": "text/event-stream",
-        "originator": originator,
-        "user-agent": user_agent,
     }
     if session_id:
         headers["session_id"] = session_id

@@ -4,14 +4,19 @@ import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
-import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography, Alert } from "antd";
+import { Select as AntdSelect, Button, Card, Col, Form, Input, Modal, Row, Tooltip, Typography, Alert } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import TeamDropdown from "../common_components/team_dropdown";
 import type { Team } from "../key_team_helpers/key_list";
-import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
+import {
+  type CredentialItem,
+  type ProviderCreateInfo,
+  modelAvailableCall,
+} from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
+import { useDeviceCodeFlow } from "@/hooks/useDeviceCodeFlow";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import LiteLLMModelNameField from "./litellm_model_name";
@@ -63,6 +68,36 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     isLoading: isProviderMetadataLoading,
     error: providerMetadataError,
   } = useProviderFields();
+
+  // Determine if the selected provider uses device_code auth flow
+  const deviceCodeProviderInfo = useMemo(() => {
+    if (!providerMetadata) return null;
+    const info = providerMetadata.find(
+      (p) =>
+        p.auth_flow === "device_code" &&
+        (p.provider === selectedProvider ||
+          p.provider_display_name === Providers[selectedProvider as keyof typeof Providers]),
+    );
+    return info || null;
+  }, [selectedProvider, providerMetadata]);
+  const isDeviceCodeProvider = deviceCodeProviderInfo != null;
+
+  const handleDeviceCodeSuccess = useCallback(
+    (apiKey: string) => { form.setFieldValue("api_key", apiKey); },
+    [form],
+  );
+
+  const { reset: resetDeviceCode, renderUI: renderDeviceCodeFlow } = useDeviceCodeFlow({
+    accessToken,
+    providerInfo: deviceCodeProviderInfo,
+    onSuccess: handleDeviceCodeSuccess,
+  });
+
+  // Reset device code state whenever the selected provider changes
+  useEffect(() => {
+    resetDeviceCode();
+  }, [selectedProvider, resetDeviceCode]);
+
   const { data: guardrailsList, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
 
@@ -269,7 +304,14 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <span className="px-4 text-gray-500 text-sm">OR</span>
                             <div className="flex-grow border-t border-gray-200"></div>
                           </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                          {isDeviceCodeProvider ? (
+                            <>
+                              <Form.Item name="api_key" hidden><input /></Form.Item>
+                              {renderDeviceCodeFlow()}
+                            </>
+                          ) : (
+                            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                          )}
                         </>
                       );
                     }

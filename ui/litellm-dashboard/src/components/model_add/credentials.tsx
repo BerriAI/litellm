@@ -3,8 +3,11 @@ import {
   credentialDeleteCall,
   CredentialItem,
   credentialUpdateCall,
+  type ProviderCreateInfo,
 } from "@/components/networking"; // Assume this is your networking function
+import { GithubOutlined } from "@ant-design/icons";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { KeyIcon } from "@heroicons/react/outline";
 import {
   Badge,
   Button,
@@ -17,15 +20,21 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Form } from "antd";
+import { Form, Modal } from "antd";
 import { UploadProps } from "antd/es/upload";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useDeviceCodeFlow } from "@/hooks/useDeviceCodeFlow";
+
+const DEVICE_CODE_PROVIDERS: Record<string, string> = {
+  github_copilot: "GitHub Copilot",
+  chatgpt: "ChatGPT",
+};
 interface CredentialsPanelProps {
   uploadProps: UploadProps;
 }
@@ -135,6 +144,50 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     setIsDeleteModalOpen(false);
   };
 
+  // --- Re-authorize flow for device-code providers ---
+  const [reauthorizingCredential, setReauthorizingCredential] = useState<CredentialItem | null>(null);
+
+  const reauthorizeProviderInfo: ProviderCreateInfo | null = (() => {
+    const provider = reauthorizingCredential?.credential_info?.custom_llm_provider;
+    if (!provider || !(provider in DEVICE_CODE_PROVIDERS)) return null;
+    return {
+      provider,
+      provider_display_name: DEVICE_CODE_PROVIDERS[provider],
+      litellm_provider: provider,
+      credential_fields: [],
+      auth_flow: "device_code",
+    };
+  })();
+
+  const handleReauthorizeSuccess = useCallback(
+    async (apiKey: string) => {
+      if (!accessToken || !reauthorizingCredential) throw new Error("Missing context");
+      await credentialUpdateCall(accessToken, reauthorizingCredential.credential_name, {
+        credential_name: reauthorizingCredential.credential_name,
+        credential_values: { api_key: apiKey },
+        credential_info: reauthorizingCredential.credential_info,
+      });
+      NotificationsManager.success("Credential re-authorized successfully");
+      await refetchCredentials();
+    },
+    [accessToken, reauthorizingCredential, refetchCredentials],
+  );
+
+  const {
+    state: reauthorizeState,
+    reset: resetReauthorize,
+    renderUI: renderReauthorizeFlow,
+  } = useDeviceCodeFlow({
+    accessToken,
+    providerInfo: reauthorizeProviderInfo,
+    onSuccess: handleReauthorizeSuccess,
+  });
+
+  const closeReauthorizeModal = () => {
+    resetReauthorize();
+    setReauthorizingCredential(null);
+  };
+
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
       <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
@@ -154,37 +207,65 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
           <TableBody>
             {!credentialList || credentialList.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center py-4 text-gray-500">
+                <TableCell colSpan={3} className="text-center py-4 text-gray-500">
                   No credentials configured
                 </TableCell>
               </TableRow>
             ) : (
-              credentialList.map((credential: CredentialItem, index: number) => (
-                <TableRow key={index}>
-                  <TableCell>{credential.credential_name}</TableCell>
-                  <TableCell>
-                    {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      icon={PencilAltIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedCredential(credential);
-                        setIsUpdateModalOpen(true);
-                      }}
-                    />
-                    <Button
-                      icon={TrashIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => openDeleteModal(credential)}
-                      className="ml-2"
-                    />
-                  </TableCell>
-                </TableRow>
-              ))
+              credentialList.map((credential: CredentialItem, index: number) => {
+                const githubLogin = credential.credential_info?.github_login;
+                return (
+                  <TableRow key={index}>
+                    <TableCell>
+                      {credential.credential_name}
+                      {githubLogin && (
+                        <span className="ml-2 text-gray-500 text-sm inline-flex items-center gap-1">
+                          (<GithubOutlined className="w-4 h-4" />
+                          <a
+                            href={`https://github.com/${githubLogin}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {githubLogin}
+                          </a>)
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        {credential.credential_info?.custom_llm_provider &&
+                          (credential.credential_info.custom_llm_provider in DEVICE_CODE_PROVIDERS) && (
+                          <Button
+                            icon={KeyIcon}
+                            variant="light"
+                            size="sm"
+                            tooltip="Re-authorize"
+                            onClick={() => setReauthorizingCredential(credential)}
+                          />
+                        )}
+                        <Button
+                          icon={PencilAltIcon}
+                          variant="light"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedCredential(credential);
+                            setIsUpdateModalOpen(true);
+                          }}
+                        />
+                        <Button
+                          icon={TrashIcon}
+                          variant="light"
+                          size="sm"
+                          onClick={() => openDeleteModal(credential)}
+                        />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -194,7 +275,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
         <AddCredentialsTab
           onAddCredential={handleAddCredential}
           open={isAddModalOpen}
-          onCancel={() => setIsAddModalOpen(false)}
+          onCancel={() => {
+            setIsAddModalOpen(false);
+            refetchCredentials();
+          }}
           uploadProps={uploadProps}
         />
       )}
@@ -207,6 +291,18 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
           onCancel={() => setIsUpdateModalOpen(false)}
         />
       )}
+
+      <Modal
+        title={`Re-authorize ${reauthorizingCredential?.credential_name ?? ""}`}
+        open={reauthorizingCredential != null}
+        onCancel={closeReauthorizeModal}
+        footer={reauthorizeState.phase === "success" ? (
+          <Button onClick={closeReauthorizeModal}>Done</Button>
+        ) : null}
+        width={500}
+      >
+        {renderReauthorizeFlow()}
+      </Modal>
 
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}

@@ -10,39 +10,33 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 
-def test_github_copilot_embedding_config_validate_environment():
+@patch("litellm.llms.github_copilot.embedding.transformation.Authenticator")
+def test_github_copilot_embedding_config_validate_environment(mock_authenticator_class):
     """Test the GitHub Copilot embedding configuration environment validation."""
+    mock_auth_instance = MagicMock()
+    mock_auth_instance.get_api_key.return_value = "copilot-inference-token"
+    mock_authenticator_class.return_value = mock_auth_instance
+
     config = GithubCopilotEmbeddingConfig()
-
-    # Mock the authenticator
-    mock_api_key = "gh.test-key-123456789"
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.return_value = mock_api_key
-
-    # Test with valid API key
-    headers = {}
     model = "github_copilot/text-embedding-3-small"
-    
+
     validated_headers = config.validate_environment(
-        headers=headers,
+        headers={},
         model=model,
         messages=[],
         optional_params={},
         litellm_params={},
-        api_key=None,
+        api_key="gh-access-token",
     )
 
-    assert validated_headers["Authorization"] == f"Bearer {mock_api_key}"
+    # Access token is exchanged for inference token
+    mock_authenticator_class.assert_called_with(access_token="gh-access-token")
+    assert validated_headers["Authorization"] == "Bearer copilot-inference-token"
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
     assert validated_headers["editor-version"] == "vscode/1.95.0"
     assert "x-request-id" in validated_headers
 
-    # Test with authentication failure
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
-        message="Failed to get API key",
-        status_code=401,
-    )
-
+    # Test with no api_key → immediate AuthenticationError
     with pytest.raises(AuthenticationError) as excinfo:
         config.validate_environment(
             headers={},
@@ -52,16 +46,17 @@ def test_github_copilot_embedding_config_validate_environment():
             litellm_params={},
             api_key=None,
         )
+    assert "required" in str(excinfo.value).lower()
 
-    assert "Failed to get API key" in str(excinfo.value)
-
-def test_github_copilot_embedding_config_get_complete_url():
+@patch("litellm.llms.github_copilot.embedding.transformation.Authenticator")
+def test_github_copilot_embedding_config_get_complete_url(mock_authenticator_class):
     """Test the GitHub Copilot embedding configuration URL generation."""
+    mock_auth_instance = MagicMock()
+    mock_authenticator_class.return_value = mock_auth_instance
+
     config = GithubCopilotEmbeddingConfig()
-    config.authenticator = MagicMock()
-    
-    # Test with default API base
-    config.authenticator.get_api_base.return_value = None
+
+    # No api_key → always default base
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -71,19 +66,18 @@ def test_github_copilot_embedding_config_get_complete_url():
     )
     assert url == "https://api.githubcopilot.com/embeddings"
 
-    # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
+    # api_key + authenticator returns custom base
+    mock_auth_instance.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
-        api_key=None,
+        api_key="gh-access-token",
         model="github_copilot/text-embedding-3-small",
         optional_params={},
         litellm_params={},
     )
     assert url == "https://api.enterprise.githubcopilot.com/embeddings"
 
-    # Test with custom API base from params
-    config.authenticator.get_api_base.return_value = None
+    # Explicit api_base always wins
     url = config.get_complete_url(
         api_base="https://custom.api.com",
         api_key=None,

@@ -23,6 +23,7 @@ from litellm.types.utils import LlmProviders
 from ..authenticator import Authenticator
 from ..common_utils import (
     GITHUB_COPILOT_API_BASE,
+    GetAccessTokenError,
     GetAPIKeyError,
     get_copilot_default_headers,
 )
@@ -54,7 +55,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def __init__(self) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -103,18 +103,24 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - User-provided extra_headers (merged with priority)
         """
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
-
-            if not api_key:
+            if isinstance(litellm_params, dict):
+                _api_key = litellm_params.get("api_key")
+            else:
+                _api_key = (
+                    getattr(litellm_params, "api_key", None) if litellm_params else None
+                )
+            if not _api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
                     message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
                 )
 
-            # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            # _api_key is the GitHub access token (ghu_xxx). Exchange it for
+            # a short-lived Copilot inference token (cached at module level).
+            authenticator = Authenticator(access_token=_api_key)
+            inference_token = authenticator.get_api_key()
+            default_headers = get_copilot_default_headers(inference_token)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
@@ -143,7 +149,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except (GetAPIKeyError, GetAccessTokenError) as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -164,10 +170,18 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Business/enterprise accounts (api.business.githubcopilot.com) can be
         added in the future by detecting account type.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            api_base or self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        # Use provided api_base or fall back to credential-resolved base or default
+        _api_key = (
+            litellm_params.get("api_key") if isinstance(litellm_params, dict) else None
         )
+        if _api_key:
+            api_base = (
+                api_base
+                or Authenticator(access_token=_api_key).get_api_base()
+                or GITHUB_COPILOT_API_BASE
+            )
+        else:
+            api_base = api_base or GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

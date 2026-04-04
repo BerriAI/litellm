@@ -28,6 +28,7 @@ class ProviderCreateInfo(BaseModel):
     provider: str
     provider_display_name: str
     litellm_provider: str
+    auth_flow: Optional[Literal["device_code"]] = None
     credential_fields: List[ProviderCredentialField]
     default_model_placeholder: Optional[str] = None
 

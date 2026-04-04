@@ -263,6 +263,7 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    github_login?: string;
   };
 }
 
@@ -282,6 +283,7 @@ export interface ProviderCreateInfo {
   provider_display_name: string;
   litellm_provider: string;
   default_model_placeholder?: string | null;
+  auth_flow?: string | null;
   credential_fields: ProviderCredentialFieldMetadata[];
 }
 
@@ -3570,6 +3572,49 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
     throw error;
   }
 };
+
+async function authenticatedPost<T>(
+  endpoint: string,
+  accessToken: string,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}${endpoint}` : endpoint;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    ...(body && { body: JSON.stringify(body) }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+}
+
+export const githubCopilotInitiateAuth = (accessToken: string) =>
+  authenticatedPost<{ device_code: string; user_code: string; verification_uri: string; poll_interval_ms: number; expires_in: number }>(
+    "/credentials/github_copilot/initiate", accessToken,
+  );
+
+export const githubCopilotCheckStatus = (accessToken: string, deviceCode: string) =>
+  authenticatedPost<{ status: string; access_token?: string; retry_after_ms?: number; error?: string }>(
+    "/credentials/github_copilot/status", accessToken, { device_code: deviceCode },
+  );
+
+export const chatgptInitiateAuth = (accessToken: string) =>
+  authenticatedPost<{ device_auth_id: string; user_code: string; verification_uri: string; poll_interval_ms: number }>(
+    "/credentials/chatgpt/initiate", accessToken,
+  );
+
+export const chatgptCheckStatus = (accessToken: string, deviceAuthId: string, userCode: string) =>
+  authenticatedPost<{ status: string; refresh_token?: string; account_id?: string; error?: string }>(
+    "/credentials/chatgpt/status", accessToken, { device_auth_id: deviceAuthId, user_code: userCode },
+  );
 
 export const credentialUpdateCall = async (
   accessToken: string,

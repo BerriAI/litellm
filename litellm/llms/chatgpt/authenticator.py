@@ -3,6 +3,7 @@ import json
 import os
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -27,17 +28,34 @@ DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS = 5
 
+# Module-level cache for credential mode.
+# Key = refresh_token, value = dict with access_token, expires_at, account_id.
+_credential_token_cache: Dict[str, Dict[str, Any]] = {}
+
 
 class Authenticator:
-    def __init__(self) -> None:
-        self.token_dir = os.getenv(
-            "CHATGPT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/chatgpt"),
-        )
-        self.auth_file = os.path.join(
-            self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json")
-        )
-        self._ensure_token_dir()
+    def __init__(self, refresh_token: Optional[str] = None) -> None:
+        """Initialize the ChatGPT authenticator.
+
+        Args:
+            refresh_token: If provided, the authenticator operates in
+                *credential mode* — it uses this refresh token to obtain
+                access tokens via the OpenAI OAuth refresh flow.  When
+                ``None`` (the default), the existing file-based behaviour
+                is preserved.
+        """
+        self._injected_refresh_token = refresh_token
+
+        if refresh_token is None:
+            # File-based mode (backward compatible)
+            self.token_dir = os.getenv(
+                "CHATGPT_TOKEN_DIR",
+                os.path.expanduser("~/.config/litellm/chatgpt"),
+            )
+            self.auth_file = os.path.join(
+                self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json")
+            )
+            self._ensure_token_dir()
 
     def get_api_base(self) -> str:
         return (
@@ -47,6 +65,18 @@ class Authenticator:
         )
 
     def get_access_token(self) -> str:
+        """Get a valid access token, refreshing if necessary.
+
+        In credential mode, uses the injected refresh_token with a
+        module-level cache to avoid redundant OAuth calls.
+
+        In file-based mode, reads from the auth file and refreshes if
+        expired.  Never triggers the interactive device code flow —
+        raises GetAccessTokenError with a docs link instead.
+        """
+        if self._injected_refresh_token is not None:
+            return self._get_access_token_credential_mode()
+
         auth_data = self._read_auth_file()
         if auth_data:
             access_token = auth_data.get("access_token")
@@ -62,16 +92,27 @@ class Authenticator:
                         "ChatGPT refresh token failed, re-login required: %s", exc
                     )
 
-        cooldown_remaining = self._get_device_code_cooldown_remaining(auth_data)
-        if cooldown_remaining > 0:
-            token = self._wait_for_access_token(cooldown_remaining)
-            if token:
-                return token
-
-        tokens = self._login_device_code()
-        return tokens["access_token"]
+        raise GetAccessTokenError(
+            message=(
+                "No ChatGPT access token configured. "
+                "Use a named credential via the LiteLLM proxy or UI before making requests. "
+                "See: https://docs.litellm.ai/docs/providers/chatgpt"
+            ),
+            status_code=401,
+        )
 
     def get_account_id(self) -> Optional[str]:
+        """Get the ChatGPT account ID.
+
+        In credential mode, derives from the cached access/id token.
+        In file-based mode, reads from the auth file.
+        """
+        if self._injected_refresh_token is not None:
+            cached = _credential_token_cache.get(self._injected_refresh_token)
+            if cached:
+                return cached.get("account_id")
+            return None
+
         auth_data = self._read_auth_file()
         if not auth_data:
             return None
@@ -85,6 +126,75 @@ class Authenticator:
             auth_data["account_id"] = derived
             self._write_auth_file(auth_data)
         return derived
+
+    def _get_access_token_credential_mode(self) -> str:
+        """Get access token in credential mode using the injected refresh token."""
+        cached = _credential_token_cache.get(self._injected_refresh_token)  # type: ignore[arg-type]
+        if cached:
+            access_token = cached.get("access_token")
+            expires_at = cached.get("expires_at")
+            if (
+                access_token
+                and expires_at
+                and time.time() < float(expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
+            ):
+                return access_token
+
+        try:
+            refreshed = self._refresh_tokens_credential_mode(self._injected_refresh_token)  # type: ignore[arg-type]
+            access_token = refreshed["access_token"]
+            _credential_token_cache[self._injected_refresh_token] = {  # type: ignore[index]
+                "access_token": access_token,
+                "expires_at": self._get_expires_at(access_token),
+                "account_id": self._extract_account_id(
+                    refreshed.get("id_token") or access_token
+                ),
+            }
+            return access_token
+        except RefreshAccessTokenError as exc:
+            raise GetAccessTokenError(
+                message=f"Failed to refresh ChatGPT access token: {exc}",
+                status_code=401,
+            )
+
+    def _refresh_tokens_credential_mode(self, refresh_token: str) -> Dict[str, str]:
+        """Refresh tokens without writing to disk (credential mode)."""
+        try:
+            client = _get_httpx_client()
+            resp = client.post(
+                CHATGPT_OAUTH_TOKEN_URL,
+                json={
+                    "client_id": CHATGPT_CLIENT_ID,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "scope": "openid profile email",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise RefreshAccessTokenError(
+                message=f"Refresh token failed: {exc}",
+                status_code=exc.response.status_code,
+            )
+        except Exception as exc:
+            raise RefreshAccessTokenError(
+                message=f"Refresh token failed: {exc}",
+                status_code=400,
+            )
+
+        access_token = data.get("access_token")
+        if not access_token:
+            raise RefreshAccessTokenError(
+                message=f"Refresh response missing access_token: {data}",
+                status_code=400,
+            )
+
+        return {
+            "access_token": access_token,
+            "refresh_token": data.get("refresh_token", refresh_token),
+            "id_token": data.get("id_token", ""),
+        }
 
     def _ensure_token_dir(self) -> None:
         if not os.path.exists(self.token_dir):
@@ -125,7 +235,8 @@ class Authenticator:
             return int(exp)
         return None
 
-    def _decode_jwt_claims(self, token: str) -> Dict[str, Any]:
+    @staticmethod
+    def _decode_jwt_claims(token: str) -> Dict[str, Any]:
         try:
             parts = token.split(".")
             if len(parts) < 2:
@@ -137,10 +248,11 @@ class Authenticator:
         except Exception:
             return {}
 
-    def _extract_account_id(self, token: Optional[str]) -> Optional[str]:
+    @staticmethod
+    def _extract_account_id(token: Optional[str]) -> Optional[str]:
         if not token:
             return None
-        claims = self._decode_jwt_claims(token)
+        claims = Authenticator._decode_jwt_claims(token)
         auth_claims = claims.get("https://api.openai.com/auth")
         if isinstance(auth_claims, dict):
             account_id = auth_claims.get("chatgpt_account_id")
@@ -149,6 +261,7 @@ class Authenticator:
         return None
 
     def _login_device_code(self) -> Dict[str, str]:
+        """Interactive device code login (SDK CLI only, never called automatically)."""
         cooldown_remaining = self._get_device_code_cooldown_remaining(
             self._read_auth_file()
         )
@@ -172,7 +285,8 @@ class Authenticator:
         self._write_auth_file(auth_data)
         return tokens
 
-    def _request_device_code(self) -> Dict[str, str]:
+    @staticmethod
+    def _request_device_code() -> Dict[str, str]:
         try:
             client = _get_httpx_client()
             resp = client.post(
@@ -257,16 +371,17 @@ class Authenticator:
             status_code=408,
         )
 
-    def _exchange_code_for_tokens(self, code_data: Dict[str, str]) -> Dict[str, str]:
+    @staticmethod
+    def _exchange_code_for_tokens(code_data: Dict[str, str]) -> Dict[str, str]:
         try:
             client = _get_httpx_client()
             redirect_uri = f"{CHATGPT_AUTH_BASE}/deviceauth/callback"
             body = (
                 "grant_type=authorization_code"
-                f"&code={code_data['authorization_code']}"
-                f"&redirect_uri={redirect_uri}"
-                f"&client_id={CHATGPT_CLIENT_ID}"
-                f"&code_verifier={code_data['code_verifier']}"
+                f"&code={quote(code_data['authorization_code'], safe='')}"
+                f"&redirect_uri={quote(redirect_uri, safe='')}"
+                f"&client_id={quote(CHATGPT_CLIENT_ID, safe='')}"
+                f"&code_verifier={quote(code_data['code_verifier'], safe='')}"
             )
             resp = client.post(
                 CHATGPT_OAUTH_TOKEN_URL,
