@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Auto-queue middleware for proxy request backpressure.
 
-Queue waiters are stored in-process, while concurrency counters live in Redis.
-This means concurrency limits are shared across workers, but queue ordering and
-wake-up semantics are only guaranteed within a single worker process.
+Admission, queue state, and slot transfer orchestration live in Redis via Lua
+scripts. This module keeps only per-request wake state in memory so the local
+worker can react to distributed claims, disconnects, and shutdown.
 """
 import asyncio
 import heapq
@@ -88,7 +88,7 @@ class _QueueEntry:
 
 
 class ModelQueue:
-    """Per-model priority queue of waiting requests within one worker process."""
+    """Per-model local wake-state registry for requests waiting on Redis claims."""
 
     def __init__(self, max_depth: int = MAX_QUEUE_DEPTH):
         self._heap: List[_QueueEntry] = []
@@ -330,8 +330,9 @@ class AutoQueueMiddleware:
     Gated behind the ``AUTOQ_ENABLED`` environment variable (default: disabled).
     When disabled the middleware is a transparent passthrough.
 
-    Queue waiters are stored in-process. This provides per-worker fairness, not
-    a globally ordered distributed queue across multiple workers.
+    Redis owns the distributed queue, request state, and claim/release
+    transitions. The middleware keeps a local wake registry only for queued
+    requests currently attached to this worker.
     """
 
     def __init__(
