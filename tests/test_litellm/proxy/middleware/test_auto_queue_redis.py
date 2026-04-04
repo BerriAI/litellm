@@ -238,6 +238,67 @@ async def test_admit_or_enqueue_is_atomic_under_parallel_contention(aqr_factory,
     assert await redis.zcard(queue_key(model)) == 11
 
 
+async def test_admit_or_enqueue_prunes_stale_backlog_before_immediate_admission(aqr_factory, redis):
+    aqr = aqr_factory(default_max_concurrent=1)
+    model = "glm-5.1"
+
+    await redis.zadd(queue_key(model), {"req-stale": 0})
+
+    result = await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-1",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(),
+        worker_id="worker-a",
+    )
+
+    assert result.decision == "admit_now"
+    assert result.request_state is not None
+    assert result.request_state.state == "active"
+    assert await redis.zrange(queue_key(model), 0, -1) == []
+    assert await redis.hgetall(request_key("req-stale")) == {}
+    assert await redis.get(active_key(model)) == b"1"
+
+
+async def test_admit_or_enqueue_promotes_backlog_when_capacity_is_available(aqr_factory, redis):
+    aqr = aqr_factory(default_max_concurrent=1)
+    model = "glm-5.1"
+
+    first = await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-1",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(),
+        worker_id="worker-a",
+    )
+    second = await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-2",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(20_000),
+        worker_id="worker-b",
+    )
+
+    assert first.decision == "admit_now"
+    assert second.decision == "queued"
+
+    await redis.set(f"autoq:limit:{model}", 2)
+
+    third = await aqr.admit_or_enqueue(
+        model=model,
+        request_id="req-3",
+        priority=10,
+        deadline_at_ms=_future_deadline_ms(30_000),
+        worker_id="worker-c",
+    )
+
+    assert third.decision == "queued"
+    assert request_state_from_hash(await redis.hgetall(request_key("req-2"))).state == "claimed"
+    assert request_state_from_hash(await redis.hgetall(request_key("req-3"))).state == "queued"
+    assert await redis.get(active_key(model)) == b"2"
+    assert await redis.zrange(queue_key(model), 0, -1) == [b"req-3"]
+
+
 async def test_release_transfers_claim_to_head_of_queue(aqr_factory, redis):
     aqr = aqr_factory(default_max_concurrent=1)
 

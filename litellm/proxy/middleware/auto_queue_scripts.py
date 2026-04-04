@@ -153,6 +153,9 @@ class DistributedAutoQueueRedis:
                 deadline_at_ms,
                 worker_id,
                 claim_token,
+                AUTOQ_REQUEST_KEY_PREFIX,
+                AUTOQ_CLAIM_KEY_PREFIX,
+                AUTOQ_ACTIVE_LEASE_KEY_PREFIX,
             ],
         )
         decision = int(result[0])
@@ -292,7 +295,6 @@ return tonumber(redis.call('GET', KEYS[1]))
 _LUA_ADMIT_OR_ENQUEUE = """
 local active = tonumber(redis.call('GET', KEYS[1])) or 0
 local limit = tonumber(redis.call('GET', KEYS[2])) or tonumber(ARGV[1])
-local queued = tonumber(redis.call('ZCARD', KEYS[3])) or 0
 local max_queue_depth = tonumber(ARGV[5])
 local now_ms = tostring(ARGV[6])
 local request_id = ARGV[7]
@@ -301,6 +303,86 @@ local priority = tostring(ARGV[9])
 local deadline_at_ms = tostring(ARGV[10])
 local worker_id = ARGV[11]
 local claim_token = ARGV[12]
+local request_key_prefix = ARGV[13]
+local claim_key_prefix = ARGV[14]
+local active_lease_key_prefix = ARGV[15]
+
+local function try_promote_backlog()
+    while active < limit do
+        local popped = redis.call('ZPOPMIN', KEYS[3], 1)
+        if not popped[1] then
+            return
+        end
+
+        local queued_request_id = popped[1]
+        local queued_request_key = request_key_prefix .. queued_request_id
+        local queued_claim_key = claim_key_prefix .. queued_request_id
+        local queued_active_lease_key = active_lease_key_prefix .. queued_request_id
+        local raw = redis.call('HGETALL', queued_request_key)
+
+        if #raw == 0 then
+            -- stale queue member, skip it and keep draining
+        else
+            local queued_worker_id = ''
+            local queued_state = ''
+            local queued_deadline_at_ms = ''
+
+            for index = 1, #raw, 2 do
+                if raw[index] == 'worker_id' then
+                    queued_worker_id = raw[index + 1]
+                elseif raw[index] == 'state' then
+                    queued_state = raw[index + 1]
+                elseif raw[index] == 'deadline_at_ms' then
+                    queued_deadline_at_ms = raw[index + 1]
+                end
+            end
+
+            if queued_state ~= 'queued' then
+                -- already terminal or claimed, skip stale queue member
+            elseif queued_deadline_at_ms ~= '' and tonumber(queued_deadline_at_ms) <= tonumber(now_ms) then
+                redis.call(
+                    'HSET',
+                    queued_request_key,
+                    'state', 'timed_out',
+                    'claim_token', '',
+                    'finished_at_ms', now_ms
+                )
+                redis.call('EXPIRE', queued_request_key, tonumber(ARGV[3]))
+                redis.call('DEL', queued_claim_key)
+                redis.call('DEL', queued_active_lease_key)
+            else
+                local queued_claim_token = claim_token .. ':backlog:' .. queued_request_id
+                redis.call(
+                    'HSET',
+                    queued_request_key,
+                    'state', 'claimed',
+                    'claim_token', queued_claim_token,
+                    'claimed_at_ms', now_ms,
+                    'started_at_ms', '',
+                    'finished_at_ms', ''
+                )
+                redis.call('EXPIRE', queued_request_key, tonumber(ARGV[3]))
+                redis.call('SET', queued_claim_key, queued_claim_token, 'EX', tonumber(ARGV[4]))
+                redis.call('DEL', queued_active_lease_key)
+                redis.call(
+                    'HSET',
+                    queued_active_lease_key,
+                    'worker_id', queued_worker_id,
+                    'claim_token', queued_claim_token
+                )
+                redis.call('EXPIRE', queued_active_lease_key, tonumber(ARGV[4]))
+                active = active + 1
+                redis.call('SET', KEYS[1], active, 'EX', tonumber(ARGV[2]))
+            end
+        end
+    end
+end
+
+if active < limit then
+    try_promote_backlog()
+end
+
+local queued = tonumber(redis.call('ZCARD', KEYS[3])) or 0
 
 if active < limit and queued == 0 then
     redis.call('SET', KEYS[1], active + 1, 'EX', tonumber(ARGV[2]))
