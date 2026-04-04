@@ -2080,6 +2080,12 @@ async def apply_guardrail(
     """
     from litellm.proxy.utils import handle_exception_on_proxy
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to apply guardrails",
+        )
+
     try:
         active_guardrail: Optional[
             CustomGuardrail

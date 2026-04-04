@@ -16,6 +16,39 @@ from litellm.secret_managers.secret_manager_handler import get_secret_from_manag
 
 oidc_cache = DualCache()
 
+# Directories blocked from OIDC file reads for security
+_OIDC_BLOCKED_PATH_PREFIXES = ["/etc/", "/root/", "/proc/", "/sys/", "/dev/"]
+
+
+def _validate_oidc_file_path(file_path: str) -> None:
+    """Validate that an OIDC token file path is safe to read."""
+    # Normalize the path to resolve .. components
+    normalized = os.path.normpath(file_path)
+    resolved = os.path.realpath(file_path)
+
+    # Check both normalized and resolved paths against blocked prefixes
+    # (resolved handles symlinks, normalized handles cases where file doesn't exist yet)
+    for prefix in _OIDC_BLOCKED_PATH_PREFIXES:
+        if normalized.startswith(prefix) or resolved.startswith(prefix):
+            raise ValueError(
+                f"OIDC file path not allowed: reading from {prefix} is blocked for security"
+            )
+        # Also check /private variants (macOS)
+        private_prefix = f"/private{prefix}"
+        if resolved.startswith(private_prefix):
+            raise ValueError(
+                f"OIDC file path not allowed: reading from {prefix} is blocked for security"
+            )
+
+    # If LITELLM_ALLOWED_OIDC_DIRS env var is set, enforce allowlist
+    allowed_dirs_env = os.getenv("LITELLM_ALLOWED_OIDC_DIRS")
+    if allowed_dirs_env:
+        allowed = [os.path.realpath(d.strip()) for d in allowed_dirs_env.split(",")]
+        if not any(resolved.startswith(d) for d in allowed):
+            raise ValueError(
+                f"OIDC file path {resolved} not in allowed directories"
+            )
+
 
 def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
     """
@@ -197,6 +230,7 @@ def get_secret(  # noqa: PLR0915
                 return oidc_token
         elif oidc_provider == "file":
             # Load token from a file
+            _validate_oidc_file_path(oidc_aud)
             with open(oidc_aud, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
@@ -211,6 +245,7 @@ def get_secret(  # noqa: PLR0915
             token_file_path = os.getenv(oidc_aud)
             if token_file_path is None:
                 raise ValueError(f"Environment variable {oidc_aud} not found")
+            _validate_oidc_file_path(token_file_path)
             with open(token_file_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
