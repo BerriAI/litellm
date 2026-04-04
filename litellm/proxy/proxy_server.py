@@ -194,6 +194,7 @@ def generate_feedback_box():
     print()  # noqa
 
 
+import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -2159,11 +2160,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -6019,9 +6018,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[
-            Union[bool, str]
-        ] = general_settings.get("use_redis_transaction_buffer", False)
+        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
+            general_settings.get("use_redis_transaction_buffer", False)
+        )
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -13908,9 +13907,138 @@ app.include_router(agent_endpoints_router)
 app.include_router(compliance_router)
 app.include_router(a2a_router)
 app.include_router(access_group_router)
+
+
+async def _stream_mcp_asgi_response(
+    handle_fn, scope: dict, receive
+) -> "StreamingResponse":
+    """
+    Call an ASGI MCP handler and return a StreamingResponse so SSE/streaming works.
+
+    asyncio.create_task copies the current context, so any ContextVar set before
+    this call (e.g. _mcp_active_toolset_id) is visible inside the handler task.
+    """
+    from starlette.responses import StreamingResponse
+
+    headers_ready: asyncio.Future = asyncio.get_running_loop().create_future()
+    body_queue: asyncio.Queue = asyncio.Queue(maxsize=1024)
+
+    async def bridging_send(message):
+        if message["type"] == "http.response.start":
+            if not headers_ready.done():
+                headers_ready.set_result(
+                    (message.get("status", 200), message.get("headers", []))
+                )
+        elif message["type"] == "http.response.body":
+            chunk = message.get("body", b"")
+            if chunk:
+                await body_queue.put(chunk)
+            if not message.get("more_body", False):
+                await body_queue.put(None)  # EOF sentinel
+
+    handler_task = asyncio.create_task(handle_fn(scope, receive, bridging_send))
+
+    # If the handler task dies (exception or cancellation) without sending the EOF
+    # sentinel, body_iter() would block forever on body_queue.get().  The callback
+    # below guarantees the queue gets unblocked regardless of how the task ends.
+    def _ensure_eof(task: asyncio.Task) -> None:
+        if task.cancelled() or task.exception() is not None:
+            body_queue.put_nowait(None)
+
+    handler_task.add_done_callback(_ensure_eof)
+
+    try:
+        status, raw_headers = await asyncio.wait_for(
+            asyncio.shield(headers_ready), timeout=30.0
+        )
+    except asyncio.TimeoutError:
+        handler_task.cancel()
+        raise HTTPException(
+            status_code=504, detail="MCP handler did not respond in time"
+        )
+
+    headers_dict = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
+
+    async def body_iter():
+        try:
+            while True:
+                chunk = await body_queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            if not handler_task.done():
+                handler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await handler_task
+
+    return StreamingResponse(
+        body_iter(),
+        status_code=status,
+        headers=headers_dict,
+        media_type=headers_dict.get("content-type"),
+    )
+
+
 ########################################################
 # MCP Server
 ########################################################
+
+
+# Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
+# Must be declared BEFORE /{mcp_server_name}/mcp to avoid being swallowed by the catchall.
+@app.api_route(
+    "/toolset/{toolset_name}/mcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def toolset_mcp_route(toolset_name: str, request: Request):
+    """
+    Namespace a toolset as its own MCP endpoint.
+
+    Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
+    the toolset. Access is enforced: non-admin API keys must have the toolset
+    listed in their object_permission.mcp_toolsets grant list, or the request
+    will be rejected with a 403.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_active_toolset_id,
+            handle_streamable_http_mcp,
+        )
+
+        if prisma_client is None:
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+            prisma_client, toolset_name
+        )
+        if toolset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Toolset '{toolset_name}' not found",
+            )
+
+        scope = dict(request.scope)
+        scope["path"] = "/mcp"
+
+        token = _mcp_active_toolset_id.set(toolset.toolset_id)
+        try:
+            return await _stream_mcp_asgi_response(
+                handle_streamable_http_mcp, scope, request.receive
+            )
+        finally:
+            _mcp_active_toolset_id.reset(token)
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling toolset MCP route for {toolset_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 # Dynamic MCP server routes - handle /{mcp_server_name}/mcp
@@ -13919,7 +14047,7 @@ app.include_router(access_group_router)
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
-    """Handle dynamic MCP server routes like /github_mcp/mcp"""
+    """Handle dynamic MCP server routes like /github_mcp/mcp and toolset routes like /devtooling-prod/mcp"""
     try:
         # Validate that the MCP server exists
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -13933,6 +14061,32 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             mcp_server_name, client_ip=client_ip
         )
         if mcp_server is None:
+            # Check if this is a toolset name — toolsets are accessible at /{name}/mcp
+            # the same way individual servers are, no separate /toolset/ prefix needed.
+            if prisma_client is not None:
+                from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                    global_mcp_server_manager,
+                )
+                from litellm.proxy._experimental.mcp_server.server import (
+                    _mcp_active_toolset_id,
+                    handle_streamable_http_mcp,
+                )
+
+                toolset = await global_mcp_server_manager.get_toolset_by_name_cached(
+                    prisma_client, mcp_server_name
+                )
+                if toolset is not None:
+                    scope = dict(request.scope)
+                    scope["path"] = "/mcp"
+
+                    token = _mcp_active_toolset_id.set(toolset.toolset_id)
+                    try:
+                        return await _stream_mcp_asgi_response(
+                            handle_streamable_http_mcp, scope, request.receive
+                        )
+                    finally:
+                        _mcp_active_toolset_id.reset(token)
+
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
             )
