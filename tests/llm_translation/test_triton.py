@@ -34,7 +34,7 @@ def test_split_embedding_by_shape_passes():
         )
         assert split_output_data == [[1, 2, 3], [4, 5, 6]]
     except Exception as e:
-        pytest.fail(f"An exception occured: {e}")
+        pytest.fail(f"An exception occurred: {e}")
 
 
 def test_split_embedding_by_shape_fails_with_shape_value_error():
