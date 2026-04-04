@@ -105,7 +105,7 @@ async def test_router_timeouts_bedrock():
         {
             "model_name": "bedrock",
             "litellm_params": {
-                "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 "timeout": 0.00001,
             },
             "tpm": 80000,
