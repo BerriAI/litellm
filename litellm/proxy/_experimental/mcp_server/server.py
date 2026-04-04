@@ -1,6 +1,7 @@
 """
 LiteLLM MCP Server Routes
 """
+
 # pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
@@ -1822,9 +1823,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
@@ -1836,9 +1837,9 @@ if MCP_AVAILABLE:
                 mcp_server.mcp_info or {}
             ).get("mcp_server_cost_info")
             if litellm_logging_obj:
-                litellm_logging_obj.model_call_details[
-                    "mcp_tool_call_metadata"
-                ] = standard_logging_mcp_tool_call
+                litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                    standard_logging_mcp_tool_call
+                )
 
             # BYOK: retrieve the stored per-user credential.  A single DB call
             # both checks existence and fetches the value, avoiding a double query.
@@ -2580,17 +2581,15 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, Dict[str, str]]],
-            Optional[Dict[str, str]],
-            Optional[Dict[str, str]],
-            Optional[str],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

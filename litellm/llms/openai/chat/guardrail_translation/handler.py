@@ -86,9 +86,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs[
-                    "structured_messages"
-                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                inputs["structured_messages"] = (
+                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                )
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:

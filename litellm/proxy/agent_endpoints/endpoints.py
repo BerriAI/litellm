@@ -177,10 +177,9 @@ async def get_agents(
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params[
-                "is_public"
-            ] = litellm.public_agent_groups is not None and (
-                agent.agent_id in litellm.public_agent_groups
+            agent.litellm_params["is_public"] = (
+                litellm.public_agent_groups is not None
+                and (agent.agent_id in litellm.public_agent_groups)
             )
 
         if health_check:
@@ -378,13 +377,13 @@ async def get_agent_by_id(
                 agent_dict = agent_row.model_dump()
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.model_dump()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.model_dump()
+                        )
                     except Exception:
-                        agent_dict[
-                            "object_permission"
-                        ] = agent_row.object_permission.dict()
+                        agent_dict["object_permission"] = (
+                            agent_row.object_permission.dict()
+                        )
                 agent = AgentResponse(**agent_dict)  # type: ignore
         else:
             # Agent found in memory — refresh spend from DB

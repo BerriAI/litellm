@@ -601,9 +601,11 @@ async def update_project(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict,
             team_id=existing_project.team_id,
             prisma_client=prisma_client,
-            team_object=LiteLLM_TeamTable(**team_obj_for_checks.model_dump())
-            if team_obj_for_checks
-            else None,
+            team_object=(
+                LiteLLM_TeamTable(**team_obj_for_checks.model_dump())
+                if team_obj_for_checks
+                else None
+            ),
         )
 
         if not has_permission:
@@ -662,9 +664,9 @@ async def update_project(  # noqa: PLR0915
                             data=object_permission_data,
                         )
                     )
-                    update_data[
-                        "object_permission_id"
-                    ] = created_permission.object_permission_id
+                    update_data["object_permission_id"] = (
+                        created_permission.object_permission_id
+                    )
 
         # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:

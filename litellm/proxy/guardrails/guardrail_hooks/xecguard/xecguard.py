@@ -673,4 +673,3 @@ class XecGuardGuardrail(CustomGuardrail):
         else:
             for chunk in all_chunks:
                 yield chunk
-

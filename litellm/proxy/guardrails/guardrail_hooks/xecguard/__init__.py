@@ -17,7 +17,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         model=getattr(litellm_params, "model", "xecguard_v2") or "xecguard_v2",
         policy_names=getattr(litellm_params, "policy_names", None),
         grounding_enabled=getattr(litellm_params, "grounding_enabled", False) or False,
-        grounding_strictness=getattr(litellm_params, "grounding_strictness", "BALANCED") or "BALANCED",
+        grounding_strictness=getattr(litellm_params, "grounding_strictness", "BALANCED")
+        or "BALANCED",
         grounding_documents=getattr(litellm_params, "grounding_documents", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

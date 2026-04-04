@@ -152,10 +152,10 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -343,10 +343,10 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -513,10 +513,10 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -682,10 +682,10 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -893,10 +893,10 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1047,10 +1047,10 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1230,10 +1230,10 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1418,10 +1418,10 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1592,10 +1592,10 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1752,10 +1752,10 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1921,10 +1921,10 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:

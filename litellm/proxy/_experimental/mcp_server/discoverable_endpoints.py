@@ -541,9 +541,9 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
     }
 
 
@@ -653,16 +653,18 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register"
-        if mcp_server_name
-        else f"{request_base_url}/register",
+        "registration_endpoint": (
+            f"{request_base_url}/{mcp_server_name}/register"
+            if mcp_server_name
+            else f"{request_base_url}/register"
+        ),
     }
 
 
