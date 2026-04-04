@@ -90,6 +90,10 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=False,
         description="If true, the alerting payload will be printed to the console.",
     )
+    default_alerting_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Default metadata to append to every alert. Gets merged with per-request alerting_metadata.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
