@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Auto-queue middleware for proxy request backpressure.
 
 Queue waiters are stored in-process, while concurrency counters live in Redis.
@@ -18,6 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from .auto_queue_scripts import AutoQueueRedis, DistributedAutoQueueRedis
 
 logger = logging.getLogger("litellm.proxy.middleware.auto_queue")
 
@@ -59,159 +63,6 @@ REDIS_PORT = int(os.environ.get("AUTOQ_REDIS_PORT", os.environ.get("REDIS_PORT",
 REDIS_DB = int(os.environ.get("AUTOQ_REDIS_DB", "3"))
 ACTIVE_KEY_TTL = 600  # seconds
 _KEY_TTL = 86400  # 24 hours for limit/success/ceiling keys
-
-
-# -- Lua Scripts ---------------------------------------------------------------
-
-_LUA_ACQUIRE = """
-local active = tonumber(redis.call('GET', KEYS[1])) or 0
-local limit = tonumber(redis.call('GET', KEYS[2])) or tonumber(ARGV[1])
-if active < limit then
-    redis.call('INCR', KEYS[1])
-    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
-    return 1
-end
-return 0
-"""
-
-_LUA_RELEASE = """
-local active = tonumber(redis.call('GET', KEYS[1])) or 0
-if active > 0 then
-    local new = redis.call('DECR', KEYS[1])
-    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
-    return math.max(0, new)
-end
-return 0
-"""
-
-_LUA_RELEASE_AND_TRANSFER = """
--- Atomically release a slot and, if waiters exist, immediately re-acquire
--- for the next waiter so no new arrival can steal it.
-local active = tonumber(redis.call('GET', KEYS[1])) or 0
-if active <= 0 then
-    return 0
-end
-local has_waiters = tonumber(ARGV[1])
-if has_waiters == 1 then
-    -- Transfer: keep active count the same (release + acquire cancel out)
-    return 1
-end
--- No waiters: release normally
-local new = redis.call('DECR', KEYS[1])
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
-return 0
-"""
-
-_LUA_SCALE_UP = """
-local count = redis.call('INCR', KEYS[1])
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
-local threshold = tonumber(ARGV[1])
-local ceiling = tonumber(redis.call('GET', KEYS[3])) or tonumber(ARGV[2])
-if tonumber(count) >= threshold then
-    local current = tonumber(redis.call('GET', KEYS[2])) or tonumber(ARGV[3])
-    if current < ceiling then
-        redis.call('SET', KEYS[2], current + 1)
-        redis.call('EXPIRE', KEYS[2], tonumber(ARGV[4]))
-    end
-    redis.call('SET', KEYS[1], 0)
-    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
-end
-return 0
-"""
-
-_LUA_SCALE_DOWN = """
-local current = tonumber(redis.call('GET', KEYS[1])) or tonumber(ARGV[1])
-local step = tonumber(ARGV[2])
-if current - step >= 1 then
-    redis.call('SET', KEYS[1], current - step)
-else
-    redis.call('SET', KEYS[1], 1)
-end
-redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
-redis.call('SET', KEYS[2], 0)
-redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
-return tonumber(redis.call('GET', KEYS[1]))
-"""
-
-
-# -- Redis Helper --------------------------------------------------------------
-
-class AutoQueueRedis:
-    """Atomic Redis operations for concurrency control and auto-scaling."""
-
-    def __init__(
-        self,
-        redis: aioredis.Redis,
-        default_max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-        ceiling: int = CEILING,
-        scale_up_threshold: int = SCALE_UP_THRESHOLD,
-        scale_down_step: int = SCALE_DOWN_STEP,
-    ):
-        self.redis = redis
-        self.default_max_concurrent = default_max_concurrent
-        self.ceiling = ceiling
-        self.scale_up_threshold = scale_up_threshold
-        self.scale_down_step = scale_down_step
-        self._acquire_script = redis.register_script(_LUA_ACQUIRE)
-        self._release_script = redis.register_script(_LUA_RELEASE)
-        self._release_transfer_script = redis.register_script(_LUA_RELEASE_AND_TRANSFER)
-        self._scale_up_script = redis.register_script(_LUA_SCALE_UP)
-        self._scale_down_script = redis.register_script(_LUA_SCALE_DOWN)
-
-    async def try_acquire(self, model: str) -> bool:
-        result = await self._acquire_script(
-            keys=[f"autoq:active:{model}", f"autoq:limit:{model}"],
-            args=[self.default_max_concurrent, ACTIVE_KEY_TTL],
-        )
-        return bool(result)
-
-    async def release(self, model: str) -> int:
-        result = await self._release_script(
-            keys=[f"autoq:active:{model}"],
-            args=[ACTIVE_KEY_TTL],
-        )
-        return int(result)
-
-    async def release_and_transfer(self, model: str, has_waiters: bool) -> bool:
-        """Atomically release a slot and re-acquire for a waiter if one exists.
-
-        Returns True if a slot was transferred (caller should wake next waiter).
-        Returns False if the slot was simply released.
-        """
-        result = await self._release_transfer_script(
-            keys=[f"autoq:active:{model}"],
-            args=[1 if has_waiters else 0, ACTIVE_KEY_TTL],
-        )
-        return bool(result)
-
-    async def on_success(self, model: str) -> None:
-        await self._scale_up_script(
-            keys=[
-                f"autoq:success:{model}",
-                f"autoq:limit:{model}",
-                f"autoq:ceiling:{model}",
-            ],
-            args=[self.scale_up_threshold, self.ceiling, self.default_max_concurrent, _KEY_TTL],
-        )
-
-    async def on_429(self, model: str) -> None:
-        await self._scale_down_script(
-            keys=[f"autoq:limit:{model}", f"autoq:success:{model}"],
-            args=[self.default_max_concurrent, self.scale_down_step, _KEY_TTL],
-        )
-
-    async def get_model_info(self, model: str) -> dict:
-        pipe = self.redis.pipeline()
-        pipe.get(f"autoq:active:{model}")
-        pipe.get(f"autoq:limit:{model}")
-        pipe.get(f"autoq:ceiling:{model}")
-        active_raw, limit_raw, ceiling_raw = await pipe.execute()
-        return {
-            "active": int(active_raw or 0),
-            "limit": int(limit_raw or self.default_max_concurrent),
-            "queued": 0,  # filled by middleware, not Redis
-            "ceiling": int(ceiling_raw or self.ceiling),
-        }
 
 
 # -- In-Memory Priority Queue -------------------------------------------------
@@ -500,7 +351,13 @@ class AutoQueueMiddleware:
                 extra={"redis_host": REDIS_HOST, "redis_port": REDIS_PORT, "redis_db": REDIS_DB},
             )
             r = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
-            self._aqr = AutoQueueRedis(redis=r)
+            self._aqr = DistributedAutoQueueRedis(
+                redis=r,
+                default_max_concurrent=DEFAULT_MAX_CONCURRENT,
+                ceiling=CEILING,
+                scale_up_threshold=SCALE_UP_THRESHOLD,
+                scale_down_step=SCALE_DOWN_STEP,
+            )
         return self._aqr
 
     async def _safe_redis_call(self, operation: Any, *, model: str, send: Send) -> Any:
