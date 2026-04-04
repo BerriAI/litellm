@@ -750,7 +750,7 @@ async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(hashicorp_s
         mock_get_response_new = MagicMock()
         mock_get_response_new.json.return_value = {
             "data": {
-                "data": {"key": "different-value"},  # Different from expected
+                "data": {"key": "different-ABCD"},  # Different from expected
             }
         }
         mock_get_response_new.raise_for_status.return_value = None
@@ -761,15 +761,18 @@ async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(hashicorp_s
         
         current_secret_name = f"old-secret-{uuid.uuid4()}"
         new_secret_name = f"new-secret-{uuid.uuid4()}"
-        new_secret_value = "expected-value"
-        
+        new_secret_value = "expected-XYZW"
+
         response = await hashicorp_secret_manager.async_rotate_secret(
             current_secret_name=current_secret_name,
             new_secret_name=new_secret_name,
             new_secret_value=new_secret_value,
         )
-        
+
         # Verify error response
         assert response["status"] == "error"
         assert "mismatch" in response["message"].lower()
-        assert "expected-value" in response["message"]
+        # Raw key values should be masked — only last 4 chars shown
+        assert "expected-XYZW" not in response["message"]
+        assert "...XYZW" in response["message"]  # last 4 of "expected-XYZW"
+        assert "...ABCD" in response["message"]  # last 4 of "different-ABCD"

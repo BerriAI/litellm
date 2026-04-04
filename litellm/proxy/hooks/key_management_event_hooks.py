@@ -322,7 +322,7 @@ class KeyManagementEventHooks:
                     optional_params = await KeyManagementEventHooks._get_secret_manager_optional_params(
                         team_id
                     )
-                    await litellm.secret_manager_client.async_rotate_secret(
+                    result = await litellm.secret_manager_client.async_rotate_secret(
                         current_secret_name=KeyManagementEventHooks._get_secret_name(
                             current_secret_name
                         ),
@@ -332,6 +332,13 @@ class KeyManagementEventHooks:
                         new_secret_value=new_secret_value,
                         optional_params=optional_params,
                     )
+                    if (
+                        isinstance(result, dict)
+                        and result.get("status") == "error"
+                    ):
+                        raise ValueError(
+                            f"Secret manager rotation failed: {result.get('message', 'unknown error')}"
+                        )
 
     @staticmethod
     def _get_secret_name(secret_name: str) -> str:
