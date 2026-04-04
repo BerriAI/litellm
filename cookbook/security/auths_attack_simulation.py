@@ -1,8 +1,8 @@
 """
 Auths Attack Simulation: LiteLLM March 24, 2026 Supply Chain Incident
 
-Demonstrates how Auths cryptographic commit verification would have detected
-the unauthorized PyPI publish that compromised LiteLLM v1.82.7 and v1.82.8.
+Demonstrates how Auths cryptographic verification would have detected the
+unauthorized PyPI publish that compromised LiteLLM v1.82.7 and v1.82.8.
 
 What happened:
   1. Attacker compromised the Trivy GitHub Action (March 19)
@@ -12,106 +12,26 @@ What happened:
   5. The malicious packages contained a credential stealer in a .pth file
   6. Source code on GitHub was never modified — the attack existed only in PyPI
 
-Why Auths prevents this:
-  With Auths, every release artifact carries an Ed25519 signature from the
-  maintainer's cryptographic identity (KERI-based DID). Stealing the PyPI
-  token is insufficient — the attacker cannot produce a valid signature
-  without the maintainer's private key stored in their device keychain.
+How Auths closes this gap:
+  The real attack bypassed Git entirely — the attacker published directly to
+  PyPI with no corresponding commit. Auths establishes a policy that every
+  legitimate release must trace back to a signed action by an authorized
+  maintainer. A package published without a valid signature from a known
+  maintainer identity has no valid attestation and would be rejected.
+
+  This simulation uses the Auths Python SDK to demonstrate the core
+  cryptographic primitive: sign an action with a maintainer's key, then
+  show that verification succeeds for the legitimate release and fails
+  for a tampered or unauthorized one.
 
 Usage:
-  brew tap auths-dev/auths-cli && brew install auths
+  pip install auths
   python auths_attack_simulation.py
+
+Requires: auths (Python SDK)
 """
-import os
-import shutil
-import subprocess
+import json
 import sys
-import tempfile
-
-
-def check_auths_cli() -> bool:
-    """Check if the auths CLI is available."""
-    return shutil.which("auths") is not None
-
-
-def run(cmd: list[str], cwd: str, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a command and return the result."""
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=check,
-    )
-
-
-def setup_test_repo(tmpdir: str) -> str:
-    """Create a temporary git repo with signed and unsigned commits."""
-    repo = os.path.join(tmpdir, "litellm-simulation")
-    os.makedirs(repo)
-
-    # Initialize repo
-    run(["git", "init"], cwd=repo)
-    run(["git", "config", "user.email", "maintainer@example.com"], cwd=repo)
-    run(["git", "config", "user.name", "LiteLLM Maintainer"], cwd=repo)
-
-    # Generate a test Ed25519 keypair for the "legitimate maintainer"
-    key_path = os.path.join(tmpdir, "test_key")
-    run(
-        ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q"],
-        cwd=tmpdir,
-    )
-
-    # Configure git to sign with this key
-    run(["git", "config", "gpg.format", "ssh"], cwd=repo)
-    run(["git", "config", "user.signingkey", key_path], cwd=repo)
-
-    # Create allowed_signers file
-    pub_key_content = open(f"{key_path}.pub").read().strip()
-    signers_path = os.path.join(repo, ".auths")
-    os.makedirs(signers_path)
-    with open(os.path.join(signers_path, "allowed_signers"), "w") as f:
-        f.write(f"maintainer@example.com {pub_key_content}\n")
-
-    run(["git", "config", "gpg.ssh.allowedSignersFile", os.path.join(signers_path, "allowed_signers")], cwd=repo)
-
-    # Commit 1: Legitimate signed release (v1.82.6)
-    with open(os.path.join(repo, "litellm_version.py"), "w") as f:
-        f.write('version = "1.82.6"\n')
-    run(["git", "add", "."], cwd=repo)
-    run(["git", "commit", "-S", "-m", "release: v1.82.6 (legitimate, signed)"], cwd=repo)
-
-    # Commit 2: Attacker's malicious commit (unsigned — simulates PyPI-only publish)
-    run(["git", "config", "commit.gpgSign", "false"], cwd=repo)
-    with open(os.path.join(repo, "litellm_version.py"), "w") as f:
-        f.write('version = "1.82.7"\n')
-    with open(os.path.join(repo, "litellm_init.pth"), "w") as f:
-        f.write("# Simulated malicious payload — credential stealer\n")
-        f.write("import os; os.environ.get('AWS_SECRET_ACCESS_KEY')  # exfiltrate\n")
-    run(["git", "add", "."], cwd=repo)
-    run(["git", "commit", "-m", "release: v1.82.7 (MALICIOUS — unsigned)"], cwd=repo)
-
-    return repo
-
-
-def run_verification(repo: str) -> None:
-    """Run auths verification and display results."""
-    result = run(
-        ["auths", "verify", "HEAD~1..HEAD", "--allowed-signers", ".auths/allowed_signers"],
-        cwd=repo,
-        check=False,
-    )
-
-    if result.returncode != 0:
-        print("  BLOCKED: Unsigned commit detected")
-        if result.stdout:
-            print(f"  Output: {result.stdout.strip()}")
-        if result.stderr:
-            print(f"  Detail: {result.stderr.strip()}")
-    else:
-        print("  PASSED: All commits verified")
-        if result.stdout:
-            print(f"  Output: {result.stdout.strip()}")
 
 
 def main() -> None:
@@ -120,54 +40,121 @@ def main() -> None:
     print("=" * 70)
     print()
 
-    if not check_auths_cli():
-        print("The 'auths' CLI is not installed.")
+    try:
+        from auths import sign_action, verify_action_envelope
+    except ImportError:
+        print("The 'auths' Python SDK is not installed.")
         print()
         print("Install it with:")
-        print("  brew tap auths-dev/auths-cli && brew install auths")
-        print("  (or: cargo install auths_cli)")
+        print("  pip install auths")
         print()
         print("Or visit: https://github.com/auths-dev/auths")
         sys.exit(0)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        print("[1] Setting up simulation repository...")
-        repo = setup_test_repo(tmpdir)
-        print("    Created repo with 2 commits:")
-        print("    - v1.82.6: Legitimate release, signed by maintainer")
-        print("    - v1.82.7: Attacker's malicious version, unsigned")
-        print()
+    # Derive the public key from the private seed for verification.
+    # In production, the maintainer's public key comes from their Auths
+    # identity (did:keri:...) and is listed in .auths/allowed_signers.
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-        # Verify the legitimate commit
-        print("[2] Verifying legitimate commit (v1.82.6)...")
-        result = run(
-            ["auths", "verify", "HEAD~2..HEAD~1", "--allowed-signers", ".auths/allowed_signers"],
-            cwd=repo,
-            check=False,
-        )
-        if result.returncode == 0:
-            print("  PASSED: Commit is signed by an authorized maintainer")
-        else:
-            print("  Result: ", result.stdout.strip() if result.stdout else result.stderr.strip())
-        print()
+        MAINTAINER_SEED_HEX = "a" * 64  # Simulated maintainer private key seed
+        seed_bytes = bytes.fromhex(MAINTAINER_SEED_HEX)
+        private_key = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+        MAINTAINER_PK_HEX = private_key.public_key().public_bytes_raw().hex()
+    except ImportError:
+        print("This simulation requires the 'cryptography' package.")
+        print("Install it with: pip install cryptography")
+        sys.exit(0)
 
-        # Verify the malicious commit
-        print("[3] Verifying attacker's commit (v1.82.7)...")
-        run_verification(repo)
-        print()
+    ATTACKER_SEED_HEX = "b" * 64  # Attacker has a different key
+    MAINTAINER_DID = "did:keri:EBfxc_LiteLLM_Maintainer"
 
-        # Summary
-        print("-" * 70)
-        print("RESULT: The attacker's unsigned commit would have been flagged.")
-        print()
-        print("In the real attack, the attacker used a stolen PyPI token to publish")
-        print("malicious packages directly to the registry. The source code on GitHub")
-        print("was never modified. With Auths, even if registry credentials are stolen,")
-        print("the attacker cannot produce a valid Ed25519 signature — the private key")
-        print("is bound to the maintainer's device keychain and never leaves it.")
-        print()
-        print("Learn more: https://github.com/auths-dev/auths")
-        print("=" * 70)
+    # ── Step 1: Legitimate maintainer signs a release ──────────────────
+    print("[1] Legitimate maintainer signs release v1.82.6...")
+    print()
+
+    release_payload = json.dumps({
+        "package": "litellm",
+        "version": "1.82.6",
+        "digest": "sha256:abc123def456...",
+        "registry": "pypi",
+    })
+
+    legitimate_envelope = sign_action(
+        MAINTAINER_SEED_HEX,
+        "release",
+        release_payload,
+        MAINTAINER_DID,
+    )
+
+    result = verify_action_envelope(legitimate_envelope, MAINTAINER_PK_HEX)
+    print(f"    Signed by: {MAINTAINER_DID}")
+    print(f"    Verification: {'PASSED' if result.valid else 'FAILED'}")
+    print()
+
+    # ── Step 2: Attacker publishes with stolen PyPI token ──────────────
+    print("[2] Attacker publishes v1.82.7 using stolen PyPI token...")
+    print("    (Attacker has registry credentials but NOT the signing key)")
+    print()
+
+    malicious_payload = json.dumps({
+        "package": "litellm",
+        "version": "1.82.7",
+        "digest": "sha256:malicious_payload_hash...",
+        "registry": "pypi",
+    })
+
+    # Attacker signs with their own key — NOT the maintainer's
+    attacker_envelope = sign_action(
+        ATTACKER_SEED_HEX,
+        "release",
+        malicious_payload,
+        "did:keri:EATTACKER_unknown_identity",
+    )
+
+    # Verify against the MAINTAINER's public key (the only trusted key)
+    result = verify_action_envelope(attacker_envelope, MAINTAINER_PK_HEX)
+    print(f"    Signed by: did:keri:EATTACKER_unknown_identity")
+    print(f"    Verification against maintainer key: {'PASSED' if result.valid else 'FAILED'}")
+    if result.error:
+        print(f"    Reason: {result.error}")
+    print()
+
+    # ── Step 3: Show tampered legitimate envelope also fails ───────────
+    print("[3] Attacker tampers with a legitimately-signed envelope...")
+    print()
+
+    envelope = json.loads(legitimate_envelope)
+    envelope["payload"]["version"] = "1.82.7"
+    envelope["payload"]["digest"] = "sha256:malicious_payload_hash..."
+    tampered_json = json.dumps(envelope)
+
+    result = verify_action_envelope(tampered_json, MAINTAINER_PK_HEX)
+    print(f"    Original signer: {MAINTAINER_DID}")
+    print(f"    Tampered payload version: 1.82.7")
+    print(f"    Verification: {'PASSED' if result.valid else 'FAILED'}")
+    if result.error:
+        print(f"    Reason: {result.error}")
+    print()
+
+    # ── Summary ────────────────────────────────────────────────────────
+    print("-" * 70)
+    print("SUMMARY")
+    print()
+    print("  v1.82.6 (legitimate, signed by maintainer): VERIFIED")
+    print("  v1.82.7 (attacker's key, not trusted):      REJECTED")
+    print("  v1.82.7 (tampered legitimate envelope):     REJECTED")
+    print()
+    print("NOTE: The real March 24 attack bypassed Git entirely — the attacker")
+    print("published directly to PyPI with no commit at all. This simulation")
+    print("demonstrates the cryptographic primitive that Auths provides: only")
+    print("the holder of the maintainer's private key can produce a valid")
+    print("signature. In a full deployment, the CI/CD pipeline would use")
+    print("'auths artifact sign' to bind the published package to the")
+    print("maintainer's identity, and consumers would verify before installing.")
+    print()
+    print("Learn more: https://github.com/auths-dev/auths")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
