@@ -608,12 +608,25 @@ class Logging(LiteLLMLoggingBaseClass):
         if "litellm_metadata" in kwargs and isinstance(
             kwargs["litellm_metadata"], dict
         ):
-            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
-            if "metadata" not in base_litellm_params:
-                base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"].copy()
 
         if litellm_params:
             base_litellm_params.update(litellm_params)
+
+        # Merge litellm_metadata into metadata AFTER .update(litellm_params) so
+        # the merge isn't silently overwritten. This ensures API key fields
+        # (user_api_key_hash, etc.) are visible to callbacks even when the
+        # request uses "litellm_metadata" (e.g. /v1/messages from Claude Code).
+        if "litellm_metadata" in kwargs and isinstance(
+            kwargs["litellm_metadata"], dict
+        ):
+            if not base_litellm_params.get("metadata"):
+                base_litellm_params["metadata"] = dict(kwargs["litellm_metadata"])
+            else:
+                base_litellm_params["metadata"] = dict(base_litellm_params["metadata"])
+                for key, value in kwargs["litellm_metadata"].items():
+                    if key not in base_litellm_params["metadata"]:
+                        base_litellm_params["metadata"][key] = value
 
         self.update_environment_variables(
             litellm_params=base_litellm_params,
