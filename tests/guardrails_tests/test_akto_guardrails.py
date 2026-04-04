@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -306,7 +305,7 @@ async def test_pre_call_allowed(akto_validate, sample_inputs, sample_request_dat
 @pytest.mark.asyncio
 async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_data):
     akto_validate.async_handler.post = AsyncMock(
-        side_effect=[_mock_blocked_response("PII"), MagicMock(status_code=200)]
+        return_value=_mock_blocked_response("PII")
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -316,19 +315,10 @@ async def test_pre_call_blocked(akto_validate, sample_inputs, sample_request_dat
             input_type="request",
         )
 
-    await asyncio.gather(*akto_validate.background_tasks)
-
     assert exc_info.value.status_code == 403
     assert "PII" in exc_info.value.detail
-    assert akto_validate.async_handler.post.call_count == 2
-
-    # Second call is the blocked-request ingestion
-    ingest_call = akto_validate.async_handler.post.call_args_list[1].kwargs
-    assert ingest_call["params"].get("ingest_data") == "true"
-    assert "guardrails" not in ingest_call["params"]
-    ingest_payload = json.loads(ingest_call["data"])
-    assert ingest_payload["statusCode"] == "403"
-    assert json.loads(ingest_payload["responsePayload"])["x-blocked-by"] == "Akto Proxy"
+    # Only the guardrail validation call; blocked-request ingestion is handled by AktoLogger via failure_callback.
+    akto_validate.async_handler.post.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
