@@ -1355,10 +1355,8 @@ def _update_model_if_team_alias_exists(
                         "New sibling deployments may be unreachable. "
                         "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
                         "team-scoped sibling routing.",
-                        str(_model).replace("\n", "").replace("\r", ""),
-                        str(user_api_key_dict.team_id)
-                        .replace("\n", "")
-                        .replace("\r", ""),
+                        _model,
+                        user_api_key_dict.team_id,
                     )
 
         data["model"] = aliased_target
