@@ -183,14 +183,6 @@ def _should_queue(scope: Scope) -> bool:
     return method == "POST" and path in _QUEUED_PATHS
 
 
-def _is_queue_status_request(scope: Scope) -> bool:
-    return (
-        scope["type"] == "http"
-        and scope.get("method", "") == "GET"
-        and scope.get("path", "") == "/queue/status"
-    )
-
-
 # -- Body Buffering ------------------------------------------------------------
 
 async def _buffer_body(receive: Receive) -> bytes:
@@ -322,6 +314,70 @@ async def _send_redis_unavailable(send: Send, model: str) -> None:
     await _send_json_error(send, 503, f"Auto-queue unavailable for model {model}")
 
 
+def auto_queue_unavailable_error(model: str) -> Dict[str, str]:
+    return {"error": f"Auto-queue unavailable for model {model}"}
+
+
+class AutoQueueStatusRedisError(RedisError):
+    def __init__(self, model: str):
+        super().__init__(f"Auto-queue unavailable for model {model}")
+        self.model = model
+
+
+def get_auto_queue_status_aqr() -> AutoQueueRedis:
+    redis_client = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+    return DistributedAutoQueueRedis(
+        redis=redis_client,
+        default_max_concurrent=DEFAULT_MAX_CONCURRENT,
+        ceiling=CEILING,
+        scale_up_threshold=SCALE_UP_THRESHOLD,
+        scale_down_step=SCALE_DOWN_STEP,
+        max_queue_depth=MAX_QUEUE_DEPTH,
+    )
+
+
+async def get_auto_queue_status_models(
+    aqr: AutoQueueRedis, local_queues: Optional[Dict[str, "ModelQueue"]] = None
+) -> List[str]:
+    models = set((local_queues or {}).keys())
+    redis_client = getattr(aqr, "redis", None)
+    if redis_client is None:
+        return sorted(models)
+
+    prefixes = (
+        AUTOQ_ACTIVE_KEY_PREFIX,
+        AUTOQ_LIMIT_KEY_PREFIX,
+        AUTOQ_CEILING_KEY_PREFIX,
+        AUTOQ_QUEUE_KEY_PREFIX,
+    )
+    for prefix in prefixes:
+        async for raw_key in redis_client.scan_iter(match=f"{prefix}*"):
+            key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
+            if key.startswith(prefix):
+                models.add(key[len(prefix) :])
+    return sorted(models)
+
+
+async def build_auto_queue_status_response(
+    aqr: AutoQueueRedis, local_queues: Optional[Dict[str, "ModelQueue"]] = None
+) -> "AutoQueueStatusResponse":
+    models_info: Dict[str, "AutoQueueModelStatus"] = {}
+    queue_map = local_queues or {}
+    try:
+        models = await get_auto_queue_status_models(aqr, queue_map)
+    except RedisError as exc:
+        raise AutoQueueStatusRedisError("queue-status") from exc
+
+    for model in models:
+        try:
+            info = await aqr.get_model_info(model)
+        except RedisError as exc:
+            raise AutoQueueStatusRedisError(model) from exc
+        info["local_waiters"] = queue_map.get(model).depth if model in queue_map else 0
+        models_info[model] = info
+    return {"models": models_info}
+
+
 def _extract_response_status(exc: Exception) -> Optional[int]:
     response = getattr(exc, "response", None)
     return getattr(response, "status_code", None)
@@ -400,25 +456,6 @@ class AutoQueueMiddleware:
         if model not in self._queues:
             self._queues[model] = ModelQueue(max_depth=self._max_queue_depth)
         return self._queues[model]
-
-    async def _get_status_models(self, aqr: AutoQueueRedis) -> List[str]:
-        models = set(self._queues.keys())
-        redis_client = getattr(aqr, "redis", None)
-        if redis_client is None:
-            return sorted(models)
-
-        prefixes = (
-            AUTOQ_ACTIVE_KEY_PREFIX,
-            AUTOQ_LIMIT_KEY_PREFIX,
-            AUTOQ_CEILING_KEY_PREFIX,
-            AUTOQ_QUEUE_KEY_PREFIX,
-        )
-        for prefix in prefixes:
-            async for raw_key in redis_client.scan_iter(match=f"{prefix}*"):
-                key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
-                if key.startswith(prefix):
-                    models.add(key[len(prefix) :])
-        return sorted(models)
 
     async def _load_request_state(self, aqr: AutoQueueRedis, request_id: str):
         redis_client = getattr(aqr, "redis", None)
@@ -988,44 +1025,9 @@ class AutoQueueMiddleware:
                 return
             raise
 
-    async def _handle_status(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Respond to GET /queue/status with model queue info."""
-        models_info: Dict[str, "AutoQueueModelStatus"] = {}
-        if self._enabled:
-            aqr = self._ensure_aqr()
-            models = await self._safe_redis_call(
-                self._get_status_models(aqr),
-                model="queue-status",
-                send=send,
-            )
-            if models is None:
-                return
-            for model in models:
-                info = await self._safe_redis_call(
-                    aqr.get_model_info(model),
-                    model=model,
-                    send=send,
-                )
-                if info is None:
-                    return
-                info["local_waiters"] = self._queues.get(model).depth if model in self._queues else 0
-                models_info[model] = info
-        response_payload: "AutoQueueStatusResponse" = {"models": models_info}
-        body = json.dumps(response_payload).encode()
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({"type": "http.response.body", "body": body})
-
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if not self._enabled:
             await self.app(scope, receive, send)
-            return
-
-        if _is_queue_status_request(scope):
-            await self._handle_status(scope, receive, send)
             return
 
         if not _should_queue(scope):

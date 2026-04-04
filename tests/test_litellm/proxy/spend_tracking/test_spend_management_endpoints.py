@@ -7,6 +7,7 @@ from datetime import timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -487,6 +488,89 @@ async def test_ui_view_spend_logs_preserves_autoq_metadata(client, monkeypatch):
         assert metadata["autoq"]["summary"]["queue_wait_ms"] == 321
         assert metadata["autoq"]["events"][0]["event"] == "queued"
         assert metadata["autoq"]["events"][0]["payload"]["position"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_queue_status_authenticated_happy_path(client, monkeypatch):
+    class FakeRedis:
+        async def scan_iter(self, match=None):
+            yield b"autoq:limit:gpt-4"
+            yield b"autoq:queue:gpt-4"
+
+    class FakeAQR:
+        redis = FakeRedis()
+
+        async def get_model_info(self, model):
+            assert model == "gpt-4"
+            return {
+                "active": 2,
+                "limit": 5,
+                "queued": 3,
+                "ceiling": 9,
+            }
+
+    monkeypatch.setattr(
+        spend_management_endpoints,
+        "get_auto_queue_status_aqr",
+        lambda: FakeAQR(),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/queue/status",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "models": {
+                "gpt-4": {
+                    "active": 2,
+                    "limit": 5,
+                    "queued": 3,
+                    "ceiling": 9,
+                    "local_waiters": 0,
+                }
+            }
+        }
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_queue_status_returns_json_503_on_redis_failure(client, monkeypatch):
+    class FakeRedis:
+        async def scan_iter(self, match=None):
+            yield b"autoq:limit:gpt-fail"
+
+    class FailingAQR:
+        redis = FakeRedis()
+
+        async def get_model_info(self, model):
+            raise RedisError("redis down")
+
+    monkeypatch.setattr(
+        spend_management_endpoints,
+        "get_auto_queue_status_aqr",
+        lambda: FailingAQR(),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/queue/status",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json() == {
+            "error": "Auto-queue unavailable for model gpt-fail"
+        }
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

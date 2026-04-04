@@ -7,12 +7,20 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.middleware.auto_queue_middleware import (
+    AutoQueueStatusRedisError,
+    auto_queue_unavailable_error,
+    build_auto_queue_status_response,
+    get_auto_queue_status_aqr as _get_auto_queue_status_aqr,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
@@ -29,6 +37,40 @@ else:
     PrismaClient = Any
 
 router = APIRouter()
+
+
+def get_auto_queue_status_aqr():
+    return _get_auto_queue_status_aqr()
+
+
+@router.get(
+    "/queue/status",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": Dict[str, Any]},
+    },
+    include_in_schema=False,
+)
+async def get_queue_status(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    try:
+        response_payload = await build_auto_queue_status_response(
+            get_auto_queue_status_aqr(),
+            local_queues=None,
+        )
+        return response_payload
+    except AutoQueueStatusRedisError as e:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=auto_queue_unavailable_error(e.model),
+        )
+    except RedisError:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=auto_queue_unavailable_error("queue-status"),
+        )
 
 
 @router.get(
