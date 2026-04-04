@@ -4,9 +4,11 @@ Semantic Tool Filter Hook
 Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
 from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
     DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD,
@@ -222,11 +224,38 @@ class SemanticToolFilterHook(CustomLogger):
                 f"with query: '{user_query[:50]}...'"
             )
 
-            # Filter tools semantically
-            filtered_tools = await self.filter.filter_tools(
+            # Separate MCP tools (prefixed) from non-MCP tools — only filter
+            # MCP tools, always pass non-MCP tools through untouched.
+            def _tool_name(t):
+                return (
+                    t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+                )
+
+            mcp_tools = [t for t in tools if is_tool_name_prefixed(_tool_name(t))]
+            non_mcp_tools = [
+                t for t in tools if not is_tool_name_prefixed(_tool_name(t))
+            ]
+
+            if not mcp_tools:
+                return None
+
+            # Filter only MCP tools semantically
+            filtered_mcp_tools = await self.filter.filter_tools(
                 query=user_query,
-                available_tools=tools,  # type: ignore
+                available_tools=mcp_tools,  # type: ignore
             )
+
+            # If no MCP tools matched and no non-MCP tools exist, fall back
+            # to the first top_k MCP tools to avoid an empty tool list.
+            if not filtered_mcp_tools and not non_mcp_tools:
+                limit = self.filter.top_k
+                filtered_mcp_tools = mcp_tools[:limit]
+                verbose_proxy_logger.warning(
+                    f"No semantic matches and no non-MCP tools — "
+                    f"falling back to first {limit} MCP tools"
+                )
+
+            filtered_tools = filtered_mcp_tools + non_mcp_tools
 
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools
