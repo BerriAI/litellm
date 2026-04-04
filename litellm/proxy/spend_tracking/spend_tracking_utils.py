@@ -149,54 +149,53 @@ def _get_spend_logs_metadata(
 def _merge_request_autoq_metadata(
     existing_autoq_metadata: Optional[dict], request_data: Optional[dict]
 ) -> Optional[dict]:
-    request_autoq_metadata = (
-        request_data.get("autoq_metadata")
-        if isinstance(request_data, dict)
-        else None
-    )
+    request_autoq_sources: list[dict] = []
+    if isinstance(request_data, dict):
+        request_metadata = request_data.get("metadata")
+        if isinstance(request_metadata, dict):
+            request_metadata_autoq = request_metadata.get("autoq")
+            if isinstance(request_metadata_autoq, dict):
+                request_autoq_sources.append(request_metadata_autoq)
+
+        litellm_params = request_data.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            litellm_request_metadata = litellm_params.get("metadata")
+            if isinstance(litellm_request_metadata, dict):
+                litellm_request_autoq = litellm_request_metadata.get("autoq")
+                if isinstance(litellm_request_autoq, dict):
+                    request_autoq_sources.append(litellm_request_autoq)
+
+        top_level_autoq_metadata = request_data.get("autoq_metadata")
+        if isinstance(top_level_autoq_metadata, dict):
+            request_autoq_sources.append(top_level_autoq_metadata)
 
     has_existing = isinstance(existing_autoq_metadata, dict)
-    has_request_autoq = isinstance(request_autoq_metadata, dict)
-    if not has_existing and not has_request_autoq:
+    if not has_existing and not request_autoq_sources:
         return None
 
     merged_autoq_metadata: dict[str, Any] = {}
     if has_existing:
         merged_autoq_metadata.update(existing_autoq_metadata or {})
 
-    if has_existing or has_request_autoq:
-        existing_events = (
-            existing_autoq_metadata.get("events")
-            if has_existing and isinstance(existing_autoq_metadata.get("events"), list)
-            else []
-        )
-        request_events = (
-            request_autoq_metadata.get("events")
-            if has_request_autoq and isinstance(request_autoq_metadata.get("events"), list)
-            else []
-        )
-        if existing_events or request_events:
-            merged_autoq_metadata["events"] = [*existing_events, *request_events]
+    events: list[Any] = []
+    if has_existing and isinstance(existing_autoq_metadata.get("events"), list):
+        events.extend(existing_autoq_metadata.get("events", []))
+    for request_autoq_metadata in request_autoq_sources:
+        if isinstance(request_autoq_metadata.get("events"), list):
+            events.extend(request_autoq_metadata.get("events", []))
+    if events:
+        merged_autoq_metadata["events"] = events
 
-        merged_summary: dict[str, Any] = {}
-        existing_summary = (
-            existing_autoq_metadata.get("summary")
-            if has_existing and isinstance(existing_autoq_metadata.get("summary"), dict)
-            else None
-        )
-        request_summary = (
-            request_autoq_metadata.get("summary")
-            if has_request_autoq and isinstance(request_autoq_metadata.get("summary"), dict)
-            else None
-        )
-        if existing_summary:
-            merged_summary.update(existing_summary)
-        if request_summary:
-            merged_summary.update(request_summary)
-        if merged_summary:
-            merged_autoq_metadata["summary"] = merged_summary
+    merged_summary: dict[str, Any] = {}
+    if has_existing and isinstance(existing_autoq_metadata.get("summary"), dict):
+        merged_summary.update(existing_autoq_metadata.get("summary", {}))
+    for request_autoq_metadata in request_autoq_sources:
+        if isinstance(request_autoq_metadata.get("summary"), dict):
+            merged_summary.update(request_autoq_metadata.get("summary", {}))
+    if merged_summary:
+        merged_autoq_metadata["summary"] = merged_summary
 
-    if has_request_autoq:
+    for request_autoq_metadata in request_autoq_sources:
         for key, value in request_autoq_metadata.items():
             if key not in {"events", "summary"}:
                 merged_autoq_metadata[key] = value

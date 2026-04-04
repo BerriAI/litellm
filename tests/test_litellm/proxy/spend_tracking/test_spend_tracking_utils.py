@@ -1266,6 +1266,64 @@ def test_get_logging_payload_should_include_autoq_metadata_in_spend_logs_metadat
 
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_should_preserve_request_metadata_autoq_when_litellm_metadata_exists():
+    request_metadata_autoq = {
+        "events": [
+            {"event": "received", "at_ms": 100, "payload": {"model": "gpt-4"}},
+        ],
+        "summary": {
+            "request_id": "req-shadowed",
+            "model": "gpt-4",
+            "decision": "queued",
+        },
+    }
+    top_level_autoq_metadata = {
+        "events": [
+            {"event": "forwarded", "at_ms": 200, "payload": {"queued": True}},
+        ],
+        "summary": {
+            "queued": True,
+        },
+    }
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-shadowed",
+        "autoq_metadata": top_level_autoq_metadata,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "autoq": request_metadata_autoq,
+            },
+            "litellm_metadata": {
+                "model_info": {"id": "model-123"},
+                "user_api_key": "test-key",
+            },
+            "proxy_server_request": {},
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={"id": "response-id", "usage": {"total_tokens": 0}},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    metadata_result = json.loads(payload["metadata"])
+    assert metadata_result["autoq"] == {
+        "events": [
+            *request_metadata_autoq["events"],
+            *top_level_autoq_metadata["events"],
+        ],
+        "summary": {
+            **request_metadata_autoq["summary"],
+            **top_level_autoq_metadata["summary"],
+        },
+    }
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_retry_info_in_spend_logs_metadata():
     """
     Test that retry info (attempted_retries, max_retries) from metadata
