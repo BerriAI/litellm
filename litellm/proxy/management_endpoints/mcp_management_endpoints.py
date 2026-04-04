@@ -2045,7 +2045,6 @@ if MCP_AVAILABLE:
         update_mcp_toolset,
     )
     from litellm.types.mcp_server.mcp_toolset import (
-        MCPToolset,
         NewMCPToolsetRequest,
         UpdateMCPToolsetRequest,
     )
