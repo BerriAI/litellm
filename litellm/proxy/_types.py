@@ -595,6 +595,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/model_hub",
             "/public/agent_hub",
             "/public/mcp_hub",
+            "/public/skill_hub",
             "/public/litellm_model_cost_map",
         ]
     )
