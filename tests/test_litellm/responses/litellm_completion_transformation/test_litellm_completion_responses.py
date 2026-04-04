@@ -1,5 +1,8 @@
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -2242,3 +2245,203 @@ class TestCompactionInputProcessing:
         assert messages[1]["content"] == "mid reply"
         assert messages[2]["role"] == "user"
         assert messages[2]["content"] == "latest question"
+
+
+class TestCompactionRouting:
+    """Tests for override_native_compaction routing in main.py."""
+
+    def _make_summary_and_final_responses(self, model: str):
+        """Create mock summary and final ModelResponse objects."""
+        import litellm
+
+        summary_response = litellm.ModelResponse(
+            id="summary-id",
+            created=1000000000,
+            model=model,
+            object="chat.completion",
+            choices=[
+                litellm.utils.Choices(
+                    index=0,
+                    message=litellm.utils.Message(
+                        role="assistant",
+                        content="<summary>The user talked about cats.</summary>",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        final_response = litellm.ModelResponse(
+            id="final-id",
+            created=1000000001,
+            model=model,
+            object="chat.completion",
+            choices=[
+                litellm.utils.Choices(
+                    index=0,
+                    message=litellm.utils.Message(
+                        role="assistant",
+                        content="Based on the summary, you were talking about cats.",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        return summary_response, final_response
+
+    @pytest.mark.asyncio
+    async def test_override_native_compaction_true_uses_litellm_path(self):
+        """When override_native_compaction=True, use litellm's compaction even for OpenAI."""
+        import base64
+        import litellm
+
+        model = "openai/gpt-4o"
+        summary_resp, final_resp = self._make_summary_and_final_responses(model)
+        call_count = 0
+
+        async def mock_acompletion(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return summary_resp if call_count == 1 else final_resp
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_ac:
+            mock_ac.side_effect = mock_acompletion
+
+            response = await litellm.aresponses(
+                model=model,
+                input="cats " * 100_000,
+                context_management=[
+                    {
+                        "type": "compaction",
+                        "compact_threshold": 50000,
+                        "override_native_compaction": True,
+                    }
+                ],
+            )
+
+        # Should have gone through litellm's compaction (2 acompletion calls)
+        assert call_count == 2
+        # Output should have our format: message first, then compaction with encrypted_content
+        assert len(response.output) >= 2
+        compaction_items = [
+            item
+            for item in response.output
+            if (item.get("type") if isinstance(item, dict) else getattr(item, "type", None)) == "compaction"
+        ]
+        assert len(compaction_items) == 1
+        compaction = compaction_items[0]
+        if isinstance(compaction, dict):
+            assert "encrypted_content" in compaction
+            decoded = base64.b64decode(compaction["encrypted_content"]).decode("utf-8")
+            assert "cats" in decoded
+            assert compaction["id"].startswith("cmp_")
+
+    @pytest.mark.asyncio
+    async def test_override_native_compaction_false_uses_native_path(self):
+        """When override_native_compaction is False/missing, native provider handles compaction."""
+        import litellm
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        handler_called = False
+        original_handler = LiteLLMCompletionTransformationHandler.response_api_handler
+
+        def spy_handler(self_handler, *args, **kwargs):
+            nonlocal handler_called
+            handler_called = True
+            return original_handler(self_handler, *args, **kwargs)
+
+        # Mock the native provider path to avoid real API calls
+        with patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.response_api_handler"
+        ) as mock_native, patch.object(
+            LiteLLMCompletionTransformationHandler,
+            "response_api_handler",
+            spy_handler,
+        ):
+            mock_native.return_value = MagicMock()
+
+            try:
+                await litellm.aresponses(
+                    model="openai/gpt-4o",
+                    input="hello",
+                    context_management=[
+                        {"type": "compaction", "compact_threshold": 50000}
+                    ],
+                )
+            except Exception:
+                pass  # We only care about which path was taken
+
+        # The litellm handler should NOT have been called
+        assert not handler_called, (
+            "Without override_native_compaction=True, native provider path should be used"
+        )
+
+    @pytest.mark.asyncio
+    async def test_override_native_compaction_missing_uses_native_path(self):
+        """When override_native_compaction key is entirely absent, native provider handles it."""
+        import litellm
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        handler_called = False
+        original_handler = LiteLLMCompletionTransformationHandler.response_api_handler
+
+        def spy_handler(self_handler, *args, **kwargs):
+            nonlocal handler_called
+            handler_called = True
+            return original_handler(self_handler, *args, **kwargs)
+
+        with patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.response_api_handler"
+        ) as mock_native, patch.object(
+            LiteLLMCompletionTransformationHandler,
+            "response_api_handler",
+            spy_handler,
+        ):
+            mock_native.return_value = MagicMock()
+
+            try:
+                await litellm.aresponses(
+                    model="openai/gpt-4o",
+                    input="hello",
+                    context_management=[
+                        {"type": "compaction", "compact_threshold": 50000}
+                    ],
+                )
+            except Exception:
+                pass
+
+        assert not handler_called, (
+            "Without override_native_compaction key, native provider path should be used"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_provider_config_always_uses_litellm_path(self):
+        """When no native provider config exists, always use litellm's compaction."""
+        import litellm
+
+        # Use a provider that litellm recognizes but has no native responses API config
+        model = "anthropic/claude-haiku-4-5-20251001"
+        summary_resp, final_resp = self._make_summary_and_final_responses(model)
+        call_count = 0
+
+        async def mock_acompletion(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return summary_resp if call_count == 1 else final_resp
+
+        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_ac:
+            mock_ac.side_effect = mock_acompletion
+
+            response = await litellm.aresponses(
+                model=model,
+                input="cats " * 100_000,
+                context_management=[
+                    {"type": "compaction", "compact_threshold": 50000}
+                ],
+            )
+
+        # Should use litellm's path (2 calls: summarization + final)
+        assert call_count == 2

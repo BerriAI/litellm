@@ -108,10 +108,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
-        acompletion_args = {}
-        acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
-
+        acompletion_args = {**kwargs, **litellm_completion_request}
         context_management = acompletion_args.pop("context_management", None)
         summary_text: Optional[str] = None
         if context_management:

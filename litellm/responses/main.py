@@ -919,16 +919,16 @@ def responses(
                 **emulated_kwargs,
             )
 
-        # If the user enables compaction context_management, always use our compaction handler, never the provider's native compaction
-        _has_compaction = False
+        _override_native_compaction = False
         _ctx_mgmt = response_api_optional_params.get("context_management")
         if _ctx_mgmt and isinstance(_ctx_mgmt, list):
-            _has_compaction = any(
-                isinstance(e, dict) and e.get("type") == "compaction"
-                for e in _ctx_mgmt
-            )
+            for e in _ctx_mgmt:
+                if isinstance(e, dict) and e.get("type") == "compaction":
+                    if e.get("override_native_compaction", False):
+                        _override_native_compaction = True
+                    break
 
-        if responses_api_provider_config is None or _has_compaction:
+        if responses_api_provider_config is None or _override_native_compaction:
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
