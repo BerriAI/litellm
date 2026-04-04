@@ -8,7 +8,10 @@ but litellm_params["litellm_metadata"] is None.
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.redact_messages import (
+    perform_redaction,
+    should_redact_message_logging,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +146,53 @@ class TestShouldRedactMessageLogging:
             litellm_metadata=None,
         )
         assert should_redact_message_logging(details) is True
+
+
+class TestPerformRedaction:
+    """Unit tests for perform_redaction()."""
+
+    def test_redact_async_complete_streaming_response(self):
+        """Test that async_complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "async_complete_streaming_response": response_obj,
+        }
+
+        result = perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["async_complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redact_complete_streaming_response(self):
+        """Test that complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "complete_streaming_response": response_obj,
+        }
+
+        result = perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
