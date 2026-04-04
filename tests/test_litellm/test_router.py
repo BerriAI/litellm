@@ -5,7 +5,6 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -13,7 +12,6 @@ sys.path.insert(
 
 
 import litellm
-from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -114,7 +112,7 @@ async def test_arouter_with_tags_and_fallbacks():
     )
 
     with pytest.raises(Exception):
-        response = await router.acompletion(
+        await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_testing_fallbacks=True,
@@ -127,7 +125,7 @@ async def test_async_router_acreate_file():
     """
     Write to all deployments of a model
     """
-    from unittest.mock import MagicMock, call, patch
+    from unittest.mock import MagicMock, patch
 
     router = litellm.Router(
         model_list=[
@@ -141,7 +139,7 @@ async def test_async_router_acreate_file():
 
     with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
         mock_acreate_file.return_value = MagicMock()
-        response = await router.acreate_file(
+        await router.acreate_file(
             model="gpt-3.5-turbo",
             purpose="test",
             file=MagicMock(),
@@ -156,7 +154,6 @@ async def test_async_router_acreate_file_with_jsonl():
     """
     Test router.acreate_file with both JSONL and non-JSONL files
     """
-    import json
     from io import BytesIO
     from unittest.mock import MagicMock, patch
 
@@ -199,15 +196,13 @@ async def test_async_router_acreate_file_with_jsonl():
 
     with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
         # Test with JSONL file
-        response = await router.acreate_file(
+        await router.acreate_file(
             model="gpt-3.5-turbo-router",
             purpose="batch",
             file=jsonl_file,
         )
 
         # Verify mock was called twice (once for each deployment)
-        print(f"mock_acreate_file.call_count: {mock_acreate_file.call_count}")
-        print(f"mock_acreate_file.call_args_list: {mock_acreate_file.call_args_list}")
         assert mock_acreate_file.call_count == 2
 
         # Get the file content passed to the first call
@@ -222,7 +217,7 @@ async def test_async_router_acreate_file_with_jsonl():
         mock_acreate_file.reset_mock()
 
         # Test with non-JSONL file
-        response = await router.acreate_file(
+        await router.acreate_file(
             model="gpt-3.5-turbo-router",
             purpose="user_data",
             file=non_jsonl_file,
@@ -291,10 +286,6 @@ async def test_arouter_amoderation_with_credential_name(mock_amoderation):
 
     mock_amoderation.assert_called_once()
     call_kwargs = mock_amoderation.call_args[1]  # Get the kwargs of the call
-    print(
-        "call kwargs for router.amoderation=",
-        json.dumps(call_kwargs, indent=4, default=str),
-    )
     assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
     assert call_kwargs["model"] == "text-moderation-stable"
 
@@ -374,15 +365,14 @@ async def test_arouter_aretrieve_batch():
         litellm, "aretrieve_batch", return_value=AsyncMock()
     ) as mock_aretrieve_batch:
         try:
-            response = await router.aretrieve_batch(
+            await router.aretrieve_batch(
                 model="gpt-3.5-turbo",
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            pass
 
         mock_aretrieve_batch.assert_called_once()
 
-        print(mock_aretrieve_batch.call_args.kwargs)
         assert mock_aretrieve_batch.call_args.kwargs["api_key"] == "my-custom-key"
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
 
@@ -410,18 +400,17 @@ async def test_arouter_aretrieve_file_content():
             ],
         )
         try:
-            response = await router.afile_content(
+            await router.afile_content(
                 **{
                     "model": "gpt-3.5-turbo",
                     "file_id": "my-unique-file-id",
                 }
             )  # type: ignore
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            pass
 
         mock_afile_content.assert_called_once()
 
-        print(mock_afile_content.call_args.kwargs)
         assert mock_afile_content.call_args.kwargs["api_key"] == "my-custom-key"
         assert mock_afile_content.call_args.kwargs["api_base"] == "my-custom-base"
 
@@ -526,14 +515,6 @@ def test_arouter_should_include_deployment():
         "model_info": {},
     }
 
-    deployment_different_team = {
-        "model_name": "claude-3",
-        "model_info": {
-            "team_id": "other-team",
-            "team_public_model_name": "team-claude-model",
-        },
-    }
-
     # Test Case 1: Team-specific deployment - team_id and team_public_model_name match
     result = router.should_include_deployment(
         model_name="team-gpt-model",
@@ -634,7 +615,7 @@ def test_arouter_responses_api_bridge():
 
     ## CONFIRM BRIDGE IS CALLED
     with patch.object(litellm, "responses", return_value=AsyncMock()) as mock_responses:
-        result = router.completion(
+        router.completion(
             model="[IP-approved] o3-pro",
             messages=[{"role": "user", "content": "Hello, world!"}],
         )
@@ -658,14 +639,14 @@ def test_arouter_responses_api_bridge():
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
-            result = router.completion(
+            router.completion(
                 model="[IP-approved] o3-pro",
                 messages=[{"role": "user", "content": "Hello, world!"}],
                 client=client,
                 num_retries=0,
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            pass
 
         assert mock_post.call_count == 1
         assert (
@@ -709,7 +690,6 @@ async def test_router_v1_messages_fallbacks():
     )
     assert result is not None
 
-    print(result)
     assert result["content"][0]["text"] == "Hello, world I am a fallback!"
 
 
@@ -728,7 +708,7 @@ def test_add_invalid_provider_to_router():
         ],
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception):
         router.add_deployment(
             Deployment(
                 model_name="vertex_ai/*",
@@ -743,11 +723,11 @@ def test_add_invalid_provider_to_router():
 
 
 @pytest.mark.asyncio
-async def test_router_ageneric_api_call_with_fallbacks_helper():
+async def test_router_ageneric_api_call_with_fallbacks_helper():  # noqa: PLR0915
     """
     Test the _ageneric_api_call_with_fallbacks_helper method with various scenarios
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     router = litellm.Router(
         model_list=[
@@ -872,7 +852,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     mock_pre_call_checks.assert_called_once()
 
     # Test 5: Test call tracking (success and failure counts)
-    initial_success_count = router.success_calls.get("gpt-3.5-turbo", 0)
+    router.success_calls.get("gpt-3.5-turbo", 0)
     initial_fail_count = router.fail_calls.get("gpt-3.5-turbo", 0)
 
     async def mock_failing_function(**kwargs):
@@ -1134,10 +1114,9 @@ def test_get_model_access_groups_cache_invalidation_upsert_deployment():
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.types.utils import ModelResponseStream
 
     # Helper class for creating async iterators
     class AsyncIterator:
@@ -1179,7 +1158,6 @@ async def test_acompletion_streaming_iterator():
     initial_kwargs = {"model": "gpt-4", "stream": True, "temperature": 0.7}
 
     # Test 1: Successful streaming (no errors)
-    print("\n=== Test 1: Successful streaming ===")
 
     # Mock successful streaming response
     mock_chunks = [
@@ -1205,10 +1183,8 @@ async def test_acompletion_streaming_iterator():
 
     assert len(collected_chunks) == 3
     assert all(chunk in mock_chunks for chunk in collected_chunks)
-    print("✓ Successfully streamed all chunks")
 
     # Test 2: MidStreamFallbackError with fallback
-    print("\n=== Test 2: MidStreamFallbackError with fallback ===")
 
     # Create error that should trigger after first chunk
     error = MidStreamFallbackError(
@@ -1284,17 +1260,14 @@ async def test_acompletion_streaming_iterator():
         assert "continuation" in modified_messages[1]["content"]
         assert modified_messages[2]["role"] == "assistant"
         assert modified_messages[2]["content"] == "Hello"
-        assert modified_messages[2]["prefix"] == True
+        assert modified_messages[2]["prefix"] is True
 
         # Verify fallback parameters
-        assert call_args.kwargs["disable_fallbacks"] == False
+        assert call_args.kwargs["disable_fallbacks"] is False
         assert call_args.kwargs["model_group"] == "gpt-4"
 
         # Should get original chunk + fallback chunks
         assert len(collected_chunks) == 3  # 1 original + 2 fallback
-        print("✓ Fallback system called correctly with proper message modification")
-
-    print("\n=== All tests passed! ===")
 
 
 @pytest.mark.asyncio
@@ -1373,9 +1346,6 @@ async def test_acompletion_streaming_iterator_edge_cases():
         # Empty content → pre-first-chunk path uses original messages
         # (no continuation prompt added)
         assert modified_messages == messages
-        print("✓ Handles empty generated content correctly")
-
-    print("✓ Edge case tests passed!")
 
 
 @pytest.mark.asyncio
@@ -1494,7 +1464,7 @@ def test_completion_streaming_iterator_fallback_on_429():
             initial_kwargs=initial_kwargs,
         )
 
-        collected_chunks = list(result)
+        list(result)
 
         assert mock_fallback.called
         call_kwargs = mock_fallback.call_args
@@ -1665,27 +1635,6 @@ def test_should_include_deployment():
         ],
     )
 
-    model = {
-        "model_name": "model_name_a28a12f9-3e44-4861-bd4f-325f2d309ce8_cd5dc6fb-b046-4e05-ae1d-32ba4d936266",
-        "litellm_params": {
-            "api_key": "sk-proj-1234567890",
-            "custom_llm_provider": "openai",
-            "use_in_pass_through": False,
-            "use_litellm_proxy": False,
-            "merge_reasoning_content_in_choices": False,
-            "model": "openai/*",
-        },
-        "model_info": {
-            "id": "95f58039-d54a-4d1c-b700-5e32e99a1120",
-            "db_model": True,
-            "updated_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
-            "created_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
-            "team_id": "a28a12f9-3e44-4861-bd4f-325f2d309ce8",
-            "team_public_model_name": "openai/*",
-            "mode": "completion",
-            "access_groups": ["restricted-models-openai"],
-        },
-    }
     model_name = "openai/o4-mini-deep-research"
     team_id = "a28a12f9-3e44-4861-bd4f-325f2d309ce8"
     assert router.get_model_list(
@@ -1694,7 +1643,7 @@ def test_should_include_deployment():
     )
 
 
-def test_get_deployment_model_info_base_model_flow():
+def test_get_deployment_model_info_base_model_flow():  # noqa: PLR0915
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch
 
@@ -1885,8 +1834,6 @@ def test_get_deployment_model_info_base_model_flow():
             # Should return None when no model info is found
             assert result is None
 
-    print("✓ All base model flow test cases passed!")
-
 
 @patch("litellm.model_cost", {})
 def test_get_deployment_model_info_base_model_merge_priority():
@@ -1979,8 +1926,6 @@ def test_get_deployment_model_info_base_model_merge_priority():
             # Key comes from base model since both base and litellm have key fields
             # and the merged custom+base overrides litellm in the final merge
             assert result["key"] == "gpt-4"
-
-    print("✓ Base model merge priority test passed!")
 
 
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
@@ -2847,3 +2792,123 @@ def test_combine_fallback_usage():
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_team_level_fallback_healthy_deployment():
+    """
+    Test that team-level fallbacks work when the primary model is unhealthy but the fallback model is healthy.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "azure/primary",
+                    "mock_response": "Hello from primary!",
+                },
+                "model_info": {
+                    "team_id": "test-team",
+                    "team_public_model_name": "claude-sonnet-4",
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "azure/fallback",
+                    "api_key": "good-key",
+                    "mock_response": "Hello from fallback!",
+                },
+                "model_info": {
+                    "team_id": "test-team",
+                    "team_public_model_name": "gpt-5-mini",
+                },
+            },
+        ],
+        fallbacks=[{"claude-sonnet-4": ["gpt-5-mini"]}],
+    )
+
+    # Mock the primary model to be unhealthy by putting its ID in cooldown
+    primary_id = router.model_list[0]["model_info"]["id"]
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=primary_id,
+        original_exception=Exception("Test Exception"),
+        exception_status=500,
+        cooldown_time=60,
+    )
+
+    # Call with team_id in metadata
+    response = await router.acompletion(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "Say hello"}],
+        metadata={"user_api_key_team_id": "test-team"},
+    )
+
+    assert response.choices[0].message.content == "Hello from fallback!"
+
+
+@pytest.mark.asyncio
+async def test_team_model_found_via_public_name_with_team_id():
+    """
+    Test that _get_all_deployments finds a team-specific model when team_id is passed.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-specific-internal-name",
+                "litellm_params": {
+                    "model": "azure/model",
+                },
+                "model_info": {
+                    "team_id": "test-team",
+                    "team_public_model_name": "public-name",
+                },
+            }
+        ]
+    )
+
+    # 1. Test without team_id -> should NOT find it
+    deployments = router._get_all_deployments(model_name="public-name", team_id=None)
+    assert len(deployments) == 0
+
+    # 2. Test with wrong team_id -> should NOT find it
+    deployments = router._get_all_deployments(
+        model_name="public-name", team_id="wrong-team"
+    )
+    assert len(deployments) == 0
+
+    # 3. Test with correct team_id -> SHOULD find it
+    deployments = router._get_all_deployments(
+        model_name="public-name", team_id="test-team"
+    )
+    assert len(deployments) == 1
+    assert deployments[0]["model_name"] == "team-specific-internal-name"
+
+
+@pytest.mark.asyncio
+async def test_async_get_healthy_deployments_with_team_id():
+    """
+    Test that _async_get_healthy_deployments correctly uses the team_id from request_kwargs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-model",
+                "litellm_params": {"model": "azure/model"},
+                "model_info": {
+                    "team_id": "test-team",
+                    "team_public_model_name": "public-name",
+                },
+            }
+        ]
+    )
+
+    # This should find the model if team_id is passed correctly in request_kwargs
+    healthy, all_deps = await router._async_get_healthy_deployments(
+        model="public-name",
+        parent_otel_span=None,
+        request_kwargs={"metadata": {"user_api_key_team_id": "test-team"}},
+    )
+
+    assert len(healthy) == 1
+    assert healthy[0]["model_name"] == "team-model"
