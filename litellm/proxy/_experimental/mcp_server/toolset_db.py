@@ -1,8 +1,6 @@
 import json
 from typing import List, Optional
 
-from prisma.errors import RecordNotFoundError
-
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy.utils import PrismaClient
@@ -93,8 +91,12 @@ async def update_mcp_toolset(
             where={"toolset_id": data.toolset_id},
             data=data_dict,
         )
-    except RecordNotFoundError:
-        return None
+    except Exception as e:
+        from prisma.errors import RecordNotFoundError
+
+        if isinstance(e, RecordNotFoundError):
+            return None
+        raise
     return _toolset_from_row(row)
 
 
@@ -106,6 +108,10 @@ async def delete_mcp_toolset(
         row = await prisma_client.db.litellm_mcptoolsettable.delete(
             where={"toolset_id": toolset_id}
         )
-    except RecordNotFoundError:
-        return None
+    except Exception as e:
+        from prisma.errors import RecordNotFoundError
+
+        if isinstance(e, RecordNotFoundError):
+            return None
+        raise
     return _toolset_from_row(row)
