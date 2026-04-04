@@ -823,6 +823,7 @@ router_settings:
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_KEY_ROTATION_GRACE_PERIOD | Duration to keep old key valid after rotation (e.g. "24h", "2d"). Default is empty (immediate revoke). Used for scheduled rotations and as fallback when not specified in regenerate request.
+| LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS | TTL in seconds for the distributed lock used by the key rotation job. Default is 600 (10 minutes).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS | Set to `True` to use the local bundled Anthropic beta headers config only, disabling remote fetching. Default is `False`
 | LITELLM_LOCAL_BLOG_POSTS | When set to `True`, uses the local bundled blog posts only, disabling remote fetching from GitHub. Default is `False`
