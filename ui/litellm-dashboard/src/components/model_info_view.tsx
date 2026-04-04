@@ -265,10 +265,10 @@ export default function ModelInfoView({
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      if (values.vector_store_ids?.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
