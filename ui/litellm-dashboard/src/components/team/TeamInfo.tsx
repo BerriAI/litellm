@@ -20,7 +20,8 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { EditOutlined, InfoCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button, Form, Input, message, Select, Switch, Tabs, Tooltip } from "antd";
+import { Button, Form, Input, Select, Switch, Tabs, Tooltip } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
@@ -94,6 +95,9 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    access_group_models?: string[];
+    access_group_mcp_server_ids?: string[];
+    access_group_agent_ids?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -366,7 +370,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
       };
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
 
@@ -388,7 +392,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       setIsEditMemberModalVisible(false);
 
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       NotificationsManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
@@ -490,7 +494,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        organization_id: values.organization_id,
+        ...(values.organization_id !== info.organization_id
+          ? { organization_id: values.organization_id ?? null }
+          : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
@@ -654,14 +660,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 ? (
+                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
                       <Badge color="red">All proxy models</Badge>
                     ) : (
-                      info.models.map((model, index) => (
-                        <Badge key={index} color="red">
-                          {model}
-                        </Badge>
-                      ))
+                      <>
+                        {info.models.map((model: string, index: number) => (
+                          <Badge key={`direct-${index}`} color="blue">
+                            {model}
+                          </Badge>
+                        ))}
+                        {(info.access_group_models || []).map((model: string, index: number) => (
+                          <Badge key={`ag-${index}`} color="green" title="From access group">
+                            {model}
+                          </Badge>
+                        ))}
+                      </>
                     )}
                   </div>
                 </Card>
@@ -1076,8 +1089,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Organization ID" name="organization_id">
-                      <Input type="" disabled />
+                    <Form.Item label="Organization" name="organization_id">
+                      <Select
+                        allowClear
+                        placeholder="Select an organization"
+                        showSearch
+                        optionFilterProp="label"
+                        options={userOrganizations.map((org) => ({
+                          value: org.organization_id,
+                          label: org.organization_alias || org.organization_id,
+                        }))}
+                      />
                     </Form.Item>
 
                     <Form.Item label="Logging Settings" name="logging_settings">

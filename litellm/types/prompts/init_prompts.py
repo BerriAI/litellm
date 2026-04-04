@@ -17,6 +17,7 @@ class SupportedPromptIntegrations(str, Enum):
 
 class PromptInfo(BaseModel):
     prompt_type: Literal["config", "db"]
+    environment: Optional[str] = "development"
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -48,6 +49,8 @@ class PromptSpec(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     version: Optional[int] = None  # Version number for version history
+    environment: Optional[str] = "development"
+    created_by: Optional[str] = None
 
     def __init__(self, **data):
         if "prompt_info" not in data:
@@ -70,6 +73,9 @@ class PromptTemplateBase(BaseModel):
 class PromptInfoResponse(BaseModel):
     prompt_spec: PromptSpec
     raw_prompt_template: Optional[PromptTemplateBase] = None
+    environments: Optional[
+        List[str]
+    ] = None  # All environments this prompt is deployed to
 
 
 class ListPromptsResponse(BaseModel):

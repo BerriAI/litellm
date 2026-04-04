@@ -1495,10 +1495,6 @@ def client(original_function):  # noqa: PLR0915
             )
             logging_obj._llm_caching_handler = _llm_caching_handler
 
-            # CHECK FOR 'os.environ/' in kwargs
-            for k, v in kwargs.items():
-                if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                    kwargs[k] = litellm.get_secret(v)
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
                 if litellm._current_cost > litellm.max_budget:
@@ -1798,6 +1794,7 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
+        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
 
         try:
             if logging_obj is None:
@@ -1944,15 +1941,36 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+            # Internal sub-calls (e.g. emulated file-search steps) share the
+            # parent's logging obj; skip async logging here so only the outer call bills once.
+            # NOTE: streaming requests return early (before this point) via
+            # CustomStreamWrapper, so this block is non-streaming only.
+            if not _is_litellm_internal_call:
+                if getattr(logging_obj, "_defer_async_logging", False):
+
+                    def _enqueue_deferred_logging() -> None:
+                        asyncio.create_task(
+                            _client_async_logging_helper(
+                                logging_obj=logging_obj,
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                            )
+                        )
+
+                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                else:
+                    asyncio.create_task(
+                        _client_async_logging_helper(
+                            logging_obj=logging_obj,
+                            result=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        )
+                    )
+
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
@@ -1985,7 +2003,7 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
-            if logging_obj:
+            if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
@@ -2576,6 +2594,47 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         return False
 
 
+def _is_explicitly_disabled_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> bool:
+    """Return True only when the model map explicitly sets *key* to ``False``.
+
+    This is the opt-out mirror of :func:`_supports_factory`.  Where
+    ``_supports_factory`` requires an explicit ``True`` to return ``True``,
+    this function requires an explicit ``False``.  A missing key (``None``)
+    is treated as *not* disabled so that unknown or newly-added models are
+    allowed through without any model-map entry.
+
+    Uses the same ``get_llm_provider`` → ``_get_model_info_helper`` chain as
+    ``_supports_factory`` so caching, fallback, and normalisation improvements
+    apply here automatically.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        val = model_info.get(key)
+        if val is False:
+            return True
+        if val is None:
+            bare_model_key = _get_model_cost_key(model)
+            if bare_model_key is not None:
+                bare_entry = litellm.model_cost.get(bare_model_key) or {}
+                if bare_entry.get(key) is False:
+                    return True
+        return False
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking {key} disabled state. "
+            f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
+            f"Error: {str(e)}"
+        )
+        return False
+
+
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return _supports_factory(
@@ -2669,6 +2728,19 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     """
     return _supports_factory(
         model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning"
+    )
+
+
+def supports_native_structured_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports native structured outputs and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_native_structured_output",
     )
 
 
@@ -4803,7 +4875,21 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
+def _get_order_filtered_deployments(
+    healthy_deployments: List[Dict], target_order: Optional[int] = None
+) -> List:
+    if target_order is not None:
+        filtered = [
+            d
+            for d in healthy_deployments
+            if d["litellm_params"].get("order") == target_order
+        ]
+        if filtered:
+            return filtered
+        # target_order doesn't match any deployment (e.g., external fallback model) — return all
+        return healthy_deployments
+
+    # Default: pick min order group
     min_order = min(
         (
             deployment["litellm_params"]["order"]
@@ -5767,6 +5853,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
+                ),
+                supports_native_structured_output=_model_info.get(
+                    "supports_native_structured_output", None
                 ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
@@ -8941,11 +9030,11 @@ class ProviderConfigManager:
 
             return get_stability_image_edit_config(model)
         elif LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.image_edit.stability_transformation import (
-                BedrockStabilityImageEditConfig,
+            from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+                get_bedrock_image_edit_config_for_model,
             )
 
-            return BedrockStabilityImageEditConfig()
+            return get_bedrock_image_edit_config_for_model(model)
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,

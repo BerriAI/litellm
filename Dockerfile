@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -15,7 +15,7 @@ USER root
 # Install build dependencies
 RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
 
-RUN python -m pip install build
+RUN python -m pip install build==1.4.2
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -49,7 +49,7 @@ USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
     # levels inside its dependency tree. `npm install -g <pkg>` only creates a
     # SEPARATE global package, it does NOT replace npm's internal copies.
@@ -90,7 +90,7 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
 # Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
 RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \

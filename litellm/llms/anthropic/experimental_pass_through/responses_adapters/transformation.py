@@ -8,6 +8,9 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -94,7 +97,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             )
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(
-                                block.get("source", {})
+                                cast(dict, block.get("source", {}))
                             )
                             if url:
                                 user_parts.append(
@@ -267,7 +270,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             effort = "low"
         else:
             effort = "minimal"
-        return {"effort": effort, "summary": "detailed"}
+        auto_summary = is_reasoning_auto_summary_enabled()
+        result: Dict[str, Any] = {"effort": effort}
+        summary = thinking.get("summary")
+        if summary:
+            result["summary"] = summary
+        elif auto_summary:
+            result["summary"] = "detailed"
+        return result
 
     def translate_request(
         self,

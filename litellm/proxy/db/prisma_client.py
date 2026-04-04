@@ -5,6 +5,7 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 import asyncio
 import os
 import random
+import signal
 import subprocess
 import time
 import urllib
@@ -44,6 +45,46 @@ class PrismaWrapper:
         self._token_refresh_task: Optional[asyncio.Task] = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: Optional[datetime] = None
+
+    def _get_engine_pid(self) -> int:
+        """Get the PID of the current Prisma engine subprocess, or 0 if unavailable."""
+        try:
+            engine = self._original_prisma._engine
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.pid
+        except (AttributeError, TypeError):
+            pass
+        return 0
+
+    @staticmethod
+    async def _kill_engine_process(pid: int) -> None:
+        """Force-kill an orphaned engine subprocess to prevent DB connection pool leaks.
+
+        Called when disconnect() fails and the old engine process may still be
+        holding open connections. Sends SIGTERM for graceful shutdown, waits
+        briefly, then SIGKILL as a backstop.
+        """
+        if pid <= 0:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            return  # Already dead or inaccessible
+        verbose_proxy_logger.warning(
+            "Sent SIGTERM to orphaned prisma-query-engine PID %s after failed disconnect.",
+            pid,
+        )
+        # Brief wait for graceful shutdown, then force-kill
+        await asyncio.sleep(0.5)
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            verbose_proxy_logger.warning(
+                "Sent SIGKILL to prisma-query-engine PID %s (did not exit after SIGTERM).",
+                pid,
+            )
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # Exited after SIGTERM — expected
 
     def _extract_token_from_db_url(self, db_url: Optional[str]) -> Optional[str]:
         """
@@ -179,10 +220,13 @@ class PrismaWrapper:
         """Disconnect and reconnect the Prisma client with a new database URL."""
         from prisma import Prisma  # type: ignore
 
+        old_engine_pid = self._get_engine_pid()
+
         try:
             await self._original_prisma.disconnect()
         except Exception as e:
             verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
+            await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)

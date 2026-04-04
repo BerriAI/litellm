@@ -195,7 +195,7 @@ const menuItems: MenuItemCfg[] = [
     icon: <UserOutlined style={{ fontSize: 18 }} />,
     roles: all_admin_roles,
   },
-  { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
+  { key: "14", page: "api-reference", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
   {
     key: "16",
     page: "model-hub-table",
