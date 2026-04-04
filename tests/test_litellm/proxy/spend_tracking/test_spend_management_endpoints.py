@@ -1088,6 +1088,74 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_preserves_autoq_metadata(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "session_id": "session-autoq",
+            "startTime": "2024-01-01T00:00:00Z",
+            "metadata": {
+                "status": "success",
+                "autoq": {
+                    "summary": {
+                        "request_id": "req1",
+                        "model": "gpt-4",
+                        "queued": True,
+                        "queue_wait_ms": 111,
+                    },
+                    "events": [
+                        {
+                            "event": "queued",
+                            "at_ms": 123,
+                            "payload": {"position": 1},
+                        }
+                    ],
+                },
+            },
+        }
+    ]
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-autoq"}
+            return 1
+
+        async def query_raw(self, sql_query, session_id, page_size, skip):
+            assert session_id == "session-autoq"
+            return mock_spend_logs
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", MockPrismaClient()
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/session/ui",
+            params={"session_id": "session-autoq", "page": 1, "page_size": 50},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert isinstance(payload["data"][0]["metadata"], str)
+        metadata = json.loads(payload["data"][0]["metadata"])
+        assert metadata["autoq"]["summary"]["queued"] is True
+        assert metadata["autoq"]["summary"]["queue_wait_ms"] == 111
+        assert metadata["autoq"]["events"][0]["payload"]["position"] == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
     today = datetime.datetime.now(timezone.utc)
     mock_spend_logs = [

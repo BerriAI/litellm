@@ -18,6 +18,7 @@ import fakeredis.aioredis
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from redis.exceptions import RedisError
 from starlette.applications import Starlette
 from starlette.routing import Route
 
@@ -160,6 +161,35 @@ async def test_queue_status_uses_distributed_redis_counts(
         "ceiling": 8,
         "local_waiters": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_queue_status_returns_json_503_on_redis_failure(asgi_client_factory):
+    """GET /queue/status should use the middleware's Redis failure response path."""
+
+    async def handler(request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse({"ok": True})
+
+    class FailingStatusRedis:
+        redis = None
+
+        async def get_model_info(self, model):
+            raise RedisError("status redis unavailable")
+
+    app = AutoQueueMiddleware(
+        Starlette(routes=[Route("/v1/chat/completions", handler, methods=["POST"])]),
+        aqr=FailingStatusRedis(),
+        enabled=True,
+    )
+    app._get_queue("gpt-fail").add("req-1", _WakeState(), priority=1)
+
+    client = await asgi_client_factory(app)
+    response = await client.get("/queue/status")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "Auto-queue unavailable for model gpt-fail"}
 
 
 @pytest.mark.asyncio

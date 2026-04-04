@@ -993,8 +993,21 @@ class AutoQueueMiddleware:
         models_info: Dict[str, "AutoQueueModelStatus"] = {}
         if self._enabled:
             aqr = self._ensure_aqr()
-            for model in await self._get_status_models(aqr):
-                info = await aqr.get_model_info(model)
+            models = await self._safe_redis_call(
+                self._get_status_models(aqr),
+                model="queue-status",
+                send=send,
+            )
+            if models is None:
+                return
+            for model in models:
+                info = await self._safe_redis_call(
+                    aqr.get_model_info(model),
+                    model=model,
+                    send=send,
+                )
+                if info is None:
+                    return
                 info["local_waiters"] = self._queues.get(model).depth if model in self._queues else 0
                 models_info[model] = info
         response_payload: "AutoQueueStatusResponse" = {"models": models_info}

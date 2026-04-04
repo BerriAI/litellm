@@ -3267,11 +3267,15 @@ async def ui_view_session_spend_logs(
         result = await prisma_client.db.query_raw(
             sql_query, session_id, page_size, skip
         )
+        normalized_result = [
+            _normalize_ui_spend_log_row(dict(row) if isinstance(row, dict) else row)
+            for row in result
+        ]
 
         total_pages = (total_records + page_size - 1) // page_size
 
         return {
-            "data": result,
+            "data": normalized_result,
             "total": total_records,
             "page": page,
             "page_size": page_size,
@@ -3325,15 +3329,6 @@ async def _build_ui_spend_logs_response(
         ``page_size``, and ``total_pages``.
     """
 
-    def _normalize_ui_spend_log_metadata(metadata: Any) -> Any:
-        if isinstance(metadata, dict):
-            normalized_metadata = dict(metadata)
-            autoq_metadata = normalized_metadata.get("autoq")
-            if isinstance(autoq_metadata, dict):
-                normalized_metadata["autoq"] = dict(autoq_metadata)
-            return json.dumps(normalized_metadata, default=str)
-        return metadata
-
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
@@ -3370,11 +3365,10 @@ async def _build_ui_spend_logs_response(
     if enrich_session_counts:
         enriched: List[dict] = []
         for row in data:
-            row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
-            sid = row_dict.get("session_id")
-            row_dict["metadata"] = _normalize_ui_spend_log_metadata(
-                row_dict.get("metadata")
+            row_dict = _normalize_ui_spend_log_row(
+                dict(row) if isinstance(row, dict) else row.model_dump()
             )
+            sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
             enriched.append(row_dict)
         response_data: list = enriched
@@ -3391,6 +3385,24 @@ async def _build_ui_spend_logs_response(
         "page_size": page_size,
         "total_pages": total_pages,
     }
+
+
+def _normalize_ui_spend_log_metadata(metadata: Any) -> Any:
+    if isinstance(metadata, dict):
+        normalized_metadata = dict(metadata)
+        autoq_metadata = normalized_metadata.get("autoq")
+        if isinstance(autoq_metadata, dict):
+            normalized_metadata["autoq"] = dict(autoq_metadata)
+        return json.dumps(normalized_metadata, default=str)
+    return metadata
+
+
+def _normalize_ui_spend_log_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_row = dict(row_dict)
+    normalized_row["metadata"] = _normalize_ui_spend_log_metadata(
+        normalized_row.get("metadata")
+    )
+    return normalized_row
 
 
 def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
