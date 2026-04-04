@@ -263,6 +263,12 @@ def _get_embedding_url(
     except Exception:
         uses_embed_content = False
 
+    # Fallback: models with "gemini-embedding" prefix use embedContent endpoint,
+    # not the legacy :predict endpoint. This ensures correct routing even if
+    # get_model_info fails (e.g., model not yet in model_prices map).
+    if not uses_embed_content and model.startswith("gemini-embedding"):
+        uses_embed_content = True
+
     endpoint = "embedContent" if uses_embed_content else "predict"
 
     base_url = get_vertex_base_url(vertex_location)
@@ -270,7 +276,7 @@ def _get_embedding_url(
     if model.isdigit():
         url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
     else:
-        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
     return url, endpoint
 
