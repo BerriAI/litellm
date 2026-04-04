@@ -1,24 +1,9 @@
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
-
-
-import json
-import os
-import sys
-import time
-
-import pytest
-from fastapi.testclient import TestClient
-
-import litellm
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 
 def test_check_migration_out_of_sync(mocker):
@@ -27,14 +12,14 @@ def test_check_migration_out_of_sync(mocker):
     - 🚨 [IMPORTANT] Does NOT Raise an Exception when the Prisma schema is out of sync with the database.
     - logs an error when the Prisma schema is out of sync with the database.
     """
-    # Mock the logger BEFORE importing the function
-    mock_logger = mocker.patch("litellm._logging.verbose_logger")
-
-    # Import the function after mocking the logger
+    # Import the function
     from litellm.proxy.db.check_migration import check_prisma_schema_diff
 
+    # Mock the logger in the module where it's used
+    mock_logger = mocker.patch("litellm.proxy.db.check_migration.verbose_logger")
+
     # Mock the helper function to simulate out-of-sync state
-    mock_diff_helper = mocker.patch(
+    mocker.patch(
         "litellm.proxy.db.check_migration.check_prisma_schema_diff_helper",
         return_value=(True, ["ALTER TABLE users ADD COLUMN new_field TEXT;"]),
     )
