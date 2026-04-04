@@ -145,6 +145,25 @@ This will ensure, your releases are safe, even when:
 
 We believe that [Cosign](https://github.com/sigstore/cosign) is a good fit for this, and have already begun working on it [PR](https://github.com/BerriAI/litellm/pull/24683).
 
+#### How to verify a Docker image with Cosign
+
+All LiteLLM Docker images are now signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
+
+```bash
+cosign verify \
+  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
+  ghcr.io/berriai/litellm:<release-tag>
+```
+
+Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+
+Expected output:
+
+```
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+```
 
 ### Avoid Compromised Packages
 
