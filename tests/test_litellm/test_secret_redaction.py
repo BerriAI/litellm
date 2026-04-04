@@ -7,13 +7,12 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
-    _redact_string,
     _secret_filter,
-    _setup_json_exception_handlers,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -57,12 +56,12 @@ def test_redact_string_catches_secret_patterns():
         SECRET,
     ]
     for secret in cases:
-        result = _redact_string("msg: " + secret)
+        result = redact_string("msg: " + secret)
         assert secret not in result, f"{secret!r} was not redacted"
         assert "REDACTED" in result
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
-    assert _redact_string(normal) == normal
+    assert redact_string(normal) == normal
 
 
 def test_filter_redacts_secrets_in_logger_output():
@@ -155,7 +154,7 @@ def test_x_api_key_regex_does_not_consume_json_delimiters():
     """x-api-key pattern must stop before closing quotes/braces so JSON stays valid."""
     # Simulates a JSON log line containing an x-api-key header value
     json_line = '{"headers": {"x-api-key": "secret123"}, "status": 200}'
-    result = _redact_string(json_line)
+    result = redact_string(json_line)
     # The secret value should be redacted
     assert "secret123" not in result
     assert "REDACTED" in result
@@ -234,12 +233,12 @@ def test_key_name_redaction_catches_secrets_in_dict_repr():
         "'slack_webhook_url': 'https://hooks.slack.com/services/T00/B00/xxx'",
     ]
     for secret_line in cases:
-        result = _redact_string(secret_line)
+        result = redact_string(secret_line)
         assert "REDACTED" in result, f"Key-name redaction missed: {secret_line!r}"
 
     # Non-sensitive keys should NOT be redacted
     safe = "'enable_jwt_auth': True, 'store_model_in_db': True"
-    assert _redact_string(safe) == safe
+    assert redact_string(safe) == safe
 
 
 def test_key_name_redaction_in_general_settings_dict():
@@ -262,3 +261,99 @@ def test_key_name_redaction_in_general_settings_dict():
     assert "REDACTED" in output
     # Non-sensitive values should survive
     assert "enable_jwt_auth" in output
+
+
+# ── Tests for issue #24902: Gemini API key leak via URL query param ──────────
+
+
+def test_redact_url_query_param_key_question_mark():
+    """?key=<secret> in a URL is fully redacted (Gemini-style API auth)."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyFakeKeyABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    result = redact_string(url)
+    assert "AIzaSyFakeKeyABCDEFGHIJKLMNOPQRSTUVWXYZ" not in result
+    assert "REDACTED" in result
+    # The base URL prefix should be preserved
+    assert "generativelanguage.googleapis.com" in result
+
+
+def test_redact_url_query_param_key_ampersand():
+    """&key=<secret> inside a multi-param URL is redacted while other params survive."""
+    url = (
+        "https://example.com/api?model=gemini-pro&key=SomeSecretKeyABCDEF12345&alt=sse"
+    )
+    result = redact_string(url)
+    assert "SomeSecretKeyABCDEF12345" not in result
+    assert "REDACTED" in result
+    # Other query params must be preserved
+    assert "model=gemini-pro" in result
+    assert "alt=sse" in result
+
+
+def test_redact_url_query_param_key_short_value_not_redacted():
+    """Short values (< 8 chars) after key= are not redacted to avoid false positives."""
+    url = "https://example.com/api?key=abc"
+    result = redact_string(url)
+    assert result == url
+
+
+def test_redact_string_applied_to_httpx_error_message():
+    """Simulates the Gemini leak path: httpx raise_for_status() includes URL with ?key=..."""
+    import httpx
+
+    # Build a fake URL with an embedded API key (the Gemini auth pattern)
+    fake_key = "AIzaSyFakeGeminiKey1234567890ABCDE"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={fake_key}"
+    request = httpx.Request("POST", url)
+    response = httpx.Response(400, request=request)
+
+    # httpx.Response.raise_for_status() includes the full URL in the error message
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        response.raise_for_status()
+
+    error_str = redact_string(str(exc_info.value))
+    assert fake_key not in error_str
+    assert "REDACTED" in error_str
+
+
+def test_redact_url_query_param_key_in_logger_output():
+    """End-to-end: Gemini-style URL with ?key=... is redacted in logger output."""
+    fake_key = "AIzaSyFakeGeminiKeyXYZ1234567890ABCDE"
+    url = (
+        f"https://generativelanguage.googleapis.com/v1/models/gemini-pro?key={fake_key}"
+    )
+
+    def log_messages():
+        verbose_logger.debug("Request failed: %s", url)
+
+    output = _capture_logger_output(log_messages)
+    assert fake_key not in output
+    assert "REDACTED" in output
+
+
+def test_exception_mapping_respects_redaction_opt_out():
+    """When LITELLM_DISABLE_REDACT_SECRETS=true, exception messages pass through unredacted."""
+    import httpx
+
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    fake_key = "AIzaSyFakeGeminiKey1234567890ABCDE"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro?key={fake_key}"
+    request = httpx.Request("POST", url)
+    response = httpx.Response(400, request=request)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        response.raise_for_status()
+    original_exc = exc_info.value
+
+    with patch(
+        "litellm.litellm_core_utils.exception_mapping_utils._ENABLE_SECRET_REDACTION",
+        False,
+    ):
+        with pytest.raises(Exception) as mapped_exc_info:
+            exception_type(
+                model="gemini/gemini-pro",
+                original_exception=original_exc,
+                custom_llm_provider="gemini",
+            )
+    # Key must survive in the mapped exception when redaction is disabled
+    assert fake_key in str(mapped_exc_info.value)

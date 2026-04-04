@@ -29,6 +29,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
+    QostodianNexusConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -84,6 +87,7 @@ class SupportedGuardrailIntegrations(Enum):
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    QOSTODIAN_NEXUS = "qostodian_nexus"
 
 
 class Role(Enum):
@@ -748,6 +752,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    QostodianNexusConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
