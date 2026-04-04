@@ -1024,10 +1024,14 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Default - return StopIteration
-                if hasattr(model_response, "usage"):
-                    self.chunks.append(model_response)
-                raise StopIteration
+                # Don't raise StopIteration here - some providers (like OpenRouter)
+                # send usage/cost data in chunks after the finish_reason chunk
+                if (
+                    hasattr(model_response, "usage")
+                    and model_response.usage is not None
+                ):
+                    return model_response
+                return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
@@ -1573,12 +1577,16 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                model_response.usage = chunk.usage
+
             ## RETURN ARG
-            return self.return_processed_chunk_logic(
+            result = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
                 model_response=model_response,  # type: ignore
                 response_obj=response_obj,
             )
+            return result
 
         except StopIteration:
             raise StopIteration
@@ -1816,6 +1824,23 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    @staticmethod
+    def _propagate_usage_cost_to_hidden_params(
+        response: "ModelResponse",
+    ) -> None:
+        """
+        If the assembled response carries a provider-reported cost on
+        usage.cost, copy it into _hidden_params so litellm's cost
+        calculator uses it instead of a token-based estimate.
+        """
+        _usage = getattr(response, "usage", None)
+        if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
+            if "additional_headers" not in response._hidden_params:
+                response._hidden_params["additional_headers"] = {}
+            response._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ] = float(_usage.cost)
+
     def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
@@ -1878,6 +1903,10 @@ class CustomStreamWrapper:
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
+                        usage_to_preserve = response.usage
+                        if usage_to_preserve:
+                            response._hidden_params["usage"] = usage_to_preserve
+
                         # Convert the object to a dictionary
                         obj_dict = response.model_dump()
 
@@ -1916,6 +1945,10 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response
+                    )
+
                     setattr(
                         response,
                         "usage",
@@ -2142,6 +2175,10 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response
+                    )
+
                     setattr(
                         response,
                         "usage",
@@ -2359,18 +2396,29 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    latest_usage_chunk = None
+
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+            usage = chunk["usage"]
+            latest_usage_chunk = usage
+            if "prompt_tokens" in usage:
+                prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            if "completion_tokens" in usage:
+                completion_tokens = usage.get("completion_tokens", 0) or 0
 
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
+
+    if (
+        latest_usage_chunk
+        and hasattr(latest_usage_chunk, "cost")
+        and latest_usage_chunk.cost is not None
+    ):
+        returned_usage_chunk.cost = latest_usage_chunk.cost
 
     return returned_usage_chunk
 

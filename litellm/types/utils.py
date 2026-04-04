@@ -1826,16 +1826,19 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        usage_to_set = None
         if "usage" in kwargs and kwargs["usage"] is not None:
             if isinstance(kwargs["usage"], dict):
-                kwargs["usage"] = Usage(**kwargs["usage"])
+                usage_to_set = Usage(**kwargs["usage"])
+                kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
                 dump = (
                     kwargs["usage"].model_dump()
                     if hasattr(kwargs["usage"], "model_dump")
                     else kwargs["usage"].dict()
                 )
-                kwargs["usage"] = Usage(**dump)
+                usage_to_set = Usage(**dump)
+                kwargs["usage"] = usage_to_set
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1843,6 +1846,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage_to_set is not None:
+            self.usage = usage_to_set
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
