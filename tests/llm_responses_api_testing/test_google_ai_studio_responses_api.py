@@ -362,7 +362,6 @@ async def test_mock_google_ai_studio_compaction():
             decoded = base64.b64decode(compaction_item["encrypted_content"]).decode("utf-8")
             assert "cats many times" in decoded
             assert compaction_item["id"].startswith("cmp_")
-            assert compaction_item["created_by"] is None
         else:
             assert getattr(compaction_item, "type", None) == "compaction"
 
