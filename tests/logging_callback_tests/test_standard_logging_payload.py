@@ -248,6 +248,75 @@ def test_get_standard_logging_metadata_invalid_keys():
     assert "another_invalid_key" not in result
 
 
+def test_get_standard_logging_metadata_redact_user_api_key_info():
+    """Test that user_api_key fields are redacted from metadata when redact_user_api_key_info is enabled"""
+    # Save original setting
+    original_setting = litellm.redact_user_api_key_info
+    
+    try:
+        # Test with redaction enabled
+        litellm.redact_user_api_key_info = True
+        
+        metadata = {
+            "user_api_key_hash": "test_hash",
+            "user_api_key_alias": "test_alias",
+            "user_api_key_team_id": "test_team_id",
+            "user_api_key_user_id": "test_user_id",
+            "user_api_key_team_alias": "test_team_alias",
+            "user_api_key_spend": 10.50,
+            "user_api_key_max_budget": 100.0,
+            "user_api_key_budget_reset_at": "2024-01-01",
+            "user_api_key_org_id": "test_org_id",
+            "user_api_key_user_email": "test@example.com",
+            "user_api_key_end_user_id": "test_end_user_id",
+            "user_api_key_request_route": "/v1/chat/completions",
+            "user_api_key_auth_metadata": {"key": "value"},
+            # Non-user_api_key fields that should be preserved
+            "requester_ip_address": "127.0.0.1",
+            "requester_metadata": {"user_agent": "test_agent"},
+            "spend_logs_metadata": {"key": "value"},
+        }
+        
+        result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+        
+        # Verify all user_api_key fields are removed (not present in dict or None)
+        # Use .get() since redaction removes keys entirely from the dict
+        assert result.get("user_api_key_hash") is None
+        assert result.get("user_api_key_alias") is None
+        assert result.get("user_api_key_team_id") is None
+        assert result.get("user_api_key_user_id") is None
+        assert result.get("user_api_key_team_alias") is None
+        assert result.get("user_api_key_spend") is None
+        assert result.get("user_api_key_max_budget") is None
+        assert result.get("user_api_key_budget_reset_at") is None
+        assert result.get("user_api_key_org_id") is None
+        assert result.get("user_api_key_user_email") is None
+        assert result.get("user_api_key_end_user_id") is None
+        assert result.get("user_api_key_request_route") is None
+        assert result.get("user_api_key_auth_metadata") is None
+        
+        # Verify non-user_api_key fields are preserved
+        assert result["requester_ip_address"] == "127.0.0.1"
+        assert result["requester_metadata"] == {"user_agent": "test_agent"}
+        assert result["spend_logs_metadata"] == {"key": "value"}
+        
+        # Test with redaction disabled
+        litellm.redact_user_api_key_info = False
+        
+        result_no_redaction = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+        
+        # Verify user_api_key fields are preserved when redaction is disabled
+        assert result_no_redaction["user_api_key_hash"] == "test_hash"
+        assert result_no_redaction["user_api_key_alias"] == "test_alias"
+        assert result_no_redaction["user_api_key_team_id"] == "test_team_id"
+        assert result_no_redaction["user_api_key_user_id"] == "test_user_id"
+        assert result_no_redaction["requester_ip_address"] == "127.0.0.1"
+        
+    finally:
+        # Restore original setting
+        litellm.redact_user_api_key_info = original_setting
+
+
 def test_cleanup_timestamps():
     """Test cleanup_timestamps with different input types"""
     # Test with datetime objects
