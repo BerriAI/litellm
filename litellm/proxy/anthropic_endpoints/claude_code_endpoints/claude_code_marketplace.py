@@ -260,6 +260,10 @@ async def register_plugin(
             manifest["keywords"] = request.keywords
         if request.category:
             manifest["category"] = request.category
+        if request.domain:
+            manifest["domain"] = request.domain
+        if request.namespace:
+            manifest["namespace"] = request.namespace
 
         # Check if plugin exists
         existing = await prisma_client.db.litellm_claudecodeplugintable.find_unique(
@@ -362,6 +366,8 @@ async def list_plugins(
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
                     category=manifest.get("category"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
