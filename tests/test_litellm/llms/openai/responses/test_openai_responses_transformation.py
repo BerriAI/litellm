@@ -13,6 +13,8 @@ sys.path.insert(
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
@@ -1282,3 +1284,76 @@ class TestPhaseParameter:
         assert validated[0]["phase"] == "commentary"
         assert validated[1]["phase"] == "final_answer"
         assert "phase" not in validated[2]
+
+
+class TestGetResponsesZeroCost:
+    """Test that GET /v1/responses/{response_id} does not incur duplicate costs (bug #25015)."""
+
+    def _make_fake_response(self):
+        """Create a fake httpx response with usage data (as OpenAI would return)."""
+        fake_response_json = {
+            "id": "resp_abc123",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "o3-deep-research",
+            "output": [],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+            },
+        }
+        return httpx.Response(
+            status_code=200,
+            json=fake_response_json,
+            request=httpx.Request("GET", "https://api.openai.com/v1/responses/resp_abc123"),
+        )
+
+    def test_get_responses_sets_zero_cost(self):
+        """
+        Verify that get_responses (sync) sets response_cost=0.0 in _hidden_params,
+        so the cost pipeline does not re-bill for a retrieval request.
+        """
+        handler = BaseLLMHTTPHandler()
+        config = OpenAIResponsesAPIConfig()
+        logging_obj = MagicMock()
+        litellm_params = GenericLiteLLMParams(api_base="https://api.openai.com/v1/responses")
+
+        mock_client = MagicMock(spec=HTTPHandler)
+        mock_client.get.return_value = self._make_fake_response()
+
+        result = handler.get_responses(
+            response_id="resp_abc123",
+            responses_api_provider_config=config,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            client=mock_client,
+        )
+
+        assert result._hidden_params["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_async_get_responses_sets_zero_cost(self):
+        """
+        Verify that async_get_responses sets response_cost=0.0 in _hidden_params,
+        so the cost pipeline does not re-bill for a retrieval request.
+        """
+        handler = BaseLLMHTTPHandler()
+        config = OpenAIResponsesAPIConfig()
+        logging_obj = MagicMock()
+        litellm_params = GenericLiteLLMParams(api_base="https://api.openai.com/v1/responses")
+
+        mock_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_client.get.return_value = self._make_fake_response()
+
+        result = await handler.async_get_responses(
+            response_id="resp_abc123",
+            responses_api_provider_config=config,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            client=mock_client,
+            custom_llm_provider="openai",
+        )
+
+        assert result._hidden_params["response_cost"] == 0.0
