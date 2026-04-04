@@ -5039,7 +5039,7 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
     # If the string is empty, return a default valid identifier
     if input_tool_name is None or len(input_tool_name) == 0:
-        return input_tool_name
+        return "tool"
     bedrock_tool_name = copy.copy(input_tool_name)
     # If it doesn't start with a letter, prepend 'a'
     if not bedrock_tool_name[0].isalpha():
@@ -5156,7 +5156,9 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
-        name = tool.get("function", {}).get("name", "")
+        # Use function.name if present; fall back to the tool's "type" field
+        # (e.g. "file_search") so non-function tool types still get a valid name.
+        name = tool.get("function", {}).get("name", "") or tool.get("type", "")
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
