@@ -2162,6 +2162,62 @@ async def test_apply_guardrail_unmask_on_response():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_unmask_reads_tokens_from_litellm_metadata():
+    """
+    Regression test: if pii_tokens are present on litellm_metadata (but not metadata),
+    response unmasking should still work.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+        mock_testing=True,
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "litellm_metadata": {
+            "pii_tokens": {
+                "<PERSON_1>": "Jane Doe",
+            }
+        },
+    }
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["Hello <PERSON_1>"]},
+        request_data=request_data,
+        input_type="response",
+    )
+
+    assert result["texts"][0] == "Hello Jane Doe"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_no_tokens_does_not_remask():
+    """
+    Regression test: for output_parse_pii response path with no tokens,
+    text should be returned unchanged (no re-masking pass).
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        output_parse_pii=True,
+        mock_testing=True,
+    )
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("check_pii should not run on response path without tokens")
+
+    guardrail.check_pii = fail_if_called
+
+    result = await guardrail.apply_guardrail(
+        inputs={"texts": ["Nice to meet you, <PERSON_1>!"]},
+        request_data={"model": "gpt-4o", "metadata": {}},
+        input_type="response",
+    )
+
+    assert result["texts"][0] == "Nice to meet you, <PERSON_1>!"
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_masks_on_request():
     """
     When input_type is 'request', apply_guardrail should mask as before.
