@@ -553,6 +553,8 @@ class TestGuardrailActions:
             # Verify the exception has the clean error message (no wrapper)
             assert str(exc_info.value) == "Content contains harmful instructions"
             assert exc_info.value.guardrail_name == "generic_guardrail_api"
+            # Guardrail blocks should map to 400, not 500
+            assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_action_intervened_modifies_content(
