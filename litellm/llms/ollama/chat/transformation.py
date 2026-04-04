@@ -370,6 +370,20 @@ class OllamaChatConfig(BaseConfig):
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 
+        # Handle tool_calls explicitly - ensure they're properly converted
+        # Fixes: https://github.com/BerriAI/litellm/issues/24091
+        tool_calls = response_json_message.get("tool_calls") if response_json_message else None
+        if tool_calls and isinstance(tool_calls, list):
+            converted_tool_calls = []
+            for tc in tool_calls:
+                # Ensure arguments is a string (not a dict) for ChatCompletionMessageToolCall
+                if "function" in tc:
+                    func = tc["function"]
+                    if "arguments" in func and isinstance(func["arguments"], dict):
+                        tc["function"]["arguments"] = json.dumps(func["arguments"])
+                converted_tool_calls.append(tc)
+            response_json_message["tool_calls"] = converted_tool_calls
+
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
