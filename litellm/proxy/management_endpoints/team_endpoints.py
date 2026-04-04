@@ -2932,6 +2932,25 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
+async def _resolve_team_access_group_resources(_team_info: Any) -> None:
+    """Populate access_group_models / mcp_server_ids / agent_ids on the team
+    info response by resolving inherited resources from its access groups."""
+    if not _team_info.access_group_ids:
+        return
+    ag_lookup = await _batch_resolve_access_group_resources(
+        _team_info.access_group_ids
+    )
+    models, mcp_ids, agent_ids = set(), set(), set()
+    for ag_id in _team_info.access_group_ids:
+        if ag_id in ag_lookup:
+            models.update(ag_lookup[ag_id]["models"])
+            mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
+            agent_ids.update(ag_lookup[ag_id]["agent_ids"])
+    _team_info.access_group_models = list(models)
+    _team_info.access_group_mcp_server_ids = list(mcp_ids)
+    _team_info.access_group_agent_ids = list(agent_ids)
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -3043,17 +3062,7 @@ async def team_info(
             )
 
         # Resolve resources inherited from access groups
-        if _team_info.access_group_ids:
-            ag_lookup = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
-            models, mcp_ids, agent_ids = set(), set(), set()
-            for ag_id in _team_info.access_group_ids:
-                if ag_id in ag_lookup:
-                    models.update(ag_lookup[ag_id]["models"])
-                    mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
-                    agent_ids.update(ag_lookup[ag_id]["agent_ids"])
-            _team_info.access_group_models = list(models)
-            _team_info.access_group_mcp_server_ids = list(mcp_ids)
-            _team_info.access_group_agent_ids = list(agent_ids)
+        await _resolve_team_access_group_resources(_team_info)
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
@@ -3401,6 +3410,73 @@ def _convert_teams_to_response_models(
     return team_list
 
 
+async def _enforce_list_team_v2_access(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    organization_id: Optional[str],
+    prisma_client: Any,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> Tuple[Optional[str], Optional[List[str]]]:
+    """Enforce access control for list_team_v2.
+
+    - Proxy admins and admin viewers can query any teams.
+    - Org admins can query teams within their organizations.
+    - Regular users can only query their own teams.
+
+    Returns the (possibly overridden) user_id and org_admin_org_ids.
+    """
+    is_proxy_admin = _user_has_admin_view(user_api_key_dict)
+    org_admin_org_ids: Optional[List[str]] = None
+
+    if is_proxy_admin:
+        return user_id, org_admin_org_ids
+
+    # Always check org admin status so that even own-queries see
+    # the full set of organisation teams, not just direct memberships.
+    if user_api_key_dict.user_id:
+        org_admin_org_ids = await _get_org_admin_org_ids(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    if org_admin_org_ids is not None:
+        # Org admin: validate org_id filter if provided
+        if organization_id and organization_id not in org_admin_org_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "You can only view teams within your organizations."
+                },
+            )
+        verbose_proxy_logger.debug(
+            "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
+            user_api_key_dict.user_id,
+            org_admin_org_ids,
+            user_id,
+        )
+    else:
+        # Not an org admin — fall back to standard route check
+        if not allowed_route_check_inside_route(
+            user_api_key_dict=user_api_key_dict, requested_user_id=user_id
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "Only admin users can query all teams/other teams. Your user role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+        # Regular user — auto-inject caller's user_id
+        if user_id is None:
+            user_id = user_api_key_dict.user_id
+
+    return user_id, org_admin_org_ids
+
+
 @router.get(
     "/v2/team/list",
     tags=["team management"],
@@ -3478,54 +3554,14 @@ async def list_team_v2(
         )
 
     # --- Access control ---
-    # Proxy admins and admin viewers can query any teams.
-    # Org admins can query teams within their organizations.
-    # Regular users can only query their own teams.
-    is_proxy_admin = _user_has_admin_view(user_api_key_dict)
-    org_admin_org_ids: Optional[List[str]] = None
-
-    if not is_proxy_admin:
-        # Always check org admin status so that even own-queries see
-        # the full set of organisation teams, not just direct memberships.
-        if user_api_key_dict.user_id:
-            org_admin_org_ids = await _get_org_admin_org_ids(
-                user_id=user_api_key_dict.user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-        if org_admin_org_ids is not None:
-            # Org admin: validate org_id filter if provided
-            if organization_id and organization_id not in org_admin_org_ids:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "You can only view teams within your organizations."
-                    },
-                )
-            verbose_proxy_logger.debug(
-                "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
-                user_api_key_dict.user_id,
-                org_admin_org_ids,
-                user_id,
-            )
-        else:
-            # Not an org admin — fall back to standard route check
-            if not allowed_route_check_inside_route(
-                user_api_key_dict=user_api_key_dict, requested_user_id=user_id
-            ):
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "error": "Only admin users can query all teams/other teams. Your user role={}".format(
-                            user_api_key_dict.user_role
-                        )
-                    },
-                )
-            # Regular user — auto-inject caller's user_id
-            if user_id is None:
-                user_id = user_api_key_dict.user_id
+    user_id, org_admin_org_ids = await _enforce_list_team_v2_access(
+        user_api_key_dict=user_api_key_dict,
+        user_id=user_id,
+        organization_id=organization_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     if status is not None and status != "deleted":
         raise HTTPException(
