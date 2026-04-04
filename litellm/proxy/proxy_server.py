@@ -375,9 +375,7 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -446,9 +444,7 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -552,9 +548,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -9309,20 +9303,17 @@ async def _add_access_group_models_to_team_models(
         return team_models
 
     # Single batch fetch for all access groups
-    access_group_rows = (
-        await prisma_client.db.litellm_accessgrouptable.find_many(
-            where={"access_group_id": {"in": list(all_access_group_ids)}}
-        )
+    access_group_rows = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": list(all_access_group_ids)}}
     )
     ag_model_map: Dict[str, List[str]] = {
-        row.access_group_id: row.access_model_names or []
-        for row in access_group_rows
+        row.access_group_id: row.access_model_names or [] for row in access_group_rows
     }
 
     # Second pass: resolve deployments for each eligible team
     for team_object in eligible_teams:
         model_names: Set[str] = set()
-        for ag_id in team_object.access_group_ids or [] :
+        for ag_id in team_object.access_group_ids or []:
             model_names.update(ag_model_map.get(ag_id, []))
 
         for model_name in model_names:
@@ -9333,9 +9324,7 @@ async def _add_access_group_models_to_team_models(
                 for deployment in deployments:
                     model_id = deployment.get("model_info", {}).get("id", None)
                     if model_id is not None:
-                        team_models.setdefault(model_id, set()).add(
-                            team_object.team_id
-                        )
+                        team_models.setdefault(model_id, set()).add(team_object.team_id)
 
     return team_models
 

@@ -54,6 +54,8 @@ class MCPServer(BaseModel):
     aws_session_token: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
+    aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
+    aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None

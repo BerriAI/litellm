@@ -202,8 +202,8 @@ def get_llm_provider(  # noqa: PLR0915
                 )
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(
-                    "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
-                        dynamic_api_key
+                    "dynamic_api_key needs to be a string. Got type={}".format(
+                        type(dynamic_api_key).__name__
                     )
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base
