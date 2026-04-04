@@ -166,6 +166,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
+        # Prevent extra_body.tools from overwriting the correctly processed tools
+        # Fixes: https://github.com/BerriAI/litellm/issues/23803
+        extra_body.pop("tools", None)
         response.update(extra_body)
 
         # ALWAYS add usage parameter to get cost data from OpenRouter
