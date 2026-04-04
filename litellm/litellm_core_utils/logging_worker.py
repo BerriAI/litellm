@@ -370,11 +370,10 @@ class LoggingWorker:
         self._running_tasks.clear()
 
     async def flush(self) -> None:
-        """Flush the logging queue."""
+        """Flush queued and in-flight logging work."""
         if self._queue is None:
             return
-        while not self._queue.empty():
-            await self._queue.join()
+        await self._queue.join()
 
     async def clear_queue(self):
         """
