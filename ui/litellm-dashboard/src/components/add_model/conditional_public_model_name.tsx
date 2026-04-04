@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
 import { TextInput } from "@tremor/react";
 import { Tooltip } from "../atoms/index";
-import { Providers } from "../provider_info_helpers";
+import { Providers, prefixWithProvider } from "../provider_info_helpers";
 
 const ConditionalPublicModelName: React.FC = () => {
   const form = Form.useFormInstance();
@@ -20,15 +20,9 @@ const ConditionalPublicModelName: React.FC = () => {
       const currentMappings = form.getFieldValue("model_mappings") || [];
       const updatedMappings = currentMappings.map((mapping: any) => {
         if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
-          if (selectedProvider === Providers.Azure) {
-            return {
-              public_name: customModelName,
-              litellm_model: `azure/${customModelName}`,
-            };
-          }
           return {
             public_name: customModelName,
-            litellm_model: customModelName,
+            litellm_model: prefixWithProvider(selectedProvider, customModelName),
           };
         }
         return mapping;
@@ -50,38 +44,23 @@ const ConditionalPublicModelName: React.FC = () => {
         !selectedModels.every((model) =>
           currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
             if (model === "custom") {
-              return mapping.litellm_model === "custom" || mapping.litellm_model === customModelName;
+              return mapping.litellm_model === "custom" || mapping.litellm_model === prefixWithProvider(selectedProvider, customModelName);
             }
-            if (selectedProvider === Providers.Azure) {
-              return mapping.litellm_model === `azure/${model}`;
-            }
-            return mapping.litellm_model === model;
+            return mapping.litellm_model === prefixWithProvider(selectedProvider, model);
           }),
         );
 
       if (shouldUpdateMappings) {
         const mappings = selectedModels.map((model: string) => {
           if (model === "custom" && customModelName) {
-            if (selectedProvider === Providers.Azure) {
-              return {
-                public_name: customModelName,
-                litellm_model: `azure/${customModelName}`,
-              };
-            }
             return {
               public_name: customModelName,
-              litellm_model: customModelName,
-            };
-          }
-          if (selectedProvider === Providers.Azure) {
-            return {
-              public_name: model,
-              litellm_model: `azure/${model}`,
+              litellm_model: prefixWithProvider(selectedProvider, customModelName),
             };
           }
           return {
             public_name: model,
-            litellm_model: model,
+            litellm_model: prefixWithProvider(selectedProvider, model),
           };
         });
 
