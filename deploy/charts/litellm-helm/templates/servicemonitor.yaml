@@ -31,6 +31,18 @@ spec:
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
     scheme: http
+  {{- /*
+    Render bearerTokenSecret block if either chart creates the secret (secret.create=true) or
+    user explicitly sets all three fields (name, key, optional).
+  */ -}}
+  {{- if or (eq .secret.create true) (and .bearerTokenSecret.name .bearerTokenSecret.key }}
+    bearerTokenSecret:
+      name: {{ .bearerTokenSecret.name | default (print (include "litellm.fullname" $) "-servicemonitor-token") }}
+      key: {{ .bearerTokenSecret.key | default "token" }}
+      {{- if hasKey .bearerTokenSecret "optional" }}
+      optional: {{ .bearerTokenSecret.optional }}
+      {{- end }}
+  {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}
