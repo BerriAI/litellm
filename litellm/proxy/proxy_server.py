@@ -375,9 +375,7 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     router as jwt_key_mapping_router,
 )
@@ -446,9 +444,7 @@ from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_route
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -552,9 +548,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -967,8 +961,42 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## Initialize Rust sidecar client (optional, for high-perf forwarding)
+    _use_sidecar = os.environ.get(
+        "USE_SIDECAR", ""
+    ).lower() == "true" or general_settings.get("use_sidecar", False)
+    if _use_sidecar:
+        # Ensure env var is set so AsyncHTTPHandler._should_use_sidecar_transport() picks it up
+        os.environ["USE_SIDECAR"] = "true"
+
+        from litellm.proxy.sidecar_client import init_sidecar_client
+
+        _sidecar_port = int(
+            os.environ.get("SIDECAR_PORT", general_settings.get("sidecar_port", 8787))
+        )
+        os.environ.setdefault("SIDECAR_PORT", str(_sidecar_port))
+        _sidecar_binary = os.environ.get(
+            "SIDECAR_BINARY", general_settings.get("sidecar_binary", "")
+        )
+        await init_sidecar_client(
+            port=_sidecar_port,
+            binary=_sidecar_binary or None,
+            auto_start=bool(_sidecar_binary),
+        )
+
     # End of startup event
     yield
+
+    # Shutdown event - close sidecar client
+    try:
+        from litellm.proxy.sidecar_client import get_sidecar_client
+
+        _sc = get_sidecar_client()
+        if _sc is not None:
+            await _sc.close()
+            verbose_proxy_logger.info("Sidecar client closed")
+    except Exception:
+        pass
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
@@ -6967,21 +6995,25 @@ async def model_info(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/engines/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
 )
 @router.post(
     "/openai/deployments/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    response_class=ORJSONResponse,
     responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
 async def chat_completion(  # noqa: PLR0915
