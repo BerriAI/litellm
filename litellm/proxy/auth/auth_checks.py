@@ -165,9 +165,24 @@ def _is_model_cost_zero(
                 )
                 return False
 
-            # This model has zero cost explicitly configured
+            # Costs are 0 — verify this is from explicit configuration,
+            # not from defaulted sparse auto-registration entries.
+            # See: https://github.com/BerriAI/litellm/issues/24770
+            safe_name = str(model_name).replace("\n", "").replace("\r", "")
+            if not _is_cost_explicitly_configured(model_name, llm_router):
+                verbose_proxy_logger.debug(
+                    "Model %s has zero cost but no explicit cost "
+                    "configuration in model_cost entry — treating as unknown "
+                    "cost (enforce budget)",
+                    safe_name,
+                )
+                return False
+
             verbose_proxy_logger.debug(
-                f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
+                "Model %s has zero cost explicitly configured (input: %s, output: %s)",
+                safe_name,
+                input_cost,
+                output_cost,
             )
 
         except Exception as e:
@@ -179,6 +194,33 @@ def _is_model_cost_zero(
 
     # All models checked have zero cost
     return True
+
+
+def _is_cost_explicitly_configured(
+    model: str, llm_router: "Router"
+) -> bool:
+    """
+    Check if any deployment in the model group has cost fields explicitly
+    set in its litellm.model_cost entry.
+
+    When Router._create_deployment() registers a model not in the global
+    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
+    fields. _get_model_info_helper() then defaults missing costs to 0.
+    This function detects that scenario by checking the raw model_cost entry.
+    """
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") != model:
+            continue
+        model_id = deployment.get("model_info", {}).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, {})
+        if (
+            "input_cost_per_token" in raw_entry
+            or "output_cost_per_token" in raw_entry
+        ):
+            return True
+    return False
 
 
 async def _run_project_checks(
@@ -2876,7 +2918,15 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
-    if valid_token.spend is not None and valid_token.max_budget is not None:
+    if valid_token.max_budget is not None:
+        from litellm.proxy.proxy_server import get_current_spend
+
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:key:{valid_token.token}",
+            fallback_spend=valid_token.spend or 0.0,
+        )
+
         ####################################
         # collect information for alerting #
         ####################################
@@ -2888,7 +2938,7 @@ async def _virtual_key_max_budget_check(
 
         call_info = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
@@ -2909,9 +2959,9 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if valid_token.spend >= valid_token.max_budget:
+        if spend >= valid_token.max_budget:
             raise litellm.BudgetExceededError(
-                current_cost=valid_token.spend,
+                current_cost=spend,
                 max_budget=valid_token.max_budget,
             )
 
@@ -3042,6 +3092,14 @@ async def _check_team_member_budget(
             team_member_budget = team_membership.litellm_budget_table.max_budget
             team_member_spend = team_membership.spend or 0.0
 
+            # Read from cross-pod counter (Redis-first) if available
+            from litellm.proxy.proxy_server import get_current_spend
+
+            team_member_spend = await get_current_spend(
+                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                fallback_spend=team_member_spend,
+            )
+
             if team_member_spend >= team_member_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
@@ -3062,35 +3120,39 @@ async def _team_max_budget_check(
         BudgetExceededError if the team is over it's max budget.
         Triggers a budget alert if the team is over it's max budget.
     """
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
-    ):
-        if valid_token:
-            call_info = CallInfo(
-                token=valid_token.token,
-                spend=team_object.spend,
-                max_budget=team_object.max_budget,
-                user_id=valid_token.user_id,
-                team_id=valid_token.team_id,
-                team_alias=valid_token.team_alias,
-                organization_id=valid_token.org_id,
-                event_group=Litellm_EntityType.TEAM,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="team_budget",
-                    user_info=call_info,
-                )
-            )
+    if team_object is not None and team_object.max_budget is not None:
+        from litellm.proxy.proxy_server import get_current_spend
 
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+        # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
+        spend = await get_current_spend(
+            counter_key=f"spend:team:{team_object.team_id}",
+            fallback_spend=team_object.spend or 0.0,
         )
+
+        if spend > team_object.max_budget:
+            if valid_token:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=spend,
+                    max_budget=team_object.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    event_group=Litellm_EntityType.TEAM,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="team_budget",
+                        user_info=call_info,
+                    )
+                )
+
+            raise litellm.BudgetExceededError(
+                current_cost=spend,
+                max_budget=team_object.max_budget,
+                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
+            )
 
 
 async def _team_soft_budget_check(

@@ -75,9 +75,9 @@ async def test_provider_budgets_e2e_test():
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "model_info": {"id": "azure-model-id"},
             },
@@ -608,6 +608,7 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
         # Verify the error is related to budget exceeded
 
         assert "Exceeded budget for deployment" in str(exc_info.value)
+
 
 @pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio

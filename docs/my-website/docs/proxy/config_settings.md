@@ -201,12 +201,13 @@ router_settings:
 | enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 | enable_key_alias_format_validation | boolean | If true, validates `key_alias` format on `/key/generate` and `/key/update`. Must be 2-255 chars, start/end with alphanumeric, only allow `a-zA-Z0-9_-/.@`. Default `false`. |
 | disable_copilot_system_to_assistant | boolean | **DEPRECATED** - GitHub Copilot API supports system prompts. |
+| default_team_params | object | Default parameters applied to every new team created via `/team/new` (including SSO auto-created teams). Only fills in fields not explicitly set in the request. Sub-fields: `max_budget` (float), `budget_duration` (string, e.g. `"30d"`), `tpm_limit` (integer), `rpm_limit` (integer), `team_member_permissions` (array of strings, e.g. `["/team/daily/activity", "/key/generate"]`), `models` (array of strings — only applied to SSO auto-created teams). |
 
 ### general_settings - Reference
 
 | Name | Type | Description |
 |------|------|-------------|
-| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| completion_model | string | The model to use for all completions, overriding any `model` specified in the request |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
@@ -279,6 +280,33 @@ router_settings:
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 | maximum_spend_logs_retention_interval             | str                   | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
+| alert_type_config | dict | Configuration mapping alert types to their handler settings |
+| always_include_stream_usage | boolean | If true, includes usage metrics in every streaming response chunk |
+| auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects UI login page to SSO provider |
+| control_plane_url | string | URL of the control plane for cross-instance state sharing |
+| custom_auth_run_common_checks | boolean | If true, runs standard auth validation checks alongside custom auth handlers |
+| custom_ui_sso_sign_in_handler | string | Custom handler for SSO sign-in logic in the UI |
+| database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
+| disable_error_logs | boolean | If true, suppresses error tracking and storage in the database |
+| enable_health_check_routing | boolean | If true, enables health check-driven request routing to avoid unhealthy deployments |
+| enable_mcp_registry | boolean | If true, enables access to the centralized MCP server registry |
+| enforce_rbac | boolean | If true, enables role-based access control (RBAC) for all proxy operations |
+| forward_llm_provider_auth_headers | boolean | If true, forwards provider-specific auth headers to LLM API calls |
+| health_check_concurrency | integer | Maximum number of concurrent health check operations |
+| health_check_staleness_threshold | integer | Maximum age in seconds for health check results before marking deployments as stale |
+| maximum_spend_logs_cleanup_cron | string | Cron expression for scheduling automatic spend log cleanup tasks |
+| mcp_client_side_auth_header_name | string | HTTP header name for client-side MCP server credentials |
+| mcp_internal_ip_ranges | list | CIDR ranges considered internal for non-public MCP server access control |
+| mcp_required_fields | list | List of required field names for MCP server submissions |
+| mcp_trusted_proxy_ranges | list | CIDR ranges of proxies trusted to forward X-Forwarded-For headers for MCP |
+| require_end_user_mcp_access_defined | boolean | If true, requires end users to have explicit MCP access permissions defined |
+| role_permissions | list | List of role-based permission configurations |
+| search_tools | list | List of search tool configurations for enabling web search capabilities |
+| token_rate_limit_type | string | Rate limit counting method: "total", "output", or "input" tokens |
+| use_redis_transaction_buffer | boolean | If true, buffers database transactions in Redis before writing |
+| use_shared_health_check | boolean | If true, uses Redis-backed shared health check state across multiple proxy instances |
+| user_header_mappings | dict | Map custom request headers to user IDs using lookup rules |
+| user_header_name | string | HTTP header name to extract user identity from requests |
 
 ### router_settings - Reference
 
@@ -367,6 +395,8 @@ router_settings:
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
 | search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search/index.md) |
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
+| enable_health_check_routing | boolean | If true, enables health check-driven deployment filtering to avoid routing requests to unhealthy deployments |
+| health_check_staleness_threshold | integer | Maximum age in seconds for cached health check results before marking deployments as stale |
 
 
 ### environment variables - Reference
