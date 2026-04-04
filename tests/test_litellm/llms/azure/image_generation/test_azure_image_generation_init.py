@@ -448,3 +448,206 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
             f"Request body 'model' field should be base_model '{base_model}', "
             f"but got: {request_data.get('model')}"
         )
+
+class TestAzureImageGenerationManagedIdentityAuth:
+    """
+    Tests for Azure image generation with Managed Identity (MI) / DefaultAzureCredential.
+
+    The image generation code path uses raw httpx requests (not the Azure SDK client),
+    so the MI token provider resolved by initialize_azure_sdk_client must be explicitly
+    used to set the Authorization header.
+    """
+
+    def test_should_set_authorization_header_from_mi_token_provider(self):
+        """
+        Test that when Managed Identity resolves a token provider via
+        initialize_azure_sdk_client, the Authorization header is set on the
+        raw httpx request used for image generation.
+        """
+        mock_token = "mock-azure-ad-token-from-mi-12345"
+        mock_token_provider = Mock(return_value=mock_token)
+
+        azure_chat = AzureChatCompletion()
+
+        mock_client_params = {
+            "api_key": None,
+            "azure_endpoint": "https://my-aoai.openai.azure.com/",
+            "api_version": "2024-06-01",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": mock_token_provider,
+        }
+
+        with patch.object(
+            azure_chat, "initialize_azure_sdk_client", return_value=mock_client_params
+        ), patch.object(
+            azure_chat, "aimage_generation", new_callable=AsyncMock
+        ) as mock_aimg:
+            mock_aimg.return_value = MagicMock()
+
+            azure_chat.image_generation(
+                prompt="test prompt",
+                timeout=30.0,
+                optional_params={},
+                logging_obj=MagicMock(),
+                headers={"Content-Type": "application/json"},
+                model="gpt-image-1",
+                api_key=None,
+                api_base="https://my-aoai.openai.azure.com/",
+                api_version="2024-06-01",
+                azure_ad_token=None,
+                azure_ad_token_provider=None,
+                aimg_generation=True,
+                litellm_params={},
+            )
+
+            call_kwargs = mock_aimg.call_args
+            headers_passed = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+            assert "Authorization" in headers_passed, (
+                "Authorization header should be set when MI token provider is resolved"
+            )
+            assert headers_passed["Authorization"] == f"Bearer {mock_token}"
+            assert "api-key" not in headers_passed, (
+                "api-key header should be removed when using MI token"
+            )
+
+    def test_should_use_explicit_token_provider_over_resolved_one(self):
+        """
+        Test that if azure_ad_token_provider is already passed (not None),
+        its token takes priority over the one resolved by initialize_azure_sdk_client.
+        """
+        explicit_token = "explicit-token-passed-by-caller"
+        explicit_provider = Mock(return_value=explicit_token)
+
+        azure_chat = AzureChatCompletion()
+
+        mock_client_params = {
+            "api_key": None,
+            "azure_endpoint": "https://my-aoai.openai.azure.com/",
+            "api_version": "2024-06-01",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": Mock(return_value="resolved-by-init-sdk-client"),
+        }
+
+        with patch.object(
+            azure_chat, "initialize_azure_sdk_client", return_value=mock_client_params
+        ), patch.object(
+            azure_chat, "aimage_generation", new_callable=AsyncMock
+        ) as mock_aimg:
+            mock_aimg.return_value = MagicMock()
+
+            azure_chat.image_generation(
+                prompt="test prompt",
+                timeout=30.0,
+                optional_params={},
+                logging_obj=MagicMock(),
+                headers={"Content-Type": "application/json"},
+                model="gpt-image-1",
+                api_key=None,
+                api_base="https://my-aoai.openai.azure.com/",
+                api_version="2024-06-01",
+                azure_ad_token=None,
+                azure_ad_token_provider=explicit_provider,
+                aimg_generation=True,
+                litellm_params={},
+            )
+
+            call_kwargs = mock_aimg.call_args
+            headers_passed = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+            assert headers_passed["Authorization"] == f"Bearer {explicit_token}"
+            explicit_provider.assert_called_once()
+
+    def test_should_not_set_authorization_when_api_key_present(self):
+        """
+        Test that when api_key is provided, MI token resolution is skipped.
+        """
+        azure_chat = AzureChatCompletion()
+
+        mock_client_params = {
+            "api_key": "my-api-key",
+            "azure_endpoint": "https://my-aoai.openai.azure.com/",
+            "api_version": "2024-06-01",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        with patch.object(
+            azure_chat, "initialize_azure_sdk_client", return_value=mock_client_params
+        ), patch.object(
+            azure_chat, "aimage_generation", new_callable=AsyncMock
+        ) as mock_aimg:
+            mock_aimg.return_value = MagicMock()
+
+            azure_chat.image_generation(
+                prompt="test prompt",
+                timeout=30.0,
+                optional_params={},
+                logging_obj=MagicMock(),
+                headers={"Content-Type": "application/json", "api-key": "my-api-key"},
+                model="gpt-image-1",
+                api_key="my-api-key",
+                api_base="https://my-aoai.openai.azure.com/",
+                api_version="2024-06-01",
+                azure_ad_token=None,
+                azure_ad_token_provider=None,
+                aimg_generation=True,
+                litellm_params={},
+            )
+
+            call_kwargs = mock_aimg.call_args
+            headers_passed = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+            assert "Authorization" not in headers_passed
+            assert headers_passed.get("api-key") == "my-api-key"
+
+    def test_should_set_authorization_in_sync_path(self):
+        """
+        Test the sync path: MI token should be set in headers for sync httpx request.
+        """
+        mock_token = "sync-mi-token-67890"
+        mock_token_provider = Mock(return_value=mock_token)
+
+        azure_chat = AzureChatCompletion()
+
+        mock_client_params = {
+            "api_key": None,
+            "azure_endpoint": "https://my-aoai.openai.azure.com/",
+            "api_version": "2024-06-01",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": mock_token_provider,
+        }
+
+        mock_httpx_response = MagicMock()
+        mock_httpx_response.json.return_value = {
+            "created": 1234567890,
+            "data": [{"url": "https://example.com/image.png", "revised_prompt": "test"}],
+        }
+
+        with patch.object(
+            azure_chat, "initialize_azure_sdk_client", return_value=mock_client_params
+        ), patch.object(
+            azure_chat, "create_azure_base_url", return_value="https://my-aoai.openai.azure.com/openai/deployments/gpt-image-1/images/generations?api-version=2024-06-01"
+        ), patch.object(
+            azure_chat, "make_sync_azure_httpx_request", return_value=mock_httpx_response
+        ) as mock_sync_request:
+
+            azure_chat.image_generation(
+                prompt="test prompt",
+                timeout=30.0,
+                optional_params={},
+                logging_obj=MagicMock(),
+                headers={"Content-Type": "application/json"},
+                model="gpt-image-1",
+                api_key=None,
+                api_base="https://my-aoai.openai.azure.com/",
+                api_version="2024-06-01",
+                azure_ad_token=None,
+                azure_ad_token_provider=None,
+                aimg_generation=False,
+                litellm_params={},
+            )
+
+            call_kwargs = mock_sync_request.call_args
+            headers_passed = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+            assert "Authorization" in headers_passed, (
+                "Sync path: Authorization header should be set from MI token provider"
+            )
+            assert headers_passed["Authorization"] == f"Bearer {mock_token}"
