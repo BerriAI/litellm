@@ -2099,7 +2099,7 @@ litellm_settings:
 | `GENERIC_LOGGER_HEADERS`  | Optional: Set headers to be sent to the custom API endpoint | No, this is optional |
 
 ```shell showLineNumbers title=".env"
-GENERIC_LOGGER_ENDPOINT="https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a"
+GENERIC_LOGGER_ENDPOINT="https://example.com/litellm-webhook"
 
 
 # Optional: Set headers to be sent to the custom API endpoint
