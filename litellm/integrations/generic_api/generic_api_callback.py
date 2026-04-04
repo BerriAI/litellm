@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
 LOG_FORMAT_TYPES = Literal["json_array", "ndjson", "single"]
@@ -302,6 +302,28 @@ class GenericAPILogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(
                 f"Generic API Logger Error - {str(e)}\n{traceback.format_exc()}"
+            )
+
+    async def async_log_audit_log_event(
+        self, audit_log: StandardAuditLogPayload
+    ) -> None:
+        """
+        Log audit log events (key/team/user CRUD) to Generic API Endpoint.
+
+        Adds the audit log payload to the batch queue for flushing.
+        """
+        try:
+            verbose_logger.debug(
+                "Generic API Logger - audit log event for object %s",
+                audit_log.get("object_id", "unknown"),
+            )
+            self.log_queue.append(dict(audit_log))
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+        except Exception as e:
+            verbose_logger.exception(
+                f"Generic API Logger Error logging audit event - {str(e)}"
             )
 
     async def async_send_batch(self):

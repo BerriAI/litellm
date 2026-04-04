@@ -277,12 +277,125 @@ class TestAuditLogTaskDoneCallback:
             mock_logger.error.assert_not_called()
 
 
+class TestGenericAPILoggerAuditLogEvent:
+    @pytest.mark.asyncio
+    async def test_queues_audit_log_event(self):
+        """GenericAPILogger should add audit log events to its batch queue."""
+        with patch(
+            "litellm.integrations.generic_api.generic_api_callback.get_async_httpx_client"
+        ):
+            from litellm.integrations.generic_api.generic_api_callback import (
+                GenericAPILogger,
+            )
+
+            logger = GenericAPILogger(
+                endpoint="https://splunk.example.com/services/collector/event",
+                headers={"Authorization": "Splunk test-token"},
+            )
+            logger.log_queue = []
+            logger.batch_size = 100
+
+            audit_log = StandardAuditLogPayload(
+                id="audit-gen-1",
+                updated_at="2026-04-01T12:00:00+00:00",
+                changed_by="user-1",
+                changed_by_api_key="sk-abc",
+                action="created",
+                table_name="LiteLLM_TeamTable",
+                object_id="team-1",
+                before_value=None,
+                updated_values='{"name": "new-team"}',
+            )
+
+            await logger.async_log_audit_log_event(audit_log)
+
+            assert len(logger.log_queue) == 1
+            payload = logger.log_queue[0]
+            assert payload["id"] == "audit-gen-1"
+            assert payload["action"] == "created"
+            assert payload["object_id"] == "team-1"
+
+    @pytest.mark.asyncio
+    async def test_flushes_when_batch_full(self):
+        """GenericAPILogger should flush when batch_size is reached from audit logs."""
+        with patch(
+            "litellm.integrations.generic_api.generic_api_callback.get_async_httpx_client"
+        ):
+            from litellm.integrations.generic_api.generic_api_callback import (
+                GenericAPILogger,
+            )
+
+            logger = GenericAPILogger(
+                endpoint="https://splunk.example.com/services/collector/event",
+                headers={"Authorization": "Splunk test-token"},
+            )
+            logger.log_queue = []
+            logger.batch_size = 1  # Flush after 1 item
+
+            with patch.object(
+                logger, "async_send_batch", new_callable=AsyncMock
+            ) as mock_send:
+                audit_log = StandardAuditLogPayload(
+                    id="audit-gen-2",
+                    updated_at="2026-04-01T12:00:00+00:00",
+                    changed_by="user-1",
+                    changed_by_api_key="sk-abc",
+                    action="deleted",
+                    table_name="LiteLLM_VerificationToken",
+                    object_id="key-1",
+                    before_value=None,
+                    updated_values=None,
+                )
+
+                await logger.async_log_audit_log_event(audit_log)
+                mock_send.assert_called_once()
+
+
+class TestResolveAuditLogCallbackFromCallbackSettings:
+    """Test that audit log callback resolution handles callback_settings generic_api callbacks."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_generic_api_from_callback_settings(self):
+        """splunk_hec defined in callback_settings should resolve to a GenericAPILogger."""
+        from litellm.proxy.management_helpers.audit_logs import (
+            _audit_log_callback_cache,
+            _resolve_audit_log_callback,
+        )
+
+        # Clear cache
+        _audit_log_callback_cache.clear()
+
+        original = litellm.callback_settings
+        litellm.callback_settings = {
+            "splunk_hec": {
+                "callback_type": "generic_api",
+                "endpoint": "https://splunk.example.com:8088/services/collector/event",
+                "headers": {
+                    "Authorization": "Splunk test-token",
+                    "Content-Type": "application/json",
+                },
+            }
+        }
+        try:
+            from litellm.integrations.generic_api.generic_api_callback import (
+                GenericAPILogger,
+            )
+
+            result = _resolve_audit_log_callback("splunk_hec")
+            assert isinstance(result, GenericAPILogger)
+            assert (
+                result.endpoint
+                == "https://splunk.example.com:8088/services/collector/event"
+            )
+        finally:
+            litellm.callback_settings = original
+            _audit_log_callback_cache.clear()
+
+
 class TestS3LoggerAuditLogEvent:
     @pytest.mark.asyncio
     async def test_queues_audit_log_with_correct_s3_key(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()
@@ -315,9 +428,7 @@ class TestS3LoggerAuditLogEvent:
 
     @pytest.mark.asyncio
     async def test_s3_key_format_no_path(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()
