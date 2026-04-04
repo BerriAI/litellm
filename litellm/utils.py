@@ -4875,7 +4875,7 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_deployment_order(deployment: Dict) -> Optional[int]:
+def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
     """
     Returns the routing order for a deployment.
 
@@ -4903,14 +4903,13 @@ def _get_order_filtered_deployments(
         return healthy_deployments
 
     # Default: pick min order group
-    min_order = min(
-        (
-            _get_deployment_order(deployment)
-            for deployment in healthy_deployments
-            if _get_deployment_order(deployment) is not None
-        ),
-        default=None,
-    )
+    _valid_orders: List[int] = [
+        o
+        for deployment in healthy_deployments
+        for o in [_get_deployment_order(deployment)]
+        if o is not None
+    ]
+    min_order: Optional[int] = min(_valid_orders) if _valid_orders else None
 
     if min_order is not None:
         filtered_deployments = [
