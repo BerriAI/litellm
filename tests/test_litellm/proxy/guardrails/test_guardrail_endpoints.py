@@ -1237,13 +1237,82 @@ async def test_register_guardrail_duplicate_name(mocker):
 
 
 @pytest.mark.asyncio
-async def test_list_guardrail_submissions_requires_admin(mocker):
-    """List submissions returns 403 when user is not admin."""
+async def test_list_guardrail_submissions_non_admin_scoped_to_own_teams(mocker):
+    """Non-admin callers see only submissions for teams they belong to."""
+    mock_prisma = mocker.Mock()
+    own_team_row = mocker.Mock(
+        guardrail_id="mine",
+        guardrail_name="mine-guard",
+        status="pending_review",
+        team_id="team-mine",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    find_many = AsyncMock(return_value=[own_team_row])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-mine"]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    result = await list_guardrail_submissions(user_api_key_dict=user)
+
+    # DB query scoped to visible teams
+    where_clause = find_many.call_args.kwargs["where"]
+    assert where_clause["team_id"] == {"in": ["team-mine"]}
+    assert len(result.submissions) == 1
+    assert result.submissions[0].team_id == "team-mine"
+    # Summary counts reflect only visible teams
+    assert result.summary.total == 1
+    assert result.summary.pending_review == 1
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_non_admin_no_teams(mocker):
+    """Non-admin caller with no team memberships gets an empty list (not 403)."""
+    mock_prisma = mocker.Mock()
+    find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    result = await list_guardrail_submissions(user_api_key_dict=user)
+
+    assert result.submissions == []
+    assert result.summary.total == 0
+    assert find_many.call_count == 0  # no DB query when user has no teams
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_non_admin_team_filter_forbidden(mocker):
+    """Non-admin caller filtering by a team they're not in gets 403."""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
-    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-mine"]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
 
     with pytest.raises(HTTPException) as exc_info:
-        await list_guardrail_submissions(user_api_key_dict=user)
+        await list_guardrail_submissions(
+            team_id="team-other", user_api_key_dict=user
+        )
     assert exc_info.value.status_code == 403
 
 
@@ -1352,6 +1421,69 @@ async def test_get_guardrail_submission_not_found(mocker):
     with pytest.raises(HTTPException) as exc_info:
         await get_guardrail_submission("nonexistent-id", user)
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_submission_non_admin_own_team(mocker):
+    """Non-admin caller can fetch a submission belonging to one of their teams."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="team-guard",
+        status="pending_review",
+        team_id="team-mine",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-mine"]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    result = await get_guardrail_submission("sub-1", user)
+
+    assert result.guardrail_id == "sub-1"
+    assert result.team_id == "team-mine"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_submission_non_admin_other_team_forbidden(mocker):
+    """Non-admin caller gets 403 when fetching a submission for a team they're not in."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="team-guard",
+        status="pending_review",
+        team_id="team-other",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=["team-mine"]),
+    )
+    user = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_submission("sub-1", user)
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

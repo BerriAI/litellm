@@ -25,8 +25,6 @@ import {
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isAdminRole } from "@/utils/roles";
 
 type GuardrailStatus = "active" | "pending" | "rejected";
 
@@ -805,8 +803,6 @@ interface TeamGuardrailsTabProps {
 }
 
 export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
-  const { userRole } = useAuthorized();
-  const isAdmin = userRole ? isAdminRole(userRole) : false;
   const [guardrails, setGuardrails] = useState<TeamGuardrail[]>([]);
   const [summary, setSummary] = useState({
     total: 0,
@@ -837,7 +833,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   }, [search]);
 
   const fetchSubmissions = useCallback(async () => {
-    if (!accessToken || !isAdmin) {
+    if (!accessToken) {
       setIsLoading(false);
       return;
     }
@@ -862,7 +858,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, isAdmin, statusFilter, searchDebounced]);
+  }, [accessToken, statusFilter, searchDebounced]);
 
   useEffect(() => {
     fetchSubmissions();
