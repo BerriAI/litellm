@@ -495,7 +495,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
         ...(values.organization_id !== info.organization_id
-          ? { organization_id: values.organization_id ?? "" }
+          ? { organization_id: values.organization_id ?? null }
           : {}),
       };
 
