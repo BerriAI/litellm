@@ -3223,6 +3223,7 @@ class SpendLogsMetadata(TypedDict):
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
     """
 
+    autoq: Optional["AutoQueueSpendLogsMetadata"]
     additional_usage_values: Optional[
         dict
     ]  # covers provider-specific usage information - e.g. prompt caching
@@ -3259,6 +3260,29 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+
+
+class AutoQueueEvent(TypedDict):
+    event: str
+    at_ms: int
+    payload: Dict[str, Any]
+
+
+class AutoQueueSummary(TypedDict, total=False):
+    request_id: str
+    model: str
+    worker_id: str
+    decision: str
+    queued: bool
+    priority: int
+    timeout_seconds: float
+    queue_wait_ms: int
+    claim_state: str
+
+
+class AutoQueueSpendLogsMetadata(TypedDict, total=False):
+    events: List[AutoQueueEvent]
+    summary: AutoQueueSummary
 
 
 class SpendLogsPayload(TypedDict):

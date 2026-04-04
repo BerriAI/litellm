@@ -22,6 +22,10 @@ import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .auto_queue_logging import (
+    append_autoq_event,
+    finalize_autoq_summary,
+)
 from .auto_queue_lease import ActiveLeaseHeartbeat
 from .auto_queue_scripts import AutoQueueRedis, DistributedAutoQueueRedis
 from .auto_queue_state import (
@@ -551,7 +555,11 @@ class AutoQueueMiddleware:
         self._wake_local_request(model, transfer.claimed_request_id)
 
     async def _process_request(
-        self, scope: Scope, body: bytes, model: str, send: Send,
+        self,
+        scope: Scope,
+        request_data: Dict[str, Any],
+        model: str,
+        send: Send,
         original_receive: Optional[Receive] = None,
     ) -> None:
         """Use distributed Redis state for admission and slot transfer orchestration."""
@@ -568,6 +576,26 @@ class AutoQueueMiddleware:
         timeout, priority = _get_key_config(scope)
         timeout_seconds = max(float(timeout), 0.0)
         deadline_at_ms = int(time.time() * 1000) + int(timeout_seconds * 1000)
+        finalize_autoq_summary(
+            request_data,
+            {
+                "request_id": request_id,
+                "model": model,
+                "worker_id": self._worker_id,
+                "priority": priority,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+        append_autoq_event(
+            request_data,
+            event="received",
+            payload={
+                "model": model,
+                "request_id": request_id,
+                "priority": priority,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
 
         decision = await self._safe_redis_call(
             aqr.admit_or_enqueue(
@@ -583,6 +611,22 @@ class AutoQueueMiddleware:
         if decision is None:
             return
         request_state = decision.request_state
+        finalize_autoq_summary(
+            request_data,
+            {
+                "decision": decision.decision,
+                "queued": decision.decision == "queued",
+            },
+        )
+        append_autoq_event(
+            request_data,
+            event="decision",
+            payload={
+                "decision": decision.decision,
+                "priority": priority,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
 
         if decision.decision == "queue_full":
             logger.warning(
@@ -595,6 +639,15 @@ class AutoQueueMiddleware:
         if decision.decision == "queued":
             wake_state = _WakeState()
             queue.add(request_id, wake_state, priority)
+            append_autoq_event(
+                request_data,
+                event="queued",
+                payload={
+                    "queue_depth": queue.depth,
+                    "priority": priority,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
             logger.info(
                 "Queued auto-queue request in distributed Redis queue",
                 extra={
@@ -635,6 +688,15 @@ class AutoQueueMiddleware:
 
             if request_state is None:
                 if wake_state.reason == _QueueWakeReason.DISCONNECTED:
+                    finalize_autoq_summary(
+                        request_data,
+                        {"claim_state": "cancelled"},
+                    )
+                    append_autoq_event(
+                        request_data,
+                        event="cancelled",
+                        payload={"reason": _QueueWakeReason.DISCONNECTED},
+                    )
                     await self._abandon_waiting_request(
                         aqr,
                         model=model,
@@ -644,6 +706,15 @@ class AutoQueueMiddleware:
                     )
                     return
                 if wake_state.reason == _QueueWakeReason.SHUTDOWN:
+                    finalize_autoq_summary(
+                        request_data,
+                        {"claim_state": "cancelled"},
+                    )
+                    append_autoq_event(
+                        request_data,
+                        event="cancelled",
+                        payload={"reason": _QueueWakeReason.SHUTDOWN},
+                    )
                     await self._abandon_waiting_request(
                         aqr,
                         model=model,
@@ -663,6 +734,15 @@ class AutoQueueMiddleware:
                     extra={"model": model, "request_id": request_id, "queue_timeout": timeout_seconds},
                 )
                 queue.remove(request_id, reason=_QueueWakeReason.TIMEOUT)
+                finalize_autoq_summary(
+                    request_data,
+                    {"claim_state": "timed_out"},
+                )
+                append_autoq_event(
+                    request_data,
+                    event="timed_out",
+                    payload={"timeout_seconds": timeout_seconds},
+                )
                 await self._abandon_waiting_request(
                     aqr,
                     model=model,
@@ -674,6 +754,10 @@ class AutoQueueMiddleware:
                 return
 
             if request_state.state not in {"claimed", "active"}:
+                finalize_autoq_summary(
+                    request_data,
+                    {"claim_state": request_state.state},
+                )
                 logger.warning(
                     "Rejecting request due to unexpected distributed queue state",
                     extra={"model": model, "request_id": request_id, "request_state": request_state.state},
@@ -686,6 +770,32 @@ class AutoQueueMiddleware:
                 )
                 await _send_json_error(send, status_code, message)
                 return
+
+        queue_wait_ms = 0
+        if (
+            request_state is not None
+            and request_state.claimed_at_ms is not None
+            and request_state.enqueued_at_ms is not None
+        ):
+            queue_wait_ms = max(
+                request_state.claimed_at_ms - request_state.enqueued_at_ms,
+                0,
+            )
+        finalize_autoq_summary(
+            request_data,
+            {
+                "claim_state": request_state.state if request_state is not None else "unknown",
+                "queue_wait_ms": queue_wait_ms,
+            },
+        )
+        append_autoq_event(
+            request_data,
+            event="claim_acquired",
+            payload={
+                "claim_state": request_state.state if request_state is not None else "unknown",
+                "queue_wait_ms": queue_wait_ms,
+            },
+        )
 
         heartbeat: Optional[ActiveLeaseHeartbeat] = None
         redis_client = getattr(aqr, "redis", None)
@@ -722,6 +832,16 @@ class AutoQueueMiddleware:
                 return
 
         logger.debug("Forwarding request with acquired auto-queue slot", extra={"model": model, "request_id": request_id})
+        append_autoq_event(
+            request_data,
+            event="forwarded",
+            payload={
+                "claim_state": request_state.state if request_state is not None else "unknown",
+                "queued": decision.decision == "queued",
+            },
+        )
+        body = json.dumps(request_data).encode()
+        scope["parsed_body"] = (tuple(request_data.keys()), request_data)
         response_status = 0
         disconnect_event = asyncio.Event()
 
@@ -863,7 +983,13 @@ class AutoQueueMiddleware:
             return
 
         try:
-            await self._process_request(scope, body, model, send, original_receive=receive)
+            await self._process_request(
+                scope,
+                data,
+                model,
+                send,
+                original_receive=receive,
+            )
         except RedisError:
             await _send_redis_unavailable(send, model)
         except Exception as exc:

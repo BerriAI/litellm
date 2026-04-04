@@ -71,6 +71,7 @@ def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
 
 def _get_spend_logs_metadata(
     metadata: Optional[dict],
+    request_data: Optional[dict] = None,
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
@@ -86,6 +87,7 @@ def _get_spend_logs_metadata(
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
+            autoq=None,
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
@@ -124,6 +126,10 @@ def _get_spend_logs_metadata(
             key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
         }
     )
+    clean_metadata["autoq"] = _merge_request_autoq_metadata(
+        metadata.get("autoq") if isinstance(metadata, dict) else None,
+        request_data,
+    )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
@@ -138,6 +144,64 @@ def _get_spend_logs_metadata(
     clean_metadata["cost_breakdown"] = cost_breakdown
 
     return clean_metadata
+
+
+def _merge_request_autoq_metadata(
+    existing_autoq_metadata: Optional[dict], request_data: Optional[dict]
+) -> Optional[dict]:
+    request_autoq_metadata = (
+        request_data.get("autoq_metadata")
+        if isinstance(request_data, dict)
+        else None
+    )
+
+    has_existing = isinstance(existing_autoq_metadata, dict)
+    has_request_autoq = isinstance(request_autoq_metadata, dict)
+    if not has_existing and not has_request_autoq:
+        return None
+
+    merged_autoq_metadata: dict[str, Any] = {}
+    if has_existing:
+        merged_autoq_metadata.update(existing_autoq_metadata or {})
+
+    if has_existing or has_request_autoq:
+        existing_events = (
+            existing_autoq_metadata.get("events")
+            if has_existing and isinstance(existing_autoq_metadata.get("events"), list)
+            else []
+        )
+        request_events = (
+            request_autoq_metadata.get("events")
+            if has_request_autoq and isinstance(request_autoq_metadata.get("events"), list)
+            else []
+        )
+        if existing_events or request_events:
+            merged_autoq_metadata["events"] = [*existing_events, *request_events]
+
+        merged_summary: dict[str, Any] = {}
+        existing_summary = (
+            existing_autoq_metadata.get("summary")
+            if has_existing and isinstance(existing_autoq_metadata.get("summary"), dict)
+            else None
+        )
+        request_summary = (
+            request_autoq_metadata.get("summary")
+            if has_request_autoq and isinstance(request_autoq_metadata.get("summary"), dict)
+            else None
+        )
+        if existing_summary:
+            merged_summary.update(existing_summary)
+        if request_summary:
+            merged_summary.update(request_summary)
+        if merged_summary:
+            merged_autoq_metadata["summary"] = merged_summary
+
+    if has_request_autoq:
+        for key, value in request_autoq_metadata.items():
+            if key not in {"events", "summary"}:
+                merged_autoq_metadata[key] = value
+
+    return merged_autoq_metadata
 
 
 def generate_hash_from_response(response_obj: Any) -> str:
@@ -341,6 +405,7 @@ def get_logging_payload(  # noqa: PLR0915
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
+        request_data=kwargs,
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None

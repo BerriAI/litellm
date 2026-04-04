@@ -10,8 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+)
+for _name in list(sys.modules):
+    if _name == "litellm" or _name.startswith("litellm."):
+        sys.modules.pop(_name, None)
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1152,6 +1155,32 @@ def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
     assert result["guardrail_information"] is None
 
 
+def test_get_spend_logs_metadata_should_merge_autoq_metadata_from_request_data():
+    autoq_metadata = {
+        "events": [
+            {"event": "received", "at_ms": 1, "payload": {"model": "gpt-4"}},
+            {"event": "forwarded", "at_ms": 2, "payload": {"queued": False}},
+        ],
+        "summary": {
+            "request_id": "gpt-4-1-2",
+            "model": "gpt-4",
+            "decision": "admit_now",
+        },
+    }
+    metadata = {
+        "user_api_key": "test-key",
+        "spend_logs_metadata": {"source": "proxy"},
+    }
+
+    result = _get_spend_logs_metadata(
+        metadata=metadata,
+        request_data={"autoq_metadata": autoq_metadata},
+    )
+
+    assert result["autoq"] == autoq_metadata
+    assert result["spend_logs_metadata"] == {"source": "proxy"}
+
+
 def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
     """
     When a guardrail blocks a request before the LLM call, the standard_logging_object
@@ -1194,6 +1223,45 @@ def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
 
     metadata_result = json.loads(payload["metadata"])
     assert metadata_result["guardrail_information"] == guardrail_info
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_should_include_autoq_metadata_in_spend_logs_metadata():
+    autoq_metadata = {
+        "events": [
+            {"event": "received", "at_ms": 100, "payload": {"model": "gpt-4"}},
+            {"event": "queued", "at_ms": 150, "payload": {"priority": 10}},
+            {"event": "forwarded", "at_ms": 200, "payload": {"queued": True}},
+        ],
+        "summary": {
+            "request_id": "gpt-4-1-2",
+            "model": "gpt-4",
+            "decision": "queued",
+            "queued": True,
+        },
+    }
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-id",
+        "autoq_metadata": autoq_metadata,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+            },
+            "proxy_server_request": {},
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={"id": "response-id", "usage": {"total_tokens": 0}},
+        start_time=datetime.datetime.now(tz=timezone.utc),
+        end_time=datetime.datetime.now(tz=timezone.utc),
+    )
+
+    metadata_result = json.loads(payload["metadata"])
+    assert metadata_result["autoq"] == autoq_metadata
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
