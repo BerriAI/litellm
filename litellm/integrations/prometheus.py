@@ -1087,9 +1087,11 @@ class PrometheusLogger(CustomLogger):
             ),
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
-            stream=str(standard_logging_payload.get("stream"))
-            if litellm.prometheus_emit_stream_label
-            else None,
+            stream=(
+                str(standard_logging_payload.get("stream"))
+                if litellm.prometheus_emit_stream_label
+                else None
+            ),
         )
 
         if (
@@ -1574,7 +1576,8 @@ class PrometheusLogger(CustomLogger):
             exception: Exception object to extract status code from directly
 
         Returns:
-            Status code as integer if found, None otherwise
+            Status code as integer if found, 500 when an exception is present
+            but carries no status code attribute, or None when no inputs provided
         """
         status_code = None
 
@@ -1611,6 +1614,13 @@ class PrometheusLogger(CustomLogger):
                         status_code = int(status_code)
                     except (ValueError, TypeError):
                         status_code = None
+
+        # If an exception was provided (directly or via kwargs) but no status code
+        # could be extracted, default to 500 — an unclassified server error is still a 5xx.
+        if status_code is None and (
+            exception is not None or (kwargs and kwargs.get("exception") is not None)
+        ):
+            return 500
 
         return status_code
 
@@ -1755,9 +1765,11 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
-                stream=str(request_data.get("stream"))
-                if litellm.prometheus_emit_stream_label
-                else None,
+                stream=(
+                    str(request_data.get("stream"))
+                    if litellm.prometheus_emit_stream_label
+                    else None
+                ),
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
