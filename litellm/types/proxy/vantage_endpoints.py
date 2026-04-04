@@ -43,10 +43,30 @@ class VantageExportRequest(BaseModel):
         description="Optional limit on number of records to export (default: no limit)",
     )
     start_time_utc: Optional[datetime] = Field(
-        None, description="Start time for data export in UTC"
+        None,
+        description=(
+            "Start time for data export in UTC. "
+            "When sku_breakdown=true and only this bound is provided, "
+            "end_time_utc defaults to now."
+        ),
     )
     end_time_utc: Optional[datetime] = Field(
-        None, description="End time for data export in UTC"
+        None,
+        description=(
+            "End time for data export in UTC. "
+            "When sku_breakdown=true and only this bound is provided, "
+            "start_time_utc defaults to 1970-01-01 (all historical data)."
+        ),
+    )
+    sku_breakdown: bool = Field(
+        False,
+        description=(
+            "When true, each output row represents a single token SKU "
+            "(prompt_token, completion_token, cache_read_token, cache_creation_token) "
+            "instead of one aggregated row per request. "
+            "Cost is allocated proportionally by token count. "
+            "Existing consumers should leave this false (default)."
+        ),
     )
 
 
@@ -55,6 +75,13 @@ class VantageDryRunRequest(BaseModel):
 
     limit: Optional[int] = Field(
         500, description="Limit on number of records to preview (default: 500)"
+    )
+    sku_breakdown: bool = Field(
+        False,
+        description=(
+            "When true, preview rows are exploded by token SKU type. "
+            "Existing consumers should leave this false (default)."
+        ),
     )
 
 
