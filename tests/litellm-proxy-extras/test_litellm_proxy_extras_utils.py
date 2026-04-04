@@ -109,19 +109,24 @@ class TestIdempotentErrorDetection:
         error_message = "constraint 'fk_user_id' already exists"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-    def test_is_idempotent_error_does_not_exist(self):
-        """Test detection of 'does not exist' error"""
+    def test_is_idempotent_error_does_not_exist_is_not_idempotent(self):
+        """Generic 'does not exist' errors are NOT idempotent — they indicate real failures"""
         error_message = "ERROR: index 'idx' does not exist"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
+
+    def test_is_idempotent_error_relation_does_not_exist_is_not_idempotent(self):
+        """Relation 'does not exist' errors are NOT idempotent"""
+        error_message = 'ERROR: relation "LiteLLM_DailyAgentSpend" does not exist'
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
+
+    def test_is_idempotent_error_cant_drop_database_is_idempotent(self):
+        """Can't drop database because it doesn't exist IS idempotent"""
+        error_message = "Can't drop database 'litellm' because it doesn't exist"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
     def test_is_idempotent_error_case_insensitive(self):
         """Test that idempotent error detection is case insensitive"""
         error_message = "COLUMN 'ID' ALREADY EXISTS"
-        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
-
-    def test_is_idempotent_error_does_not_exist(self):
-        """Test detection of 'does not exist' error"""
-        error_message = "ERROR: index 'idx' does not exist"
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
     def test_is_idempotent_error_negative(self):
