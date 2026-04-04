@@ -20,6 +20,7 @@ from litellm.proxy.middleware.auto_queue_middleware import (
     auto_queue_unavailable_error,
     build_auto_queue_status_response,
     get_auto_queue_status_aqr as _get_auto_queue_status_aqr,
+    get_auto_queue_status_models,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -43,6 +44,14 @@ def get_auto_queue_status_aqr():
     return _get_auto_queue_status_aqr()
 
 
+async def _infer_queue_status_error_model(aqr: Any) -> str:
+    try:
+        models = await get_auto_queue_status_models(aqr, local_queues=None)
+    except RedisError:
+        return "queue-status"
+    return models[0] if len(models) == 1 else "queue-status"
+
+
 @router.get(
     "/queue/status",
     tags=["Budget & Spend Tracking"],
@@ -55,9 +64,10 @@ def get_auto_queue_status_aqr():
 async def get_queue_status(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    aqr = get_auto_queue_status_aqr()
     try:
         response_payload = await build_auto_queue_status_response(
-            get_auto_queue_status_aqr(),
+            aqr,
             local_queues=None,
         )
         return response_payload
@@ -67,9 +77,10 @@ async def get_queue_status(
             content=auto_queue_unavailable_error(e.model),
         )
     except RedisError:
+        error_model = await _infer_queue_status_error_model(aqr)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=auto_queue_unavailable_error("queue-status"),
+            content=auto_queue_unavailable_error(error_model),
         )
 
 

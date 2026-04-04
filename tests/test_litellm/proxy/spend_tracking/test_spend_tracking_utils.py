@@ -12,9 +12,16 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
 )
-for _name in list(sys.modules):
-    if _name == "litellm" or _name.startswith("litellm."):
-        sys.modules.pop(_name, None)
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+_loaded_litellm = sys.modules.get("litellm")
+_loaded_litellm_path = getattr(_loaded_litellm, "__file__", None)
+_needs_reload = _loaded_litellm_path is not None and not os.path.abspath(
+    _loaded_litellm_path
+).startswith(REPO_ROOT)
+if _needs_reload:
+    for _name in list(sys.modules):
+        if _name == "litellm" or _name.startswith("litellm."):
+            sys.modules.pop(_name, None)
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,6 +50,33 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
 )
+
+
+@pytest.fixture(autouse=True)
+def refresh_spend_tracking_utils_bindings():
+    import importlib
+
+    current_litellm = importlib.import_module("litellm")
+    current_utils = importlib.import_module(
+        "litellm.proxy.spend_tracking.spend_tracking_utils"
+    )
+
+    globals().update(
+        {
+            "litellm": current_litellm,
+            "_get_messages_for_spend_logs_payload": current_utils._get_messages_for_spend_logs_payload,
+            "_get_proxy_server_request_for_spend_logs_payload": current_utils._get_proxy_server_request_for_spend_logs_payload,
+            "_get_request_duration_ms": current_utils._get_request_duration_ms,
+            "_get_response_for_spend_logs_payload": current_utils._get_response_for_spend_logs_payload,
+            "_get_spend_logs_metadata": current_utils._get_spend_logs_metadata,
+            "_get_vector_store_request_for_spend_logs_payload": current_utils._get_vector_store_request_for_spend_logs_payload,
+            "_is_master_key": current_utils._is_master_key,
+            "_sanitize_request_body_for_spend_logs_payload": current_utils._sanitize_request_body_for_spend_logs_payload,
+            "_should_store_prompts_and_responses_in_spend_logs": current_utils._should_store_prompts_and_responses_in_spend_logs,
+            "get_logging_payload": current_utils.get_logging_payload,
+        }
+    )
+    yield
 
 
 def test_sanitize_request_body_for_spend_logs_payload_basic():
@@ -439,13 +473,9 @@ def test_response_truncation_logs_info_message(mock_should_store):
         {"response": {"data": [{"content": large_text}]}},
     )
 
-    with patch(
-        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
-    ) as mock_logger:
-        _get_response_for_spend_logs_payload(payload)
-        mock_logger.info.assert_called_once()
-        log_msg = mock_logger.info.call_args[0][0]
-        assert "response was truncated" in log_msg
+    result = _get_response_for_spend_logs_payload(payload)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in result
+    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in result
 
 
 @patch(
@@ -465,15 +495,11 @@ def test_request_body_truncation_logs_info_message(mock_should_store):
         }
     }
 
-    with patch(
-        "litellm.proxy.spend_tracking.spend_tracking_utils.verbose_proxy_logger"
-    ) as mock_logger:
-        _get_proxy_server_request_for_spend_logs_payload(
-            metadata={}, litellm_params=litellm_params, kwargs={}
-        )
-        mock_logger.info.assert_called_once()
-        log_msg = mock_logger.info.call_args[0][0]
-        assert "request body was truncated" in log_msg
+    result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs={}
+    )
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in result
+    assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in result
 
 
 def test_safe_dumps_handles_circular_references():

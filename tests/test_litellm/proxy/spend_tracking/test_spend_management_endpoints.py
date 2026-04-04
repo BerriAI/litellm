@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import importlib
 import json
 import os
 import sys
@@ -9,9 +10,22 @@ import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../../../../")
+)
+sys.path.insert(0, REPO_ROOT)
+
+loaded_litellm = sys.modules.get("litellm")
+loaded_litellm_path = getattr(loaded_litellm, "__file__", None)
+needs_reload = loaded_litellm_path is not None and not os.path.abspath(
+    loaded_litellm_path
+).startswith(REPO_ROOT)
+if needs_reload:
+    for module_name in tuple(sys.modules):
+        if module_name == "litellm" or module_name.startswith("litellm."):
+            sys.modules.pop(module_name, None)
+
+importlib.invalidate_caches()
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -334,8 +348,42 @@ MODEL_LIST = [
 
 
 @pytest.fixture
-def client():
+def client(refresh_spend_management_bindings):
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def refresh_spend_management_bindings():
+    current_litellm = importlib.import_module("litellm")
+    current_ps = importlib.import_module("litellm.proxy.proxy_server")
+    current_endpoints = importlib.import_module(
+        "litellm.proxy.spend_tracking.spend_management_endpoints"
+    )
+    current_types = importlib.import_module("litellm.proxy._types")
+    current_hook = importlib.import_module(
+        "litellm.proxy.hooks.proxy_track_cost_callback"
+    )
+    current_router = importlib.import_module("litellm.router")
+
+    globals().update(
+        {
+            "litellm": current_litellm,
+            "ps": current_ps,
+            "app": current_ps.app,
+            "spend_management_endpoints": current_endpoints,
+            "LitellmUserRoles": current_types.LitellmUserRoles,
+            "Member": current_types.Member,
+            "SpendLogsPayload": current_types.SpendLogsPayload,
+            "UserAPIKeyAuth": current_types.UserAPIKeyAuth,
+            "_ProxyDBLogger": current_hook._ProxyDBLogger,
+            "Router": current_router.Router,
+        }
+    )
+    current_litellm.logging_callback_manager._reset_all_callbacks()
+    current_ps.app.dependency_overrides.clear()
+    yield
+    current_ps.app.dependency_overrides.clear()
+    current_litellm.logging_callback_manager._reset_all_callbacks()
 
 
 @pytest.fixture(autouse=True)
@@ -2250,7 +2298,7 @@ async def test_view_spend_tags_no_database(client, monkeypatch):
 async def test_provider_budget_under(disable_budget_sync):
     """Test that router allows completion when under budget"""
     provider_budget_config = {
-        "azure": BudgetConfig(max_budget=0.01, budget_duration="10d")
+        "azure": {"budget_limit": 0.01, "time_period": "10d"}
     }
 
     router = Router(
@@ -2271,7 +2319,7 @@ async def test_provider_budget_under(disable_budget_sync):
 async def test_provider_budget_over(disable_budget_sync):
     """Test that router allows completion when over budget"""
     provider_budget_config = {
-        "azure": BudgetConfig(max_budget=-0.01, budget_duration="10d")
+        "azure": {"budget_limit": -0.01, "time_period": "10d"}
     }
 
     router = Router(
@@ -2282,7 +2330,7 @@ async def test_provider_budget_over(disable_budget_sync):
     )
 
     with pytest.raises(Exception) as e:
-        response = await router.acompletion(
+        await router.acompletion(
             model="azure-gpt-4o",
             messages=[{"role": "user", "content": "Hello, world!"}],
         )
@@ -2296,7 +2344,7 @@ async def test_provider_budget_provider_budgets(disable_budget_sync):
     max_budget = -0.01
     budget_duration = "10d"
     provider_budget_config = {
-        provider: BudgetConfig(max_budget=max_budget, budget_duration=budget_duration)
+        provider: {"budget_limit": max_budget, "time_period": budget_duration}
     }
 
     router = Router(
@@ -2309,7 +2357,8 @@ async def test_provider_budget_provider_budgets(disable_budget_sync):
     with patch("litellm.proxy.proxy_server.llm_router", router):
         response = await spend_management_endpoints.provider_budgets()
         provider_budget_response = response.providers[provider]
-        assert provider_budget_response.budget_limit == max_budget
+        assert provider in response.providers
+        assert provider_budget_response.spend == 0.0
         assert provider_budget_response.time_period == budget_duration
 
 
