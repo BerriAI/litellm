@@ -26,7 +26,7 @@ Building on the roadmap from our [security incident](https://docs.litellm.ai/blo
 - Security scans and unit tests run in isolated environments.
 - Validation and release are separated into different repositories, making it harder for an attacker to reach release credentials.
 - Trusted Publishing for PyPI releases - this means no long-lived credentials are used to publish releases.
-- Immutable Docker release tags - this means no tampering of Docker release tags after they are published [Learn more](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/). Note: work for GHCR docker releases is planned as well.
+- Immutable Docker release tags - this means no tampering of Docker release tags after they are published. This is enabled on [GHCR](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages). Note: work for Docker Hub immutable tags is planned as well.
 
 ## What's next
 
