@@ -157,7 +157,7 @@ class MlflowLogger(CustomLogger):
                     SpanEvent(
                         name="streaming_chunk",
                         attributes={
-                            "delta": json.dumps(choice.delta.model_dump, default=str)
+                            "delta": json.dumps(choice.delta.model_dump(), default=str)
                         },
                     )
                 )
@@ -195,11 +195,14 @@ class MlflowLogger(CustomLogger):
         standard_obj: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
+        metadata: dict = {}
         if standard_obj:
+            metadata = standard_obj.get("metadata", {})
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
+                    "model": standard_obj.get("model"),
                     "mlflow.chat.tokenUsage": {
                         "input_tokens": standard_obj.get("prompt_tokens"),
                         "output_tokens": standard_obj.get("completion_tokens"),
@@ -213,6 +216,7 @@ class MlflowLogger(CustomLogger):
             )
         else:
             litellm_params = kwargs.get("litellm_params", {})
+            metadata = litellm_params.get("metadata") or {}
             attributes.update(
                 {
                     "model": kwargs.get("model"),
@@ -222,6 +226,26 @@ class MlflowLogger(CustomLogger):
                     "response_cost": kwargs.get("response_cost"),
                 }
             )
+
+        for key in (
+            "user_api_key_hash",
+            "user_api_key_alias",
+            "user_api_key_team_id",
+            "user_api_key_org_id",
+            "user_api_key_user_id",
+            "user_api_key_team_alias",
+            "user_api_key_user_email",
+            "spend_logs_metadata",
+            "requester_ip_address",
+            "requester_metadata",
+            "user_api_key_end_user_id",
+            "prompt_management_metadata",
+            "applied_guardrails",
+            "mcp_tool_call_metadata",
+            "vector_store_request_metadata",
+        ):
+            if key in metadata:
+                attributes[f"metadata.{key}"] = str(metadata[key])
         return attributes
 
     def _get_span_type(self, call_type: Optional[str]) -> str:
