@@ -935,6 +935,42 @@ async def cancel_response(
         )
 
 
+@router.get(
+    "/v1/responses",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.get(
+    "/responses",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def get_responses_root(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Handle GET /responses - return a helpful error for clients attempting HTTP GET.
+
+    The Responses API uses WebSocket for streaming mode or POST for creating responses.
+    GET /v1/responses is not a valid OpenAI Responses API endpoint.
+
+    For WebSocket connections, use: ws://host/v1/responses?model=<model>
+    For creating responses, use: POST /v1/responses with a request body
+    """
+    raise HTTPException(
+        status_code=405,
+        detail=(
+            "Method Not Allowed. The Responses API at /v1/responses supports:\n"
+            "  - POST: Create a new response (send a request body)\n"
+            "  - WebSocket: Connect to ws://host/v1/responses?model=<model> for streaming mode\n"
+            "GET requests are not supported. If you are using a Codex CLI or similar client "
+            "that connects via WebSocket, ensure the model query parameter is provided."
+        ),
+        headers={"Allow": "POST, WebSocket"},
+    )
+
+
 @router.websocket("/v1/responses")
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
