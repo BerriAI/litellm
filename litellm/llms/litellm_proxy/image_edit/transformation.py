@@ -10,7 +10,9 @@ class LiteLLMProxyImageEditConfig(OpenAIImageEditConfig):
     def validate_environment(
         self, headers: dict, model: str, api_key: Optional[str] = None
     ) -> dict:
-        api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        api_key = (
+            api_key or get_secret_str("LITELLM_PROXY_API_KEY") or "fake-api-key"
+        )  # litellm_proxy does not require an api key
         headers.update({"Authorization": f"Bearer {api_key}"})
         return headers
 
