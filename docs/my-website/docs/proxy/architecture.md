@@ -17,7 +17,7 @@ import TabItem from '@theme/TabItem';
     - 2.1 Check if the Virtual Key exists in Redis Cache or In Memory Cache
     - 2.2 **If not in Cache**, Lookup Virtual Key in DB
 
-3. **Rate Limiting**: The [MaxParallelRequestsHandler](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py) checks the **rate limit (rpm/tpm)** for the the following components:
+3. **Rate Limiting**: The [MaxParallelRequestsHandler](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py) checks the **rate limit (rpm/tpm)** for the following components:
     - Global Server Rate Limit
     - Virtual Key Rate Limit
     - User Rate Limit

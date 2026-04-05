@@ -61,7 +61,7 @@ This directory is used by the Prometheus client library to store metric files th
 
 ## Virtual Keys, Teams, Internal Users
 
-Use this for for tracking per [user, key, team, etc.](virtual_keys)
+Use this for tracking per [user, key, team, etc.](virtual_keys)
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
