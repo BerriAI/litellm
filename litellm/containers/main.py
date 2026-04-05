@@ -48,7 +48,7 @@ async def acreate_container(
     file_ids: Optional[List[str]] = None,
     timeout=600,  # default to 10 minutes
     # LiteLLM specific params,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -122,7 +122,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     acreate_container: Literal[True],
     **kwargs,
@@ -139,7 +139,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     acreate_container: Literal[False] = False,
     **kwargs,
@@ -158,7 +158,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -275,7 +275,7 @@ async def alist_containers(
     limit: Optional[int] = None,
     order: Optional[str] = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -348,7 +348,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     alist_containers: Literal[True],
     **kwargs,
@@ -365,7 +365,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     alist_containers: Literal[False] = False,
     **kwargs,
@@ -384,7 +384,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -481,7 +481,7 @@ def list_containers(
 async def aretrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -548,7 +548,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     aretrieve_container: Literal[True],
     **kwargs,
@@ -563,7 +563,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     aretrieve_container: Literal[False] = False,
     **kwargs,
@@ -580,7 +580,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -667,7 +667,7 @@ def retrieve_container(
 async def adelete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -734,7 +734,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     adelete_container: Literal[True],
     **kwargs,
@@ -749,7 +749,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     adelete_container: Literal[False] = False,
     **kwargs,
@@ -766,7 +766,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -856,7 +856,7 @@ async def alist_container_files(
     limit: Optional[int] = None,
     order: Optional[str] = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -930,7 +930,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     alist_container_files: Literal[True],
     **kwargs,
@@ -948,7 +948,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     alist_container_files: Literal[False] = False,
     **kwargs,
@@ -968,7 +968,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -1062,7 +1062,7 @@ async def aupload_container_file(
     container_id: str,
     file: FileTypes,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -1151,7 +1151,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     aupload_container_file: Literal[True],
     **kwargs,
@@ -1167,7 +1167,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     *,
     aupload_container_file: Literal[False] = False,
     **kwargs,
@@ -1185,7 +1185,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,

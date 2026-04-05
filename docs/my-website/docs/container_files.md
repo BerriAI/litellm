@@ -15,7 +15,7 @@ Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/
 |---------|-----------|
 | Cost Tracking | ✅ |
 | Logging | ✅ |
-| Supported Providers | `openai` |
+| Supported Providers | `openai`, `azure` |
 
 ## Endpoints
 
@@ -27,11 +27,17 @@ Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/
 | `/v1/containers/{container_id}/files/{file_id}/content` | GET | Download file content |
 | `/v1/containers/{container_id}/files/{file_id}` | DELETE | Delete file |
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 ## LiteLLM Python SDK
 
 ### Upload Container File
 
 Upload files directly to a container session. This is useful when `/chat/completions` or `/responses` sends files to the container but the input file type is limited to PDF. This endpoint lets you work with other file types like CSV, Excel, Python scripts, etc.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
 
 ```python showLineNumbers title="upload_container_file.py"
 from litellm import upload_container_file
@@ -47,6 +53,29 @@ print(f"Uploaded: {file.id}")
 print(f"Path: {file.path}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python showLineNumbers title="upload_container_file_azure.py"
+from litellm import upload_container_file
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+file = upload_container_file(
+    container_id="cntr_123...",
+    file=("data.csv", open("data.csv", "rb").read(), "text/csv"),
+    custom_llm_provider="azure"
+)
+
+print(f"Uploaded: {file.id}")
+print(f"Path: {file.path}")
+```
+
+</TabItem>
+</Tabs>
+
 **Async:**
 
 ```python showLineNumbers title="aupload_container_file.py"
@@ -55,7 +84,7 @@ from litellm import aupload_container_file
 file = await aupload_container_file(
     container_id="cntr_123...",
     file=("script.py", b"print('hello world')", "text/x-python"),
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 ```
 
@@ -70,6 +99,9 @@ file = await aupload_container_file(
 
 ### List Container Files
 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```python showLineNumbers title="list_container_files.py"
 from litellm import list_container_files
 
@@ -82,6 +114,28 @@ for file in files.data:
     print(f"  - {file.id}: {file.filename}")
 ```
 
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```python showLineNumbers title="list_container_files_azure.py"
+from litellm import list_container_files
+import os
+
+os.environ["AZURE_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_API_BASE"] = "https://your-resource.openai.azure.com"
+
+files = list_container_files(
+    container_id="cntr_123...",
+    custom_llm_provider="azure"
+)
+
+for file in files.data:
+    print(f"  - {file.id}: {file.filename}")
+```
+
+</TabItem>
+</Tabs>
+
 **Async:**
 
 ```python showLineNumbers title="alist_container_files.py"
@@ -89,7 +143,7 @@ from litellm import alist_container_files
 
 files = await alist_container_files(
     container_id="cntr_123...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 ```
 
@@ -101,7 +155,7 @@ from litellm import retrieve_container_file
 file = retrieve_container_file(
     container_id="cntr_123...",
     file_id="cfile_456...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 
 print(f"File: {file.filename}")
@@ -116,7 +170,7 @@ from litellm import retrieve_container_file_content
 content = retrieve_container_file_content(
     container_id="cntr_123...",
     file_id="cfile_456...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 
 # content is raw bytes
@@ -132,16 +186,13 @@ from litellm import delete_container_file
 result = delete_container_file(
     container_id="cntr_123...",
     file_id="cfile_456...",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai"  # or "azure"
 )
 
 print(f"Deleted: {result.deleted}")
 ```
 
 ## LiteLLM AI Gateway (Proxy)
-
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 
 ### Upload File
 
@@ -377,6 +428,7 @@ curl -X DELETE "http://localhost:4000/v1/containers/cntr_123.../files/cfile_456.
 | Provider | Status |
 |----------|--------|
 | OpenAI | ✅ Supported |
+| Azure OpenAI | ✅ Supported |
 
 ## Related
 
