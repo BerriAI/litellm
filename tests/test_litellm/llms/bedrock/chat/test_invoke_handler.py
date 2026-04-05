@@ -1,5 +1,6 @@
 import os
 import sys
+import pytest
 
 
 sys.path.insert(
@@ -7,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+from litellm.llms.bedrock.common_utils import BedrockError
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -200,3 +202,88 @@ def test_bedrock_converse_streaming_consistent_id():
         assert (
             response.id == expected_id
         ), "All chunk IDs must match the one captured from the messageStart event"
+
+
+import pytest
+from litellm.llms.bedrock.common_utils import BedrockError
+
+
+def test_json_error_detection_validation_exception():
+    """Test that ValidationException errors are properly detected with 400 status"""
+    error_chunk = b'{"message": "Invalid request", "type": "ValidationException"}'
+    
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-v2")
+    
+    # Create a mock iterator that yields the error chunk
+    def mock_iterator():
+        yield error_chunk
+    
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(mock_iterator()))
+    
+    assert exc_info.value.status_code == 400
+    assert "Invalid request" in str(exc_info.value.message)
+
+
+def test_json_error_detection_throttling_exception():
+    """Test that ThrottlingException gets 429 status code"""
+    error_chunk = b'{"message": "Rate exceeded", "type": "ThrottlingException"}'
+    
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-v2")
+    
+    def mock_iterator():
+        yield error_chunk
+    
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(mock_iterator()))
+    
+    assert exc_info.value.status_code == 429
+    assert "Rate exceeded" in str(exc_info.value.message)
+
+
+def test_json_error_detection_access_denied():
+    """Test that AccessDeniedException gets 403 status code"""
+    error_chunk = b'{"message": "Access denied", "type": "AccessDeniedException"}'
+    
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-v2")
+    
+    def mock_iterator():
+        yield error_chunk
+    
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(mock_iterator()))
+    
+    assert exc_info.value.status_code == 403
+    assert "Access denied" in str(exc_info.value.message)
+
+
+def test_json_error_detection_unknown_type_defaults_to_400():
+    """Test that unknown error types default to 400 status code"""
+    error_chunk = b'{"message": "Unknown error type", "type": "UnknownException"}'
+    
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-v2")
+    
+    def mock_iterator():
+        yield error_chunk
+    
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(mock_iterator()))
+    
+    assert exc_info.value.status_code == 400  # Should default to 400
+    assert "Unknown error type" in str(exc_info.value.message)
+
+
+async def test_async_json_error_detection():
+    """Test that async iterator also properly detects JSON errors"""
+    error_chunk = b'{"message": "Async error", "type": "ThrottlingException"}'
+    
+    decoder = AWSEventStreamDecoder(model="anthropic.claude-v2")
+    
+    async def mock_async_iterator():
+        yield error_chunk
+    
+    with pytest.raises(BedrockError) as exc_info:
+        async for _ in decoder.aiter_bytes(mock_async_iterator()):
+            pass
+    
+    assert exc_info.value.status_code == 429
