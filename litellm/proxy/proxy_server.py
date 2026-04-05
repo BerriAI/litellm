@@ -275,6 +275,7 @@ from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    ACCESS_GROUP_NO_MODELS_SENTINEL,
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
@@ -10871,6 +10872,8 @@ async def model_info_v1(  # noqa: PLR0915
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
+    # Strip the fail-closed sentinel — it must never appear in the /v1/models response.
+    all_models_str = [m for m in all_models_str if m != ACCESS_GROUP_NO_MODELS_SENTINEL]
 
     if len(all_models_str) > 0:
         _relevant_models = []

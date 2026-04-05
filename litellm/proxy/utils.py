@@ -5516,6 +5516,7 @@ async def get_available_models_for_user(
     """
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
+        ACCESS_GROUP_NO_MODELS_SENTINEL,
         get_complete_model_list,
         get_key_models_with_db_access_groups,
         get_team_models,
@@ -5580,6 +5581,10 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
     )
+
+    # Strip the fail-closed sentinel before returning to callers — it must never
+    # appear in a model listing response (e.g. GET /v1/models).
+    all_models = [m for m in all_models if m != ACCESS_GROUP_NO_MODELS_SENTINEL]
 
     return all_models
 

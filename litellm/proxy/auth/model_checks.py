@@ -132,6 +132,13 @@ def get_key_models(
     return all_models
 
 
+# Sentinel used by get_key_models_with_db_access_groups to signal "key has
+# access_group_ids but none resolved to any model" so that get_complete_model_list()
+# does not fall through to team_models (fail-closed).  Callers that return model
+# lists to end-users MUST strip this value before responding.
+ACCESS_GROUP_NO_MODELS_SENTINEL = "__access_group_no_models__"
+
+
 async def get_key_models_with_db_access_groups(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_model_list: List[str],
@@ -168,7 +175,7 @@ async def get_key_models_with_db_access_groups(
         # Fail-closed: if the access group is configured but resolves to nothing
         # (deleted group, DB unavailable, or empty group), use a sentinel so
         # get_complete_model_list() does NOT fall through to team_models.
-        key_models = db_models if db_models else ["__access_group_no_models__"]
+        key_models = db_models if db_models else [ACCESS_GROUP_NO_MODELS_SENTINEL]
 
     return key_models
 
