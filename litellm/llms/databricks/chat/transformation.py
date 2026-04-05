@@ -357,6 +357,29 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         return False
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        messages = self._transform_messages(messages=messages, model=model)
+        optional_params.pop("max_retries", None)
+
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
