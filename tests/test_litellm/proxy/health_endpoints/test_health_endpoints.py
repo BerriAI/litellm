@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -16,6 +17,7 @@ import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_mod
 
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
+    _resolve_os_environ_variables,
     get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
@@ -335,6 +337,252 @@ async def test_health_services_endpoint_sqs(status, error_message):
         assert result["status"] == status
         assert result["message"] == error_message
         mock_instance.async_health_check.assert_awaited_once()
+
+
+def test_resolve_os_environ_variables_should_use_secret_manager_get_secret():
+    params = {
+        "api_key": "os.environ/TEST_API_KEY",
+        "api_base": "https://example.com",
+    }
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret",
+        return_value="resolved-secret-value",
+    ) as mock_get_secret:
+        result = _resolve_os_environ_variables(params)
+
+    assert result == {
+        "api_key": "resolved-secret-value",
+        "api_base": "https://example.com",
+    }
+    mock_get_secret.assert_called_once_with("os.environ/TEST_API_KEY")
+
+
+def test_resolve_os_environ_variables_should_resolve_nested_dicts_and_lists():
+    params = {
+        "api_key": "os.environ/ROOT_SECRET",
+        "headers": {
+            "Authorization": "os.environ/AUTH_SECRET",
+            "static": "value",
+        },
+        "fallbacks": [
+            "os.environ/FALLBACK_SECRET",
+            {
+                "nested_list_key": "os.environ/NESTED_LIST_SECRET",
+            },
+            ["os.environ/DEEP_LIST_SECRET", "plain-value"],
+        ],
+    }
+
+    resolved_values = {
+        "os.environ/ROOT_SECRET": "root-secret",
+        "os.environ/AUTH_SECRET": "auth-secret",
+        "os.environ/FALLBACK_SECRET": "fallback-secret",
+        "os.environ/NESTED_LIST_SECRET": "nested-list-secret",
+        "os.environ/DEEP_LIST_SECRET": "deep-list-secret",
+    }
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret",
+        side_effect=lambda secret_name: resolved_values[secret_name],
+    ) as mock_get_secret:
+        result = _resolve_os_environ_variables(params)
+
+    assert result == {
+        "api_key": "root-secret",
+        "headers": {
+            "Authorization": "auth-secret",
+            "static": "value",
+        },
+        "fallbacks": [
+            "fallback-secret",
+            {"nested_list_key": "nested-list-secret"},
+            ["deep-list-secret", "plain-value"],
+        ],
+    }
+    assert mock_get_secret.call_count == 5
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_email_should_use_test_email_address_from_db_when_store_model_in_db_enabled():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_config.find_unique = AsyncMock(
+        side_effect=[
+            SimpleNamespace(param_value={"store_model_in_db": True}),
+            SimpleNamespace(param_value={"TEST_EMAIL_ADDRESS": "encrypted-db-value"}),
+        ]
+    )
+    mock_slack_alerting = SimpleNamespace(
+        send_key_created_or_user_invited_email=AsyncMock()
+    )
+    mock_proxy_logging_obj = SimpleNamespace(
+        slack_alerting_instance=mock_slack_alerting
+    )
+    mock_user_api_key_dict = SimpleNamespace(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with patch.dict(os.environ, {"TEST_EMAIL_ADDRESS": "env@example.com"}), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret_bool",
+        return_value=False,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.decrypt_value_helper",
+        return_value="db@example.com",
+    ):
+        result = await health_services_endpoint(
+            service="email",
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert result["status"] == "success"
+    assert (
+        mock_prisma.db.litellm_config.find_unique.await_args_list[0].kwargs["where"]
+        == {"param_name": "general_settings"}
+    )
+    assert (
+        mock_prisma.db.litellm_config.find_unique.await_args_list[1].kwargs["where"]
+        == {"param_name": "environment_variables"}
+    )
+    webhook_event = (
+        mock_slack_alerting.send_key_created_or_user_invited_email.await_args.kwargs[
+            "webhook_event"
+        ]
+    )
+    assert webhook_event.user_email == "db@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "store_model_in_db_secret,general_settings_row,environment_variables_row,expected_db_calls",
+    [
+        (False, SimpleNamespace(param_value={"store_model_in_db": False}), None, 1),
+        (True, None, None, 1),
+    ],
+    ids=["db-disabled", "config-row-missing"],
+)
+async def test_health_services_endpoint_email_should_fall_back_to_env_test_email_address_when_db_disabled_or_missing(
+    store_model_in_db_secret,
+    general_settings_row,
+    environment_variables_row,
+    expected_db_calls,
+):
+    mock_prisma = MagicMock()
+    db_rows = []
+    if general_settings_row is not None:
+        db_rows.append(general_settings_row)
+    if store_model_in_db_secret:
+        db_rows.append(environment_variables_row)
+    mock_prisma.db.litellm_config.find_unique = AsyncMock(side_effect=db_rows)
+    mock_slack_alerting = SimpleNamespace(
+        send_key_created_or_user_invited_email=AsyncMock()
+    )
+    mock_proxy_logging_obj = SimpleNamespace(
+        slack_alerting_instance=mock_slack_alerting
+    )
+    mock_user_api_key_dict = SimpleNamespace(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with patch.dict(os.environ, {"TEST_EMAIL_ADDRESS": "env@example.com"}), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret_bool",
+        return_value=store_model_in_db_secret,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.decrypt_value_helper"
+    ) as decrypt_mock:
+        result = await health_services_endpoint(
+            service="email",
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert result["status"] == "success"
+    webhook_event = (
+        mock_slack_alerting.send_key_created_or_user_invited_email.await_args.kwargs[
+            "webhook_event"
+        ]
+    )
+    assert webhook_event.user_email == "env@example.com"
+    assert mock_prisma.db.litellm_config.find_unique.await_count == expected_db_calls
+    decrypt_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_email_should_accept_json_string_environment_variables():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_config.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            param_value=json.dumps(
+                {"TEST_EMAIL_ADDRESS": "json-string-db-value"}
+            )
+        )
+    )
+    mock_slack_alerting = SimpleNamespace(
+        send_key_created_or_user_invited_email=AsyncMock()
+    )
+    mock_proxy_logging_obj = SimpleNamespace(
+        slack_alerting_instance=mock_slack_alerting
+    )
+    mock_user_api_key_dict = SimpleNamespace(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with patch.dict(os.environ, {"TEST_EMAIL_ADDRESS": "env@example.com"}), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.get_secret_bool",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.decrypt_value_helper",
+        return_value="json@example.com",
+    ) as decrypt_mock:
+        result = await health_services_endpoint(
+            service="email",
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert result["status"] == "success"
+    decrypt_mock.assert_called_once_with(
+        value="json-string-db-value",
+        key="TEST_EMAIL_ADDRESS",
+        exception_type="debug",
+        return_original_value=True,
+    )
+    webhook_event = (
+        mock_slack_alerting.send_key_created_or_user_invited_email.await_args.kwargs[
+            "webhook_event"
+        ]
+    )
+    assert webhook_event.user_email == "json@example.com"
 
 
 @pytest.mark.asyncio
@@ -814,3 +1062,357 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+# ──────────────────────────────────────────────────────────
+# _str_to_bool / _get_env_secret / get_secret_bool
+# ──────────────────────────────────────────────────────────
+
+
+def test_str_to_bool():
+    from litellm.proxy.health_endpoints._health_endpoints import _str_to_bool
+
+    assert _str_to_bool(None) is None
+    assert _str_to_bool("true") is True
+    assert _str_to_bool("True") is True
+    assert _str_to_bool("  TRUE  ") is True
+    assert _str_to_bool("false") is False
+    assert _str_to_bool("False") is False
+    assert _str_to_bool("  FALSE  ") is False
+    assert _str_to_bool("yes") is None
+    assert _str_to_bool("1") is None
+    assert _str_to_bool("") is None
+
+
+def test_get_env_secret(monkeypatch):
+    from litellm.proxy.health_endpoints._health_endpoints import _get_env_secret
+
+    # Not set – returns default
+    monkeypatch.delenv("MY_SECRET", raising=False)
+    assert _get_env_secret("MY_SECRET") is None
+    assert _get_env_secret("MY_SECRET", default_value="default") == "default"
+
+    # Set via plain name
+    monkeypatch.setenv("MY_SECRET", "hello")
+    assert _get_env_secret("MY_SECRET") == "hello"
+
+    # Set via os.environ/ prefix
+    assert _get_env_secret("os.environ/MY_SECRET") == "hello"
+
+    # Not set, os.environ/ prefix – returns default
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    assert _get_env_secret("os.environ/MISSING_KEY", default_value=False) is False
+
+
+def test_get_secret_bool(monkeypatch):
+    from litellm.proxy.health_endpoints._health_endpoints import get_secret_bool
+
+    # Not set – returns default
+    monkeypatch.delenv("BOOL_FLAG", raising=False)
+    assert get_secret_bool("BOOL_FLAG") is None
+    assert get_secret_bool("BOOL_FLAG", default_value=True) is True
+
+    # Set to "true"
+    monkeypatch.setenv("BOOL_FLAG", "true")
+    assert get_secret_bool("BOOL_FLAG") is True
+
+    # Set to "false"
+    monkeypatch.setenv("BOOL_FLAG", "false")
+    assert get_secret_bool("BOOL_FLAG") is False
+
+    # Set to unrecognised value – returns None (not default, because env var IS set)
+    monkeypatch.setenv("BOOL_FLAG", "maybe")
+    assert get_secret_bool("BOOL_FLAG", default_value=True) is None
+
+
+# ──────────────────────────────────────────────────────────
+# _parse_config_row_param_value
+# ──────────────────────────────────────────────────────────
+
+
+def test_parse_config_row_param_value():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _parse_config_row_param_value,
+    )
+
+    # None → empty dict
+    assert _parse_config_row_param_value(None) == {}
+
+    # Dict → copy of dict
+    assert _parse_config_row_param_value({"a": 1}) == {"a": 1}
+
+    # Valid JSON string
+    assert _parse_config_row_param_value('{"x": 2}') == {"x": 2}
+
+    # Invalid JSON string → empty dict
+    assert _parse_config_row_param_value("not-json") == {}
+
+    # JSON string that parses to non-dict (list) → empty dict
+    assert _parse_config_row_param_value("[1, 2, 3]") == {}
+
+    # Arbitrary non-convertible type → empty dict
+    assert _parse_config_row_param_value(12345) == {}
+
+
+# ──────────────────────────────────────────────────────────
+# _build_model_param_to_info_mapping
+# ──────────────────────────────────────────────────────────
+
+
+def test_build_model_param_to_info_mapping_basic():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _build_model_param_to_info_mapping,
+    )
+
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "model-id-1"},
+            "litellm_params": {"model": "openai/gpt-4"},
+        },
+        {
+            "model_name": "gpt-3.5",
+            "model_info": {"id": "model-id-2"},
+            "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+        },
+    ]
+
+    result = _build_model_param_to_info_mapping(model_list)
+
+    assert "openai/gpt-4" in result
+    assert result["openai/gpt-4"] == [{"model_name": "gpt-4", "model_id": "model-id-1"}]
+    assert result["openai/gpt-3.5-turbo"] == [
+        {"model_name": "gpt-3.5", "model_id": "model-id-2"}
+    ]
+
+
+def test_build_model_param_to_info_mapping_multiple_models_same_param():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _build_model_param_to_info_mapping,
+    )
+
+    model_list = [
+        {
+            "model_name": "prod-gpt4",
+            "model_info": {"id": "id-a"},
+            "litellm_params": {"model": "openai/gpt-4"},
+        },
+        {
+            "model_name": "staging-gpt4",
+            "model_info": {"id": "id-b"},
+            "litellm_params": {"model": "openai/gpt-4"},
+        },
+    ]
+
+    result = _build_model_param_to_info_mapping(model_list)
+
+    assert len(result["openai/gpt-4"]) == 2
+    names = {entry["model_name"] for entry in result["openai/gpt-4"]}
+    assert names == {"prod-gpt4", "staging-gpt4"}
+
+
+def test_build_model_param_to_info_mapping_skips_missing_fields():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _build_model_param_to_info_mapping,
+    )
+
+    # Missing model_name or litellm_params.model → should be skipped
+    model_list = [
+        {
+            "model_info": {"id": "id-1"},
+            "litellm_params": {"model": "openai/gpt-4"},
+            # no model_name
+        },
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "id-2"},
+            "litellm_params": {},  # no model key
+        },
+    ]
+
+    result = _build_model_param_to_info_mapping(model_list)
+    assert result == {}
+
+
+# ──────────────────────────────────────────────────────────
+# _aggregate_health_check_results
+# ──────────────────────────────────────────────────────────
+
+
+def test_aggregate_health_check_results_healthy():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _aggregate_health_check_results,
+    )
+
+    model_param_to_info = {
+        "openai/gpt-4": [{"model_name": "gpt-4", "model_id": "id-1"}]
+    }
+    healthy_endpoints = [{"model": "openai/gpt-4", "latency": 0.1}]
+
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, [])
+
+    key = ("id-1", "gpt-4")
+    assert key in result
+    assert result[key]["healthy_count"] == 1
+    assert result[key]["unhealthy_count"] == 0
+    assert result[key]["error_message"] is None
+
+
+def test_aggregate_health_check_results_unhealthy():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _aggregate_health_check_results,
+    )
+
+    model_param_to_info = {
+        "openai/gpt-4": [{"model_name": "gpt-4", "model_id": "id-1"}]
+    }
+    unhealthy_endpoints = [{"model": "openai/gpt-4", "error": "connection refused"}]
+
+    result = _aggregate_health_check_results(model_param_to_info, [], unhealthy_endpoints)
+
+    key = ("id-1", "gpt-4")
+    assert key in result
+    assert result[key]["unhealthy_count"] == 1
+    assert result[key]["error_message"] == "connection refused"
+
+
+def test_aggregate_health_check_results_unknown_model_skipped():
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _aggregate_health_check_results,
+    )
+
+    model_param_to_info = {}
+    healthy_endpoints = [{"model": "openai/unknown"}]
+
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, [])
+    assert result == {}
+
+
+# ──────────────────────────────────────────────────────────
+# _save_background_health_checks_to_db
+# ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_no_prisma():
+    """When prisma_client is None the function returns early without error."""
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    # Should not raise
+    await _save_background_health_checks_to_db(
+        prisma_client=None,
+        model_list=[],
+        healthy_endpoints=[],
+        unhealthy_endpoints=[],
+        start_time=time.time(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_saves_on_status_change():
+    """When status changes, a DB write task should be created."""
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "model-id-1"},
+            "litellm_params": {"model": "openai/gpt-4"},
+        }
+    ]
+    healthy_endpoints = [{"model": "openai/gpt-4"}]
+
+    # Simulate last check was "unhealthy" → status changes to "healthy"
+    last_check = SimpleNamespace(
+        model_id="model-id-1",
+        model_name="gpt-4",
+        status="unhealthy",
+        checked_at=None,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[last_check])
+    mock_prisma.save_health_check_result = AsyncMock(return_value=None)
+
+    with patch("asyncio.create_task") as mock_create_task:
+        await _save_background_health_checks_to_db(
+            prisma_client=mock_prisma,
+            model_list=model_list,
+            healthy_endpoints=healthy_endpoints,
+            unhealthy_endpoints=[],
+            start_time=time.time(),
+        )
+        mock_create_task.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_skips_when_status_unchanged_recently():
+    """When status is unchanged and last check was recent (<1 hour), no write."""
+    from datetime import timezone
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "model-id-1"},
+            "litellm_params": {"model": "openai/gpt-4"},
+        }
+    ]
+    healthy_endpoints = [{"model": "openai/gpt-4"}]
+
+    recent_time = datetime.now(timezone.utc)
+    last_check = SimpleNamespace(
+        model_id="model-id-1",
+        model_name="gpt-4",
+        status="healthy",  # same as current
+        checked_at=recent_time,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[last_check])
+    mock_prisma.save_health_check_result = AsyncMock(return_value=None)
+
+    with patch("asyncio.create_task") as mock_create_task:
+        await _save_background_health_checks_to_db(
+            prisma_client=mock_prisma,
+            model_list=model_list,
+            healthy_endpoints=healthy_endpoints,
+            unhealthy_endpoints=[],
+            start_time=time.time(),
+        )
+        mock_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_handles_db_error():
+    """DB errors are caught and swallowed (health check should not fail)."""
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(
+        side_effect=Exception("DB connection lost")
+    )
+
+    # Should not raise
+    await _save_background_health_checks_to_db(
+        prisma_client=mock_prisma,
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "model_info": {"id": "id-1"},
+                "litellm_params": {"model": "openai/gpt-4"},
+            }
+        ],
+        healthy_endpoints=[{"model": "openai/gpt-4"}],
+        unhealthy_endpoints=[],
+        start_time=time.time(),
+    )

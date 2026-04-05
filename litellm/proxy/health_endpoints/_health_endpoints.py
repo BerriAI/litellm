@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import os
 import time
@@ -26,6 +27,7 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
     _clean_endpoint_data,
@@ -39,6 +41,44 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 from litellm.secret_managers.main import get_secret
 
 #### Health ENDPOINTS ####
+
+
+def _str_to_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+
+    normalized_value = value.strip().lower()
+    if normalized_value == "true":
+        return True
+    if normalized_value == "false":
+        return False
+    return None
+
+
+def _get_env_secret(
+    secret_name: str, default_value: Optional[Union[str, bool]] = None
+) -> Optional[Union[str, bool]]:
+    if secret_name.startswith("os.environ/"):
+        secret_name = secret_name.replace("os.environ/", "")
+
+    secret_value = os.getenv(secret_name)
+    if secret_value is None:
+        return default_value
+
+    return secret_value
+
+
+def get_secret_bool(
+    secret_name: str, default_value: Optional[bool] = None
+) -> Optional[bool]:
+    secret_value = _get_env_secret(secret_name=secret_name)
+    if secret_value is None:
+        return default_value
+
+    if isinstance(secret_value, bool):
+        return secret_value
+
+    return _str_to_bool(secret_value)
 
 
 def _resolve_os_environ_variables(params: dict) -> dict:
@@ -143,6 +183,90 @@ def get_callback_identifier(callback):
         if callback_strs:
             return callback_strs[0]
     return callback_name(callback)
+
+
+def _parse_config_row_param_value(param_value: Any) -> dict:
+    if param_value is None:
+        return {}
+
+    if isinstance(param_value, str):
+        try:
+            parsed_value = json.loads(param_value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed_value if isinstance(parsed_value, dict) else {}
+
+    if isinstance(param_value, dict):
+        return dict(param_value)
+
+    try:
+        parsed_value = dict(param_value)
+    except (TypeError, ValueError):
+        return {}
+
+    return parsed_value if isinstance(parsed_value, dict) else {}
+
+
+def _is_truthy_config_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+
+    if value is None:
+        return False
+
+    return bool(value)
+
+
+async def _resolve_test_email_address(prisma_client: Any) -> Optional[str]:
+    test_email_address = os.getenv("TEST_EMAIL_ADDRESS")
+
+    try:
+        store_model_in_db = (
+            get_secret_bool("STORE_MODEL_IN_DB", default_value=False) is True
+        )
+
+        if not store_model_in_db and prisma_client is not None:
+            general_settings_row = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "general_settings"}
+            )
+            general_settings = _parse_config_row_param_value(
+                getattr(general_settings_row, "param_value", None)
+            )
+            store_model_in_db = _is_truthy_config_flag(
+                general_settings.get("store_model_in_db")
+            )
+
+        if not store_model_in_db or prisma_client is None:
+            return test_email_address
+
+        environment_variables_row = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
+        environment_variables = _parse_config_row_param_value(
+            getattr(environment_variables_row, "param_value", None)
+        )
+        db_test_email_address = environment_variables.get("TEST_EMAIL_ADDRESS")
+
+        if db_test_email_address is None:
+            return test_email_address
+
+        decrypted_test_email_address = decrypt_value_helper(
+            value=db_test_email_address,
+            key="TEST_EMAIL_ADDRESS",
+            exception_type="debug",
+            return_original_value=True,
+        )
+
+        return decrypted_test_email_address or test_email_address
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Falling back to TEST_EMAIL_ADDRESS from env after DB lookup failed: %s",
+            str(e),
+        )
+        return test_email_address
 
 
 router = APIRouter()
@@ -447,7 +571,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 spend=0,
                 max_budget=0,
                 user_id=user_api_key_dict.user_id,
-                user_email=os.getenv("TEST_EMAIL_ADDRESS"),
+                user_email=await _resolve_test_email_address(prisma_client),
                 team_id=user_api_key_dict.team_id,
             )
 
