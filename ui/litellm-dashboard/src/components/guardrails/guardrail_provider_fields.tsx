@@ -120,7 +120,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   ]);
 
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
-  const isXecguardProvider = providerKey === "xecguard";
+  const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
 
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
