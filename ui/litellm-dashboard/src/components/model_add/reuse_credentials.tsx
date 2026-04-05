@@ -61,7 +61,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
           <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
+            <Link href="https://github.com/BerriAI/litellm/issues" target="_blank" rel="noopener noreferrer">Need Help?</Link>
           </Tooltip>
 
           <div>
