@@ -31,7 +31,7 @@ Building on the roadmap from our [security incident](https://docs.litellm.ai/blo
 
 ## Verify Docker image signatures
 
-All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
 
 ```bash
 cosign verify \
