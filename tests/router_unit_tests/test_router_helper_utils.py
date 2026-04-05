@@ -828,6 +828,21 @@ def test_upsert_deployment(model_list):
     assert len(router.model_list) == len(model_list)
 
 
+def test_upsert_deployment_updates_model_name(model_list):
+    """Test that changing only model_name still updates an existing deployment."""
+    router = Router(model_list=model_list)
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-3.5-turbo"
+    )
+    deployment_id = deployment.model_info.id
+    deployment.model_name = "gpt-3.5-turbo-renamed"
+
+    updated_deployment = router.upsert_deployment(deployment=deployment)
+
+    assert updated_deployment is not None
+    assert router.get_deployment(model_id=deployment_id).model_name == deployment.model_name
+
+
 def test_delete_deployment(model_list):
     """Test if the 'delete_deployment' function is working correctly"""
     router = Router(model_list=model_list)
