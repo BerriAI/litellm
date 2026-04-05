@@ -469,3 +469,70 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     assert (
         should_cooldown is True
     ), f"Should cooldown when we have {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS} failed requests (100% failure rate)"
+
+
+def test_is_cooldown_required_429_wrapped_as_apiconnectionerror():
+    """
+    Test that _is_cooldown_required returns True when a 429 rate limit error
+    is wrapped as an APIConnectionError.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/24366
+
+    Some OpenAI-like providers (registered via providers.json) have their 429
+    responses mapped to APIConnectionError by the catch-all exception handler.
+    The cooldown handler should still recognize these as rate limit errors and
+    trigger a cooldown.
+    """
+    mock_router = MagicMock()
+    mock_router.allowed_fails = 0
+    mock_router.disable_cooldowns = False
+    mock_router.failed_calls = MagicMock()
+    mock_router.failed_calls.get_cache.return_value = None
+
+    # This is the actual exception string produced when a providers.json
+    # provider returns HTTP 429
+    exception_str = (
+        "litellm.APIConnectionError: ProviderException - "
+        "Error code: 429 - {'error': {'message': 'Rate limit exceeded. "
+        "Retry in 6s.', 'type': 'rate_limit'}}"
+    )
+
+    result = _is_cooldown_required(
+        litellm_router_instance=mock_router,
+        model_id="test-deployment-id",
+        exception_status="429",
+        exception_str=exception_str,
+    )
+
+    assert result is True, (
+        "_is_cooldown_required should return True for 429 errors "
+        "wrapped as APIConnectionError"
+    )
+
+
+def test_is_cooldown_required_genuine_apiconnectionerror():
+    """
+    Test that _is_cooldown_required still returns False for genuine
+    APIConnectionError (no 429 / rate limit indicators).
+    """
+    mock_router = MagicMock()
+    mock_router.allowed_fails = 0
+    mock_router.disable_cooldowns = False
+    mock_router.failed_calls = MagicMock()
+    mock_router.failed_calls.get_cache.return_value = None
+
+    exception_str = (
+        "litellm.APIConnectionError: ProviderException - Connection refused"
+    )
+
+    result = _is_cooldown_required(
+        litellm_router_instance=mock_router,
+        model_id="test-deployment-id",
+        exception_status="",
+        exception_str=exception_str,
+    )
+
+    assert result is False, (
+        "_is_cooldown_required should return False for genuine "
+        "connection errors (no rate limit)"
+    )
