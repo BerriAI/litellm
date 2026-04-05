@@ -13726,7 +13726,6 @@
         "supported_modalities": [
             "text",
             "image",
-            "audio",
             "video"
         ],
         "supported_output_modalities": [
@@ -15025,7 +15024,6 @@
         "supported_modalities": [
             "text",
             "image",
-            "audio",
             "video"
         ],
         "supported_output_modalities": [
@@ -31235,7 +31233,6 @@
         "supported_modalities": [
             "text",
             "image",
-            "audio",
             "video"
         ],
         "supported_output_modalities": [
