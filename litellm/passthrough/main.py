@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.passthrough.utils import CommonUtils
-from litellm.utils import client
+from litellm.utils import client, supports_httpx_timeout
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
@@ -52,6 +52,7 @@ async def allm_passthrough_route(
     json: Optional[Any] = None,
     params: Optional[QueryParamTypes] = None,
     cookies: Optional[CookieTypes] = None,
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
@@ -98,6 +99,7 @@ async def allm_passthrough_route(
             json=json,
             params=params,
             cookies=cookies,
+            timeout=timeout,
             client=client,
             **kwargs,
         )
@@ -178,6 +180,7 @@ def llm_passthrough_route(
     json: Optional[Any] = None,
     params: Optional[QueryParamTypes] = None,
     cookies: Optional[CookieTypes] = None,
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[
@@ -286,6 +289,17 @@ def llm_passthrough_route(
     if json and isinstance(json, dict) and "model" in json:
         json["model"] = model
 
+    ### TIMEOUT LOGIC ###
+    timeout = timeout or kwargs.get("request_timeout", 600) or 600
+    if (
+        custom_llm_provider is not None
+        and isinstance(timeout, httpx.Timeout)
+        and not supports_httpx_timeout(custom_llm_provider)
+    ):
+        timeout = timeout.read or 600
+    elif not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)
+
     request = client.client.build_request(
         method=method,
         url=updated_url,
@@ -296,6 +310,7 @@ def llm_passthrough_route(
         params=params,
         headers=headers,
         cookies=cookies,
+        timeout=timeout,
     )
 
     ## IS STREAMING REQUEST
