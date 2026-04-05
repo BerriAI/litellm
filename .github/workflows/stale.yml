@@ -5,10 +5,6 @@ on:
     - cron: "0 0 * * *" # Runs daily at midnight UTC
   workflow_dispatch:
 
-permissions:
-  issues: write
-  pull-requests: write
-
 jobs:
   stale:
     if: github.repository == 'BerriAI/litellm'
