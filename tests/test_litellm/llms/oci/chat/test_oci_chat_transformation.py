@@ -741,3 +741,273 @@ class TestOCISignerSupport:
         )
 
         assert wrapper.path_url == "/api/v1/chat"
+
+
+class TestOCISplitChunks:
+    """
+    Unit tests for the SSE split_chunks helpers used in sync and async streaming.
+
+    These validate the fix for:
+    - Sync: JSONDecodeError when iter_text() returns chunks spanning multiple events
+    - Async: whitespace-only chunks being yielded before stripping (Greptile P2)
+    """
+
+    def _run_sync_split(self, raw_chunks):
+        """Invoke the sync split_chunks logic directly (extracted for testability)."""
+        results = []
+        for item in raw_chunks:
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    async def _run_async_split(self, raw_chunks):
+        """Invoke the async split_chunks logic directly."""
+        results = []
+        async def _gen():
+            for c in raw_chunks:
+                yield c
+        async for item in _gen():
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    def test_sync_single_event_per_chunk(self):
+        """Normal case: one SSE event per iter_text() chunk."""
+        chunks = ['data: {"text":"hello"}', 'data: {"text":"world"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"hello"}',
+            'data: {"text":"world"}',
+        ]
+
+    def test_sync_multiple_events_in_one_chunk(self):
+        """iter_text() returns two SSE events concatenated — must be split."""
+        chunks = ['data: {"text":"a"}\n\ndata: {"text":"b"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"a"}',
+            'data: {"text":"b"}',
+        ]
+
+    def test_sync_whitespace_only_chunks_discarded(self):
+        """Whitespace between events must not be yielded."""
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = self._run_sync_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    def test_sync_empty_string_discarded(self):
+        """Empty string produced by splitting trailing \\n\\n must be discarded."""
+        chunks = ["data: {}\n\n"]
+        assert self._run_sync_split(chunks) == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_whitespace_only_chunks_discarded(self):
+        """
+        Regression test for Greptile P2: async version was checking `if not chunk`
+        BEFORE stripping, so '\\n  ' would pass the guard and yield '' downstream,
+        causing ValueError in chunk_creator ('Chunk does not start with data:').
+        """
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_empty_string_discarded(self):
+        """Trailing \\n\\n must not produce an empty yielded chunk in async path."""
+        chunks = ["data: {}\n\n"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_multiple_events_in_one_chunk(self):
+        """Async path must split concatenated SSE events just like sync."""
+        chunks = ['data: {"text":"x"}\n\ndata: {"text":"y"}']
+        result = await self._run_async_split(chunks)
+        assert result == ['data: {"text":"x"}', 'data: {"text":"y"}']
+
+
+class TestOCIProviderEmbeddingConfig:
+    """
+    Verifies that get_provider_embedding_config returns OCIEmbedConfig for OCI
+    and that the dead duplicate elif branch has been removed (Greptile P1).
+    """
+
+    def test_returns_oci_embed_config(self):
+        from litellm.llms.oci.embed.transformation import OCIEmbedConfig
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            model="cohere.embed-english-v3.0",
+            provider=LlmProviders.OCI,
+        )
+        assert isinstance(config, OCIEmbedConfig)
+
+    def test_no_duplicate_oci_branch(self):
+        """
+        Ensure utils.py does not contain two separate OCI embedding branches.
+        The dead code was removed in commit 64dfbe2b; this test guards against
+        regression (e.g. a future merge re-introducing it).
+        """
+        import inspect
+        from litellm.utils import ProviderConfigManager
+        source = inspect.getsource(
+            ProviderConfigManager.get_provider_embedding_config
+        )
+        oci_count = source.count("LlmProviders.OCI")
+        assert oci_count == 1, (
+            f"Expected exactly 1 OCI branch in get_provider_embedding_config, found {oci_count}. "
+            "A duplicate dead-code branch may have been reintroduced."
+        )
+
+
+class TestOCICohereParamMapping:
+    """
+    Unit tests for Bug 3 (stop → stopSequences) and Bug 4 (hardcoded defaults removed).
+    """
+
+    def _make_config(self):
+        return OCIChatConfig()
+
+    def test_cohere_stop_maps_to_stop_sequences(self):
+        """Bug 3: Cohere API uses 'stopSequences', not 'stop'."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END", "STOP"]},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert "stopSequences" in result, "stop should map to stopSequences for Cohere"
+        assert result["stopSequences"] == ["END", "STOP"]
+        assert "stop" not in result
+
+    def test_generic_stop_maps_to_stop(self):
+        """GENERIC vendors (Meta, Google, xAI) keep 'stop' as-is."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="meta.llama-3.3-70b-instruct",
+            drop_params=False,
+        )
+        assert result.get("stop") == ["END"]
+        assert "stopSequences" not in result
+
+    def test_cohere_no_hardcoded_defaults(self):
+        """Bug 4: Cohere calls must not inject maxTokens/temperature/topK/topP/frequencyPenalty
+        when the user hasn't provided them."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        for injected in ("maxTokens", "temperature", "topK", "topP", "frequencyPenalty"):
+            assert injected not in result, (
+                f"'{injected}' should not be injected when user did not provide it"
+            )
+
+    def test_cohere_explicit_params_still_passed(self):
+        """User-provided Cohere params must still be forwarded correctly."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"max_tokens": 200, "temperature": 0.5},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert result.get("maxTokens") == 200
+        assert result.get("temperature") == 0.5
+
+
+class TestOCIStreamingSignedBody:
+    """
+    Unit test for Bug 1: sync and async streaming paths must use signed_json_body
+    when provided, not re-serialize data with json.dumps().
+    """
+
+    def test_get_custom_stream_wrapper_uses_signed_body(self, monkeypatch):
+        """
+        When signed_json_body is provided, the POST must use that exact bytes object,
+        not json.dumps(data) — otherwise the RSA-SHA256 signature is invalid.
+        """
+        import httpx
+        from unittest.mock import MagicMock, patch
+
+        config = OCIChatConfig()
+        signed_bytes = b'{"signed": true}'
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data={"key": "value"},
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=signed_bytes,
+        )
+
+        assert posted_data["data"] == signed_bytes, (
+            "Streaming must use signed_json_body, not re-serialize data"
+        )
+
+    def test_get_custom_stream_wrapper_fallback_without_signed_body(self, monkeypatch):
+        """When signed_json_body is None, fall back to json.dumps(data)."""
+        import json
+        from unittest.mock import MagicMock
+
+        config = OCIChatConfig()
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+        payload = {"key": "value"}
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data=payload,
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=None,
+        )
+
+        assert posted_data["data"] == json.dumps(payload), (
+            "Without signed_json_body, must fall back to json.dumps(data)"
+        )

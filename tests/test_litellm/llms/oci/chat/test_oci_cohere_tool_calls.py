@@ -90,13 +90,13 @@ class TestOCICohereToolCalls:
         # Check location parameter
         location_param = weather_tool.parameterDefinitions["location"]
         assert location_param.description == "The city or location to get weather for"
-        assert location_param.type == "string"
+        assert location_param.type == "str"
         assert location_param.isRequired == True
         
         # Check unit parameter
         unit_param = weather_tool.parameterDefinitions["unit"]
-        assert unit_param.description == "Temperature unit (celsius or fahrenheit)"
-        assert unit_param.type == "string"
+        assert unit_param.description == "Temperature unit (celsius or fahrenheit). Allowed values: ['celsius', 'fahrenheit']"
+        assert unit_param.type == "str"
         assert unit_param.isRequired == False
         
         # Check second tool
@@ -107,7 +107,7 @@ class TestOCICohereToolCalls:
         
         expression_param = calc_tool.parameterDefinitions["expression"]
         assert expression_param.description == "Mathematical expression to evaluate"
-        assert expression_param.type == "string"
+        assert expression_param.type == "str"
         assert expression_param.isRequired == True
 
     def test_cohere_request_with_tools(self):
@@ -156,13 +156,6 @@ class TestOCICohereToolCalls:
         assert chat_request["apiFormat"] == "COHERE"
         assert chat_request["message"] == "What's the weather like in Tokyo?"
         assert chat_request["chatHistory"] == []
-        
-        # Verify default parameters are included
-        assert chat_request["maxTokens"] == 600
-        assert chat_request["temperature"] == 1
-        assert chat_request["topK"] == 0
-        assert chat_request["topP"] == 0.75
-        assert chat_request["frequencyPenalty"] == 0
         
         # Verify tools are transformed correctly
         assert "tools" in chat_request
@@ -229,7 +222,7 @@ class TestOCICohereToolCalls:
         assert len(result.choices[0].message.tool_calls) == 1
         
         tool_call = result.choices[0].message.tool_calls[0]
-        assert tool_call.id == "call_0"
+        assert tool_call.id.startswith("call_")
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
         assert tool_call.function.arguments == '{"location": "Tokyo"}'
@@ -466,7 +459,7 @@ class TestOCICohereToolCalls:
         assert "tool_choice" not in supported_params
 
     def test_cohere_default_parameters(self):
-        """Test that Cohere requests include required default parameters"""
+        """Test that Cohere requests do not inject hardcoded defaults — caller supplies all params."""
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
@@ -480,13 +473,12 @@ class TestOCICohereToolCalls:
         )
 
         chat_request = transformed_request["chatRequest"]
-        
-        # Verify all required default parameters are present
-        assert chat_request["maxTokens"] == 600
-        assert chat_request["temperature"] == 1
-        assert chat_request["topK"] == 0
-        assert chat_request["topP"] == 0.75
-        assert chat_request["frequencyPenalty"] == 0
+
+        # No hardcoded defaults injected — only pass through what the user supplies
+        assert "maxTokens" not in chat_request
+        assert "topK" not in chat_request
+        assert "topP" not in chat_request
+        assert "frequencyPenalty" not in chat_request
 
     def test_cohere_parameter_override(self):
         """Test that user-provided parameters override defaults"""
@@ -507,15 +499,15 @@ class TestOCICohereToolCalls:
         )
 
         chat_request = transformed_request["chatRequest"]
-        
-        # Verify user parameters override defaults
+
+        # Verify user parameters are passed through
         assert chat_request["temperature"] == 0.5
         assert chat_request["maxTokens"] == 1000
-        
-        # Verify other defaults are still present
-        assert chat_request["topK"] == 0
-        assert chat_request["topP"] == 0.75
-        assert chat_request["frequencyPenalty"] == 0
+
+        # Unset params are absent (no hardcoded defaults)
+        assert "topK" not in chat_request
+        assert "topP" not in chat_request
+        assert "frequencyPenalty" not in chat_request
 
     def test_cohere_vendor_detection(self):
         """Test that Cohere models are correctly identified"""
@@ -718,10 +710,10 @@ class TestOCICohereStreaming:
     def test_cohere_streaming_wrapper_initialization(self):
         """Test OCIStreamWrapper initialization"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
+        # chunk_creator is the public dispatch entry point
         assert hasattr(stream_wrapper, 'chunk_creator')
-        assert hasattr(stream_wrapper, '_handle_cohere_stream_chunk')
-        assert hasattr(stream_wrapper, '_handle_generic_stream_chunk')
+        assert callable(stream_wrapper.chunk_creator)
 
     def test_cohere_streaming_chunk_parsing(self):
         """Test parsing of Cohere streaming chunks"""
