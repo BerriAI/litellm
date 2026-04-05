@@ -55,24 +55,33 @@ pip install litellm
 ```
 
 ### Step 2: Set Your Credentials
+ 
+ Choose **one** of these authentication methods:
+ 
+> **Breaking change**: credential resolution is "first-source-wins" 
+> 
+> Credential resolution no longer merges individual fields across sources.
+> 
+> Resolution order is:
+`kwargs` → `service key` → `env (AICORE_*)` → `config` → `VCAP service`
+>
+> **Important behavior:** once LiteLLM finds *any* credential value in a source, it takes **all** credentials from that source exclusively (except `resource_group`, which may still be resolved separately).
 
-Choose **one** of these authentication methods:
+ <Tabs>
+ <TabItem value="service-key" label="Service Key JSON (Recommended)">
 
-<Tabs>
-<TabItem value="service-key" label="Service Key JSON (Recommended)">
+The simplest approach - paste your entire service key as a single environment variable. 
 
-The simplest approach - paste your entire service key as a single environment variable. The service key must be wrapped in a `credentials` object:
+> **Note:** the service key no more needs to be wrapped in a "credentials" key.
 
 ```bash
 export AICORE_SERVICE_KEY='{
-  "credentials": {
     "clientid": "your-client-id",
     "clientsecret": "your-client-secret",
     "url": "https://<your-instance>.authentication.sap.hana.ondemand.com",
     "serviceurls": {
       "AI_API_URL": "https://api.ai.<your-region>.aws.ml.hana.ondemand.com"
     }
-  }
 }'
 export AICORE_RESOURCE_GROUP="default"
 ```
