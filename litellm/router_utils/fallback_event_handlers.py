@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
 )
@@ -123,21 +124,31 @@ async def run_async_fallback(
         if mg == original_model_group:
             continue
         try:
+            # Deep copy kwargs so each fallback attempt starts from the
+            # original, unmodified parameters.  Without this, provider-
+            # specific handlers (e.g. Bedrock's converse_handler) can
+            # mutate kwargs via .pop() calls, leaving subsequent fallback
+            # providers with missing keys (e.g. `tool_choice` present but
+            # `tools` removed).  See https://github.com/BerriAI/litellm/issues/24764
+            fallback_kwargs = safe_deep_copy(kwargs)
+
             # LOGGING
-            kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
+            fallback_kwargs = litellm_router.log_retry(
+                kwargs=fallback_kwargs, e=original_exception
+            )
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
             if isinstance(mg, str):
-                kwargs["model"] = mg
+                fallback_kwargs["model"] = mg
             elif isinstance(mg, dict):
-                kwargs.update(mg)
-            kwargs.setdefault("metadata", {}).update(
-                {"model_group": kwargs.get("model", None)}
+                fallback_kwargs.update(mg)
+            fallback_kwargs.setdefault("metadata", {}).update(
+                {"model_group": fallback_kwargs.get("model", None)}
             )  # update model_group used, if fallbacks are done
             fallback_depth = fallback_depth + 1
-            kwargs["fallback_depth"] = fallback_depth
-            kwargs["max_fallbacks"] = max_fallbacks
+            fallback_kwargs["fallback_depth"] = fallback_depth
+            fallback_kwargs["max_fallbacks"] = max_fallbacks
             response = await litellm_router.async_function_with_fallbacks(
-                *args, **kwargs
+                *args, **fallback_kwargs
             )
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
@@ -147,7 +158,7 @@ async def run_async_fallback(
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
                 original_model_group=original_model_group,
-                kwargs=kwargs,
+                kwargs=fallback_kwargs,
                 original_exception=original_exception,
             )
             return response
@@ -155,7 +166,7 @@ async def run_async_fallback(
             error_from_fallbacks = e
             await log_failure_fallback_event(
                 original_model_group=original_model_group,
-                kwargs=kwargs,
+                kwargs=fallback_kwargs,
                 original_exception=original_exception,
             )
     raise error_from_fallbacks
