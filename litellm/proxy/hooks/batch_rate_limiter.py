@@ -194,9 +194,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             required_capacity = (
                 batch_usage.request_count
                 if rate_limit_type == "requests"
-                else batch_usage.total_tokens
-                if rate_limit_type == "tokens"
-                else 0
+                else batch_usage.total_tokens if rate_limit_type == "tokens" else 0
             )
 
             if required_capacity > limit_remaining:

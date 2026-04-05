@@ -5315,9 +5315,9 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Optional[str] = (
-            kwargs.get("metadata", {}) or {}
-        ).get("user_api_key_team_id")
+        _request_team_id: Optional[str] = (kwargs.get("metadata", {}) or {}).get(
+            "user_api_key_team_id"
+        )
         all_deployments = self._get_all_deployments(
             model_name=original_model_group, team_id=_request_team_id
         )

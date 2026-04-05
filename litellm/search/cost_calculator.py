@@ -1,6 +1,7 @@
 """
 Cost calculation for search providers.
 """
+
 from typing import Optional, Tuple
 
 from litellm.utils import get_model_info
