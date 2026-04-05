@@ -360,3 +360,46 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    @pytest.mark.asyncio
+    async def test_event_loop_change_cancels_orphaned_tasks(self):
+        """Restarting on a new loop should cancel and discard the old worker."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        old_task = worker._worker_task
+        assert old_task is not None
+        assert old_task.done() is False
+
+        worker._bound_loop = asyncio.new_event_loop()
+        worker.start()
+        await asyncio.sleep(0.05)
+
+        assert old_task.done() or old_task.cancelled()
+        assert old_task._log_destroy_pending is False
+        assert worker._worker_task is not None
+        assert worker._worker_task is not old_task
+
+        await worker.stop()
+
+    def test_flush_on_exit_cancels_worker_task(self):
+        """_flush_on_exit should discard the old worker bound to a closed loop."""
+        loop = asyncio.new_event_loop()
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        loop.run_until_complete(self._start_worker(worker))
+        old_task = worker._worker_task
+        assert old_task is not None
+
+        loop.close()
+        worker._flush_on_exit()
+
+        assert old_task._log_destroy_pending is False
+        assert worker._worker_task is None
+        assert len(worker._running_tasks) == 0
+
+    @staticmethod
+    async def _start_worker(worker: LoggingWorker):
+        worker.start()
+        await asyncio.sleep(0.05)
