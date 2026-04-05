@@ -83,7 +83,7 @@ async def batch_upsert_tools(
         data = [item for item in items if item.get("tool_name")]
         if not data:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
         table = prisma_client.db.litellm_tooltable
         for item in data:
             tool_name = item.get("tool_name", "")
