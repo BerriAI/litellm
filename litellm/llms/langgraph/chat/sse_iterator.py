@@ -22,9 +22,22 @@ class LangGraphSSEStreamIterator:
     Iterator for LangGraph SSE streaming responses.
     Supports both sync and async iteration.
 
-    LangGraph stream format with stream_mode="messages-tuple":
-    Each SSE event is a tuple: (event_type, data)
-    Common event types: "messages", "metadata"
+    LangGraph SSE wire format (stream_mode="messages-tuple"):
+
+        event: messages
+        data: [<AIMessageChunk>, <metadata_dict>]
+
+        event: metadata
+        data: {"run_id": "...", ...}
+
+    The event type is delivered via the SSE ``event:`` header line.
+    The ``data:`` payload for a ``messages`` event is a two-element array
+    ``[message_object, metadata_object]``, NOT a tuple
+    ``[event_type_string, payload]``.
+
+    The previous implementation incorrectly treated ``data[0]`` as the event
+    type, causing every real ``messages`` frame to be silently dropped because
+    ``data[0]`` is a dict (the AI message), not the string ``"messages"``.
     """
 
     def __init__(self, response: httpx.Response, model: str):
@@ -33,6 +46,8 @@ class LangGraphSSEStreamIterator:
         self.finished = False
         self.line_iterator = None
         self.async_line_iterator = None
+        # Tracks the most recent ``event:`` field within the current SSE event block.
+        self._current_event: Optional[str] = None
 
     def __iter__(self):
         """Initialize sync iteration."""
@@ -48,15 +63,25 @@ class LangGraphSSEStreamIterator:
         """
         Parse a single SSE line and return a ModelResponse chunk if applicable.
 
-        LangGraph SSE format can vary:
-        - data: [...] (tuple format)
-        - event: ...\ndata: ...
+        Standard SSE multi-line format::
+
+            event: messages
+            data: [...]
+
+        An empty line signals the end of an event block and resets
+        ``_current_event`` to ``None``.
         """
-        line = line.strip()
-        if not line:
+        # SSE spec: an empty line dispatches the event; reset state.
+        if not line.strip():
+            self._current_event = None
             return None
 
-        # Handle SSE data lines
+        # Track the event type from the ``event:`` field.
+        if line.startswith("event:"):
+            self._current_event = line[6:].strip()
+            return None
+
+        # Handle SSE data lines.
         if line.startswith("data:"):
             json_str = line[5:].strip()
             if not json_str:
@@ -64,32 +89,53 @@ class LangGraphSSEStreamIterator:
 
             try:
                 data = json.loads(json_str)
-                return self._process_data(data)
+                return self._process_data(data, event_type=self._current_event)
             except json.JSONDecodeError:
                 verbose_logger.debug(f"Skipping non-JSON SSE line: {line[:100]}")
                 return None
 
         return None
 
-    def _process_data(self, data) -> Optional[ModelResponseStream]:
+    def _process_data(
+        self, data, event_type: Optional[str] = None
+    ) -> Optional[ModelResponseStream]:
         """
-        Process parsed data from SSE stream.
+        Process parsed data from an SSE ``data:`` line.
 
-        LangGraph uses tuple format: [event_type, payload]
+        Dispatch is based on *event_type* (the value of the preceding
+        ``event:`` header), not on the contents of *data* itself.
+
+        LangGraph ``messages`` event payload::
+
+            [<AIMessageChunk dict>, <metadata dict>]
+
+        LangGraph ``metadata`` event payload::
+
+            {"run_id": "...", ...}
         """
-        # Handle tuple format: ["messages", ...]
-        if isinstance(data, list) and len(data) >= 2:
-            event_type = data[0]
+        # --- Standard SSE protocol: event type from the ``event:`` header ---
+        if event_type == "messages":
+            # data = [message_object, metadata_object]
+            if isinstance(data, list) and len(data) >= 1:
+                return self._process_messages_payload(data[0])
+            return None
+
+        if event_type == "metadata":
+            return self._process_metadata_event(data)
+
+        # --- Fallback: legacy/non-standard tuple format [event_type, payload] ---
+        # Retained for backward compatibility with any client that wraps the
+        # data array as ["messages", payload] or ["metadata", payload].
+        if isinstance(data, list) and len(data) >= 2 and isinstance(data[0], str):
+            legacy_event = data[0]
             payload = data[1]
-
-            if event_type == "messages":
+            if legacy_event == "messages":
                 return self._process_messages_event(payload)
-            elif event_type == "metadata":
-                # Metadata event, might contain usage info
+            elif legacy_event == "metadata":
                 return self._process_metadata_event(payload)
 
-        # Handle dict format (alternative response format)
-        elif isinstance(data, dict):
+        # --- Dict format (alternative / non-streaming-style response) ---
+        if isinstance(data, dict):
             if "content" in data:
                 return self._create_content_chunk(data.get("content", ""))
             elif "messages" in data:
@@ -101,11 +147,28 @@ class LangGraphSSEStreamIterator:
 
         return None
 
+    def _process_messages_payload(self, msg: object) -> Optional[ModelResponseStream]:
+        """
+        Extract content from a single LangGraph AIMessageChunk dict.
+
+        This is the direct ``data[0]`` element from a ``messages`` SSE event.
+        """
+        if not isinstance(msg, dict):
+            return None
+
+        msg_type = msg.get("type", "")
+        content = msg.get("content", "")
+
+        if msg_type in ("ai", "AIMessageChunk") and content:
+            return self._create_content_chunk(content)
+
+        return None
+
     def _process_messages_event(self, payload) -> Optional[ModelResponseStream]:
         """
-        Process a messages event from the stream.
+        Process a messages payload in the legacy tuple format.
 
-        payload format: [[message_object, metadata], ...]
+        Legacy payload format: [[message_object, metadata], ...]
         """
         if isinstance(payload, list):
             for item in payload:
