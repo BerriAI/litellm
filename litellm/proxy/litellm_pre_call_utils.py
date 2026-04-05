@@ -26,6 +26,22 @@ from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_head
 _SPECIAL_HEADERS_CACHE = frozenset(
     v.value.lower() for v in SpecialHeaders._member_map_.values()
 )
+
+
+def _sanitize_for_log(value: Any) -> str:
+    """
+    Basic log sanitization helper to reduce log-injection risk.
+
+    Removes newline and carriage-return characters so user-controlled
+    values cannot forge additional log lines when written to text logs.
+    """
+    try:
+        text = str(value)
+    except Exception:
+        # Fallback to repr if str() fails for any reason
+        text = repr(value)
+    # Strip CR/LF characters commonly used for log injection
+    return text.replace("\r", "").replace("\n", "")
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -1355,10 +1371,8 @@ def _update_model_if_team_alias_exists(
                         "New sibling deployments may be unreachable. "
                         "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
                         "team-scoped sibling routing.",
-                        str(_model).replace("\n", "").replace("\r", ""),
-                        str(user_api_key_dict.team_id)
-                        .replace("\n", "")
-                        .replace("\r", ""),
+                        _sanitize_for_log(_model),
+                        user_api_key_dict.team_id,
                     )
 
         data["model"] = aliased_target

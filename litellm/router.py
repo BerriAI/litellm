@@ -310,6 +310,7 @@ class Router:
         ignore_invalid_deployments: bool = False,
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: Optional[int] = None,
+        health_check_ignore_transient_errors: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -501,6 +502,7 @@ class Router:
         )
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
+        self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         _staleness = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
         )
@@ -5313,11 +5315,16 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        all_deployments = self._get_all_deployments(model_name=original_model_group)
+        _request_team_id: Optional[str] = (
+            kwargs.get("metadata", {}) or {}
+        ).get("user_api_key_team_id")
+        all_deployments = self._get_all_deployments(
+            model_name=original_model_group, team_id=_request_team_id
+        )
         _order_set: set = {
-            d.get("litellm_params", {}).get("order")
+            litellm.utils._get_deployment_order(d)
             for d in all_deployments
-            if d.get("litellm_params", {}).get("order") is not None
+            if litellm.utils._get_deployment_order(d) is not None
         }
         order_values: list = sorted(_order_set)
         if len(order_values) > 1 and not _skip_order_fallback:
@@ -9073,7 +9080,9 @@ class Router:
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = self._get_all_deployments(model_name=model)
+        healthy_deployments = self._get_all_deployments(
+            model_name=model, team_id=request_team_id
+        )
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
@@ -9094,7 +9103,9 @@ class Router:
                     )
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
-                    healthy_deployments = self._get_all_deployments(model_name=model)
+                    healthy_deployments = self._get_all_deployments(
+                        model_name=model, team_id=request_team_id
+                    )
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
@@ -9184,10 +9195,23 @@ class Router:
         )
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
+        _pre_cooldown_deployments = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
         )
+        # Safety net: only bypass cooldown filter when health-check routing is
+        # driving cooldown (i.e. allowed_fails_policy is set). Without a policy,
+        # cooldowns are from real request failures and must not be bypassed.
+        if (
+            not healthy_deployments
+            and self.enable_health_check_routing
+            and self.allowed_fails_policy is not None
+        ):
+            verbose_router_logger.warning(
+                "All deployments in cooldown via health-check routing, bypassing cooldown filter"
+            )
+            healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -9620,10 +9644,20 @@ class Router:
         cooldown_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
+        _pre_cooldown_deployments = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
         )
+        if (
+            not healthy_deployments
+            and self.enable_health_check_routing
+            and self.allowed_fails_policy is not None
+        ):
+            verbose_router_logger.warning(
+                "All deployments in cooldown via health-check routing, bypassing cooldown filter"
+            )
+            healthy_deployments = _pre_cooldown_deployments
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -9925,6 +9959,12 @@ class Router:
         if not self.enable_health_check_routing:
             return healthy_deployments
 
+        # When allowed_fails_policy is set, cooldown is the sole routing exclusion
+        # mechanism -- skip the binary health check filter so the policy threshold
+        # is respected before any deployment is excluded.
+        if self.allowed_fails_policy is not None:
+            return healthy_deployments
+
         unhealthy_ids = (
             await self.health_state_cache.async_get_unhealthy_deployment_ids(
                 parent_otel_span=parent_otel_span
@@ -9952,6 +9992,9 @@ class Router:
     ) -> List[Dict]:
         """Sync version of _async_filter_health_check_unhealthy_deployments."""
         if not self.enable_health_check_routing:
+            return healthy_deployments
+
+        if self.allowed_fails_policy is not None:
             return healthy_deployments
 
         unhealthy_ids = self.health_state_cache.get_unhealthy_deployment_ids(

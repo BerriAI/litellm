@@ -5668,6 +5668,22 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "oci":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
@@ -7234,7 +7250,8 @@ async def ahealth_check(
 
         if mode is None:
             return {
-                "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}"
+                "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
+                "exception": e,
             }
 
         error_to_return = str(e) + "\nstack trace: " + stack_trace
@@ -7246,6 +7263,7 @@ async def ahealth_check(
         return {
             "error": error_to_return,
             "raw_request_typed_dict": raw_request_typed_dict,
+            "exception": e,
         }
 
 

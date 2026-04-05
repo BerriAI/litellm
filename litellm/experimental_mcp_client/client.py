@@ -82,6 +82,8 @@ class MCPSigV4Auth(httpx.Auth):
         aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         aws_service_name: Optional[str] = None,
+        aws_role_name: Optional[str] = None,
+        aws_session_name: Optional[str] = None,
     ):
         try:
             from botocore.credentials import Credentials
@@ -97,7 +99,16 @@ class MCPSigV4Auth(httpx.Auth):
         # Note: os.environ/ prefixed values are already resolved by
         # ProxyConfig._check_for_os_environ_vars() at config load time.
         # Values arrive here as plain strings.
-        if aws_access_key_id and aws_secret_access_key:
+        if aws_role_name:
+            self.credentials = self._assume_role(
+                aws_role_name=aws_role_name,
+                aws_session_name=aws_session_name,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=self.region_name,
+            )
+        elif aws_access_key_id and aws_secret_access_key:
             self.credentials = Credentials(
                 access_key=aws_access_key_id,
                 secret_key=aws_secret_access_key,
@@ -115,6 +126,43 @@ class MCPSigV4Auth(httpx.Auth):
                     "aws_secret_access_key, or configure default credentials "
                     "(env vars, ~/.aws/credentials, instance profile)."
                 )
+
+    @staticmethod
+    def _assume_role(
+        aws_role_name: str,
+        aws_session_name: Optional[str],
+        aws_access_key_id: Optional[str],
+        aws_secret_access_key: Optional[str],
+        aws_session_token: Optional[str],
+        aws_region_name: str,
+    ):
+        """Call STS AssumeRole and return temporary credentials."""
+        import boto3
+        from botocore.credentials import Credentials
+
+        session_name = (
+            aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        )
+
+        sts_kwargs: dict = {"region_name": aws_region_name}
+        if aws_access_key_id and aws_secret_access_key:
+            sts_kwargs["aws_access_key_id"] = aws_access_key_id
+            sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            if aws_session_token:
+                sts_kwargs["aws_session_token"] = aws_session_token
+
+        sts_client = boto3.client("sts", **sts_kwargs)
+        sts_response = sts_client.assume_role(
+            RoleArn=aws_role_name,
+            RoleSessionName=session_name,
+        )
+
+        sts_creds = sts_response["Credentials"]
+        return Credentials(
+            access_key=sts_creds["AccessKeyId"],
+            secret_key=sts_creds["SecretAccessKey"],
+            token=sts_creds["SessionToken"],
+        )
 
     def auth_flow(
         self, request: httpx.Request

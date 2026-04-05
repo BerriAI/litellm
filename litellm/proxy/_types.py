@@ -432,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/server",
+        "/v1/mcp/server/{path:path}",
     ]
 
     agent_routes = [
@@ -665,6 +666,9 @@ class LiteLLMRoutes(enum.Enum):
         "/invitation/delete",
         # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
         "/guardrails/register",
+        # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
+        "/guardrails/submissions",
+        "/guardrails/submissions/{guardrail_id}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -856,6 +860,8 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
@@ -1847,6 +1853,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -3809,6 +3817,10 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+    # Resources inherited from access groups (separate from direct assignments)
+    access_group_models: Optional[List[str]] = None
+    access_group_mcp_server_ids: Optional[List[str]] = None
+    access_group_agent_ids: Optional[List[str]] = None
 
 
 class TeamInfoResponseObject(TypedDict):
