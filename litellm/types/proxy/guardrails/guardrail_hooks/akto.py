@@ -9,9 +9,8 @@ class AktoConfigModel(GuardrailConfigModel):
     """
     Config for the Akto guardrail.
 
-    Use two separate config entries to control behaviour:
-      akto-validate (mode: pre_call)  -> check guardrails, block if flagged
-      akto-ingest   (mode: post_call) -> ingest request+response data
+    Mode:
+      pre_call -> validate request, block if flagged
     """
 
     akto_base_url: Optional[str] = Field(
@@ -28,16 +27,6 @@ class AktoConfigModel(GuardrailConfigModel):
     akto_api_key: Optional[str] = Field(
         default=None,
         description="API key for Akto. Env: AKTO_API_KEY.",
-    )
-
-    akto_account_id: Optional[str] = Field(
-        default=None,
-        description="Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.",
-    )
-
-    akto_vxlan_id: Optional[str] = Field(
-        default=None,
-        description="Akto VXLAN ID. Env: AKTO_VXLAN_ID. Default: '0'.",
     )
 
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
