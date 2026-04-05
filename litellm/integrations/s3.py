@@ -150,7 +150,7 @@ class S3Logger:
                 "time-"
                 + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f")
                 + "_"
-                + payload["id"]
+                + str(payload["id"])[:150]
                 + ".json"
             )
 
