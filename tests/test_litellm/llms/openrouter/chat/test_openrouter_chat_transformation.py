@@ -84,6 +84,95 @@ class TestOpenRouterChatCompletionStreamingHandler:
         assert "KeyError" in str(exc_info.value)
         assert exc_info.value.status_code == 400
 
+    def test_chunk_parser_passes_through_annotations_in_delta(self):
+        """Annotations in delta (url_citation) must not be silently dropped."""
+        handler = OpenRouterChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        annotations = [
+            {
+                "type": "url_citation",
+                "url_citation": {
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "start_index": 0,
+                    "end_index": 10,
+                },
+            }
+        ]
+        chunk = {
+            "id": "test_id",
+            "created": 1234567890,
+            "model": "perplexity/sonar-pro",
+            "choices": [
+                {
+                    "delta": {
+                        "content": "Hello",
+                        "reasoning": None,
+                        "annotations": annotations,
+                    },
+                    "index": 0,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["annotations"] == annotations
+
+    def test_chunk_parser_passes_through_annotations_on_choice(self):
+        """Some providers put annotations at the choice level, not inside delta."""
+        handler = OpenRouterChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        annotations = [
+            {
+                "type": "url_citation",
+                "url_citation": {
+                    "url": "https://example.com/alt",
+                    "title": "Alt Source",
+                    "start_index": 5,
+                    "end_index": 15,
+                },
+            }
+        ]
+        chunk = {
+            "id": "test_id",
+            "created": 1234567890,
+            "model": "openai/gpt-5.1",
+            "choices": [
+                {
+                    "delta": {"content": "World", "reasoning": None},
+                    "annotations": annotations,
+                    "index": 0,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"]["annotations"] == annotations
+        # Choice-level annotations must be removed after promotion to delta
+        assert result.choices[0].get("annotations") is None
+
+    def test_chunk_parser_no_annotations_no_regression(self):
+        """When no annotations are present, delta must not gain an annotations key."""
+        handler = OpenRouterChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        chunk = {
+            "id": "test_id",
+            "created": 1234567890,
+            "model": "test_model",
+            "choices": [
+                {"delta": {"content": "hi", "reasoning": None}, "index": 0}
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+        assert result.choices[0]["delta"].get("annotations") is None
+
 
 def test_openrouter_extra_body_transformation():
     transformed_request = OpenrouterConfig().transform_request(
