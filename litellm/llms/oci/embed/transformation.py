@@ -29,6 +29,7 @@ import httpx
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.oci.chat.transformation import OCI_API_VERSION
 from litellm.llms.oci.common_utils import (
     OCIError,
     get_oci_base_url,
@@ -87,7 +88,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return ["dimensions", "encoding_format"]
+        return ["dimensions"]
 
     def map_openai_params(
         self,
@@ -98,15 +99,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
     ) -> dict:
         for key, value in non_default_params.items():
             if key == "dimensions":
+                # OCI API uses outputDimensions (cohere.embed-v4.0+)
                 optional_params["outputDimensions"] = value
-            elif key == "encoding_format":
-                # OCI always returns float32 — note unsupported but don't hard-fail
-                if not drop_params and not litellm.drop_params:
-                    raise OCIError(
-                        status_code=400,
-                        message="OCI embeddings do not support encoding_format. "
-                        "Pass drop_params=True to silently ignore it.",
-                    )
         return optional_params
 
     def validate_environment(
@@ -130,8 +124,13 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/20231130/actions/embedText"
+        # If the caller provides a full endpoint URL, use it as-is.
+        # Otherwise construct the standard OCI GenAI embedText endpoint from the region.
+        resolved_base = api_base or litellm.api_base
+        if resolved_base:
+            return resolved_base.rstrip("/")
+        base = get_oci_base_url(optional_params, None)
+        return f"{base}/{OCI_API_VERSION}/actions/embedText"
 
     def sign_request(
         self,
@@ -175,7 +174,17 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         if isinstance(input, str):
             texts = [input]
         elif isinstance(input, list):
-            texts = [item if isinstance(item, str) else str(item) for item in input]
+            texts = []
+            for item in input:
+                if isinstance(item, list):
+                    raise OCIError(
+                        status_code=400,
+                        message=(
+                            "OCI embedText does not support token-array inputs. "
+                            "Convert token lists to strings before calling embedding()."
+                        ),
+                    )
+                texts.append(item if isinstance(item, str) else str(item))
         else:
             texts = [str(input)]
 
@@ -259,10 +268,14 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             for i, embedding in enumerate(parsed.embeddings)
         ]
 
-        if parsed.usage is not None:
+        if parsed.inputTextTokenCounts is not None:
+            # Actual OCI API returns per-input token counts — sum for total usage
+            total = sum(parsed.inputTextTokenCounts)
+            model_response.usage = Usage(prompt_tokens=total, total_tokens=total)
+        elif parsed.usage is not None:
+            # Some deployments may return a usage object directly
             model_response.usage = Usage(
                 prompt_tokens=parsed.usage.promptTokens,
-                completion_tokens=0,
                 total_tokens=parsed.usage.totalTokens,
             )
 

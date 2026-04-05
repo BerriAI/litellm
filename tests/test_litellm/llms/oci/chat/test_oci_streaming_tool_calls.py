@@ -97,7 +97,8 @@ class TestOCIStreamingToolCalls:
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
-        assert result.choices[0].delta.tool_calls[0]["id"] == ""
+        # Missing id is filled with a generated call_* id to avoid empty/null ids
+        assert result.choices[0].delta.tool_calls[0]["id"].startswith("call_")
 
     def test_stream_chunk_with_missing_name_field(self):
         """
@@ -163,7 +164,8 @@ class TestOCIStreamingToolCalls:
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
-        assert result.choices[0].delta.tool_calls[0]["id"] == ""
+        # Missing id is filled with a generated call_* id to avoid empty/null ids
+        assert result.choices[0].delta.tool_calls[0]["id"].startswith("call_")
         assert result.choices[0].delta.tool_calls[0]["function"]["name"] == ""
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
@@ -263,8 +265,8 @@ class TestOCIStreamingToolCalls:
         )
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 
-        # Second tool call - missing id
-        assert result.choices[0].delta.tool_calls[1]["id"] == ""
+        # Second tool call - missing id gets a generated call_* id
+        assert result.choices[0].delta.tool_calls[1]["id"].startswith("call_")
         assert result.choices[0].delta.tool_calls[1]["function"]["name"] == "get_time"
         assert (
             result.choices[0].delta.tool_calls[1]["function"]["arguments"]
