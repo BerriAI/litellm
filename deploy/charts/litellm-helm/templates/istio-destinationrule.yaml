@@ -1,0 +1,22 @@
+{{- if and .Values.istio.enabled .Values.istio.destinationRule.enabled -}}
+{{- $fullName := include "litellm.fullname" . -}}
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+    {{- with .Values.istio.destinationRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.istio.destinationRule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  host: {{ $fullName }}
+  {{- with .Values.istio.destinationRule.trafficPolicy }}
+  trafficPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
