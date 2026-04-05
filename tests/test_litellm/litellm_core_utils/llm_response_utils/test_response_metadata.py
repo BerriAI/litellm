@@ -6,6 +6,7 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 """
 
 import datetime
+import types
 from unittest.mock import MagicMock
 
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
@@ -13,11 +14,85 @@ import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+    get_response_hidden_params,
+    merge_hidden_params_with_logging_timings,
+    strip_litellm_internal_keys_from_dict_response,
     update_response_metadata,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.utils import ModelResponse
+
+
+class TestMergeHiddenParamsWithLoggingTimings:
+    """Proxy merge for async generators / responses without _hidden_params."""
+
+    def test_fills_overhead_from_logging_obj(self):
+        """Simulates /v1/messages SSE: no response._hidden_params, timing on logging_obj."""
+        class _FakeStream:
+            pass
+
+        logging_obj = types.SimpleNamespace(
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            model_call_details={"llm_api_duration_ms": 40.0},
+            caching_details=None,
+        )
+
+        end = datetime.datetime(2025, 1, 1, 0, 0, 1)
+        merged = merge_hidden_params_with_logging_timings(
+            _FakeStream(),
+            logging_obj,
+            end_time=end,
+        )
+        assert merged["litellm_overhead_time_ms"] == 960.0
+        assert merged["_response_ms"] == 1000.0
+
+    def test_preserves_existing_overhead_on_response(self):
+        logging_obj = types.SimpleNamespace(
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            model_call_details={"llm_api_duration_ms": 1.0},
+        )
+
+        class R:
+            _hidden_params = {"litellm_overhead_time_ms": 42.0, "_response_ms": 100.0}
+
+        merged = merge_hidden_params_with_logging_timings(
+            R(),
+            logging_obj,
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+        assert merged["litellm_overhead_time_ms"] == 42.0
+
+
+class TestDictResponseHiddenParams:
+    """Dict-shaped API responses (e.g. Anthropic /v1/messages) must carry timing metadata."""
+
+    def test_update_response_metadata_stores_overhead_on_dict(self):
+        result: dict = {"id": "msg_1", "type": "message", "role": "assistant", "content": []}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 50.0}
+        logging_obj.caching_details = None
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.0)
+        logging_obj.litellm_call_id = "call-1"
+
+        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+        end = datetime.datetime(2025, 1, 1, 0, 0, 1)
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="claude-3-5-sonnet",
+            kwargs={},
+            start_time=start,
+            end_time=end,
+        )
+
+        hidden = get_response_hidden_params(result)
+        assert hidden.get("litellm_overhead_time_ms") is not None
+        assert hidden.get("_response_ms") == 1000.0
+
+        strip_litellm_internal_keys_from_dict_response(result)
+        assert "_hidden_params" not in result
 
 
 class TestCallbackDurationMs:

@@ -4,12 +4,27 @@ from typing import Any, Optional, Union
 from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.hidden_params_timing import (
+    get_response_hidden_params,
+    hidden_params_to_plain_dict,
+    merge_hidden_params_with_logging_timings,
+    strip_litellm_internal_keys_from_dict_response,
+)
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
 from litellm.types.utils import (
     EmbeddingResponse,
     HiddenParams,
     ModelResponse,
     TranscriptionResponse,
+)
+
+__all__ = (
+    "ResponseMetadata",
+    "get_response_hidden_params",
+    "hidden_params_to_plain_dict",
+    "merge_hidden_params_with_logging_timings",
+    "strip_litellm_internal_keys_from_dict_response",
+    "update_response_metadata",
 )
 
 
@@ -20,8 +35,8 @@ class ResponseMetadata:
 
     def __init__(self, result: Any):
         self.result = result
-        self._hidden_params: Union[HiddenParams, dict] = (
-            getattr(result, "_hidden_params", {}) or {}
+        self._hidden_params: Union[HiddenParams, dict] = get_response_hidden_params(
+            result
         )
 
     @property
@@ -169,6 +184,15 @@ class ResponseMetadata:
         """Apply metadata to the response object"""
         if hasattr(self.result, "_hidden_params"):
             self.result._hidden_params = self._hidden_params
+        elif isinstance(self.result, dict):
+            # Dict-shaped responses (e.g. Anthropic Messages API) have no
+            # attribute slot; use a private key stripped before HTTP response.
+            if isinstance(self._hidden_params, dict):
+                self.result["_hidden_params"] = self._hidden_params
+            elif isinstance(self._hidden_params, HiddenParams):
+                self.result["_hidden_params"] = self._hidden_params.model_dump(
+                    exclude_none=True
+                )
 
 
 def update_response_metadata(
