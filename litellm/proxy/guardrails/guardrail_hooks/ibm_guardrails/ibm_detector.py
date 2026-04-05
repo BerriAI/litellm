@@ -163,7 +163,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response={
                         "detections": [
-                            [detection for detection in message_detections]
+                            list(message_detections)
                             for message_detections in response_json
                         ]
                     },

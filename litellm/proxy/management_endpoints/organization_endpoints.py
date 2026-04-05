@@ -486,7 +486,7 @@ async def update_organization(
     budget_fields = {
         k: v
         for k, v in data.model_dump().items()
-        if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
+        if k in LiteLLM_BudgetTable.model_fields and v is not None
     }
 
     if budget_fields and existing_organization_row.budget_id:
@@ -498,7 +498,7 @@ async def update_organization(
         )
 
     # Remove budget fields from organization update data
-    for field in LiteLLM_BudgetTable.model_fields.keys():
+    for field in LiteLLM_BudgetTable.model_fields:
         updated_organization_row.pop(field, None)
 
     response = await prisma_client.db.litellm_organizationtable.update(

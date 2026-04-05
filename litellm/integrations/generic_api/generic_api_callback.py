@@ -39,7 +39,7 @@ def load_compatible_callbacks() -> Dict:
         json_path = os.path.join(
             os.path.dirname(__file__), "generic_api_compatible_callbacks.json"
         )
-        with open(json_path, "r") as f:
+        with open(json_path) as f:
             return json.load(f)
     except Exception as e:
         verbose_logger.warning(

@@ -121,7 +121,7 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata.get(key) for key in SpendLogsMetadata.__annotations__.keys()
+            key: metadata.get(key) for key in SpendLogsMetadata.__annotations__
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails

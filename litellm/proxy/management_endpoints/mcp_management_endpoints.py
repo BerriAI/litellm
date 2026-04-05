@@ -1932,7 +1932,7 @@ if MCP_AVAILABLE:
         if _mcp_registry_cache is not None:
             return _mcp_registry_cache
         try:
-            with open(_MCP_REGISTRY_PATH, "r") as f:
+            with open(_MCP_REGISTRY_PATH) as f:
                 data: Dict[str, Any] = json.load(f)
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -2005,7 +2005,7 @@ if MCP_AVAILABLE:
 
     @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> Dict[str, Any]:
-        with open(_OPENAPI_REGISTRY_PATH, "r") as f:
+        with open(_OPENAPI_REGISTRY_PATH) as f:
             data: Dict[str, Any] = json.load(f)
         return data
 

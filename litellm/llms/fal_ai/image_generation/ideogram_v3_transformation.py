@@ -64,7 +64,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         supported_params = self.get_supported_openai_params(model)
 
-        for k in non_default_params.keys():
+        for k in non_default_params:
             if k in optional_params:
                 continue
 

@@ -158,7 +158,7 @@ def load_private_key_from_str(key_str: str):
 def load_private_key_from_file(file_path: str):
     """Loads a private key from a file path"""
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             key_str = f.read().strip()
     except FileNotFoundError:
         raise FileNotFoundError(f"Private key file not found: {file_path}")

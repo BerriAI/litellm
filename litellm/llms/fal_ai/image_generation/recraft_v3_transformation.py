@@ -62,8 +62,8 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)

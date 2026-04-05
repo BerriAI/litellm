@@ -223,7 +223,7 @@ class StorageBackendFileService:
         managed_files_obj = cast(Any, managed_files_obj)
 
         # Create model mappings using storage URL
-        model_mappings = {model_name: storage_url for model_name in target_model_names}
+        model_mappings = dict.fromkeys(target_model_names, storage_url)
 
         # Create unified file ID
         file_type = file_data.get("content_type", "application/octet-stream")

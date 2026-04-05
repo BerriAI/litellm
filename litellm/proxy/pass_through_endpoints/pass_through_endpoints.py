@@ -2080,7 +2080,7 @@ class InitPassThroughEndpointHelpers:
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
         # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
         # Extract unique paths from keys for quick checking
-        for key in _registered_pass_through_routes.keys():
+        for key in _registered_pass_through_routes:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
@@ -2102,7 +2102,7 @@ class InitPassThroughEndpointHelpers:
         route: str, method: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
-        for key in _registered_pass_through_routes.keys():
+        for key in _registered_pass_through_routes:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]

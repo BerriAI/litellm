@@ -848,7 +848,7 @@ def construct_tool_use_system_prompt(
         "</function_calls>\n"
         "\n"
         "Here are the tools available:\n"
-        "<tools>\n" + "\n".join([tool_str for tool_str in tool_str_list]) + "\n</tools>"
+        "<tools>\n" + "\n".join(list(tool_str_list)) + "\n</tools>"
     )
     return tool_use_system_prompt
 
