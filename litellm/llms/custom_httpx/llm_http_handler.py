@@ -861,6 +861,18 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        # Some providers (e.g. OCI) require request signing after the body is built.
+        # The default BaseConfig.sign_request returns (headers, None) — a no-op for
+        # providers that don't need signing.
+        headers, signed_body = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -887,6 +899,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                signed_body=signed_body,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -900,7 +913,7 @@ class BaseLLMHTTPHandler:
             response = sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=signed_body if signed_body is not None else json.dumps(data),
                 timeout=timeout,
             )
         except Exception as e:
@@ -935,6 +948,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        signed_body: Optional[bytes] = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -945,12 +959,20 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=request_data,
-                timeout=timeout,
-            )
+            if signed_body is not None:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=signed_body,
+                    timeout=timeout,
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                    timeout=timeout,
+                )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
