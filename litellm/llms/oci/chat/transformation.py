@@ -447,7 +447,7 @@ class OCIChatConfig(BaseConfig):
                         toolResults=[
                             CohereToolResult(
                                 call=cohere_call,
-                                outputs=[{"result": content}],
+                                outputs=[{"output": content}],
                             )
                         ]
                     )
