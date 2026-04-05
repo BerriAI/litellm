@@ -12,6 +12,7 @@ import json
 import sys
 import time
 import heapq
+import threading
 from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
+        self._increment_lock = threading.RLock()
 
     def check_value_size(self, value: Any):
         """
@@ -227,12 +229,13 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value
-        self.set_cache(key, value, **kwargs)
-        return value
+    def increment_cache(self, key, value: float, **kwargs) -> float:
+        with self._increment_lock:
+            # keep read-modify-write atomic
+            init_value = self.get_cache(key=key) or 0
+            value = init_value + value
+            self.set_cache(key, value, **kwargs)
+            return value
 
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
@@ -245,11 +248,7 @@ class InMemoryCache(BaseCache):
         return return_val
 
     async def async_increment(self, key, value: float, **kwargs) -> float:
-        # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value
-        await self.async_set_cache(key, value, **kwargs)
-        return value
+        return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
         self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
