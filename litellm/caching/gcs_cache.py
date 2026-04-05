@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
 
 
 class GCSCache(BaseCache):
@@ -48,7 +49,7 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             self.sync_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: set_cache() - Got exception from GCS: {e}")
@@ -59,7 +60,7 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(
