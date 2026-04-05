@@ -1,5 +1,6 @@
 import datetime
 import json
+import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -97,7 +98,10 @@ def get_vendor_from_model(model: str) -> OCIVendors:
     return OCIVendors.GENERIC
 
 
-# 5 minute timeout (models may need to load)
+# OCI GenAI REST API version — stable since service launch, unlikely to change
+OCI_API_VERSION = "20231130"
+
+# Streaming timeout — generous because OCI models may need to warm up on first request
 STREAMING_TIMEOUT = 60 * 5
 
 
@@ -186,7 +190,10 @@ class OCIChatConfig(BaseConfig):
                 # Workaround for mypy issue
                 if drop_params or litellm.drop_params:
                     continue
-                raise Exception(f"param `{key}` is not supported on OCI")
+                raise OCIError(
+                    status_code=400,
+                    message=f"param `{key}` is not supported on OCI",
+                )
 
             if alias is None:
                 adapted_params[key] = value
@@ -449,8 +456,9 @@ class OCIChatConfig(BaseConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         if not messages:
-            raise Exception(
-                "kwarg `messages` must be an array of messages that follow the openai chat standard"
+            raise OCIError(
+                status_code=400,
+                message="kwarg `messages` must be an array of messages that follow the openai chat standard",
             )
         # Validate credentials early so the caller gets a clear error immediately
         # rather than a cryptic signing failure at request time.
@@ -463,12 +471,15 @@ class OCIChatConfig(BaseConfig):
                 if not creds.get(k)
             ]
             if missing or not (creds.get("oci_key") or creds.get("oci_key_file")):
-                raise Exception(
-                    "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
-                    "and at least one of oci_key or oci_key_file. "
-                    "These can be supplied via optional_params or via OCI_USER, OCI_FINGERPRINT, "
-                    "OCI_TENANCY, OCI_COMPARTMENT_ID, OCI_KEY_FILE environment variables. "
-                    "Alternatively, provide an oci_signer object from the OCI SDK."
+                raise OCIError(
+                    status_code=401,
+                    message=(
+                        "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
+                        "and at least one of oci_key or oci_key_file. "
+                        "These can be supplied via optional_params or via OCI_USER, OCI_FINGERPRINT, "
+                        "OCI_TENANCY, OCI_COMPARTMENT_ID, OCI_KEY_FILE environment variables. "
+                        "Alternatively, provide an oci_signer object from the OCI SDK."
+                    ),
                 )
         return validate_oci_environment(headers, optional_params, api_key)
 
@@ -482,7 +493,7 @@ class OCIChatConfig(BaseConfig):
         stream: Optional[bool] = None,
     ) -> str:
         base = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/20231130/actions/chat"
+        return f"{base}/{OCI_API_VERSION}/actions/chat"
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
         selected_params: Dict = {}
@@ -601,12 +612,15 @@ class OCIChatConfig(BaseConfig):
                     CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls)
                 )
             elif role == "tool":
-                # Tool messages need special handling
+                # Tool result messages: include the tool_call_id so Cohere can correlate
+                # the result back to the right tool call in the conversation history.
+                tool_call_id = msg.get("tool_call_id")  # type: ignore[union-attr]
                 chat_history.append(
                     CohereMessage(
                         role="TOOL",
                         message=content,
-                        toolCalls=None,  # Tool messages don't have tool calls
+                        toolCalls=None,
+                        toolCallId=tool_call_id,
                     )
                 )
 
@@ -678,8 +692,9 @@ class OCIChatConfig(BaseConfig):
 
         oci_serving_mode = optional_params.get("oci_serving_mode", "ON_DEMAND")
         if oci_serving_mode not in ["ON_DEMAND", "DEDICATED"]:
-            raise Exception(
-                "kwarg `oci_serving_mode` must be either 'ON_DEMAND' or 'DEDICATED'"
+            raise OCIError(
+                status_code=400,
+                message="kwarg `oci_serving_mode` must be either 'ON_DEMAND' or 'DEDICATED'",
             )
 
         if oci_serving_mode == "DEDICATED":
@@ -700,7 +715,10 @@ class OCIChatConfig(BaseConfig):
             # Extract the last user message as the main message
             user_messages = [msg for msg in messages if msg.get("role") == "user"]
             if not user_messages:
-                raise Exception("No user message found for Cohere model")
+                raise OCIError(
+                    status_code=400,
+                    message="No user message found — Cohere models require at least one user message",
+                )
 
             # Extract system messages into preambleOverride
             system_messages = [msg for msg in messages if msg.get("role") == "system"]
@@ -760,29 +778,30 @@ class OCIChatConfig(BaseConfig):
         response_text = cohere_response.chatResponse.text
         oci_finish_reason = cohere_response.chatResponse.finishReason
 
-        # Map finish reason
+        # Map finish reason — pass through unknown reasons rather than silently mapping to "stop"
         if oci_finish_reason == "COMPLETE":
             finish_reason = "stop"
         elif oci_finish_reason == "MAX_TOKENS":
             finish_reason = "length"
+        elif oci_finish_reason == "TOOL_CALL":
+            finish_reason = "tool_calls"
         else:
-            finish_reason = "stop"
+            finish_reason = oci_finish_reason  # preserve unknown reasons as-is
 
         # Handle tool calls
         tool_calls: Optional[List[Dict[str, Any]]] = None
         if cohere_response.chatResponse.toolCalls:
-            tool_calls = []
-            for tool_call in cohere_response.chatResponse.toolCalls:
-                tool_calls.append(
-                    {
-                        "id": f"call_{len(tool_calls)}",  # Generate a simple ID
-                        "type": "function",
-                        "function": {
-                            "name": tool_call.name,
-                            "arguments": json.dumps(tool_call.parameters),
-                        },
-                    }
-                )
+            tool_calls = [
+                {
+                    "id": f"call_{uuid.uuid4().hex[:24]}",
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": json.dumps(tool_call.parameters),
+                    },
+                }
+                for tool_call in cohere_response.chatResponse.toolCalls
+            ]
 
         # Create choice
         choice = Choices(
@@ -832,7 +851,7 @@ class OCIChatConfig(BaseConfig):
         response_message = completion_response.chatResponse.choices[0].message
         # message is None when a reasoning model spends all max_tokens on reasoning
         if response_message is not None:
-            if response_message.content and response_message.content[0].type == "TEXT":
+            if response_message.content and len(response_message.content) > 0 and response_message.content[0].type == "TEXT":
                 message.content = response_message.content[0].text
             if response_message.toolCalls:
                 message.tool_calls = adapt_tools_to_openai_standard(
@@ -1028,19 +1047,19 @@ def adapt_messages_to_generic_oci_standard_content_message(
     # ]
     for content_item in content:
         if not isinstance(content_item, dict):
-            raise Exception("Each content item must be a dictionary")
+            raise OCIError(status_code=400, message="Each content item must be a dictionary")
 
         type = content_item.get("type")
         if not isinstance(type, str):
-            raise Exception("Prop `type` is not a string")
+            raise OCIError(status_code=400, message="Each content item must have a string `type` field")
 
         if type not in ["text", "image_url"]:
-            raise Exception(f"Prop `{type}` is not supported")
+            raise OCIError(status_code=400, message=f"Content type `{type}` is not supported by OCI")
 
         if type == "text":
             text = content_item.get("text")
             if not isinstance(text, str):
-                raise Exception("Prop `text` is not a string")
+                raise OCIError(status_code=400, message="Content item of type `text` must have a string `text` field")
             new_content.append(OCITextContentPart(text=text))
 
         elif type == "image_url":
@@ -1049,8 +1068,9 @@ def adapt_messages_to_generic_oci_standard_content_message(
             if isinstance(image_url, dict):
                 image_url = image_url.get("url")
             if not isinstance(image_url, str):
-                raise Exception(
-                    "Prop `image_url` must be a string or an object with a `url` property"
+                raise OCIError(
+                    status_code=400,
+                    message="Prop `image_url` must be a string or an object with a `url` property",
                 )
             new_content.append(OCIImageContentPart(imageUrl=OCIImageUrl(url=image_url)))
 
@@ -1068,26 +1088,26 @@ def adapt_messages_to_generic_oci_standard_tool_call(
     tool_calls_formated = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
-            raise Exception("Each tool call must be a dictionary")
+            raise OCIError(status_code=400, message="Each tool call must be a dictionary")
 
         if tool_call.get("type") != "function":
-            raise Exception("OCI only supports function tools")
+            raise OCIError(status_code=400, message="OCI only supports function tool calls")
 
         tool_call_id = tool_call.get("id")
         if not isinstance(tool_call_id, str):
-            raise Exception("Prop `id` is not a string")
+            raise OCIError(status_code=400, message="Tool call `id` must be a string")
 
         tool_function = tool_call.get("function")
         if not isinstance(tool_function, dict):
-            raise Exception("Prop `function` is not a dictionary")
+            raise OCIError(status_code=400, message="Tool call `function` must be a dictionary")
 
         function_name = tool_function.get("name")
         if not isinstance(function_name, str):
-            raise Exception("Prop `name` is not a string")
+            raise OCIError(status_code=400, message="Tool call `function.name` must be a string")
 
         arguments = tool_call["function"].get("arguments", "{}")
         if not isinstance(arguments, str):
-            raise Exception("Prop `arguments` is not a string")
+            raise OCIError(status_code=400, message="Tool call `function.arguments` must be a JSON string")
 
         # tool_calls_formated.append(OCIToolCall(
         #     id=tool_call_id,
@@ -1138,15 +1158,16 @@ def adapt_messages_to_generic_oci_standard(
 
         if role == "assistant" and tool_calls is not None:
             if not isinstance(tool_calls, list):
-                raise Exception("Prop `tool_calls` must be a list of tool calls")
+                raise OCIError(status_code=400, message="Message `tool_calls` must be a list")
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
             )
 
         elif role in ["system", "user", "assistant"] and content is not None:
             if not isinstance(content, (str, list)):
-                raise Exception(
-                    "Prop `content` must be a string or a list of content items"
+                raise OCIError(
+                    status_code=400,
+                    message="Message `content` must be a string or list of content parts",
                 )
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_content_message(role, content)
@@ -1154,9 +1175,9 @@ def adapt_messages_to_generic_oci_standard(
 
         elif role == "tool":
             if not isinstance(tool_call_id, str):
-                raise Exception("Prop `tool_call_id` is required and must be a string")
+                raise OCIError(status_code=400, message="Tool result message must have a string `tool_call_id`")
             if not isinstance(content, str):
-                raise Exception("Prop `content` is not a string")
+                raise OCIError(status_code=400, message="Tool result message `content` must be a string")
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_tool_response(
                     role, tool_call_id, content
@@ -1170,11 +1191,11 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
     new_tools = []
     for tool in tools:
         if tool["type"] != "function":
-            raise Exception("OCI only supports function tools")
+            raise OCIError(status_code=400, message="OCI only supports function tools")
 
         tool_function = tool.get("function")
         if not isinstance(tool_function, dict):
-            raise Exception("Prop `function` is not a dictionary")
+            raise OCIError(status_code=400, message="Tool `function` must be a dictionary")
 
         new_tool = OCIToolDefinition(
             type="FUNCTION",
@@ -1190,8 +1211,6 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
 def adapt_tools_to_openai_standard(
     tools: List[OCIToolCall],
 ) -> List[ChatCompletionMessageToolCall]:
-    import uuid
-
     new_tools = []
     for tool in tools:
         new_tool = ChatCompletionMessageToolCall(
@@ -1236,7 +1255,10 @@ class OCIStreamWrapper(CustomStreamWrapper):
         try:
             typed_chunk = CohereStreamChunk(**dict_chunk)
         except TypeError as e:
-            raise ValueError(f"Chunk cannot be casted to CohereStreamChunk: {str(e)}")
+            raise OCIError(
+                status_code=500,
+                message=f"Chunk cannot be parsed as CohereStreamChunk: {str(e)}",
+            )
 
         if typed_chunk.index is None:
             typed_chunk.index = 0
@@ -1250,10 +1272,9 @@ class OCIStreamWrapper(CustomStreamWrapper):
             finish_reason = "stop"
         elif finish_reason == "MAX_TOKENS":
             finish_reason = "length"
-        elif finish_reason is None:
-            finish_reason = None
-        else:
-            finish_reason = "stop"
+        elif finish_reason == "TOOL_CALL":
+            finish_reason = "tool_calls"
+        # None → streaming in progress; unknown → pass through as-is
 
         # For Cohere, we don't have tool calls in the streaming format
         tool_calls = None
@@ -1290,7 +1311,10 @@ class OCIStreamWrapper(CustomStreamWrapper):
         try:
             typed_chunk = OCIStreamChunk(**dict_chunk)
         except TypeError as e:
-            raise ValueError(f"Chunk cannot be casted to OCIStreamChunk: {str(e)}")
+            raise OCIError(
+                status_code=500,
+                message=f"Chunk cannot be parsed as OCIStreamChunk: {str(e)}",
+            )
 
         if typed_chunk.index is None:
             typed_chunk.index = 0
@@ -1301,12 +1325,14 @@ class OCIStreamWrapper(CustomStreamWrapper):
                 if isinstance(item, OCITextContentPart):
                     text += item.text
                 elif isinstance(item, OCIImageContentPart):
-                    raise ValueError(
-                        "OCI does not support image content in streaming responses"
+                    raise OCIError(
+                        status_code=500,
+                        message="OCI returned image content in a streaming response — not supported",
                     )
                 else:
-                    raise ValueError(
-                        f"Unsupported content type in OCI response: {item.type}"
+                    raise OCIError(
+                        status_code=500,
+                        message=f"Unsupported content type in OCI streaming response: {item.type}",
                     )
 
         tool_calls = None
