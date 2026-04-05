@@ -4,7 +4,6 @@ import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
@@ -1282,21 +1281,17 @@ async def test_assistant_message_cache_control():
     assert result[0]["role"] == "user"
     assert result[1]["role"] == "assistant"
 
-    # Bedrock rejects cachePoint in assistant messages ("There is nothing
-    # available to cache"), so assistant content must NOT contain cachePoint.
+    # Assistant message should have text content and cachePoint
     assistant_content = result[1]["content"]
-    assert len(assistant_content) == 1
+    assert len(assistant_content) == 2
     assert assistant_content[0]["text"] == "Hi there!"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
 @pytest.mark.asyncio
 async def test_assistant_message_list_content_cache_control():
-    """Test that cache_control on assistant list content does NOT produce cachePoint blocks.
-
-    Bedrock rejects cachePoint in assistant messages with 'There is nothing
-    available to cache'.  Prompt caching only supports cache points in system,
-    tools, and user messages.
-    """
+    """Test assistant messages with list content and cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
         _bedrock_converse_messages_pt,
@@ -1320,10 +1315,12 @@ async def test_assistant_message_list_content_cache_control():
 
     assert result == async_result
 
-    # No cachePoint in assistant content
+    # Assistant message should have text content and cachePoint
     assistant_content = result[1]["content"]
-    assert len(assistant_content) == 1
+    assert len(assistant_content) == 2
     assert assistant_content[0]["text"] == "This should be cached"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
 @pytest.mark.asyncio
@@ -1462,12 +1459,10 @@ async def test_assistant_tool_calls_cache_control():
     assistant_content = result[1]["content"]
     assert len(assistant_content) == 2
 
-    # First should be tool use
     assert "toolUse" in assistant_content[0]
     assert assistant_content[0]["toolUse"]["name"] == "calc"
     assert assistant_content[0]["toolUse"]["toolUseId"] == "call_proxy_123"
 
-    # Second should be cachePoint
     assert "cachePoint" in assistant_content[1]
     assert assistant_content[1]["cachePoint"]["type"] == "default"
 
@@ -1516,15 +1511,12 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
     assistant_content = result[1]["content"]
     assert len(assistant_content) == 3
 
-    # First tool use with cache
     assert "toolUse" in assistant_content[0]
     assert assistant_content[0]["toolUse"]["toolUseId"] == "call_1"
 
-    # Cache point for first tool
     assert "cachePoint" in assistant_content[1]
     assert assistant_content[1]["cachePoint"]["type"] == "default"
 
-    # Second tool use without cache
     assert "toolUse" in assistant_content[2]
     assert assistant_content[2]["toolUse"]["toolUseId"] == "call_2"
 

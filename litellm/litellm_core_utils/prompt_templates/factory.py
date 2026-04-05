@@ -3881,8 +3881,6 @@ def _convert_to_bedrock_tool_call_invoke(
                                 _parts_list.append(
                                     BedrockContentBlock(toolUse=bedrock_tool)
                                 )
-                            # cache_control applies to the whole original
-                            # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
                                 _parts_list.append(
                                     BedrockContentBlock(
@@ -3899,7 +3897,6 @@ def _convert_to_bedrock_tool_call_invoke(
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
 
-                # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
                     cache_point_block = BedrockContentBlock(
                         cachePoint=CachePointBlock(type="default")
@@ -4459,6 +4456,13 @@ class BedrockConverseMessagesProcessor:
                                         toolUseId=tool_use_id,
                                     )
                                     _parts.append(BedrockContentBlock(toolResult=bedrock_tool_result))
+                                else:
+                                    verbose_logger.warning(
+                                        "Unexpected tool_use block in user message content — "
+                                        "tool_use belongs in assistant messages. Dropping block."
+                                    )
+                                # Skip cachePoint — Bedrock rejects cachePoint placed
+                                # before toolResult ("nothing available to cache").
                                 continue
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -4637,6 +4641,20 @@ class BedrockConverseMessagesProcessor:
                                 assistants_parts.append(
                                     BedrockContentBlock(toolUse=bedrock_tool_use)
                                 )
+                                # Skip cachePoint for tool_use — a cachePoint here
+                                # would land before the user's toolResult, which
+                                # Bedrock rejects with "nothing available to cache".
+                                continue
+                            _cache_point_block = (
+                                litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    message_block=cast(
+                                        OpenAIMessageContentListBlock, element
+                                    ),
+                                    block_type="content_block",
+                                )
+                            )
+                            if _cache_point_block is not None:
+                                assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
@@ -4646,6 +4664,13 @@ class BedrockConverseMessagesProcessor:
                         assistant_content.append(
                             BedrockContentBlock(text=_assistant_content)
                         )
+                    _cache_point_block = (
+                        litellm.AmazonConverseConfig()._get_cache_point_block(
+                            assistant_message_block, block_type="content_block"
+                        )
+                    )
+                    if _cache_point_block is not None:
+                        assistant_content.append(_cache_point_block)
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
@@ -4832,11 +4857,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             )
                             _parts.append(_part)
                         elif element["type"] in ("tool_result", "tool_use"):
-                            # Anthropic-format tool results/uses embedded in user messages
-                            # (e.g. sent by Cursor IDE after a tool call).  Convert the
-                            # tool_result to a Bedrock toolResult block.  Skip the
-                            # cachePoint — Bedrock rejects cachePoint blocks placed
-                            # immediately after toolResult content with no preceding text.
                             if element["type"] == "tool_result":
                                 tool_use_id = element.get("tool_use_id", str(uuid.uuid4()))
                                 inner_content = element.get("content", "")
@@ -4856,8 +4876,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     toolUseId=tool_use_id,
                                 )
                                 _parts.append(BedrockContentBlock(toolResult=bedrock_tool_result))
-                            # Skip cachePoint for tool_result/tool_use — add it at
-                            # message level (after all content) if needed, handled below.
+                            else:
+                                verbose_logger.warning(
+                                    "Unexpected tool_use block in user message content — "
+                                    "tool_use belongs in assistant messages. Dropping block."
+                                )
+                            # Skip cachePoint — Bedrock rejects cachePoint placed
+                            # before toolResult ("nothing available to cache").
                             continue
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -5017,8 +5042,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                         elif element["type"] == "tool_use":
                             # Anthropic-format tool invocation embedded in assistant
                             # content list (e.g. from Cursor IDE). Convert to Bedrock
-                            # toolUse ContentBlock directly. Skip cachePoint — Bedrock
-                            # rejects cachePoint immediately after toolUse blocks.
+                            # toolUse ContentBlock directly.
                             tool_input = element.get("input", {})
                             if isinstance(tool_input, str):
                                 try:
@@ -5033,11 +5057,20 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(
                                 BedrockContentBlock(toolUse=bedrock_tool_use)
                             )
-                            continue  # skip _get_cache_point_block for tool_use
-                        # Anthropic prompt caching only supports cachePoint blocks in
-                        # system, tools, and USER messages — NOT in assistant messages.
-                        # Bedrock rejects cachePoint in assistant content with
-                        # "There is nothing available to cache."  Skip it here.
+                            # Skip cachePoint for tool_use — a cachePoint here
+                            # would land before the user's toolResult, which
+                            # Bedrock rejects with "nothing available to cache".
+                            continue
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 # Skip completely empty strings to avoid blank content blocks
@@ -5045,6 +5078,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                     assistant_content.append(
                         BedrockContentBlock(text=_assistant_content)
                     )
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        assistant_message_block, block_type="content_block"
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
