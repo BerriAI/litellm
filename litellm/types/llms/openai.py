@@ -797,6 +797,11 @@ ValidUserMessageContentTypes = [
     "guarded_text",
     "video_url",
     "file",
+    # Anthropic/Bedrock multi-turn tool use: clients like Cursor send tool results
+    # back in user messages as {"type": "tool_result", ...}. Allow them through so
+    # downstream provider transformations can handle them correctly.
+    "tool_result",
+    "tool_use",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 ValidUserMessageContentTypesLiteral = Literal[
@@ -819,6 +824,11 @@ ValidUserMessageContentTypes = [
     "guarded_text",
     "video_url",
     "file",
+    # Anthropic/Bedrock multi-turn tool use: clients like Cursor send tool results
+    # back in user messages as {"type": "tool_result", ...}. Allow them through so
+    # downstream provider transformations can handle them correctly.
+    "tool_result",
+    "tool_use",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 # Assistant message content types (text, thinking, redacted_thinking, image_url)
