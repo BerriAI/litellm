@@ -1144,11 +1144,9 @@ class PrometheusLogger(CustomLogger):
 
         # set proxy virtual key rpm/tpm metrics
         self._set_virtual_key_rate_limit_metrics(
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
             kwargs=kwargs,
             metadata=_metadata,
-            model_id=enum_values.model_id,
+            enum_values=enum_values,
         )
 
         # set latency metrics
@@ -1372,11 +1370,9 @@ class PrometheusLogger(CustomLogger):
 
     def _set_virtual_key_rate_limit_metrics(
         self,
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
         kwargs: dict,
         metadata: dict,
-        model_id: Optional[str] = None,
+        enum_values: UserAPIKeyLabelValues,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -1397,19 +1393,25 @@ class PrometheusLogger(CustomLogger):
             metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
         )
 
-        self.litellm_remaining_api_key_requests_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
-        ).set(remaining_requests)
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                "litellm_remaining_api_key_requests_for_model"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_api_key_requests_for_model.labels(**_labels).set(
+            remaining_requests
+        )
 
-        self.litellm_remaining_api_key_tokens_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
-        ).set(remaining_tokens)
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                "litellm_remaining_api_key_tokens_for_model"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_remaining_api_key_tokens_for_model.labels(**_labels).set(
+            remaining_tokens
+        )
 
     def _set_latency_metrics(
         self,
