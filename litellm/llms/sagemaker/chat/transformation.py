@@ -98,6 +98,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
+        model_id = optional_params.get("model_id", None)
+        if model_id is not None:
+            headers = headers or {}
+            headers["X-Amzn-SageMaker-Inference-Component"] = model_id
         return self._sign_request(
             service_name="sagemaker",
             headers=headers,
