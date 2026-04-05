@@ -81,7 +81,7 @@ Teams can now attach guardrails directly from the team management UI. Admins con
 
 MCP Toolsets let AI platform admins create curated subsets of tools from one or more MCP servers and assign them to teams and keys with scoped permissions. Instead of granting access to an entire MCP server, you can now bundle specific tools into a named toolset — controlling exactly which tools each team or API key can invoke. Toolsets are fully managed through the UI (new Toolsets tab) and API, and work seamlessly with the Responses API and Playground.
 
-![MCP Toolsets](../../img/release_notes/mcp_ui.png)
+![MCP Toolsets](../../img/release_notes/mcp_toolsets.jpeg)
 
 [Get Started](../../docs/mcp)
 ---
