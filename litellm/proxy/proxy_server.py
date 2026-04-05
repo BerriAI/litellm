@@ -278,6 +278,7 @@ from litellm.proxy.auth.model_checks import (
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
+    get_key_models_with_db_access_groups,
     get_mcp_server_ids,
     get_team_models,
 )
@@ -10852,7 +10853,7 @@ async def model_info_v1(  # noqa: PLR0915
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
+    key_models = await get_key_models_with_db_access_groups(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
