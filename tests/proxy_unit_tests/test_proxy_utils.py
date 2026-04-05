@@ -178,6 +178,7 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
         team_metadata=team_metadata,
     )
     proxy_config = Mock()
+    proxy_config.load_team_config.return_value = {}
 
     data = {"metadata": {}}
     if request_tags is not None:
