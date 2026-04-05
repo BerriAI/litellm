@@ -1603,14 +1603,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
+        _usage_metadata = completion_response["usageMetadata"]
         usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get(
-                "promptTokenCount", 0
-            ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens=_usage_metadata.get("promptTokenCount", 0)
+            + _usage_metadata.get("toolUsePromptTokenCount", 0),
+            completion_tokens=_usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=_usage_metadata.get("totalTokenCount", 0),
         )
 
         setattr(model_response, "usage", usage)
@@ -1641,14 +1639,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
+        _usage_metadata = completion_response["usageMetadata"]
         usage = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get(
-                "promptTokenCount", 0
-            ),
-            completion_tokens=completion_response["usageMetadata"].get(
-                "candidatesTokenCount", 0
-            ),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens=_usage_metadata.get("promptTokenCount", 0)
+            + _usage_metadata.get("toolUsePromptTokenCount", 0),
+            completion_tokens=_usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=_usage_metadata.get("totalTokenCount", 0),
         )
 
         setattr(model_response, "usage", usage)
@@ -1666,7 +1662,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+        effective_prompt_tokens = usage_metadata.get(
+            "promptTokenCount", 0
+        ) + usage_metadata.get("toolUsePromptTokenCount", 0)
+        if effective_prompt_tokens + usage_metadata.get(
             "candidatesTokenCount", 0
         ) == usage_metadata.get("totalTokenCount", 0):
             return True
@@ -1848,8 +1847,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
+        prompt_tokens = usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
+            "toolUsePromptTokenCount", 0
+        )
         usage = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0),
+            prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
