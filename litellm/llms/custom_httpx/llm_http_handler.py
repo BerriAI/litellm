@@ -1965,7 +1965,10 @@ class BaseLLMHTTPHandler:
             response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
-                e=e, provider_config=anthropic_messages_provider_config
+                e=e,
+                provider_config=anthropic_messages_provider_config,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
             )
 
         # used for logging + cost tracking
@@ -4690,6 +4693,8 @@ class BaseLLMHTTPHandler:
             "BaseContainerConfig",
             BaseEvalsAPIConfig,
         ],
+        model: str = "",
+        custom_llm_provider: str = "",
     ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
@@ -4711,17 +4716,33 @@ class BaseLLMHTTPHandler:
         if provider_config is None:
             from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-            raise BaseLLMException(
+            raw_exception = BaseLLMException(
                 status_code=status_code,
                 message=error_text,
                 headers=error_headers,
             )
+        else:
+            raw_exception = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
 
-        raise provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        # When model and provider are known, map to typed exceptions
+        # (RateLimitError, ContextWindowExceededError, etc.) so Router
+        # retry/fallback logic works correctly.
+        if model and custom_llm_provider:
+            from litellm.litellm_core_utils.exception_mapping_utils import (
+                exception_type,
+            )
+
+            raise exception_type(
+                model=model,
+                original_exception=raw_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+
+        raise raw_exception
 
     async def async_realtime(
         self,
