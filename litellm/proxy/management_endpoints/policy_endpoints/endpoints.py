@@ -659,8 +659,10 @@ async def get_policy_templates(
         "yes",
     )
     if use_local:
-        return _load_policy_templates_from_local_backup()
+        templates = _load_policy_templates_from_local_backup()
+        return _filter_templates_by_available_patterns(templates)
 
+    templates = []
     try:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -671,13 +673,51 @@ async def get_policy_templates(
         )
         response = await async_client.get(POLICY_TEMPLATES_GITHUB_URL)
         if response.status_code == 200:
-            return response.json()
+            templates = response.json()
     except Exception as e:
         verbose_proxy_logger.debug(
             "Failed to fetch policy templates from GitHub, using local backup: %s", e
         )
 
-    return _load_policy_templates_from_local_backup()
+    if not templates:
+        templates = _load_policy_templates_from_local_backup()
+
+    return _filter_templates_by_available_patterns(templates)
+
+
+def _filter_templates_by_available_patterns(templates: list) -> list:
+    """Filter out templates that reference unavailable prebuilt patterns."""
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+        PREBUILT_PATTERNS,
+    )
+
+    available_patterns = set(PREBUILT_PATTERNS.keys())
+    filtered_templates = []
+
+    for template in templates:
+        is_valid = True
+        guardrail_definitions = template.get("guardrailDefinitions", [])
+        for gd in guardrail_definitions:
+            litellm_params = gd.get("litellm_params", {})
+            if litellm_params.get("guardrail") == "litellm_content_filter":
+                patterns = litellm_params.get("patterns", [])
+                for p in patterns:
+                    if p.get("pattern_type") == "prebuilt":
+                        pattern_name = p.get("pattern_name")
+                        if pattern_name and pattern_name not in available_patterns:
+                            is_valid = False
+                            break
+            if not is_valid:
+                break
+
+        if is_valid:
+            filtered_templates.append(template)
+        else:
+            verbose_proxy_logger.debug(
+                f"Filtering out policy template '{template.get('id')}' because it references unavailable patterns"
+            )
+
+    return filtered_templates
 
 
 class EnrichTemplateRequest(BaseModel):

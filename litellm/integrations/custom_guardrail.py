@@ -805,7 +805,13 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        for key, value in vars(litellm_params).items():
+        # Handle both dict and Pydantic model/object
+        items = (
+            litellm_params.items()
+            if isinstance(litellm_params, dict)
+            else vars(litellm_params).items()
+        )
+        for key, value in items:
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(

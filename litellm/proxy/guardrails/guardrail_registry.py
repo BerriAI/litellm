@@ -234,10 +234,18 @@ class GuardrailRegistry:
     ########### DB management helpers for guardrails ###########
     ############################################################
     async def add_guardrail_to_db(
-        self, guardrail: Guardrail, prisma_client: PrismaClient
+        self,
+        guardrail: Guardrail,
+        prisma_client: PrismaClient,
+        guardrail_id: Optional[str] = None,
     ):
         """
-        Add a guardrail to the database
+        Add a guardrail to the database.
+
+        Args:
+            guardrail_id: If provided, the row is created with this specific ID
+                          (used by rollback paths to restore a deleted row with
+                          its original ID).
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
@@ -252,15 +260,19 @@ class GuardrailRegistry:
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
 
+            create_data: Dict[str, Any] = {
+                "guardrail_name": guardrail_name,
+                "litellm_params": litellm_params,
+                "guardrail_info": guardrail_info,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            if guardrail_id is not None:
+                create_data["guardrail_id"] = guardrail_id
+
             # Create guardrail in DB
             created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
-                data={
-                    "guardrail_name": guardrail_name,
-                    "litellm_params": litellm_params,
-                    "guardrail_info": guardrail_info,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                }
+                data=create_data
             )
 
             # Add guardrail_id to the returned guardrail object
@@ -541,26 +553,30 @@ class InMemoryGuardrailHandler:
         return _guardrail_callback
 
     def update_in_memory_guardrail(
-        self, guardrail_id: str, guardrail: Guardrail
+        self,
+        guardrail_id: str,
+        guardrail: Guardrail,
+        config_file_path: Optional[str] = None,
     ) -> None:
         """
-        Update a guardrail in memory
+        Update a guardrail in memory by deleting and re-initializing.
 
-        - updates the guardrail in memory
-        - updates the guardrail params in litellm.callback_manager
+        Re-initialization is necessary because guardrails like
+        ``ContentFilterGuardrail`` compile patterns at init time.
+        Simply patching attributes via ``setattr`` would leave stale
+        compiled state and skip validation of new patterns.
         """
-        self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
+        # Delete old callback and in-memory references
+        self.delete_in_memory_guardrail(guardrail_id)
 
-        custom_guardrail_callback = self.guardrail_id_to_custom_guardrail.get(
-            guardrail_id
+        # Work on a copy to avoid mutating the caller's dict (important for rollback paths)
+        guardrail_copy = {**guardrail, "guardrail_id": guardrail_id}
+
+        # Re-initialize (validates patterns, compiles regexes, registers callback)
+        self.initialize_guardrail(
+            guardrail=cast(Guardrail, guardrail_copy),
+            config_file_path=config_file_path,
         )
-        if custom_guardrail_callback:
-            updated_litellm_params = cast(
-                LitellmParams, guardrail.get("litellm_params", {})
-            )
-            custom_guardrail_callback.update_in_memory_litellm_params(
-                litellm_params=updated_litellm_params
-            )
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
