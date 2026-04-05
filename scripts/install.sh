@@ -83,8 +83,8 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$PYTHON_BIN" -m pip install --upgrade "${LITELLM_PACKAGE}" \
-  || die "pip install failed. Try manually: $PYTHON_BIN -m pip install '${LITELLM_PACKAGE}'"
+"$PYTHON_BIN" -m pip install --only-binary :all: --upgrade "${LITELLM_PACKAGE}" \
+  || die "pip install failed. Try manually: $PYTHON_BIN -m pip install --only-binary :all: '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by pip for this Python ───────────────
 # sysconfig.get_path('scripts') is where pip puts console scripts — reliable
