@@ -13,7 +13,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -326,3 +325,110 @@ async def test_litellm_call_info_backwards_compatible():
 
         assert result == {"x-test": "1"}
         assert injector.called is True
+
+
+# --- Tests for custom_llm_provider fallback (streaming response types) ---
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_fallback_to_response_attribute():
+    """Test that _build_litellm_call_info falls back to response.custom_llm_provider
+    when _hidden_params doesn't contain it (streaming response types)."""
+    inspector = CallInfoInspectorLogger()
+
+    class MockStreamResponse:
+        """Mimics CustomStreamWrapper: custom_llm_provider as attribute,
+        _hidden_params without it."""
+
+        custom_llm_provider = "bedrock"
+        _hidden_params = {
+            "model_id": "model-xyz",
+            "api_base": "https://bedrock.us-east-1.amazonaws.com",
+        }
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={
+                "model": "claude-3",
+                "metadata": {"model_info": {"id": "model-xyz"}},
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockStreamResponse(),
+        )
+
+        assert inspector.called is True
+        assert inspector.received_call_info is not None
+        assert inspector.received_call_info["custom_llm_provider"] == "bedrock"
+        assert (
+            inspector.received_call_info["api_base"]
+            == "https://bedrock.us-east-1.amazonaws.com"
+        )
+        assert inspector.received_call_info["model_id"] == "model-xyz"
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_fallback_no_hidden_params():
+    """Test that _build_litellm_call_info works when response has no _hidden_params
+    at all (LiteLLMCompletionStreamingIterator case)."""
+    inspector = CallInfoInspectorLogger()
+
+    class MockIteratorResponse:
+        """Mimics LiteLLMCompletionStreamingIterator: custom_llm_provider as attribute,
+        no _hidden_params attribute at all."""
+
+        custom_llm_provider = "vertex_ai"
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={"model": "gemini-pro", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockIteratorResponse(),
+        )
+
+        assert inspector.called is True
+        assert inspector.received_call_info is not None
+        assert inspector.received_call_info["custom_llm_provider"] == "vertex_ai"
+        assert inspector.received_call_info["api_base"] is None
+        assert inspector.received_call_info["model_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_litellm_call_info_hidden_params_takes_priority():
+    """Test that _hidden_params.custom_llm_provider takes priority over
+    the response attribute when both are present."""
+    inspector = CallInfoInspectorLogger()
+
+    class MockResponse:
+        custom_llm_provider = "attribute_value"
+        _hidden_params = {
+            "custom_llm_provider": "hidden_params_value",
+            "api_base": "https://example.com",
+            "model_id": "m1",
+        }
+
+    with patch("litellm.callbacks", [inspector]):
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.caching.caching import DualCache
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        await proxy_logging.post_call_response_headers_hook(
+            data={"model": "test", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=MockResponse(),
+        )
+
+        assert (
+            inspector.received_call_info["custom_llm_provider"]
+            == "hidden_params_value"
+        )

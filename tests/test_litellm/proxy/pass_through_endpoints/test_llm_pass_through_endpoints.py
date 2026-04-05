@@ -225,7 +225,9 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
+        mock_request.state = (
+            None  # Prevent Mock from returning a truthy _cached_headers
+        )
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -325,7 +327,9 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
+        mock_request.state = (
+            None  # Prevent Mock from returning a truthy _cached_headers
+        )
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -908,7 +912,9 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
-        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
+        mock_request.state = (
+            None  # Prevent Mock from returning a truthy _cached_headers
+        )
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-key",
@@ -1197,7 +1203,7 @@ class TestBedrockLLMProxyRoute:
         """
         Test that Bedrock passthrough endpoints use credentials from model configuration
         instead of environment variables when a router model is used.
-        
+
         This test verifies the fix for the bug where passthrough endpoints were using
         environment variables instead of model-specific credentials from config.yaml.
         """
@@ -1267,14 +1273,24 @@ class TestBedrockLLMProxyRoute:
             deployment_litellm_params = deployment.get("litellm_params", {})
 
             # Verify model-specific credentials are in the deployment
-            assert deployment_litellm_params.get("aws_access_key_id") == model_access_key
-            assert deployment_litellm_params.get("aws_secret_access_key") == model_secret_key
+            assert (
+                deployment_litellm_params.get("aws_access_key_id") == model_access_key
+            )
+            assert (
+                deployment_litellm_params.get("aws_secret_access_key")
+                == model_secret_key
+            )
             assert deployment_litellm_params.get("aws_region_name") == model_region
-            assert deployment_litellm_params.get("aws_session_token") == model_session_token
+            assert (
+                deployment_litellm_params.get("aws_session_token")
+                == model_session_token
+            )
 
             # Verify environment variables are NOT in the deployment
             assert deployment_litellm_params.get("aws_access_key_id") != env_access_key
-            assert deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
+            assert (
+                deployment_litellm_params.get("aws_secret_access_key") != env_secret_key
+            )
             assert deployment_litellm_params.get("aws_region_name") != env_region
 
             # Test 3: Verify credentials are passed through the passthrough route
@@ -1483,7 +1499,9 @@ class TestForwardHeaders:
 
         # Create a mock request with custom headers
         mock_request = MagicMock(spec=Request)
-        mock_request.state = None  # Prevent MagicMock from returning a truthy _cached_headers
+        mock_request.state = (
+            None  # Prevent MagicMock from returning a truthy _cached_headers
+        )
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/test/endpoint"
@@ -1518,7 +1536,9 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aiter_bytes = AsyncMock(
+            return_value=[b'{"result": "success"}']
+        )
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with patch(
@@ -1540,6 +1560,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=True
             result = await pass_through_request(
@@ -1587,7 +1610,7 @@ class TestForwardHeaders:
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/test/endpoint"
-        
+
         # User headers that should NOT be forwarded
         user_headers = {
             "x-custom-header": "custom-value",
@@ -1612,7 +1635,9 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aiter_bytes = AsyncMock(
+            return_value=[b'{"result": "success"}']
+        )
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with patch(
@@ -1634,6 +1659,9 @@ class TestForwardHeaders:
             mock_logging_obj.pre_call_hook = AsyncMock(return_value=mock_request_body)
             mock_logging_obj.post_call_success_hook = AsyncMock()
             mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(
+                return_value={}
+            )
 
             # Call pass_through_request with forward_headers=False (default)
             result = await pass_through_request(
@@ -1674,7 +1702,7 @@ class TestForwardHeaders:
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/openai/chat/completions"
-        
+
         # User headers to be forwarded
         user_headers = {
             "x-custom-tracking-id": "tracking-123",
@@ -1683,7 +1711,7 @@ class TestForwardHeaders:
         }
         mock_request.headers = user_headers
         mock_request.json = AsyncMock(return_value={"stream": False})
-        
+
         mock_fastapi_response = MagicMock(spec=Response)
         mock_user_api_key_dict = MagicMock()
 
@@ -1691,7 +1719,9 @@ class TestForwardHeaders:
         mock_httpx_response = MagicMock()
         mock_httpx_response.status_code = 200
         mock_httpx_response.headers = {"content-type": "application/json"}
-        mock_httpx_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+        mock_httpx_response.aiter_bytes = AsyncMock(
+            return_value=[b'{"result": "success"}']
+        )
         mock_httpx_response.aread = AsyncMock(return_value=b'{"result": "success"}')
 
         with patch(
@@ -1746,10 +1776,10 @@ class TestForwardHeaders:
 
                 # Verify create_pass_through_route was called
                 mock_create_route.assert_called_once()
-                
+
                 # Get the call arguments to verify _forward_headers parameter
                 call_kwargs = mock_create_route.call_args[1]
-                
+
                 # Note: The current implementation doesn't explicitly pass _forward_headers
                 # This test documents the current behavior. If _forward_headers should be
                 # configurable in llm_passthrough_factory_proxy_route, it would need to be added
@@ -2251,15 +2281,15 @@ class TestOpenAIPassthroughRoute:
             # Verify create_pass_through_route was called with correct target
             mock_create_route.assert_called_once()
             call_args = mock_create_route.call_args[1]
-            
+
             # Should route to OpenAI's responses API
             assert call_args["target"] == "https://api.openai.com/v1/responses"
             assert call_args["endpoint"] == "v1/responses"
-            
+
             # Verify headers contain API key
             assert "authorization" in call_args["custom_headers"]
             assert "Bearer sk-test-key" in call_args["custom_headers"]["authorization"]
-            
+
             # Verify result
             assert result == {"id": "resp_123", "status": "completed"}
 
@@ -2301,7 +2331,7 @@ class TestOpenAIPassthroughRoute:
             mock_create_route.assert_called_once()
             call_args = mock_create_route.call_args[1]
             assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
-            
+
             # Verify result
             assert result == {"id": "chatcmpl-123", "choices": []}
 
@@ -2372,10 +2402,10 @@ class TestOpenAIPassthroughRoute:
             mock_create_route.assert_called_once()
             call_args = mock_create_route.call_args[1]
             assert call_args["target"] == "https://api.openai.com/v1/assistants"
-            
+
             # Verify headers contain API key and OpenAI-Beta header
             assert "authorization" in call_args["custom_headers"]
-            
+
             # Verify result
             assert result == {"id": "asst_123", "object": "assistant"}
 
@@ -2419,10 +2449,12 @@ class TestCursorProxyRoute:
             call_args = mock_create_route.call_args[1]
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
 
-            expected_auth = base64.b64encode(
-                f"{test_api_key}:".encode("utf-8")
-            ).decode("ascii")
-            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+            expected_auth = base64.b64encode(f"{test_api_key}:".encode("utf-8")).decode(
+                "ascii"
+            )
+            assert (
+                call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+            )
 
             assert result == {"agents": [], "nextCursor": None}
 
@@ -2466,7 +2498,10 @@ class TestCursorProxyRoute:
 
         ui_credential = CredentialItem(
             credential_name="my-cursor-key",
-            credential_values={"api_key": "crsr_ui_test_key", "api_base": "https://api.cursor.com"},
+            credential_values={
+                "api_key": "crsr_ui_test_key",
+                "api_base": "https://api.cursor.com",
+            },
             credential_info={"custom_llm_provider": "cursor"},
         )
 
@@ -2493,8 +2528,11 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/models"
 
             import base64
+
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
-            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+            assert (
+                call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+            )
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
