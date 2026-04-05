@@ -857,22 +857,8 @@ async def _apply_default_budget_to_end_user(
     )
 
     if default_budget is not None:
-        # Apply default budget to end user object (in-memory for this request)
+        # Apply default budget to end user object
         end_user_obj.litellm_budget_table = default_budget
-
-        # Persist budget_id to DB so the budget reset job can find this user
-        try:
-            await prisma_client.db.litellm_endusertable.update(
-                where={"user_id": end_user_obj.user_id},
-                data={"budget_id": litellm.max_end_user_budget_id},
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to persist default budget_id for end user %s: %s",
-                end_user_obj.user_id,
-                e,
-            )
-
         verbose_proxy_logger.debug(
             f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
         )
