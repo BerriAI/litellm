@@ -2,6 +2,7 @@ import React from "react";
 import Image from "next/image";
 import { MessageType } from "./types";
 import { shouldShowChatAttachedImage } from "./ChatImageUtils";
+import { sanitizeImageSrc } from "./ResponsesImageUtils";
 import { FilePdfOutlined } from "@ant-design/icons";
 
 interface ChatImageRendererProps {
@@ -23,7 +24,7 @@ const ChatImageRenderer: React.FC<ChatImageRendererProps> = ({ message }) => {
         </div>
       ) : (
         <Image
-          src={message.imagePreviewUrl || ""}
+          src={sanitizeImageSrc(message.imagePreviewUrl)}
           alt="User uploaded image"
           width={256}
           height={200}

@@ -28,6 +28,8 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
+import { getObfuscated, setObfuscated } from "../../../utils/storageUtils";
+import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
 import PolicySelector from "../../policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "../../mcp_tools/MCPToolArgumentsForm";
@@ -67,7 +69,7 @@ import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
 import ResponsesImageRenderer from "./ResponsesImageRenderer";
 import ResponsesImageUpload from "./ResponsesImageUpload";
-import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
+import { createDisplayMessage, createMultimodalMessage, sanitizeImageSrc } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
@@ -163,7 +165,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     clearMCPEvents,
   } = useChatHistory({ simplified });
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
-    const saved = sessionStorage.getItem("apiKeySource");
+    const saved = getObfuscated("apiKeySource");
     if (saved) {
       try {
         return JSON.parse(saved) as "session" | "custom";
@@ -173,7 +175,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
-  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
+  const [apiKey, setApiKey] = useState<string>(() => getObfuscated("apiKey") || "");
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
@@ -338,9 +340,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     proxySettings,
   ]);
 
+  // chatHistory persistence is handled by useChatHistory.ts (debounced,
+  // with empty-array guard to avoid defeating clearChatHistory()).
+
   useEffect(() => {
-    sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
-    sessionStorage.setItem("apiKey", apiKey);
+    setObfuscated("apiKeySource", JSON.stringify(apiKeySource));
+    setObfuscated("apiKey", apiKey);
     sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
@@ -479,7 +484,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const handleImageUpload = (file: File) => {
     setUploadedImages((prev) => [...prev, file]);
-    const previewUrl = URL.createObjectURL(file);
+    const rawUrl = URL.createObjectURL(file);
+    // Validate the blob URL protocol to break the taint chain for static analysis.
+    // URL.createObjectURL always returns a blob: URL, but we verify explicitly so
+    // CodeQL can confirm no untrusted scheme reaches <img src>.
+    const previewUrl = sanitizeImageSrc(rawUrl);
     setImagePreviewUrls((prev) => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
@@ -1710,7 +1719,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {uploadedImages.map((file, index) => (
                         <div key={index} className="relative inline-block">
                           <img
-                            src={imagePreviewUrls[index] || ""}
+                            src={sanitizeImageSrc(imagePreviewUrls[index])}
                             alt={`Upload preview ${index + 1}`}
                             className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
                           />

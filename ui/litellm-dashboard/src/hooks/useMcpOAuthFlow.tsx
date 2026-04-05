@@ -11,6 +11,7 @@ import {
   serverRootPath,
 } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { setObfuscated, getObfuscated } from "@/utils/storageUtils";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -78,24 +79,21 @@ export const useMcpOAuthFlow = ({
   };
 
   const setStorageItem = (key: string, value: string) => {
-    if (typeof window === "undefined") return;
-    try {
-      // Use sessionStorage only — the flow state may contain client credentials;
-      // writing them to localStorage would persist across browser sessions and
-      // make them readable by any injected script (XSS).
-      window.sessionStorage.setItem(key, value);
-    } catch (err) {
-      console.warn(`Failed to set storage item ${key}`, err);
-    }
+    setObfuscated(key, value);
   };
 
   const getStorageItem = (key: string): string | null => {
+    // Try obfuscated sessionStorage first, fall back to legacy plain localStorage.
+    // The localStorage fallback exists for one-time migration of values written
+    // before the obfuscated-sessionStorage switch. It can be removed once all
+    // active sessions have been refreshed (target: next major release).
+    const obfuscated = getObfuscated(key);
+    if (obfuscated !== null) return obfuscated;
     if (typeof window === "undefined") return null;
     try {
-      // Try sessionStorage first, fall back to localStorage
-      return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+      return window.localStorage.getItem(key);
     } catch (err) {
-      console.warn(`Failed to get storage item ${key}`, err);
+      console.warn(`Failed to read legacy localStorage key "${key}"`, err);
       return null;
     }
   };
