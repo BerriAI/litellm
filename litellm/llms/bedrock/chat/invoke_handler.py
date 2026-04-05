@@ -67,7 +67,11 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
+from ..common_utils import (
+    BedrockError,
+    ModelResponseIterator,
+    get_bedrock_tool_name,
+)
 
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
@@ -199,11 +203,13 @@ async def make_call(
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                ),
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -293,11 +299,13 @@ def make_sync_call(
     try:
         if client is None:
             client = _get_httpx_client(
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                )
             )
 
         response = client.post(
@@ -547,9 +555,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -908,9 +916,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if self.is_claude_messages_api_model(model):
@@ -1381,6 +1389,38 @@ class BedrockLLM(BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
+
+    @staticmethod
+    def get_bedrock_model_id(
+        optional_params: dict,
+        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        model: str,
+    ) -> str:
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = BedrockLLM.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
+        from ..common_utils import apply_embedded_bedrock_region_from_model_path
+
+        modelId = apply_embedded_bedrock_region_from_model_path(
+            modelId, optional_params
+        )
+        if provider == "llama" and "llama/" in modelId:
+            modelId = BedrockLLM._get_model_id_for_llama_like_model(modelId)
+
+        return modelId
+
+    @staticmethod
+    def _get_model_id_for_llama_like_model(
+        model: str,
+    ) -> str:
+        """
+        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
+        """
+        model_id = model.replace("llama/", "")
+        return BedrockLLM.encode_model_id(model_id=model_id)
 
 
 def get_response_stream_shape():

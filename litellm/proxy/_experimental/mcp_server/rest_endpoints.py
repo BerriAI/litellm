@@ -2,7 +2,7 @@ import importlib
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Set, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
@@ -1027,6 +1027,15 @@ if MCP_AVAILABLE:
         """
         Test if we can connect to the provided MCP server before adding it
         """
+        from litellm.proxy._types import LitellmUserRoles
+
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "User does not have permission to test MCP server connections. Only PROXY_ADMIN users can perform this action."
+                },
+            )
 
         async def _test_connection_operation(client):
             async def _noop(session):
@@ -1041,7 +1050,7 @@ if MCP_AVAILABLE:
             raw_headers=_safe_get_request_headers(request),
         )
 
-    @router.post("/test/tools/list")
+    @router.post("/test/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def test_tools_list(
         request: Request,
         new_mcp_server_request: NewMCPServerRequest,
@@ -1050,6 +1059,16 @@ if MCP_AVAILABLE:
         """
         Preview tools available from MCP server before adding it
         """
+        from litellm.proxy._types import LitellmUserRoles
+
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "User does not have permission to test MCP server tools. Only PROXY_ADMIN users can perform this action."
+                },
+            )
+
         # For OpenAPI spec servers, generate tools from the spec directly
         if new_mcp_server_request.spec_path:
             return await _preview_openapi_tools(new_mcp_server_request.spec_path)

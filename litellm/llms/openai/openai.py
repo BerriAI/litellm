@@ -36,7 +36,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -562,9 +561,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider = (
                             litellm_params.copy() if litellm_params else {}
                         )
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
                         agentic_response = (
@@ -596,6 +595,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str,
         stream_options: Optional[dict] = None,
     ) -> CustomStreamWrapper:
+        from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+
         completion_stream = MockResponseIterator(model_response=response)
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,

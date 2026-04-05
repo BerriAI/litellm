@@ -9,7 +9,6 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-from litellm._uuid import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -17,15 +16,15 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -80,6 +79,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 self._configure_dd_direct_api()
 
             # Optional override for testing
+            from litellm.integrations.datadog.datadog_handler import (
+                get_datadog_base_url_from_env,
+            )
+
             dd_base_url = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
@@ -152,36 +155,26 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         return dict_datadog_llm_obs_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            verbose_logger.debug(
-                f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
-            )
-            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
-            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
-            self.log_queue.append(payload)
+        verbose_logger.debug(
+            f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
+        )
+        payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
+        verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+        self.log_queue.append(payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
-        except Exception as e:
-            verbose_logger.exception(
-                f"DataDogLLMObs: Error logging success event - {str(e)}"
-            )
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            verbose_logger.debug(
-                f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
-            )
-            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
-            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
-            self.log_queue.append(payload)
+        verbose_logger.debug(
+            f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
+        )
+        payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
+        verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+        self.log_queue.append(payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
-        except Exception as e:
-            verbose_logger.exception(
-                f"DataDogLLMObs: Error logging failure event - {str(e)}"
-            )
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
     async def async_send_batch(self):
         try:
@@ -249,8 +242,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error sending batch - {e.response.text}"
             )
+            raise
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
+            raise
 
     def create_llm_obs_payload(
         self, kwargs: Dict, start_time: datetime, end_time: datetime
@@ -349,9 +344,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[
-                StandardLoggingPayloadErrorInformation
-            ] = standard_logging_payload.get("error_information")
+            error_information: Optional[StandardLoggingPayloadErrorInformation] = (
+                standard_logging_payload.get("error_information")
+            )
 
             if error_information:
                 error_info = DDLLMObsError(
@@ -621,9 +616,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[
-            list[StandardLoggingGuardrailInformation]
-        ] = standard_logging_payload.get("guardrail_information")
+        guardrail_info: Optional[list[StandardLoggingGuardrailInformation]] = (
+            standard_logging_payload.get("guardrail_information")
+        )
         if guardrail_info is not None:
             total_duration = 0.0
             for info in guardrail_info:
@@ -793,15 +788,15 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     if function_arguments:
                         # Store arguments as JSON string for Datadog
                         if isinstance(function_arguments, str):
-                            kv_pairs[
-                                f"tool_calls.{idx}.function.arguments"
-                            ] = function_arguments
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = (
+                                function_arguments
+                            )
                         else:
                             import json
 
-                            kv_pairs[
-                                f"tool_calls.{idx}.function.arguments"
-                            ] = json.dumps(function_arguments)
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = (
+                                json.dumps(function_arguments)
+                            )
             except (KeyError, TypeError, ValueError) as e:
                 verbose_logger.debug(
                     f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}"

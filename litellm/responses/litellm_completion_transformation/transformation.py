@@ -181,12 +181,17 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         # Extract reasoning_effort from reasoning parameter
-        reasoning_effort = None
+        reasoning_effort: Optional[Any] = None
         reasoning_param = responses_api_request.get("reasoning")
         if reasoning_param:
             if isinstance(reasoning_param, dict):
-                # reasoning can be {"effort": "low|medium|high"}
-                reasoning_effort = reasoning_param.get("effort")
+                # reasoning can be {"effort": "low|medium|high"} or include "summary"
+                # for OpenAI Responses; providers expect reasoning_effort as a string unless
+                # summary is present (main.py preserves dict for responses_api_bridge).
+                if "summary" in reasoning_param:
+                    reasoning_effort = reasoning_param
+                else:
+                    reasoning_effort = reasoning_param.get("effort")
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
@@ -1519,7 +1524,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Map chat completion finish_reason to responses API status.
 
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call", "refusal"
         Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
 
         Args:
@@ -1534,7 +1539,7 @@ class LiteLLMCompletionResponsesConfig:
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
             return "completed"
-        elif finish_reason in ["length", "content_filter"]:
+        elif finish_reason in ["length", "content_filter", "refusal"]:
             return "incomplete"
         else:
             # Default to completed for unknown finish reasons

@@ -939,6 +939,14 @@ def responses_api_bridge_check(
     reasoning_effort: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+
+    # Global flag: route ALL OpenAI chat completions through Responses API.
+    # Returns early with minimal model_info; callers only inspect the "mode" key.
+    if litellm.route_all_chat_openai_to_responses and custom_llm_provider == "openai":
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
+        return model_info, model
+
     try:
         model_info = cast(
             dict,
@@ -5302,6 +5310,7 @@ def embedding(  # noqa: PLR0915
                     api_key=api_key,
                     api_base=api_base,
                     client=client,
+                    litellm_params=litellm_params_dict,
                 )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(

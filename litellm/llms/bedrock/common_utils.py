@@ -6,7 +6,7 @@ Common utilities used across bedrock chat/embedding/image generation
 
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
@@ -145,6 +145,60 @@ class AmazonBedrockGlobalConfig:
         ]
 
 
+_BEDROCK_INVOKE_EMBEDDED_REGIONS: Optional[frozenset] = None
+
+
+def _bedrock_invoke_embedded_region_names() -> frozenset:
+    global _BEDROCK_INVOKE_EMBEDDED_REGIONS
+    if _BEDROCK_INVOKE_EMBEDDED_REGIONS is None:
+        _BEDROCK_INVOKE_EMBEDDED_REGIONS = frozenset(
+            AmazonBedrockGlobalConfig().get_all_regions()
+        )
+    return _BEDROCK_INVOKE_EMBEDDED_REGIONS
+
+
+def strip_bedrock_routing_prefix(model: str) -> str:
+    """Strip all LiteLLM routing prefixes (bedrock/, converse/, invoke/, etc.)."""
+    s = model
+    for prefix in ("bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"):
+        if s.startswith(prefix):
+            s = s.split("/", 1)[1]
+    return s
+
+
+def split_embedded_bedrock_region_prefix(
+    model_id: str,
+) -> Tuple[Optional[str], str]:
+    """
+    If model_id is ``{region}/{rest}`` and region is a Bedrock AWS region, return
+    (region, rest). Otherwise (None, model_id).
+    """
+    if "/" not in model_id:
+        return None, model_id
+    prefix, remainder = model_id.split("/", 1)
+    if not remainder.strip():
+        return None, model_id
+    if prefix not in _bedrock_invoke_embedded_region_names():
+        return None, model_id
+    return prefix, remainder
+
+
+def apply_embedded_bedrock_region_from_model_path(
+    model_id: str, optional_params: dict
+) -> str:
+    """
+    Strip routing prefixes, then if the id is ``region/bedrockModelId``, set
+    ``optional_params['aws_region_name']`` when unset and return ``bedrockModelId`` only.
+    """
+    stripped = strip_bedrock_routing_prefix(model_id)
+    region, remainder = split_embedded_bedrock_region_prefix(stripped)
+    if region is None:
+        return stripped
+    if optional_params.get("aws_region_name") is None:
+        optional_params["aws_region_name"] = region
+    return remainder
+
+
 def add_custom_header(headers):
     """Closure to capture the headers and add them."""
 
@@ -247,7 +301,8 @@ def init_bedrock_client(
         config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
     elif isinstance(timeout, httpx.Timeout):
         config = boto3.session.Config(  # type: ignore
-            connect_timeout=timeout.connect, read_timeout=timeout.read
+            connect_timeout=timeout.connect,  # type: ignore[arg-type, union-attr]
+            read_timeout=timeout.read,  # type: ignore[arg-type, union-attr]
         )
     else:
         config = boto3.session.Config()  # type: ignore
@@ -420,14 +475,6 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     """
     if "arn" in model.lower():
         return model.split("/")[-1]
-    return model
-
-
-def strip_bedrock_routing_prefix(model: str) -> str:
-    """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
-        if model.startswith(prefix):
-            model = model.split("/", 1)[1]
     return model
 
 
@@ -1062,9 +1109,11 @@ class CommonBatchFilesUtils:
 
         return (
             dict(prepped.headers),
-            request_data.encode("utf-8")
-            if isinstance(request_data, str)
-            else request_data,
+            (
+                request_data.encode("utf-8")
+                if isinstance(request_data, str)
+                else request_data
+            ),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:

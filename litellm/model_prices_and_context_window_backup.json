@@ -16167,6 +16167,21 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-lite-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "gemini/veo-3.1-fast-generate-001": {
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
@@ -16878,6 +16893,72 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06
+    },
+    "baseten/MiniMaxAI/MiniMax-M2.5": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06
+    },
+    "baseten/nvidia/Nemotron-120B-A12B": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07
+    },
+    "baseten/zai-org/GLM-5": {
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 3.15e-06
+    },
+    "baseten/zai-org/GLM-4.7": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06
+    },
+    "baseten/zai-org/GLM-4.6": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06
+    },
+    "baseten/moonshotai/Kimi-K2.5": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 3e-06
+    },
+    "baseten/moonshotai/Kimi-K2-Thinking": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06
+    },
+    "baseten/moonshotai/Kimi-K2-Instruct-0905": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06
+    },
+    "baseten/openai/gpt-oss-120b": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 5e-07
+    },
+    "baseten/deepseek-ai/DeepSeek-V3.1": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06
+    },
+    "baseten/deepseek-ai/DeepSeek-V3-0324": {
+        "input_cost_per_token": 7.7e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 7.7e-07
     },
     "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": {
         "input_cost_per_token": 3e-07,

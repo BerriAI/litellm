@@ -177,6 +177,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         """
         Transform request to Nvidia NIM format.
