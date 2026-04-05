@@ -1,0 +1,149 @@
+name: Release Docker Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (e.g. v1.83.0-nightly)"
+        required: true
+        type: string
+      commit_hash:
+        description: "Commit SHA to build from"
+        required: true
+        type: string
+
+concurrency:
+  group: release-docker-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build-and-push:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: litellm
+            dockerfile: Dockerfile
+          - image: litellm-database
+            dockerfile: docker/Dockerfile.database
+          - image: litellm-non_root
+            dockerfile: docker/Dockerfile.non_root
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/berriai/${{ matrix.image }}
+          tags: |
+            type=raw,value=${{ github.event.inputs.tag }}
+            type=raw,value=main-latest
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v4.1.1
+
+      - name: Sign image with cosign (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/berriai/${{ matrix.image }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ghcr.io/berriai/${{ matrix.image }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.image }}.spdx.json
+
+      - name: Attest SBOM with cosign
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/berriai/${{ matrix.image }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.image }}.spdx.json \
+            --type spdxjson \
+            "${IMAGE}@${DIGEST}"
+
+      - name: Upload SBOM as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ matrix.image }}
+          path: sbom-${{ matrix.image }}.spdx.json
+
+  verify-signatures:
+    name: Verify ${{ matrix.image }} signature
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: litellm
+          - image: litellm-database
+          - image: litellm-non_root
+
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v4.1.1
+
+      - name: Log in to GHCR (read-only)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/BerriAI/litellm/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "ghcr.io/berriai/${{ matrix.image }}:${{ github.event.inputs.tag }}"
+
+      - name: Verify SBOM attestation
+        run: |
+          cosign verify-attestation \
+            --certificate-identity-regexp "https://github.com/BerriAI/litellm/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --type spdxjson \
+            "ghcr.io/berriai/${{ matrix.image }}:${{ github.event.inputs.tag }}"

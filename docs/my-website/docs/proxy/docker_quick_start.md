@@ -865,6 +865,59 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 
 `litellm_settings` are module-level params for the LiteLLM Python SDK (equivalent to doing `litellm.<some_param>` on the SDK). You can see all params [here](https://github.com/BerriAI/litellm/blob/208fe6cb90937f73e0def5c97ccb2359bf8a467b/litellm/__init__.py#L114)
 
+## Verify Image & Package Signatures
+
+All official LiteLLM Docker images and PyPI packages are signed using [Sigstore](https://www.sigstore.dev/) keyless signing. This lets you cryptographically verify that an artifact was built by the BerriAI/litellm CI pipeline — not tampered with or uploaded by a compromised account.
+
+### Install cosign
+
+```bash
+# macOS
+brew install cosign
+
+# Linux
+curl -fsSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 -o /usr/local/bin/cosign
+chmod +x /usr/local/bin/cosign
+```
+
+### Verify a Docker image
+
+```bash
+cosign verify \
+  --certificate-identity-regexp "https://github.com/BerriAI/litellm/" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  ghcr.io/berriai/litellm:main-latest
+```
+
+This also works for other image variants (`litellm-database`, `litellm-non_root`).
+
+### Verify SBOM attestation
+
+Each image includes a signed SBOM (Software Bill of Materials) attestation:
+
+```bash
+cosign verify-attestation \
+  --certificate-identity-regexp "https://github.com/BerriAI/litellm/" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --type spdxjson \
+  ghcr.io/berriai/litellm:main-latest
+```
+
+### Verify a PyPI package
+
+Download the `.sigstore.json` bundle from the [GitHub Actions workflow artifacts](https://github.com/BerriAI/litellm/actions/workflows/publish_to_pypi.yml), then:
+
+```bash
+pip install sigstore
+python -m sigstore verify identity \
+  --bundle litellm-1.83.0.tar.gz.sigstore.json \
+  --cert-identity "https://github.com/BerriAI/litellm/.github/workflows/publish_to_pypi.yml@refs/heads/main" \
+  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+  litellm-1.83.0.tar.gz
+```
+
+If verification succeeds, you can be confident the artifact was built by the official BerriAI/litellm CI — not by a compromised credential or registry.
+
 ## Support & Talk with founders
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
