@@ -5542,9 +5542,13 @@ async def get_available_models_for_user(
     # Get team models
     team_models: List[str] = user_api_key_dict.team_models
 
-    # If specific team_id is provided, validate and get team models
+    # If specific team_id is provided, validate and get team models.
+    # Do NOT reset key_models when the key has access_group_ids — the access
+    # group restriction must remain in force even when a team_id is specified,
+    # otherwise any caller can bypass it via ?team_id=xxx (issue #23850).
     if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
+        if not user_api_key_dict.access_group_ids:
+            key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
