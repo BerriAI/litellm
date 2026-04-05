@@ -7505,6 +7505,9 @@ class Router:
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
 
+        # Add model (needed for provider-config routing in batches/files)
+        credentials["model"] = deployment.litellm_params.model
+
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
             credentials["custom_llm_provider"] = (
