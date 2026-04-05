@@ -724,21 +724,23 @@ def generic_cost_per_token(  # noqa: PLR0915
     # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
     # 3. If no breakdown at all, assume all completion_tokens are text_tokens
     has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
-    if text_tokens == 0:
-        if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
-            text_tokens = max(
-                0,
-                usage.completion_tokens
-                - reasoning_tokens
-                - audio_tokens
-                - image_tokens,
-            )
-        else:
-            # No breakdown at all, all tokens are text tokens
-            text_tokens = usage.completion_tokens
-            is_text_tokens_total = True
+    
+    if has_token_breakdown:
+        # Calculate text tokens as remainder when we have a breakdown
+        # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
+        #This simply checks for double counting reasoning or audio tokens when these are already included in text_tokens like in haiku 4.5 response by writing this check with only when text_tokens were 0 , we were skipping to check that case in which text_tokens are there and other like reasoning tokens are embedded in that number
+        text_tokens = max(
+            0,
+            usage.completion_tokens
+            - reasoning_tokens
+            - audio_tokens
+            - image_tokens,
+        )
+    else:
+        # No breakdown at all, all tokens are text tokens
+        # Also it doesn't matter text tokens is 0 or not if has_token_breakdown isn't true  then text_tokens = completion_tokens
+        text_tokens = usage.completion_tokens
+        is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
