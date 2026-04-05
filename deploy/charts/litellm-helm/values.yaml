@@ -12,6 +12,10 @@ image:
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "main-latest"
   tag: ""
+  # Overrides the image tag with a specific image digest for pinning.
+  # When set, the image will be referenced as `repository@digest` instead of `repository:tag`.
+  # Example: "sha256:abc123..."
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: "litellm"
