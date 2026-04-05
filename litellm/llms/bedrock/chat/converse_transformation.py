@@ -573,9 +573,16 @@ class AmazonConverseConfig(BaseConfig):
             return ToolChoiceValuesBlock(auto={})
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            specific_tool = SpecificToolChoiceBlock(
-                name=tool_choice.get("function", {}).get("name", "")
-            )
+            tool_name = tool_choice.get("function", {}).get("name", "")
+            if not tool_name or not tool_name.strip():
+                # Bedrock rejects toolChoice.tool.name="" — fall back to auto.
+                # This happens when clients (e.g. Cursor) send tool_choice with a blank tool name.
+                verbose_logger.warning(
+                    "tool_choice specifies an empty tool name; falling back to tool_choice='auto' "
+                    "because Bedrock requires toolChoice.tool.name to match [a-zA-Z0-9_-]+."
+                )
+                return ToolChoiceValuesBlock(auto={})
+            specific_tool = SpecificToolChoiceBlock(name=tool_name)
             return ToolChoiceValuesBlock(tool=specific_tool)
         else:
             raise litellm.utils.UnsupportedParamsError(
