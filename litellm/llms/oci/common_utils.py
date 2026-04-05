@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -382,3 +382,148 @@ def validate_oci_environment(
     headers.setdefault("content-type", "application/json")
     headers.setdefault("user-agent", f"litellm/{version}")
     return headers
+
+
+# ---------------------------------------------------------------------------
+# JSON schema utilities for OCI tool definitions
+#
+# OCI Generative AI does not support JSON Schema extensions ($ref, $defs,
+# anyOf).  Pydantic v2 emits all three for models with Optional fields or
+# nested schemas.  The helpers below are ported from the official
+# langchain-oracle reference implementation so that tool schemas are always
+# valid before they reach the OCI endpoint.
+# ---------------------------------------------------------------------------
+
+# Mapping from JSON Schema type names to Python type names, as expected by
+# the OCI Cohere API's CohereParameterDefinition.type field.
+OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
+    "string": "str",
+    "number": "float",
+    "boolean": "bool",
+    "integer": "int",
+    "array": "List",
+    "object": "Dict",
+    "any": "any",
+}
+
+
+def resolve_oci_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Inline all ``$ref``/``$defs`` references — OCI does not support JSON Schema ``$ref``."""
+    defs = schema.get("$defs", {})
+    resolving_stack: set = set()
+
+    def _resolve(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref = obj["$ref"]
+                if ref.startswith("#/$defs/"):
+                    key = ref.split("/")[-1]
+                    if key in resolving_stack:
+                        return {"type": "object"}  # break cycles
+                    resolving_stack.add(key)
+                    try:
+                        return _resolve(defs.get(key, obj))
+                    finally:
+                        resolving_stack.discard(key)
+                return obj  # external $ref — leave unchanged
+            return {k: _resolve(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_resolve(item) for item in obj]
+        return obj
+
+    resolved = _resolve(schema)
+    if isinstance(resolved, dict):
+        resolved.pop("$defs", None)
+    return resolved
+
+
+def resolve_oci_schema_anyof(obj: Any) -> Any:
+    """Resolve Pydantic v2 ``Optional[T]`` → ``anyOf`` patterns.
+
+    Pydantic v2 emits ``{"anyOf": [{"type": "T"}, {"type": "null"}]}`` for
+    ``Optional[T]``.  OCI models don't understand ``anyOf``, so we pick the
+    first non-null branch and merge top-level metadata into it.
+    """
+    if isinstance(obj, dict):
+        if "anyOf" in obj and "type" not in obj:
+            non_null = [
+                t for t in obj["anyOf"]
+                if not (isinstance(t, dict) and t.get("type") == "null")
+            ]
+            if non_null:
+                resolved = {**obj, **non_null[0]}
+                resolved.pop("anyOf", None)
+                return resolve_oci_schema_anyof(resolved)
+        return {k: resolve_oci_schema_anyof(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [resolve_oci_schema_anyof(item) for item in obj]
+    return obj
+
+
+def sanitize_oci_schema(schema: Any) -> Any:
+    """Recursively remove OCI-incompatible fields from a JSON schema.
+
+    Strips ``title`` keys, removes ``None``-valued ``default`` entries,
+    normalises ``type: [T, "null"]`` list types, and ensures arrays carry an
+    ``items`` definition.
+    """
+    if isinstance(schema, list):
+        return [sanitize_oci_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    sanitized: Dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title":
+            continue
+        if key == "default" and value is None:
+            continue
+        if key == "type":
+            if value == "any":
+                sanitized[key] = "object"
+                continue
+            if isinstance(value, list):
+                non_null = [t for t in value if t != "null"]
+                sanitized[key] = non_null[0] if non_null else "string"
+                continue
+        sanitized[key] = sanitize_oci_schema(value)
+
+    if sanitized.get("type") == "array" and "items" not in sanitized:
+        sanitized["items"] = {"type": "object"}
+
+    required = sanitized.get("required")
+    properties = sanitized.get("properties")
+    if "required" in sanitized:
+        if isinstance(required, list) and isinstance(properties, dict):
+            sanitized["required"] = [
+                f for f in required if isinstance(f, str) and f in properties
+            ]
+        elif not isinstance(required, list):
+            sanitized["required"] = []
+
+    return sanitized
+
+
+def enrich_cohere_param_description(description: str, param_schema: Dict[str, Any]) -> str:
+    """Embed schema constraints into a Cohere parameter description.
+
+    ``CohereParameterDefinition`` only has ``type``, ``description``, and
+    ``isRequired``.  Rich constraints (``enum``, ``format``, ``minimum``,
+    ``maximum``, ``pattern``) are appended to the description string so the
+    model can still see and respect them.
+    """
+    parts = [description] if description else []
+    if "enum" in param_schema:
+        parts.append(f"Allowed values: {param_schema['enum']}")
+    if "format" in param_schema:
+        parts.append(f"Format: {param_schema['format']}")
+    if "minimum" in param_schema or "maximum" in param_schema:
+        range_parts = []
+        if "minimum" in param_schema:
+            range_parts.append(f"min={param_schema['minimum']}")
+        if "maximum" in param_schema:
+            range_parts.append(f"max={param_schema['maximum']}")
+        parts.append(f"Range: {', '.join(range_parts)}")
+    if "pattern" in param_schema:
+        parts.append(f"Pattern: {param_schema['pattern']}")
+    return ". ".join(parts) if parts else ""

@@ -26,10 +26,15 @@ from litellm.llms.custom_httpx.http_handler import (
     version,
 )
 from litellm.llms.oci.common_utils import (
+    OCI_JSON_TO_PYTHON_TYPES,
     OCIError,
     OCIRequestWrapper,  # re-exported for backwards compatibility
+    enrich_cohere_param_description,
     get_oci_base_url,
     resolve_oci_credentials,
+    resolve_oci_schema_anyof,
+    resolve_oci_schema_refs,
+    sanitize_oci_schema,
     sign_oci_request,
     validate_oci_environment,
 )
@@ -529,6 +534,21 @@ class OCIChatConfig(BaseConfig):
                     selected_params["tools"], vendor  # type: ignore[arg-type]
                 )
 
+        # Convert toolChoice from OpenAI string form ("auto", "none", "required") to the
+        # OCI dict form ({"type": "AUTO"} etc.) — the API rejects plain strings.
+        if "toolChoice" in selected_params:
+            tc = selected_params["toolChoice"]
+            if isinstance(tc, str):
+                tc_map = {
+                    "auto": {"type": "AUTO"},
+                    "none": {"type": "NONE"},
+                    "required": {"type": "REQUIRED"},
+                    "any": {"type": "REQUIRED"},
+                }
+                selected_params["toolChoice"] = tc_map.get(
+                    tc.lower(), {"type": "FUNCTION", "name": tc}
+                )
+
         # Transform response_format type to OCI uppercase format
         if "responseFormat" in selected_params:
             rf = selected_params["responseFormat"]
@@ -663,18 +683,34 @@ class OCIChatConfig(BaseConfig):
     def adapt_tool_definitions_to_cohere_standard(
         self, tools: List[Dict[str, Any]]
     ) -> List[CohereTool]:
-        """Adapt tool definitions to Cohere format."""
+        """Adapt tool definitions to the OCI Cohere format.
+
+        - Resolves ``$ref``/``$defs`` and ``anyOf`` patterns that OCI rejects.
+        - Maps JSON Schema type names to Python type names (``"string"`` → ``"str"``).
+        - Embeds unsupported constraints (enum, format, range, pattern) into the
+          parameter description so the model can still see them.
+        """
         cohere_tools = []
         for tool in tools:
             function_def = tool.get("function", {})
-            parameters = function_def.get("parameters", {}).get("properties", {})
-            required = function_def.get("parameters", {}).get("required", [])
+            raw_params = function_def.get("parameters", {})
+
+            # Resolve schema extensions that OCI Cohere doesn't support
+            resolved = sanitize_oci_schema(
+                resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params))
+            )
+            properties = resolved.get("properties", {})
+            required = resolved.get("required", [])
 
             parameter_definitions = {}
-            for param_name, param_schema in parameters.items():
+            for param_name, param_schema in properties.items():
+                json_type = param_schema.get("type", "string")
+                python_type = OCI_JSON_TO_PYTHON_TYPES.get(json_type, json_type)
                 parameter_definitions[param_name] = CohereParameterDefinition(
-                    description=param_schema.get("description", ""),
-                    type=param_schema.get("type", "string"),
+                    description=enrich_cohere_param_description(
+                        param_schema.get("description", ""), param_schema
+                    ),
+                    type=python_type,
                     isRequired=param_name in required,
                 )
 
@@ -1231,11 +1267,17 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
         if not isinstance(tool_function, dict):
             raise OCIError(status_code=400, message="Tool `function` must be a dictionary")
 
+        # Resolve $ref/$defs and anyOf that OCI GenericChatRequest doesn't support
+        raw_params = tool_function.get("parameters", {})
+        resolved_params = sanitize_oci_schema(
+            resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_params))
+        )
+
         new_tool = OCIToolDefinition(
             type="FUNCTION",
             name=tool_function.get("name"),
             description=tool_function.get("description", ""),
-            parameters=tool_function.get("parameters", {}),
+            parameters=resolved_params,
         )
         new_tools.append(new_tool)
 
