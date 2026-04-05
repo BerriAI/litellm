@@ -710,10 +710,10 @@ class TestOCICohereStreaming:
     def test_cohere_streaming_wrapper_initialization(self):
         """Test OCIStreamWrapper initialization"""
         stream_wrapper = self._create_stream_wrapper()
-        
+
+        # chunk_creator is the public dispatch entry point
         assert hasattr(stream_wrapper, 'chunk_creator')
-        assert hasattr(stream_wrapper, '_handle_cohere_stream_chunk')
-        assert hasattr(stream_wrapper, '_handle_generic_stream_chunk')
+        assert callable(stream_wrapper.chunk_creator)
 
     def test_cohere_streaming_chunk_parsing(self):
         """Test parsing of Cohere streaming chunks"""
