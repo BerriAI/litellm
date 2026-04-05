@@ -358,9 +358,13 @@ class XecGuardGuardrail(CustomGuardrail):
     @staticmethod
     def _raise_if_unsafe_scan(result: dict) -> None:
         """Raise HTTPException when XecGuard /scan returns UNSAFE."""
-        decision = result.get("decision", "SAFE")
-        if decision != "UNSAFE":
+        decision = result.get("decision", "")
+        if decision == "SAFE":
             return
+        if decision != "UNSAFE":
+            verbose_proxy_logger.warning(
+                "XecGuard returned unexpected decision %r – treating as UNSAFE", decision
+            )
 
         trace_id = result.get("trace_id", "n/a")
         xecguard_result = result.get("xecguard_result", [])
@@ -388,9 +392,13 @@ class XecGuardGuardrail(CustomGuardrail):
     @staticmethod
     def _raise_if_unsafe_grounding(result: dict) -> None:
         """Raise HTTPException when XecGuard /grounding returns UNSAFE."""
-        decision = result.get("decision", "SAFE")
-        if decision != "UNSAFE":
+        decision = result.get("decision", "")
+        if decision == "SAFE":
             return
+        if decision != "UNSAFE":
+            verbose_proxy_logger.warning(
+                "XecGuard returned unexpected decision %r – treating as UNSAFE", decision
+            )
 
         trace_id = result.get("trace_id", "n/a")
         xr = result.get("xecguard_result")
