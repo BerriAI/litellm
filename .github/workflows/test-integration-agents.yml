@@ -1,0 +1,27 @@
+name: "Integration Tests: Agents"
+
+# Phase 3g — replaces CircleCI `agent_testing`
+# Secrets needed: OPENAI_API_KEY, ANTHROPIC_API_KEY (tests use LiteLLM
+#   completion which reads keys from env at runtime)
+on:
+  push:
+    branches: ["litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agents:
+    uses: ./.github/workflows/_test-integration-base.yml
+    with:
+      test-path: tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests
+      workers: 0
+      reruns: 2
+      timeout-minutes: 20
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

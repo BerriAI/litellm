@@ -1,0 +1,31 @@
+name: "Integration Tests: Batch Operations"
+
+# Phase 3f — replaces CircleCI `batches_testing`
+# Secrets needed: OPENAI_API_KEY, AZURE_API_KEY, AZURE_SWEDEN_API_KEY,
+#   GOOGLE_APPLICATION_CREDENTIALS, GCS_PATH_SERVICE_ACCOUNT, MANUS_API_KEY
+on:
+  push:
+    branches: ["litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  batches:
+    uses: ./.github/workflows/_test-integration-base.yml
+    with:
+      test-path: tests/batches_tests
+      workers: 2
+      reruns: 2
+      timeout-minutes: 20
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+      AZURE_SWEDEN_API_KEY: ${{ secrets.AZURE_SWEDEN_API_KEY }}
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+      GCS_PATH_SERVICE_ACCOUNT: ${{ secrets.GCS_PATH_SERVICE_ACCOUNT }}
+      MANUS_API_KEY: ${{ secrets.MANUS_API_KEY }}

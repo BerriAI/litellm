@@ -1,0 +1,36 @@
+name: "Integration Tests: Images, Audio & OCR"
+
+# Phase 3e — replaces CircleCI `image_gen_testing`, `audio_testing`, `ocr_testing`
+# Secrets needed: OPENAI_API_KEY, AZURE_API_KEY, AZURE_API_BASE,
+#   AZURE_DOCUMENT_INTELLIGENCE_API_KEY, AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT,
+#   MISTRAL_API_KEY, GOOGLE_APPLICATION_CREDENTIALS
+on:
+  push:
+    branches: ["litellm_*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  media:
+    uses: ./.github/workflows/_test-integration-base.yml
+    with:
+      test-path: >-
+        tests/image_gen_tests
+        tests/audio_tests
+        tests/ocr_tests
+      workers: 4
+      reruns: 2
+      timeout-minutes: 20
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+      AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+      AZURE_DOCUMENT_INTELLIGENCE_API_KEY: ${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_API_KEY }}
+      AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: ${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
