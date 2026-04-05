@@ -53,10 +53,38 @@ pip install litellm==1.83.3rc1
 
 ## Key Highlights
 
-- **MCP Toolsets are now production-ready end-to-end** with DB schema + management API + UI + Responses API integration, and tighter access-control + caching behavior ([PR #25155](https://github.com/BerriAI/litellm/pull/25155), expanded from [#25146](https://github.com/BerriAI/litellm/pull/25146), [#24335](https://github.com/BerriAI/litellm/pull/24335), [#24426](https://github.com/BerriAI/litellm/pull/24426)).
-- **Skills Marketplace + Skills Gateway are landed on `main`** (already available): self-hosted marketplace support ([PR #19378](https://github.com/BerriAI/litellm/pull/19378)) plus unified cross-provider Skills API support and follow-up fixes ([PR #18232](https://github.com/BerriAI/litellm/pull/18232), [PR #23069](https://github.com/BerriAI/litellm/pull/23069), [PR #23211](https://github.com/BerriAI/litellm/pull/23211), [PR #23244](https://github.com/BerriAI/litellm/pull/23244)).
-- **Guardrail fallbacks are now supported** via optional `on_error` behavior, with project/team guardrail UX wiring and improved streaming error handling ([PR #25150](https://github.com/BerriAI/litellm/pull/25150), [PR #24831](https://github.com/BerriAI/litellm/pull/24831), [PR #25087](https://github.com/BerriAI/litellm/pull/25087), [PR #25100](https://github.com/BerriAI/litellm/pull/25100), [PR #25038](https://github.com/BerriAI/litellm/pull/25038)).
-- **Team Bring Your Own Guardrails (BYOG) support is now in UI flows** so teams can attach guardrails directly from team management views ([PR #25038](https://github.com/BerriAI/litellm/pull/25038), [PR #25100](https://github.com/BerriAI/litellm/pull/25100), [PR #25087](https://github.com/BerriAI/litellm/pull/25087)).
+- **MCP Toolsets** — [Create curated tool subsets from one or more MCP servers with scoped permissions, and manage them from the UI or API](../../docs/mcp)
+- **Skills Marketplace** — [Browse, install, and publish Claude Code skills from a self-hosted marketplace — works across Anthropic, Vertex AI, Azure, and Bedrock](../../docs/proxy/skills)
+- **Guardrail Fallbacks** — [Configure `on_error` behavior so guardrail failures degrade gracefully instead of blocking the request](../../docs/proxy/guardrails)
+- **Team Bring Your Own Guardrails** — [Teams can now attach and manage their own guardrails directly from team settings in the UI](../../docs/proxy/guardrails)
+
+---
+
+
+### Skills Marketplace
+
+The Skills Marketplace gives teams a self-hosted catalog for discovering, installing, and publishing Claude Code skills. Skills are portable across Anthropic, Vertex AI, Azure, and Bedrock — so a skill published once works everywhere your gateway routes to.
+
+![Skills Marketplace](../../img/release_notes/skills_marketplace.png)
+
+[Get Started](../../docs/proxy/skills)
+
+### Guardrail Fallbacks
+
+Guardrail pipelines now support an optional `on_error` behavior. When a guardrail check fails or errors out, you can configure the pipeline to fall back gracefully — logging the failure and continuing the request — instead of returning a hard 500 to the caller. This is especially useful for non-critical guardrails where availability matters more than enforcement.
+
+### Team Bring Your Own Guardrails
+
+Teams can now attach guardrails directly from the team management UI. Admins configure available guardrails at the project or proxy level, and individual teams select which ones apply to their traffic — no config file changes or proxy restarts needed. This also ships with project-level guardrail support in the project create/edit flows.
+
+### MCP Toolsets
+
+MCP Toolsets let AI platform admins create curated subsets of tools from one or more MCP servers and assign them to teams and keys with scoped permissions. Instead of granting access to an entire MCP server, you can now bundle specific tools into a named toolset — controlling exactly which tools each team or API key can invoke. Toolsets are fully managed through the UI (new Toolsets tab) and API, and work seamlessly with the Responses API and Playground.
+
+![MCP Toolsets](../../img/release_notes/mcp_ui.png)
+
+[Get Started](../../docs/mcp)
+---
 
 ## New Models / Updated Models
 
