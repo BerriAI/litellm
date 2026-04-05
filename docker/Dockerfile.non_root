@@ -41,7 +41,7 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
-# NOTE: .npmrc (which has ignore-scripts=true and min-release-age=3d) is temporarily
+# NOTE: .npmrc (which has ignore-scripts=true and min-release-age=3) is temporarily
 # renamed during npm install/ci. This is safe because npm ci installs from
 # package-lock.json with pinned versions + integrity hashes.
 RUN mkdir -p /var/lib/litellm/ui && \
