@@ -11,6 +11,18 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - name: Ryan Crabbe
+    title: Performance Engineer, LiteLLM
+    url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
+    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+  - name: Yuneng Jiang
+    title: SWE @ LiteLLM (Full Stack)
+    url: https://www.linkedin.com/in/yuneng-david-jiang-455676139/
+    image_url: https://avatars.githubusercontent.com/u/171294688?v=4
+  - name: Shivam Rawat
+    title: Software Engineer, LiteLLM
+    url: https://linkedin.com/in/shivam-rawat-482937318
+    image_url: https://github.com/shivamrawat1.png
 hide_table_of_contents: false
 ---
 
