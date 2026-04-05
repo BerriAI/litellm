@@ -147,13 +147,17 @@ class DualCache(BaseCache):
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
-                redis_result = self.redis_cache.get_cache(
+                redis_result, redis_ttl = self.redis_cache.get_cache_with_ttl(
                     key, parent_otel_span=parent_otel_span
                 )
 
                 if redis_result is not None:
-                    # Update in-memory cache with the value from Redis
-                    self.in_memory_cache.set_cache(key, redis_result, **kwargs)
+                    # Update in-memory cache with the value from Redis,
+                    # preserving the remaining TTL to avoid stale entries
+                    _backfill_kwargs = {**kwargs}
+                    if redis_ttl is not None and redis_ttl > 0:
+                        _backfill_kwargs["ttl"] = redis_ttl
+                    self.in_memory_cache.set_cache(key, redis_result, **_backfill_kwargs)
 
                 result = redis_result
 
@@ -221,14 +225,18 @@ class DualCache(BaseCache):
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
-                redis_result = await self.redis_cache.async_get_cache(
+                redis_result, redis_ttl = await self.redis_cache.async_get_cache_with_ttl(
                     key, parent_otel_span=parent_otel_span
                 )
 
                 if redis_result is not None:
-                    # Update in-memory cache with the value from Redis
+                    # Update in-memory cache with the value from Redis,
+                    # preserving the remaining TTL to avoid stale entries
+                    _backfill_kwargs = {**kwargs}
+                    if redis_ttl is not None and redis_ttl > 0:
+                        _backfill_kwargs["ttl"] = redis_ttl
                     await self.in_memory_cache.async_set_cache(
-                        key, redis_result, **kwargs
+                        key, redis_result, **_backfill_kwargs
                     )
 
                 result = redis_result
@@ -310,7 +318,8 @@ class DualCache(BaseCache):
                 if len(sublist_keys) > 0:
                     try:
                         # If not found in in-memory cache, try fetching from Redis
-                        redis_result = await self.redis_cache.async_batch_get_cache(
+                        # Use with_ttl variant to preserve TTL when backfilling in-memory
+                        redis_result_with_ttl = await self.redis_cache.async_batch_get_cache_with_ttl(
                             sublist_keys, parent_otel_span=parent_otel_span
                         )
                     except Exception:
@@ -321,8 +330,8 @@ class DualCache(BaseCache):
                         raise
 
                     # Short-circuit if redis_result is None or contains only None values
-                    if redis_result is None or all(
-                        v is None for v in redis_result.values()
+                    if redis_result_with_ttl is None or all(
+                        v is None for v, _ttl in redis_result_with_ttl.values()
                     ):
                         return result
 
@@ -330,12 +339,15 @@ class DualCache(BaseCache):
                     key_to_index = {key: i for i, key in enumerate(keys)}
 
                     # Update both result and in-memory cache in a single loop
-                    for key, value in redis_result.items():
+                    for key, (value, redis_ttl) in redis_result_with_ttl.items():
                         result[key_to_index[key]] = value
 
                         if value is not None and self.in_memory_cache is not None:
+                            _backfill_kwargs = {**kwargs}
+                            if redis_ttl is not None and redis_ttl > 0:
+                                _backfill_kwargs["ttl"] = redis_ttl
                             await self.in_memory_cache.async_set_cache(
-                                key, value, **kwargs
+                                key, value, **_backfill_kwargs
                             )
 
             return result

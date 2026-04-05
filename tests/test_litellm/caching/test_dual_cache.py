@@ -17,14 +17,14 @@ async def test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads
     keys = ["shared_a", "shared_b"]
     start_gate = asyncio.Event()
 
-    async def _mock_async_batch_get_cache(key_list, parent_otel_span=None):
+    async def _mock_async_batch_get_cache_with_ttl(key_list, parent_otel_span=None):
         await asyncio.sleep(0.05)
-        return {k: None for k in key_list}
+        return {k: (None, None) for k in key_list}
 
     with patch.object(
         dual_cache.redis_cache,
-        "async_batch_get_cache",
-        new=AsyncMock(side_effect=_mock_async_batch_get_cache),
+        "async_batch_get_cache_with_ttl",
+        new=AsyncMock(side_effect=_mock_async_batch_get_cache_with_ttl),
     ) as mock_async_batch_get_cache:
 
         async def worker():
@@ -47,7 +47,7 @@ async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_
 
     with patch.object(
         dual_cache.redis_cache,
-        "async_batch_get_cache",
+        "async_batch_get_cache_with_ttl",
         new=AsyncMock(side_effect=RuntimeError("redis unavailable")),
     ) as mock_async_batch_get_cache:
         first_result = await dual_cache.async_batch_get_cache(keys=keys)
