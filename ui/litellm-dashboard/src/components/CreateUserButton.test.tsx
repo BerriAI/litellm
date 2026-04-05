@@ -20,6 +20,13 @@ vi.mock("./networking", () => ({
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
 }));
 
+vi.mock("./onboarding_link", () => ({
+  __esModule: true,
+  default: ({ isInvitationLinkModalVisible }: { isInvitationLinkModalVisible: boolean }) =>
+    isInvitationLinkModalVisible ? <div data-testid="onboarding-modal">Onboarding Modal</div> : null,
+  InvitationLink: {},
+}));
+
 vi.mock("./bulk_create_users_button", () => ({
   default: () => <div data-testid="bulk-create-users">Bulk Create Users</div>,
 }));
@@ -86,6 +93,92 @@ describe("CreateUserButton", { timeout: 20000 }, () => {
     const dialog = screen.getByRole("dialog", { name: /invite user/i });
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /invite user/i })).toBeInTheDocument();
+  });
+
+  it("should render send invite email toggle in modal with default off", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    expect(within(dialog).getByText("Send Invite Email")).toBeInTheDocument();
+
+    const switchToggle = within(dialog).getByRole("switch");
+    expect(switchToggle).toBeInTheDocument();
+    expect(switchToggle).not.toBeChecked();
+  });
+
+  it("should pass send_invite_email true to API when toggle is on", async () => {
+    const user = userEvent.setup();
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "email-user" } });
+    mockInvitationCreateCall.mockResolvedValue({
+      id: "inv-email",
+      user_id: "email-user",
+      has_user_setup_sso: false,
+    } as any);
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    await user.type(within(dialog).getByLabelText(/user email/i), "invite@example.com");
+
+    // Toggle the switch ON
+    const switchToggle = within(dialog).getByRole("switch");
+    await user.click(switchToggle);
+
+    await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
+        user_email: "invite@example.com",
+        send_invite_email: true,
+      }));
+    });
+  });
+
+  it("should pass send_invite_email false to API when toggle is off", async () => {
+    const user = userEvent.setup();
+    mockUserCreateCall.mockResolvedValue({ data: { user_id: "no-email-user" } });
+    mockInvitationCreateCall.mockResolvedValue({
+      id: "inv-no-email",
+      user_id: "no-email-user",
+      has_user_setup_sso: false,
+    } as any);
+
+    renderWithProviders(
+      <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    await user.type(within(dialog).getByLabelText(/user email/i), "noemail@example.com");
+    await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
+    await user.click(screen.getByText("User"));
+    await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+    await waitFor(() => {
+      expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
+        user_email: "noemail@example.com",
+        send_invite_email: false,
+      }));
+    });
   });
 
   it("should display email invitations info message in embedded mode", () => {
