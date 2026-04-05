@@ -8,6 +8,7 @@ from typing import (
     Any,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Optional,
     Protocol,
@@ -193,6 +194,13 @@ def get_vendor_from_model(model: str) -> OCIVendors:
 
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT = 60 * 5
+
+
+def _split_sse_text(text: str) -> Iterator[str]:
+    """Split a possibly-batched SSE text block into individual event strings."""
+    for chunk in text.split("\n\n"):
+        if chunk:
+            yield chunk.strip()
 
 
 class OCIChatConfig(BaseConfig):
@@ -1115,8 +1123,12 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.iter_text()
 
+        def split_chunks(stream: Iterator[str]) -> Iterator[str]:
+            for item in stream:
+                yield from _split_sse_text(item)
+
         streaming_response = OCIStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=split_chunks(completion_stream),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
@@ -1160,12 +1172,10 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.aiter_text()
 
-        async def split_chunks(completion_stream: AsyncIterator[str]):
-            async for item in completion_stream:
-                for chunk in item.split("\n\n"):
-                    if not chunk:
-                        continue
-                    yield chunk.strip()
+        async def split_chunks(stream: AsyncIterator[str]) -> AsyncIterator[str]:
+            async for item in stream:
+                for chunk in _split_sse_text(item):
+                    yield chunk
 
         streaming_response = OCIStreamWrapper(
             completion_stream=split_chunks(completion_stream),
