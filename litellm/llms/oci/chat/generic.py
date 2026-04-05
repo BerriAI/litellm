@@ -7,9 +7,8 @@ parsing, and streaming chunk parsing for models served with
 """
 
 import datetime
-import json
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import httpx
 
@@ -70,7 +69,9 @@ def adapt_messages_to_generic_oci_standard_content_message(
 
     for content_item in content:
         if not isinstance(content_item, dict):
-            raise OCIError(status_code=400, message="Each content item must be a dictionary")
+            raise OCIError(
+                status_code=400, message="Each content item must be a dictionary"
+            )
 
         item_type = content_item.get("type")
         if not isinstance(item_type, str):
@@ -119,9 +120,13 @@ def adapt_messages_to_generic_oci_standard_tool_call(
     tool_calls_formatted = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
-            raise OCIError(status_code=400, message="Each tool call must be a dictionary")
+            raise OCIError(
+                status_code=400, message="Each tool call must be a dictionary"
+            )
         if tool_call.get("type") != "function":
-            raise OCIError(status_code=400, message="OCI only supports function tool calls")
+            raise OCIError(
+                status_code=400, message="OCI only supports function tool calls"
+            )
 
         tool_call_id = tool_call.get("id")
         if not isinstance(tool_call_id, str):
@@ -129,7 +134,9 @@ def adapt_messages_to_generic_oci_standard_tool_call(
 
         tool_function = tool_call.get("function")
         if not isinstance(tool_function, dict):
-            raise OCIError(status_code=400, message="Tool call `function` must be a dictionary")
+            raise OCIError(
+                status_code=400, message="Tool call `function` must be a dictionary"
+            )
 
         function_name = tool_function.get("name")
         if not isinstance(function_name, str):
@@ -186,7 +193,9 @@ def adapt_messages_to_generic_oci_standard(
 
         if role == "assistant" and tool_calls is not None:
             if not isinstance(tool_calls, list):
-                raise OCIError(status_code=400, message="Message `tool_calls` must be a list")
+                raise OCIError(
+                    status_code=400, message="Message `tool_calls` must be a list"
+                )
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
             )
@@ -240,7 +249,9 @@ def adapt_tool_definition_to_oci_standard(
 
         tool_function = tool.get("function")
         if not isinstance(tool_function, dict):
-            raise OCIError(status_code=400, message="Tool `function` must be a dictionary")
+            raise OCIError(
+                status_code=400, message="Tool `function` must be a dictionary"
+            )
 
         raw_params = tool_function.get("parameters", {})
         resolved_params = sanitize_oci_schema(
@@ -308,7 +319,9 @@ def handle_generic_response(
         ):
             message.content = response_message.content[0].text
         if response_message.toolCalls:
-            message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
+            message.tool_calls = adapt_tools_to_openai_standard(
+                response_message.toolCalls
+            )
 
     oci_usage = completion_response.chatResponse.usage
     model_response.usage = Usage(  # type: ignore[attr-defined]
@@ -377,7 +390,9 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
                 delta=Delta(
                     content=text,
                     tool_calls=(
-                        [tool.model_dump() for tool in tool_calls] if tool_calls else None
+                        [tool.model_dump() for tool in tool_calls]
+                        if tool_calls
+                        else None
                     ),
                     provider_specific_fields=None,
                     thinking_blocks=None,
