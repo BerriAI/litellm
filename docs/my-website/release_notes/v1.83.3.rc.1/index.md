@@ -16,11 +16,11 @@ authors:
     url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
     image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
   - name: Yuneng Jiang
-    title: SWE @ LiteLLM (Full Stack)
+    title: Senior SWE @ LiteLLM (Full Stack)
     url: https://www.linkedin.com/in/yuneng-david-jiang-455676139/
     image_url: https://avatars.githubusercontent.com/u/171294688?v=4
   - name: Shivam Rawat
-    title: Software Engineer, LiteLLM
+    title: Forward Deployed Engineer, LiteLLM
     url: https://linkedin.com/in/shivam-rawat-482937318
     image_url: https://github.com/shivamrawat1.png
 hide_table_of_contents: false
@@ -56,6 +56,7 @@ pip install litellm==1.83.3rc1
 - **MCP Toolsets are now production-ready end-to-end** with DB schema + management API + UI + Responses API integration, and tighter access-control + caching behavior ([PR #25155](https://github.com/BerriAI/litellm/pull/25155), expanded from [#25146](https://github.com/BerriAI/litellm/pull/25146), [#24335](https://github.com/BerriAI/litellm/pull/24335), [#24426](https://github.com/BerriAI/litellm/pull/24426)).
 - **Skills Marketplace + Skills Gateway are landed on `main`** (already available): self-hosted marketplace support ([PR #19378](https://github.com/BerriAI/litellm/pull/19378)) plus unified cross-provider Skills API support and follow-up fixes ([PR #18232](https://github.com/BerriAI/litellm/pull/18232), [PR #23069](https://github.com/BerriAI/litellm/pull/23069), [PR #23211](https://github.com/BerriAI/litellm/pull/23211), [PR #23244](https://github.com/BerriAI/litellm/pull/23244)).
 - **Guardrail fallbacks are now supported** via optional `on_error` behavior, with project/team guardrail UX wiring and improved streaming error handling ([PR #25150](https://github.com/BerriAI/litellm/pull/25150), [PR #24831](https://github.com/BerriAI/litellm/pull/24831), [PR #25087](https://github.com/BerriAI/litellm/pull/25087), [PR #25100](https://github.com/BerriAI/litellm/pull/25100), [PR #25038](https://github.com/BerriAI/litellm/pull/25038)).
+- **Team Bring Your Own Guardrails (BYOG) support is now in UI flows** so teams can attach guardrails directly from team management views ([PR #25038](https://github.com/BerriAI/litellm/pull/25038), [PR #25100](https://github.com/BerriAI/litellm/pull/25100), [PR #25087](https://github.com/BerriAI/litellm/pull/25087)).
 
 ## New Models / Updated Models
 
