@@ -9,8 +9,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
-    anthropic_messages_pt,
+    _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
+    _convert_to_bedrock_tool_call_result,
+    anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     ollama_pt,
     sanitize_messages_for_tool_calling,
@@ -2339,3 +2341,193 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["type"] == "text"
     assert "cache_control" in text_block
     assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_bedrock_converse_messages_pt_document_block():
+    """Test that a document content block is converted to a Bedrock DocumentBlock."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    assert len(result) == 1
+    content = result[0]["content"]
+    assert len(content) == 1
+
+    doc_block = content[0]
+    assert "document" in doc_block
+    assert doc_block["document"]["format"] == "pdf"
+    assert doc_block["document"]["source"]["bytes"] == "dGVzdA=="
+    assert doc_block["document"]["name"].startswith("Document_")
+    assert doc_block["document"]["name"].endswith("_pdf")
+
+
+def test_bedrock_converse_messages_pt_document_and_text():
+    """Test that mixed document + text content produces both blocks."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                },
+                {"type": "text", "text": "What is the title?"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    content = result[0]["content"]
+    assert len(content) == 2
+
+    doc_block = content[0]
+    assert "document" in doc_block
+    assert doc_block["document"]["format"] == "pdf"
+
+    text_block = content[1]
+    assert "text" in text_block
+    assert text_block["text"] == "What is the title?"
+
+
+def test_bedrock_converse_messages_pt_document_in_tool_result():
+    """Test that a tool result containing a document block is converted correctly."""
+    message = {
+        "role": "tool",
+        "tool_call_id": "tool_123",
+        "content": [
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "dGVzdA==",
+                },
+            },
+        ],
+    }
+
+    result = _convert_to_bedrock_tool_call_result(message)
+
+    tool_result = result["toolResult"]
+    assert len(tool_result["content"]) == 1
+    assert "document" in tool_result["content"][0]
+    assert tool_result["content"][0]["document"]["format"] == "pdf"
+    assert tool_result["content"][0]["document"]["source"]["bytes"] == "dGVzdA=="
+
+
+def test_bedrock_converse_messages_pt_document_various_formats():
+    """Test that various document media types produce the correct format value."""
+    test_cases = [
+        ("application/pdf", "pdf"),
+        ("text/csv", "csv"),
+        ("text/html", "html"),
+        ("text/plain", "txt"),
+        ("text/markdown", "md"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+        ),
+    ]
+
+    for media_type, expected_format in test_cases:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": "dGVzdA==",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        result = _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
+
+        doc_block = result[0]["content"][0]
+        assert doc_block["document"]["format"] == expected_format, (
+            f"Expected format '{expected_format}' for media_type '{media_type}', "
+            f"got '{doc_block['document']['format']}'"
+        )
+
+
+def test_bedrock_converse_messages_pt_document_deterministic_name():
+    """Test that the same document data always produces the same name."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    name1 = result1[0]["content"][0]["document"]["name"]
+    name2 = result2[0]["content"][0]["document"]["name"]
+    assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_document_rejects_url_source():
+    """Test that a URL-type document source raises a clear error instead of KeyError."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/doc.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="only supports base64-encoded"):
+        _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )

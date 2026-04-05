@@ -3984,6 +3984,14 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
+            elif content["type"] == "document":
+                _doc_block = BedrockConverseMessagesProcessor._process_document_message(
+                    content
+                )
+                if "document" in _doc_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_doc_block["document"])
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
@@ -4439,6 +4447,11 @@ class BedrockConverseMessagesProcessor:
                                     message=cast(ChatCompletionFileObject, element)
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "document":
+                                _part = BedrockConverseMessagesProcessor._process_document_message(
+                                    element
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -4719,6 +4732,44 @@ class BedrockConverseMessagesProcessor:
         )
 
     @staticmethod
+    def _process_document_message(element: dict) -> BedrockContentBlock:
+        """Convert a document content block to a Bedrock DocumentBlock.
+
+        Handles the Anthropic-style document format:
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}}
+        """
+        source = element["source"]
+        source_type = source.get("type")
+        if source_type != "base64":
+            raise ValueError(
+                f"Bedrock Converse only supports base64-encoded document sources, got '{source_type}'. "
+                "Please convert the document to base64 before sending to Bedrock."
+            )
+        media_type: str = source["media_type"]
+        data: str = source["data"]
+        doc_format = BedrockImageProcessor._validate_format(
+            mime_type=media_type, image_format=media_type.split("/")[1]
+        )
+
+        # Deterministic name using the same hashing pattern as _create_bedrock_block
+        HASH_SAMPLE_BYTES = 64 * 1024
+        normalized = "".join(data.split()).encode("utf-8")
+        sample = normalized[:HASH_SAMPLE_BYTES]
+        hasher = hashlib.sha256()
+        hasher.update(sample)
+        hasher.update(str(len(normalized)).encode("utf-8"))
+        content_hash = hasher.hexdigest()[:16]
+        document_name = f"Document_{content_hash}_{doc_format}"
+
+        return BedrockContentBlock(
+            document=BedrockDocumentBlock(
+                source=BedrockSourceBlock(bytes=data),
+                format=doc_format,
+                name=document_name,
+            )
+        )
+
+    @staticmethod
     def add_thinking_blocks_to_assistant_content(
         thinking_blocks: List[BedrockContentBlock],
         assistant_parts: List[BedrockContentBlock],
@@ -4813,6 +4864,11 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 BedrockConverseMessagesProcessor._process_file_message(
                                     message=cast(ChatCompletionFileObject, element)
                                 )
+                            )
+                            _parts.append(_part)
+                        elif element["type"] == "document":
+                            _part = BedrockConverseMessagesProcessor._process_document_message(
+                                element
                             )
                             _parts.append(_part)
                         _cache_point_block = (
