@@ -173,9 +173,9 @@ class TestOllamaChatConfigResponseFormat:
             headers={},
         )
 
-        # Verify empty content becomes empty string
+        # Verify empty content is not set (empty string is falsy, so key is omitted)
         assert len(result["messages"]) == 1
-        assert result["messages"][0]["content"] == ""
+        assert "content" not in result["messages"][0]
         assert result["messages"][0]["role"] == "user"
 
     def test_transform_request_image_extraction(self):
@@ -321,9 +321,8 @@ class TestOllamaChatConfigResponseFormat:
         # Verify no images key when no images present
         assert result["messages"][0]["content"] == "Just text here"
         # Since extract_images_from_message returns empty list [] when no images found,
-        # and the code checks "if images is not None", an empty list will still be set
-        assert "images" in result["messages"][0]
-        assert result["messages"][0]["images"] == []
+        # and the code now checks "if images:" (truthy), empty list is not set
+        assert "images" not in result["messages"][0]
 
 
 class TestOllamaToolCalling:
