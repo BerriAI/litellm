@@ -21,6 +21,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
+from openai import OpenAI
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -55,6 +57,7 @@ from .common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
+import os
 from .storage_backend_service import StorageBackendFileService
 
 router = APIRouter()
@@ -111,6 +114,11 @@ def get_model_from_json_obj(json_object: dict) -> Optional[str]:
     model = body.get("model")
 
     return model
+
+
+def _stream_openai_file_content(file_id: str, client: OpenAI):
+    with client.files.with_streaming_response.content(file_id) as response:
+        yield from response.iter_bytes(chunk_size=1024 * 1024)
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -822,6 +830,118 @@ async def get_file_content(  # noqa: PLR0915
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+
+
+# NOTE: Rough Prototype to check memory usage
+@router.get(
+    "/{provider}/v2/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
+    "/v2/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+async def get_file_content_v2(
+    request: Request,
+    fastapi_response: Response,
+    file_id: str,
+    provider: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
+
+    data: Dict = {"file_id": file_id}
+    try:
+        # Include original request and headers in the data (same as v1 flow)
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="afile_content",
+        )
+
+        custom_llm_provider = (
+            provider
+            or get_custom_llm_provider_from_request_headers(request=request)
+            or get_custom_llm_provider_from_request_query(request=request)
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
+        if custom_llm_provider != "openai":
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "v2 files content currently only supports openai provider"},
+            )
+
+        client = OpenAI(
+            base_url=os.getenv("OPENAI_BASE_URL"),
+            api_key=os.getenv("OPENAI_API_KEY"),
+        )
+
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
+
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id="",
+                cache_key="",
+                api_base="",
+                version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            )
+        )
+
+        return StreamingResponse(
+            _stream_openai_file_content(file_id, client),
+            media_type="application/octet-stream",
+            headers={
+                "content-disposition": f'attachment; filename="{file_id}.bin"',
+            },
+        )
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+        
 
 
 @router.get(
