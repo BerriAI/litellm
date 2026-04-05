@@ -2742,8 +2742,12 @@ async def can_key_call_model(
     """
     Checks if token can call a given model
 
-    1. First checks native key-level model permissions (current implementation)
-    2. If not allowed natively, falls back to access_group_ids on the key
+    1. If key has no native models but has access_group_ids, resolve the allowed
+       model set from those groups first — prevents models=[] from being treated
+       as "allow all" when access groups are configured (fix for issue #23850).
+    2. Check native key-level model permissions with the resolved model list.
+    3. If not allowed natively (non-empty models case), fall back to
+       access_group_ids on the key.
 
     Returns:
         - True: if token allowed to call model
@@ -2751,21 +2755,35 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    effective_models = valid_token.models
+    if not effective_models and valid_token.access_group_ids:
+        # Key has no native model list but is scoped to access groups.
+        # Resolve the allowed models now so _can_object_call_model enforces them
+        # instead of treating models=[] as "allow all" (#23850).
+        effective_models = (
+            await _get_models_from_access_groups(
+                access_group_ids=valid_token.access_group_ids,
+            )
+            or effective_models  # keep [] only if the group truly has no models
+        )
+
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=valid_token.models,
+            models=effective_models,
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             object_type="key",
         )
     except ProxyException:
-        # Fallback: check key's access_group_ids
-        key_access_group_ids = valid_token.access_group_ids or []
-        if key_access_group_ids:
+        # Fallback: if native models were non-empty and denied access, check
+        # whether access_group_ids grant additional permissions.
+        # Skip when we already resolved from access_group_ids above to avoid a
+        # redundant DB round-trip and an infinite retry on the same denied model.
+        if valid_token.models and valid_token.access_group_ids:
             models_from_groups = await _get_models_from_access_groups(
-                access_group_ids=key_access_group_ids,
+                access_group_ids=valid_token.access_group_ids,
             )
             if models_from_groups:
                 return _can_object_call_model(
