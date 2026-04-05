@@ -17,9 +17,9 @@ class FunctionCall(TypedDict):
     args: Optional[dict]
 
 
-class FileDataType(TypedDict):
+class FileDataType(TypedDict, total=False):
     mime_type: str
-    file_uri: str  # the cloud storage uri of storing this file
+    file_uri: Required[str]  # the cloud storage uri of storing this file
 
 
 class BlobType(TypedDict, total=False):
