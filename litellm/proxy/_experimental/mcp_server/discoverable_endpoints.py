@@ -463,6 +463,115 @@ async def callback(code: str, state: str):
         )
 
 
+def _html_safe_json(value: object) -> str:
+    """
+    JSON-serialize a value for safe embedding inside HTML <script> tags.
+    Escapes characters that could break out of the script block (XSS).
+    """
+    s = json.dumps(value)
+    return (
+        s.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+    )
+
+
+def _build_mcp_oauth_callback_html(code: Optional[str], state: Optional[str]) -> str:
+    """
+    Build the inline HTML page for the MCP OAuth callback.
+
+    This page mirrors the logic of the Next.js page at
+    ui/litellm-dashboard/src/app/mcp/oauth/callback/page.tsx:
+    it stores the OAuth result in browser storage and redirects the
+    user back to the LiteLLM UI.
+
+    Served as a backend route so it works even when the static-files
+    mount for /ui is unavailable (e.g. read-only container filesystems).
+    """
+    code_json = _html_safe_json(code)
+    state_json = _html_safe_json(state)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LiteLLM MCP OAuth</title>
+  <style>
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+    }}
+    .card {{
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      padding: 2.5rem 2rem;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }}
+    h1 {{ font-size: 1.25rem; color: #0f172a; margin-bottom: 0.75rem; }}
+    p {{ font-size: 0.9rem; color: #475569; line-height: 1.6; margin: 0.25rem 0; }}
+    .note {{ font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>LiteLLM MCP OAuth</h1>
+    <p>Authorization complete. You may close this window and return to the LiteLLM dashboard.</p>
+    <p class="note">If the window does not close automatically, everything is still saved — you can close it manually.</p>
+  </div>
+  <script>
+    (function () {{
+      var RESULT_KEY = "litellm-mcp-oauth-result";
+      var RETURN_URL_KEY = "litellm-mcp-oauth-return-url";
+
+      var payload = {{
+        type: "litellm-mcp-oauth",
+        code: {code_json},
+        state: {state_json}
+      }};
+
+      try {{
+        var payloadStr = JSON.stringify(payload);
+        window.sessionStorage.setItem(RESULT_KEY, payloadStr);
+        window.localStorage.setItem(RESULT_KEY, payloadStr);
+      }} catch (e) {{}}
+
+      var returnUrl = null;
+      try {{
+        returnUrl = window.sessionStorage.getItem(RETURN_URL_KEY) ||
+                    window.localStorage.getItem(RETURN_URL_KEY);
+      }} catch (e) {{}}
+
+      // Validate returnUrl: reject absolute URLs (open redirect protection)
+      if (returnUrl && (returnUrl.startsWith('//') || /^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(returnUrl))) {{
+        returnUrl = null;
+      }}
+
+      if (!returnUrl) {{
+        var path = window.location.pathname || "";
+        var uiIndex = path.indexOf("/ui");
+        returnUrl = uiIndex >= 0 ? path.slice(0, uiIndex + 3) : "/";
+      }}
+
+      window.location.replace(returnUrl);
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+# The /ui/mcp/oauth/callback route is registered in proxy_server.py (before
+# the StaticFiles mount) to ensure it takes precedence over static files.
+
+
 # ------------------------------
 # Optional .well-known endpoints for MCP + OAuth discovery
 # ------------------------------
