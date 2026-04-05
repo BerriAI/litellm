@@ -511,6 +511,40 @@ class TestProxyOAuthHeaderForwarding:
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
         assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
 
+    def test_add_provider_specific_headers_oauth_removes_conflicting_x_api_key(self):
+        """When both x-api-key and OAuth Authorization are present, x-api-key must be
+        removed to prevent the Anthropic API from preferring it over Authorization.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/24436
+        When ANTHROPIC_AUTH_TOKEN is set and forward_client_headers is true, Claude Code
+        sends x-litellm-api-key: Bearer <oauth_token>. The proxy forwards this as
+        x-api-key (from ANTHROPIC_API_HEADERS). But when we also add
+        Authorization: Bearer <oauth_token>, the Anthropic API uses x-api-key (which
+        fails for OAuth tokens since x-api-key requires sk-ant-api* format).
+        Fix: remove x-api-key when we detect an OAuth Authorization header.
+        """
+        from litellm.proxy.litellm_pre_call_utils import (
+            add_provider_specific_headers_to_request,
+        )
+
+        data: dict = {}
+        # This is what the proxy receives from Claude Code when ANTHROPIC_AUTH_TOKEN is set:
+        # x-api-key from ANTHROPIC_API_HEADERS + authorization from OAuth detection
+        headers = {
+            "x-api-key": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "authorization": f"Bearer {FAKE_OAUTH_TOKEN}",
+            "content-type": "application/json",
+        }
+
+        add_provider_specific_headers_to_request(data=data, headers=headers)
+
+        assert "provider_specific_header" in data
+        psh = data["provider_specific_header"]
+        assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        # x-api-key must NOT be present - it would take precedence over Authorization
+        # at the HTTP level, causing "Invalid key=value pair" errors for OAuth tokens
+        assert "x-api-key" not in psh["extra_headers"]
+
     def test_clean_headers_forwards_x_api_key_when_authenticated_with_litellm_key(self):
         """clean_headers should forward x-api-key when user authenticated with x-litellm-api-key and forward_llm_provider_auth_headers=True."""
         from starlette.datastructures import Headers
