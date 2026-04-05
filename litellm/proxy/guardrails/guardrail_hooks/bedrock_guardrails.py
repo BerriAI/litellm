@@ -690,7 +690,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check topic policy
             topic_policy = assessment.get("topicPolicy")
             if topic_policy:
-                topics = topic_policy.get("topics", [])
+                topics = topic_policy.get("topics") or []
                 for topic in topics:
                     if topic.get("action") == "BLOCKED":
                         return True
@@ -698,7 +698,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check content policy
             content_policy = assessment.get("contentPolicy")
             if content_policy:
-                filters = content_policy.get("filters", [])
+                filters = content_policy.get("filters") or []
                 for filter_item in filters:
                     if filter_item.get("action") == "BLOCKED":
                         return True
@@ -706,11 +706,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                custom_words = word_policy.get("customWords", [])
+                custom_words = word_policy.get("customWords") or []
                 for custom_word in custom_words:
                     if custom_word.get("action") == "BLOCKED":
                         return True
-                managed_words = word_policy.get("managedWordLists", [])
+                managed_words = word_policy.get("managedWordLists") or []
                 for managed_word in managed_words:
                     if managed_word.get("action") == "BLOCKED":
                         return True
@@ -718,12 +718,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check sensitive information policy
             sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
             if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities", [])
+                pii_entities = sensitive_info_policy.get("piiEntities") or []
                 if pii_entities:
                     for pii_entity in pii_entities:
                         if pii_entity.get("action") == "BLOCKED":
                             return True
-                regexes = sensitive_info_policy.get("regexes", [])
+                regexes = sensitive_info_policy.get("regexes") or []
                 if regexes:
                     for regex in regexes:
                         if regex.get("action") == "BLOCKED":
@@ -732,7 +732,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check contextual grounding policy
             contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
             if contextual_grounding_policy:
-                grounding_filters = contextual_grounding_policy.get("filters", [])
+                grounding_filters = contextual_grounding_policy.get("filters") or []
                 for grounding_filter in grounding_filters:
                     if grounding_filter.get("action") == "BLOCKED":
                         return True
