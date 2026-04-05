@@ -12,7 +12,7 @@ jobs:
       issues: write
     steps:
       - name: Add component labels
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -79,4 +79,38 @@ jobs:
 
                 break;
               }
+            }
+
+            // Check for 'claude code' keyword (can be applied alongside component labels)
+            if (/claude code/i.test(body)) {
+              const claudeLabel = {
+                name: 'claude code',
+                color: '7c3aed',
+                description: 'Issues related to Claude Code usage'
+              };
+
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: claudeLabel.name
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: claudeLabel.name,
+                    color: claudeLabel.color,
+                    description: claudeLabel.description
+                  });
+                }
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [claudeLabel.name]
+              });
             }
