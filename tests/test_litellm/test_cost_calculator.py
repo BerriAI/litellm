@@ -447,6 +447,77 @@ def test_per_request_custom_pricing_with_router():
     assert "gpt-3.5-turbo" in selected
 
 
+def test_zero_cost_custom_pricing_with_anthropic_provider():
+    """
+    When a user sets input_cost_per_token=0.0 and output_cost_per_token=0.0
+    with custom_llm_provider="anthropic" via the router, the zero-cost
+    override must be respected. The provider-specific dispatch should
+    be bypassed so that real Anthropic pricing is NOT used.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25204
+    """
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                    "api_key": "test_api_key",
+                },
+                "model_info": {
+                    "id": "zero-cost-model-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+        ]
+    )
+
+    result = router.completion(
+        model="free-claude",
+        messages=[{"role": "user", "content": "Hello!"}],
+        mock_response="Hi there!",
+    )
+
+    assert result._hidden_params["response_cost"] == 0.0
+
+
+def test_cost_per_token_custom_pricing_bypasses_provider_dispatch():
+    """
+    cost_per_token with custom_pricing=True should use generic_cost_per_token
+    instead of the provider-specific dispatch, ensuring custom pricing entries
+    (including zero costs) are respected.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25204
+    """
+    from litellm.cost_calculator import cost_per_token
+
+    custom_model_id = "custom-zero-cost-anthropic"
+    litellm.register_model(
+        model_cost={
+            custom_model_id: {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_val = cost_per_token(
+        model=custom_model_id,
+        prompt_tokens=1000,
+        completion_tokens=500,
+        custom_llm_provider="anthropic",
+        custom_pricing=True,
+    )
+
+    assert prompt_cost == 0.0
+    assert completion_cost_val == 0.0
+
+
 def test_azure_realtime_cost_calculator():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
