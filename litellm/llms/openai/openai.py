@@ -350,6 +350,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         if max_retries is not None:
             client.max_retries = max_retries
 
+    def _httpx_is_closed(self, openai_client) -> bool:
+        """Return True if underlying httpx client is missing or closed."""
+        httpx_client = getattr(openai_client, "_client", None)
+        if httpx_client is None:
+            return True
+        return bool(getattr(httpx_client, "is_closed", True))
+
     def _get_openai_client(
         self,
         is_async: bool,
@@ -362,61 +369,74 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
-        client_initialization_params: Dict = locals()
-        if client is None:
-            if not isinstance(max_retries, int):
-                raise OpenAIError(
-                    status_code=422,
-                    message="max retries must be an int. Passed in value: {}".format(
-                        max_retries
-                    ),
-                )
-            cached_client = self.get_cached_openai_client(
-                client_initialization_params=client_initialization_params,
-                client_type="openai",
-            )
-
-            if cached_client:
-                if isinstance(cached_client, OpenAI) or isinstance(
-                    cached_client, AsyncOpenAI
-                ):
-                    return cached_client
-            if is_async:
-                _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(
-                        shared_session=shared_session
-                    ),
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    organization=organization,
-                )
-            else:
-                _new_client = OpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_sync_http_client(),
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    organization=organization,
-                )
-
-            ## SAVE CACHE KEY
-            self.set_cached_openai_client(
-                openai_client=_new_client,
-                client_initialization_params=client_initialization_params,
-                client_type="openai",
-            )
-            return _new_client
-
-        else:
+        # If caller passed a client explicitly, do not use cache
+        if client is not None:
             self._set_dynamic_params_on_client(
                 client=client,
                 organization=organization,
                 max_retries=max_retries,
             )
             return client
+
+        # IMPORTANT: compute params AFTER explicit-client early return so `client` is always None in cache-key
+        client_initialization_params: Dict = locals()
+
+        # Cache path
+        if not isinstance(max_retries, int):
+            raise OpenAIError(
+                status_code=422,
+                message="max retries must be an int. Passed in value: {}".format(
+                    max_retries
+                ),
+            )
+
+        cached_client = self.get_cached_openai_client(
+            client_initialization_params=client_initialization_params,
+            client_type="openai",
+        )
+
+        if cached_client and isinstance(cached_client, (AsyncOpenAI, OpenAI)):
+            if self._httpx_is_closed(cached_client):
+                raw_key = BaseOpenAILLM.get_openai_client_cache_key(
+                    client_initialization_params=client_initialization_params,
+                    client_type="openai",
+                )
+                key = litellm.in_memory_llm_clients_cache.update_cache_key_with_event_loop(
+                    raw_key
+                )
+                litellm.in_memory_llm_clients_cache._remove_key(key)
+            else:
+                return cached_client
+
+        # Create new client
+        if is_async:
+            _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=OpenAIChatCompletion._get_async_http_client(
+                    shared_session=shared_session
+                ),
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+            )
+        else:
+            _new_client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=OpenAIChatCompletion._get_sync_http_client(),
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+            )
+
+        ## SAVE CACHE KEY
+        self.set_cached_openai_client(
+            openai_client=_new_client,
+            client_initialization_params=client_initialization_params,
+            client_type="openai",
+        )
+        return _new_client
 
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
