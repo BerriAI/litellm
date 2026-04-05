@@ -1,20 +1,16 @@
-import base64
 import datetime
-import hashlib
 import json
-from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Optional,
-    Protocol,
     Tuple,
     Union,
 )
-from urllib.parse import urlparse
 
 import httpx
 
@@ -28,11 +24,18 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     version,
 )
-from litellm.llms.oci.common_utils import OCIError
+from litellm.llms.oci.common_utils import (
+    OCIError,
+    OCIRequestWrapper,  # re-exported for backwards compatibility
+    get_oci_base_url,
+    resolve_oci_credentials,
+    sign_oci_request,
+    validate_oci_environment,
+)
 from litellm.types.llms.oci import (
     CohereChatRequest,
-    CohereMessage,
     CohereChatResult,
+    CohereMessage,
     CohereParameterDefinition,
     CohereStreamChunk,
     CohereTool,
@@ -54,6 +57,7 @@ from litellm.types.llms.oci import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    Choices,
     Delta,
     LlmProviders,
     ModelResponse,
@@ -74,103 +78,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class OCISignerProtocol(Protocol):
-    """
-    Protocol for OCI request signers (e.g., oci.signer.Signer).
-
-    This protocol defines the interface expected for OCI SDK signer objects.
-    Compatible with the OCI Python SDK's Signer class.
-
-    See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
-    """
-
-    def do_request_sign(
-        self, request: Any, *, enforce_content_headers: bool = False
-    ) -> None:
-        """
-        Sign an HTTP request by adding authentication headers.
-
-        Args:
-            request: Request object with method, url, headers, body, and path_url attributes
-            enforce_content_headers: Whether to enforce content-type and content-length headers
-        """
-        ...
-
-
-@dataclass
-class OCIRequestWrapper:
-    """
-    Wrapper for HTTP requests compatible with OCI signer interface.
-
-    This class wraps request data in a format compatible with OCI SDK signers,
-    which expect objects with method, url, headers, body, and path_url attributes.
-    """
-
-    method: str
-    url: str
-    headers: dict
-    body: bytes
-
-    @property
-    def path_url(self) -> str:
-        """Returns the path + query string for OCI signing."""
-        parsed_url = urlparse(self.url)
-        return parsed_url.path + ("?" + parsed_url.query if parsed_url.query else "")
-
-
-def sha256_base64(data: bytes) -> str:
-    digest = hashlib.sha256(data).digest()
-    return base64.b64encode(digest).decode()
-
-
-def build_signature_string(method, path, headers, signed_headers):
-    lines = []
-    for header in signed_headers:
-        if header == "(request-target)":
-            value = f"{method.lower()} {path}"
-        else:
-            value = headers[header]
-        lines.append(f"{header}: {value}")
-    return "\n".join(lines)
-
-
-def load_private_key_from_str(key_str: str):
-    try:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-    except ImportError as e:
-        raise ImportError(
-            "cryptography package is required for OCI authentication. "
-            "Please install it with: pip install cryptography"
-        ) from e
-
-    key = serialization.load_pem_private_key(
-        key_str.encode("utf-8"),
-        password=None,
-    )
-    if not isinstance(key, rsa.RSAPrivateKey):
-        raise TypeError(
-            "The provided private key is not an RSA key, which is required for OCI signing."
-        )
-    return key
-
-
-def load_private_key_from_file(file_path: str):
-    """Loads a private key from a file path"""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            key_str = f.read().strip()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Private key file not found: {file_path}")
-    except OSError as e:
-        raise OSError(f"Failed to read private key file '{file_path}': {e}") from e
-
-    if not key_str:
-        raise ValueError(f"Private key file is empty: {file_path}")
-
-    return load_private_key_from_str(key_str)
-
-
 def get_vendor_from_model(model: str) -> OCIVendors:
     """
     Extracts the vendor from the model name.
@@ -187,8 +94,7 @@ def get_vendor_from_model(model: str) -> OCIVendors:
     vendor = model.split(".")[0].lower()
     if vendor == "cohere":
         return OCIVendors.COHERE
-    else:
-        return OCIVendors.GENERIC
+    return OCIVendors.GENERIC
 
 
 # 5 minute timeout (models may need to load)
@@ -239,25 +145,21 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere and Gemini use the same parameter mapping as GENERIC
-        self.openai_to_oci_cohere_param_map = (
-            self.openai_to_oci_generic_param_map.copy()
-        )
+        # Cohere uses the same parameter keys as GENERIC except tool_choice is unsupported.
+        # Build a *separate* frozen reference map so callers never mutate the canonical dict.
+        self._openai_to_oci_cohere_param_map = {
+            k: v
+            for k, v in self.openai_to_oci_generic_param_map.items()
+            if k not in ("tool_choice", "max_retries")
+        }
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        supported_params = []
-        vendor = get_vendor_from_model(model)
-        if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
-            open_ai_to_oci_param_map.pop("tool_choice")
-            open_ai_to_oci_param_map.pop("max_retries")
-        else:
-            open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
-        for key, value in open_ai_to_oci_param_map.items():
-            if value:
-                supported_params.append(key)
-
-        return supported_params
+        param_map = (
+            self._openai_to_oci_cohere_param_map
+            if get_vendor_from_model(model) == OCIVendors.COHERE
+            else self.openai_to_oci_generic_param_map
+        )
+        return [key for key, value in param_map.items() if value]
 
     def map_openai_params(
         self,
@@ -269,7 +171,7 @@ class OCIChatConfig(BaseConfig):
         adapted_params = {}
         vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+            open_ai_to_oci_param_map = self._openai_to_oci_cohere_param_map
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
 
@@ -515,56 +417,23 @@ class OCIChatConfig(BaseConfig):
         Sign the OCI request by adding authentication headers.
 
         Supports two signing modes:
-        1. OCI SDK Signer: Use an oci_signer object to sign the request
-        2. Manual Signing: Use OCI credentials to manually sign the request
 
-        Args:
-            headers: Request headers to be signed
-            optional_params: Optional parameters including auth credentials or oci_signer
-            request_data: The request body dict to be sent in HTTP request
-            api_base: The complete URL for the HTTP request
-            api_key: Optional API key (not used for OCI)
-            model: Optional model name
-            stream: Optional streaming flag
-            fake_stream: Optional fake streaming flag
-
-        Returns:
-            Tuple of (signed_headers, encoded_body):
-            - If oci_signer is provided: Returns (headers, body) where body is the encoded JSON
-            - If manual credentials are provided: Returns (headers, None) as body is not returned
-              for the manual signing path
-
-        Raises:
-            OCIError: If signing fails with oci_signer
-            Exception: If required credentials are missing
-            ImportError: If cryptography package is not installed (manual signing only)
-
-        Example:
-            >>> from oci.signer import Signer
-            >>> signer = Signer(
-            ...     tenancy="ocid1.tenancy.oc1..",
-            ...     user="ocid1.user.oc1..",
-            ...     fingerprint="xx:xx:xx",
-            ...     private_key_file_location="~/.oci/key.pem"
-            ... )
-            >>> headers, body = config.sign_request(
-            ...     headers={},
-            ...     optional_params={"oci_signer": signer},
-            ...     request_data={"message": "Hello"},
-            ...     api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/..."
-            ... )
+        1. **OCI SDK Signer** — pass ``oci_signer`` (an ``oci.signer.Signer`` instance or any
+           object implementing :class:`~litellm.llms.oci.common_utils.OCISignerProtocol`).
+        2. **Manual RSA-SHA256** — pass ``oci_user``, ``oci_fingerprint``, ``oci_tenancy``, and
+           ``oci_key`` (PEM string) or ``oci_key_file`` (path).  All of these can also be
+           supplied via ``OCI_USER``, ``OCI_FINGERPRINT``, ``OCI_TENANCY``, and
+           ``OCI_KEY_FILE`` environment variables.
         """
-        oci_signer = optional_params.get("oci_signer")
-
-        # If a signer is provided, use it for request signing
-        if oci_signer is not None:
-            return self._sign_with_oci_signer(
-                headers, optional_params, request_data, api_base
-            )
-
-        # Standard manual credential signing
-        return self._sign_with_manual_credentials(
-            headers, optional_params, request_data, api_base
+        return sign_oci_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
         )
 
     def validate_environment(
@@ -577,80 +446,29 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """
-        Validate the OCI environment and credentials.
-
-        Supports two authentication modes:
-        1. OCI SDK Signer: Pass an oci_signer object (e.g., oci.signer.Signer)
-        2. Manual Credentials: Pass oci_user, oci_fingerprint, oci_tenancy, and oci_key/oci_key_file
-
-        Args:
-            headers: Request headers to populate
-            model: Model name
-            messages: List of chat messages
-            optional_params: Optional parameters including authentication credentials
-            litellm_params: LiteLLM parameters
-            api_key: Optional API key (not used for OCI)
-            api_base: Optional API base URL
-
-        Returns:
-            Updated headers dict
-
-        Raises:
-            Exception: If required parameters are missing or invalid
-        """
-        oci_signer = optional_params.get("oci_signer")
-        oci_region = optional_params.get("oci_region", "us-ashburn-1")
-
-        # Determine api_base
-        api_base = (
-            api_base
-            or litellm.api_base
-            or f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com"
-        )
-
-        if not api_base:
-            raise Exception(
-                "Either `api_base` must be provided or `litellm.api_base` must be set. "
-                "Alternatively, you can set the `oci_region` optional parameter to use the default OCI region."
-            )
-
-        # Validate credentials only if signer is not provided
-        if oci_signer is None:
-            oci_user = optional_params.get("oci_user")
-            oci_fingerprint = optional_params.get("oci_fingerprint")
-            oci_tenancy = optional_params.get("oci_tenancy")
-            oci_key = optional_params.get("oci_key")
-            oci_key_file = optional_params.get("oci_key_file")
-            oci_compartment_id = optional_params.get("oci_compartment_id")
-
-            if (
-                not oci_user
-                or not oci_fingerprint
-                or not oci_tenancy
-                or not (oci_key or oci_key_file)
-                or not oci_compartment_id
-            ):
-                raise Exception(
-                    "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
-                    "and at least one of oci_key or oci_key_file. "
-                    "Alternatively, provide an oci_signer object from the OCI SDK."
-                )
-
-        # Common header setup
-        headers.update(
-            {
-                "content-type": "application/json",
-                "user-agent": f"litellm/{version}",
-            }
-        )
-
         if not messages:
             raise Exception(
                 "kwarg `messages` must be an array of messages that follow the openai chat standard"
             )
-
-        return headers
+        # Validate credentials early so the caller gets a clear error immediately
+        # rather than a cryptic signing failure at request time.
+        # Credentials may come from optional_params or OCI_* env vars.
+        if optional_params.get("oci_signer") is None:
+            creds = resolve_oci_credentials(optional_params)
+            missing = [
+                k
+                for k in ("oci_user", "oci_fingerprint", "oci_tenancy", "oci_compartment_id")
+                if not creds.get(k)
+            ]
+            if missing or not (creds.get("oci_key") or creds.get("oci_key_file")):
+                raise Exception(
+                    "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
+                    "and at least one of oci_key or oci_key_file. "
+                    "These can be supplied via optional_params or via OCI_USER, OCI_FINGERPRINT, "
+                    "OCI_TENANCY, OCI_COMPARTMENT_ID, OCI_KEY_FILE environment variables. "
+                    "Alternatively, provide an oci_signer object from the OCI SDK."
+                )
+        return validate_oci_environment(headers, optional_params, api_key)
 
     def get_complete_url(
         self,
@@ -661,15 +479,13 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        oci_region = optional_params.get("oci_region", "us-ashburn-1")
-        return f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com/20231130/actions/chat"
+        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        return f"{base}/20231130/actions/chat"
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
-        selected_params = {}
+        selected_params: Dict = {}
         if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
-            # remove tool_choice from the map
-            open_ai_to_oci_param_map.pop("tool_choice")
+            open_ai_to_oci_param_map = self._openai_to_oci_cohere_param_map
             # Add default values for Cohere API
             selected_params = {
                 "maxTokens": 600,
@@ -853,9 +669,16 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        oci_compartment_id = optional_params.get("oci_compartment_id", None)
+        creds = resolve_oci_credentials(optional_params)
+        oci_compartment_id = creds["oci_compartment_id"]
         if not oci_compartment_id:
-            raise Exception("kwarg `oci_compartment_id` is required for OCI requests")
+            raise OCIError(
+                status_code=400,
+                message=(
+                    "oci_compartment_id is required for OCI chat requests. "
+                    "Pass it as optional_params or set the OCI_COMPARTMENT_ID env var."
+                ),
+            )
 
         vendor = get_vendor_from_model(model)
 
@@ -968,8 +791,6 @@ class OCIChatConfig(BaseConfig):
                 )
 
         # Create choice
-        from litellm.types.utils import Choices
-
         choice = Choices(
             index=0,
             message={
@@ -983,8 +804,6 @@ class OCIChatConfig(BaseConfig):
 
         # Extract usage info
         usage_info = cohere_response.chatResponse.usage
-        from litellm.types.utils import Usage
-
         model_response.usage = Usage(  # type: ignore[attr-defined]
             prompt_tokens=usage_info.promptTokens,  # type: ignore[union-attr]
             completion_tokens=usage_info.completionTokens,  # type: ignore[union-attr]
@@ -1017,17 +836,20 @@ class OCIChatConfig(BaseConfig):
 
         message = model_response.choices[0].message  # type: ignore
         response_message = completion_response.chatResponse.choices[0].message
-        if response_message.content and response_message.content[0].type == "TEXT":
-            message.content = response_message.content[0].text
-        if response_message.toolCalls:
-            message.tool_calls = adapt_tools_to_openai_standard(
-                response_message.toolCalls
-            )
+        # message is None when a reasoning model spends all max_tokens on reasoning
+        if response_message is not None:
+            if response_message.content and response_message.content[0].type == "TEXT":
+                message.content = response_message.content[0].text
+            if response_message.toolCalls:
+                message.tool_calls = adapt_tools_to_openai_standard(
+                    response_message.toolCalls
+                )
 
+        oci_usage = completion_response.chatResponse.usage
         usage = Usage(
-            prompt_tokens=completion_response.chatResponse.usage.promptTokens,
-            completion_tokens=completion_response.chatResponse.usage.completionTokens,
-            total_tokens=completion_response.chatResponse.usage.totalTokens,
+            prompt_tokens=oci_usage.promptTokens,
+            completion_tokens=oci_usage.completionTokens or 0,
+            total_tokens=oci_usage.totalTokens,
         )
         model_response.usage = usage  # type: ignore
 
@@ -1111,10 +933,16 @@ class OCIChatConfig(BaseConfig):
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.iter_text()
+        def split_chunks(stream: Iterator[str]) -> Iterator[str]:
+            """SSE events are separated by \\n\\n — yield one data line at a time."""
+            for item in stream:
+                for chunk in item.split("\n\n"):
+                    stripped = chunk.strip()
+                    if stripped:
+                        yield stripped
 
         streaming_response = OCIStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=split_chunks(response.iter_text()),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
@@ -1139,7 +967,7 @@ class OCIChatConfig(BaseConfig):
             del data["stream"]
 
         if client is None or isinstance(client, HTTPHandler):
-            client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
+            client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
 
         try:
             response = await client.post(
@@ -1368,10 +1196,12 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
 def adapt_tools_to_openai_standard(
     tools: List[OCIToolCall],
 ) -> List[ChatCompletionMessageToolCall]:
+    import uuid
+
     new_tools = []
     for tool in tools:
         new_tool = ChatCompletionMessageToolCall(
-            id=tool.id,
+            id=tool.id or f"call_{uuid.uuid4().hex[:24]}",
             type="function",
             function={
                 "name": tool.name,

@@ -1,8 +1,14 @@
 """
-OCI Generative AI Embedding Configuration
+OCI Generative AI — Embedding transformation.
 
-Supports embedding models available on Oracle Cloud Infrastructure Generative AI service.
-Uses the same authentication mechanisms as OCI chat (manual signing or OCI SDK Signer).
+Endpoint: POST /20231130/actions/embedText
+Supported models: cohere.embed-english-v3.0, cohere.embed-multilingual-v3.0,
+cohere.embed-v4.0, and all other Cohere embed variants available on OCI
+(including dedicated endpoints).
+
+Authentication follows the same RSA-SHA256 / OCI SDK signer pattern as chat.
+The base handler (base_llm_http_handler.embedding) calls sign_request after
+building the body, so signing happens automatically.
 
 Supported models:
 - cohere.embed-english-v3.0
@@ -10,24 +16,43 @@ Supported models:
 - cohere.embed-multilingual-v3.0
 - cohere.embed-multilingual-light-v3.0
 - cohere.embed-english-image-v3.0
-- cohere.embed-english-light-image-v3.0
-- cohere.embed-multilingual-light-image-v3.0
+- cohere.embed-multilingual-image-v3.0
 - cohere.embed-v4.0
 
 Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/latest/EmbedTextResult/EmbedText
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.oci.chat.transformation import OCIChatConfig
-from litellm.llms.oci.common_utils import OCIError
+from litellm.llms.oci.common_utils import (
+    OCIError,
+    get_oci_base_url,
+    resolve_oci_credentials,
+    sign_oci_request,
+    validate_oci_environment,
+)
+from litellm.types.llms.oci import (
+    OCIEmbedRequest,
+    OCIEmbedResponse,
+    OCIServingMode,
+)
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
+
+# OCI sends up to 96 texts per embedText request (Cohere limit).
+OCI_EMBED_BATCH_LIMIT = 96
 
 # Input type mapping from OpenAI conventions to OCI/Cohere conventions
 _INPUT_TYPE_MAP = {
@@ -38,65 +63,50 @@ _INPUT_TYPE_MAP = {
 }
 
 
-class OCIEmbeddingConfig(BaseEmbeddingConfig):
+class OCIEmbedConfig(BaseEmbeddingConfig):
     """
-    Configuration for OCI Generative AI Embedding API.
+    Transformation config for OCI Generative AI embeddings.
 
-    The OCI embedding endpoint uses the Cohere embed models hosted on OCI.
-    Authentication is handled via OCI request signing (manual credentials or OCI SDK Signer).
+    Supports both text and (on cohere.embed-v4.0) multimodal inputs.
 
-    Usage:
-        ```python
-        import litellm
+    Authentication — same two modes as chat:
+    - **OCI SDK signer**: pass ``oci_signer`` in optional_params.
+    - **Manual RSA-SHA256**: pass ``oci_user``, ``oci_fingerprint``, ``oci_tenancy``,
+      and ``oci_key`` or ``oci_key_file``, or set the corresponding ``OCI_*`` env vars.
 
-        response = litellm.embedding(
-            model="oci/cohere.embed-english-v3.0",
-            input=["Hello world", "Goodbye world"],
-            oci_compartment_id="ocid1.compartment.oc1..xxx",
-            oci_region="us-ashburn-1",
-            oci_user="ocid1.user.oc1..xxx",
-            oci_fingerprint="xx:xx:xx:xx",
-            oci_tenancy="ocid1.tenancy.oc1..xxx",
-            oci_key_file="~/.oci/key.pem",
-        )
-        ```
+    Required call-time params (via optional_params or env vars):
+    - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+
+    Optional call-time params:
+    - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``
+    - ``oci_endpoint_id``: endpoint OCID for dedicated serving mode
+    - ``input_type``: ``SEARCH_DOCUMENT``, ``SEARCH_QUERY``, ``CLASSIFICATION``, ``CLUSTERING``
+    - ``truncate``: ``NONE``, ``START``, or ``END`` (default ``END``)
+    - ``dimensions``: output embedding dimensions (cohere.embed-v4.0+)
     """
 
-    def __init__(self) -> None:
-        # We reuse OCIChatConfig for signing logic
-        self._chat_config = OCIChatConfig()
-
-    def get_complete_url(
-        self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        model: str,
-        optional_params: dict,
-        litellm_params: dict,
-        stream: Optional[bool] = None,
-    ) -> str:
-        if api_base:
-            return api_base
-
-        oci_region = optional_params.get("oci_region", "us-ashburn-1")
-        return f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com/20231130/actions/embedText"
-
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
-            "dimensions",
-        ]
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return ["dimensions", "encoding_format"]
 
     def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
         model: str,
-        drop_params: bool,
+        drop_params: bool = False,
     ) -> dict:
-        # Note: OCI Cohere embed does not support custom dimensions natively,
-        # but we pass it through in case future models support it
-        if "dimensions" in non_default_params:
-            optional_params["dimensions"] = non_default_params["dimensions"]
+        for key, value in non_default_params.items():
+            if key == "dimensions":
+                optional_params["outputDimensions"] = value
+            elif key == "encoding_format":
+                # OCI always returns float32 — note unsupported but don't hard-fail
+                if not drop_params and not litellm.drop_params:
+                    raise OCIError(
+                        status_code=400,
+                        message="OCI embeddings do not support encoding_format. "
+                        "Pass drop_params=True to silently ignore it.",
+                    )
         return optional_params
 
     def validate_environment(
@@ -109,49 +119,19 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """
-        Validate OCI credentials for embedding requests.
-        Supports both OCI SDK Signer and manual credential signing.
-        """
-        oci_signer = optional_params.get("oci_signer")
-        oci_region = optional_params.get("oci_region", "us-ashburn-1")
+        return validate_oci_environment(headers, optional_params, api_key)
 
-        api_base = (
-            api_base
-            or f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com"
-        )
-
-        if oci_signer is None:
-            oci_user = optional_params.get("oci_user")
-            oci_fingerprint = optional_params.get("oci_fingerprint")
-            oci_tenancy = optional_params.get("oci_tenancy")
-            oci_key = optional_params.get("oci_key")
-            oci_key_file = optional_params.get("oci_key_file")
-            oci_compartment_id = optional_params.get("oci_compartment_id")
-
-            if (
-                not oci_user
-                or not oci_fingerprint
-                or not oci_tenancy
-                or not (oci_key or oci_key_file)
-                or not oci_compartment_id
-            ):
-                raise Exception(
-                    "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
-                    "and at least one of oci_key or oci_key_file. "
-                    "Alternatively, provide an oci_signer object from the OCI SDK."
-                )
-
-        from litellm.llms.custom_httpx.http_handler import version
-
-        headers.update(
-            {
-                "content-type": "application/json",
-                "user-agent": f"litellm/{version}",
-            }
-        )
-
-        return headers
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        return f"{base}/20231130/actions/embedText"
 
     def sign_request(
         self,
@@ -163,17 +143,14 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ):
-        """Delegate to OCIChatConfig's signing logic."""
-        return self._chat_config.sign_request(
+    ) -> Tuple[dict, Optional[bytes]]:
+        return sign_oci_request(
             headers=headers,
             optional_params=optional_params,
             request_data=request_data,
             api_base=api_base,
             api_key=api_key,
             model=model,
-            stream=stream,
-            fake_stream=fake_stream,
         )
 
     def transform_embedding_request(
@@ -182,91 +159,62 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
-        api_base: Optional[str] = None,
     ) -> dict:
-        """
-        Transform the embedding request to OCI format.
-
-        OCI embedText API expects:
-        {
-            "compartmentId": "...",
-            "servingMode": {"servingType": "ON_DEMAND", "modelId": "..."},
-            "inputs": ["text1", "text2"],
-            "truncate": "END",
-            "inputType": "SEARCH_DOCUMENT"
-        }
-        """
-        oci_compartment_id = optional_params.get("oci_compartment_id")
-        if not oci_compartment_id:
-            raise Exception(
-                "kwarg `oci_compartment_id` is required for OCI embedding requests"
+        creds = resolve_oci_credentials(optional_params)
+        compartment_id = creds["oci_compartment_id"]
+        if not compartment_id:
+            raise OCIError(
+                status_code=400,
+                message=(
+                    "oci_compartment_id is required for OCI embedding requests. "
+                    "Pass it as optional_params or set the OCI_COMPARTMENT_ID env var."
+                ),
             )
 
-        # Build serving mode
-        oci_serving_mode = optional_params.get("oci_serving_mode", "ON_DEMAND")
-        if oci_serving_mode == "DEDICATED":
-            oci_endpoint_id = optional_params.get("oci_endpoint_id", model)
-            serving_mode = {
-                "servingType": "DEDICATED",
-                "endpointId": oci_endpoint_id,
-            }
-        else:
-            serving_mode = {
-                "servingType": "ON_DEMAND",
-                "modelId": model,
-            }
-
-        # Normalize input to list of strings
+        # Normalise input to a flat list of strings
         if isinstance(input, str):
-            inputs = [input]
+            texts = [input]
         elif isinstance(input, list):
-            inputs = []
-            for item in input:
-                if isinstance(item, str):
-                    inputs.append(item)
-                elif isinstance(item, list):
-                    raise ValueError(
-                        "OCI embedding does not support token-array inputs. "
-                        "Please convert token lists to strings before calling embedding()."
-                    )
-                else:
-                    inputs.append(str(item))
+            texts = [item if isinstance(item, str) else str(item) for item in input]
         else:
-            inputs = [str(input)]
+            texts = [str(input)]
 
-        # Build request data — OCI embedText API expects inputs, truncate,
-        # and inputType at the top level alongside compartmentId and servingMode
-        request_data: Dict[str, Any] = {
-            "compartmentId": oci_compartment_id,
-            "servingMode": serving_mode,
-            "inputs": inputs,
-            "truncate": optional_params.get("truncate", "END"),
-        }
+        if len(texts) > OCI_EMBED_BATCH_LIMIT:
+            raise OCIError(
+                status_code=400,
+                message=(
+                    f"OCI embedText accepts at most {OCI_EMBED_BATCH_LIMIT} inputs per request "
+                    f"(got {len(texts)}). Batch your requests."
+                ),
+            )
 
-        # Map input_type if provided
+        serving_mode_type = optional_params.get("oci_serving_mode", "ON_DEMAND").upper()
+        if serving_mode_type not in {"ON_DEMAND", "DEDICATED"}:
+            raise OCIError(
+                status_code=400,
+                message="oci_serving_mode must be 'ON_DEMAND' or 'DEDICATED'.",
+            )
+
+        if serving_mode_type == "DEDICATED":
+            endpoint_id = optional_params.get("oci_endpoint_id", model)
+            serving_mode = OCIServingMode(servingType="DEDICATED", endpointId=endpoint_id)
+        else:
+            serving_mode = OCIServingMode(servingType="ON_DEMAND", modelId=model)
+
+        # Map input_type from OpenAI convention to OCI/Cohere convention
         input_type = optional_params.get("input_type")
         if input_type:
-            mapped_type = _INPUT_TYPE_MAP.get(input_type.lower(), input_type.upper())
-            request_data["inputType"] = mapped_type
+            input_type = _INPUT_TYPE_MAP.get(input_type.lower(), input_type.upper())
 
-        # Sign the request using the same URL the HTTP handler will POST to
-        signing_url = self.get_complete_url(
-            api_base=api_base,
-            api_key=None,
-            model=model,
-            optional_params=optional_params,
-            litellm_params={},
+        request = OCIEmbedRequest(
+            compartmentId=compartment_id,
+            servingMode=serving_mode,
+            inputs=texts,
+            inputType=input_type,
+            truncate=optional_params.get("truncate", "END"),
+            outputDimensions=optional_params.get("outputDimensions"),
         )
-
-        signed_headers, body = self.sign_request(
-            headers=headers,
-            optional_params=optional_params,
-            request_data=request_data,
-            api_base=signing_url,
-        )
-        headers.update(signed_headers)
-
-        return request_data
+        return request.model_dump(exclude_none=True)
 
     def transform_embedding_response(
         self,
@@ -274,63 +222,49 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        api_key: Optional[str],
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
     ) -> EmbeddingResponse:
-        """
-        Transform OCI embedding response to standard EmbeddingResponse format.
-
-        OCI response format:
-        {
-            "embeddings": [[0.1, 0.2, ...], [0.3, 0.4, ...]],
-            "modelId": "cohere.embed-english-v3.0",
-            "modelVersion": "3.0",
-            "inputTextTokenCounts": [5, 4]
-        }
-        """
         if raw_response.status_code != 200:
             raise OCIError(
-                message=raw_response.text,
                 status_code=raw_response.status_code,
+                message=raw_response.text,
             )
 
         try:
-            raw_response_json = raw_response.json()
-        except Exception:
+            json_response = raw_response.json()
+        except Exception as e:
             raise OCIError(
-                message=raw_response.text,
                 status_code=raw_response.status_code,
+                message=f"Failed to parse OCI embed response as JSON: {e}",
             )
 
-        embeddings = raw_response_json.get("embeddings", [])
-        model_id = raw_response_json.get("modelId", model)
-
-        # Build response data in OpenAI format
-        embedding_data = []
-        for idx, embedding in enumerate(embeddings):
-            embedding_data.append(
-                {
-                    "object": "embedding",
-                    "index": idx,
-                    "embedding": embedding,
-                }
+        try:
+            parsed = OCIEmbedResponse(**json_response)
+        except Exception as e:
+            raise OCIError(
+                status_code=500,
+                message=f"OCI embed response does not match expected schema: {e}",
             )
 
-        model_response.model = model_id
-        model_response.data = embedding_data
-        model_response.object = "list"
+        model_response.model = parsed.modelId
+        model_response.data = [
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": embedding,
+            }
+            for i, embedding in enumerate(parsed.embeddings)
+        ]
 
-        # Calculate token usage
-        input_token_counts = raw_response_json.get("inputTextTokenCounts", [])
-        total_tokens = sum(input_token_counts) if input_token_counts else 0
-
-        usage = Usage(
-            prompt_tokens=total_tokens,
-            total_tokens=total_tokens,
-        )
-        model_response.usage = usage
+        if parsed.usage is not None:
+            model_response.usage = Usage(
+                prompt_tokens=parsed.usage.promptTokens,
+                completion_tokens=0,
+                total_tokens=parsed.usage.totalTokens,
+            )
 
         return model_response
 
@@ -340,8 +274,8 @@ class OCIEmbeddingConfig(BaseEmbeddingConfig):
         status_code: int,
         headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
-        return OCIError(
-            message=error_message,
-            status_code=status_code,
-            headers=headers if isinstance(headers, httpx.Headers) else None,
-        )
+        return OCIError(status_code=status_code, message=error_message)
+
+
+# Alias for backwards compatibility with any code that imports OCIEmbeddingConfig
+OCIEmbeddingConfig = OCIEmbedConfig
