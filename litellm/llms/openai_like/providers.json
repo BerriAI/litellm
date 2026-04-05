@@ -15,6 +15,11 @@
     "base_url": "https://ai-gateway.helicone.ai/",
     "api_key_env": "HELICONE_API_KEY"
   },
+  "latitude": {
+    "base_url": "https://api.lsh.ai/v1",
+    "api_key_env": "LATITUDE_API_KEY",
+    "api_base_env": "LATITUDE_API_BASE"
+  },
   "veniceai": {
     "base_url": "https://api.venice.ai/api/v1",
     "api_key_env": "VENICE_AI_API_KEY"
