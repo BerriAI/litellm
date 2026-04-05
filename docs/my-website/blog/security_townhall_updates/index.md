@@ -143,11 +143,11 @@ This will ensure, your releases are safe, even when:
 - Tampered registry artifacts are published
 - Tag mutations are made after the release is published
 
-We believe that [Cosign](https://github.com/sigstore/cosign) is a good fit for this, and have already begun working on it [PR](https://github.com/BerriAI/litellm/pull/24683).
+We believe that [Cosign](https://github.com/sigstore/cosign) is a good fit for this, and have shipped it in [PR #24683](https://github.com/BerriAI/litellm/pull/24683).
 
 #### How to verify a Docker image with Cosign
 
-All LiteLLM Docker images are now signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
+Starting from `v1.83.0-nightly`, all LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
 
 ```bash
 cosign verify \

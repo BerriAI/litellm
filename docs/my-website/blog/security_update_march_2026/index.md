@@ -710,7 +710,7 @@ The LiteLLM AI Gateway team has already taken the following steps:
 
 ## Verify Docker image signatures
 
-All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
+Starting from `v1.83.0-nightly`, all LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). To verify the integrity of an image before deploying:
 
 ```bash
 cosign verify \
