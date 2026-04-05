@@ -35,6 +35,7 @@ from litellm.llms.custom_httpx.http_handler import (
     version,
 )
 from litellm.llms.oci.chat.cohere import (
+    _extract_text_content,
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
     handle_cohere_response,
@@ -43,10 +44,8 @@ from litellm.llms.oci.chat.cohere import (
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
     adapt_tool_definition_to_oci_standard,
-    adapt_tools_to_openai_standard,
     handle_generic_response,
     handle_generic_stream_chunk,
-    open_ai_to_generic_oci_role_map,
 )
 from litellm.llms.oci.common_utils import (
     OCIError,
@@ -143,7 +142,7 @@ class OCIChatConfig(BaseConfig):
         # - tool_choice is unsupported
         # - stop sequences key is "stopSequences" not "stop"
         # - n (numGenerations) is GENERIC-only
-        self._openai_to_oci_cohere_param_map = {
+        self.openai_to_oci_cohere_param_map = {
             k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
             if k not in ("tool_choice", "max_retries", "n")
@@ -151,7 +150,7 @@ class OCIChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         param_map = (
-            self._openai_to_oci_cohere_param_map
+            self.openai_to_oci_cohere_param_map
             if get_vendor_from_model(model) == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
         )
@@ -167,7 +166,7 @@ class OCIChatConfig(BaseConfig):
         adapted_params = {}
         vendor = get_vendor_from_model(model)
         param_map = (
-            self._openai_to_oci_cohere_param_map
+            self.openai_to_oci_cohere_param_map
             if vendor == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
         )
@@ -185,8 +184,6 @@ class OCIChatConfig(BaseConfig):
                 adapted_params[key] = value
                 continue
             adapted_params[alias] = value
-            if alias == "responseFormat":
-                adapted_params["response_format"] = value
 
         return adapted_params
 
@@ -405,7 +402,7 @@ class OCIChatConfig(BaseConfig):
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+    ) -> Tuple[dict, bytes]:
         return sign_oci_request(
             headers=headers,
             optional_params=optional_params,
@@ -436,7 +433,12 @@ class OCIChatConfig(BaseConfig):
             creds = resolve_oci_credentials(optional_params)
             missing = [
                 k
-                for k in ("oci_user", "oci_fingerprint", "oci_tenancy", "oci_compartment_id")
+                for k in (
+                    "oci_user",
+                    "oci_fingerprint",
+                    "oci_tenancy",
+                    "oci_compartment_id",
+                )
                 if not creds.get(k)
             ]
             if missing or not (creds.get("oci_key") or creds.get("oci_key_file")):
@@ -466,7 +468,7 @@ class OCIChatConfig(BaseConfig):
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
         param_map = (
-            self._openai_to_oci_cohere_param_map
+            self.openai_to_oci_cohere_param_map
             if vendor == OCIVendors.COHERE
             else self.openai_to_oci_generic_param_map
         )
@@ -477,7 +479,11 @@ class OCIChatConfig(BaseConfig):
                 selected_params[oci_key] = optional_params[openai_key]  # type: ignore[index]
 
         for oci_value in param_map.values():
-            if oci_value and oci_value in optional_params and oci_value not in selected_params:
+            if (
+                oci_value
+                and oci_value in optional_params
+                and oci_value not in selected_params
+            ):
                 selected_params[oci_value] = optional_params[oci_value]  # type: ignore[index]
 
         if "tools" in selected_params:
@@ -514,7 +520,9 @@ class OCIChatConfig(BaseConfig):
                 schema_payload: Optional[Any] = None
                 if "json_schema" in rf_payload:
                     raw_schema = rf_payload.pop("json_schema")
-                    schema_payload = dict(raw_schema) if isinstance(raw_schema, dict) else raw_schema
+                    schema_payload = (
+                        dict(raw_schema) if isinstance(raw_schema, dict) else raw_schema
+                    )
                 if schema_payload is not None:
                     rf_payload["jsonSchema"] = schema_payload
                 if vendor == OCIVendors.COHERE:
@@ -524,35 +532,6 @@ class OCIChatConfig(BaseConfig):
                     rf_payload["type"] = "JSON_OBJECT" if fmt == "JSON" else fmt
 
         return selected_params
-
-    # ------------------------------------------------------------------
-    # Delegating wrappers — keep instance-method call sites working
-    # while the real logic lives in cohere.py / generic.py.
-    # ------------------------------------------------------------------
-
-    def adapt_messages_to_cohere_standard(
-        self, messages: List[AllMessageValues]
-    ):  # type: ignore[return]
-        return adapt_messages_to_cohere_standard(messages)
-
-    def adapt_tool_definitions_to_cohere_standard(
-        self, tools: List[Dict[str, Any]]
-    ):  # type: ignore[return]
-        return adapt_tool_definitions_to_cohere_standard(tools)
-
-    def _extract_text_content(self, content: Any) -> str:
-        """Return plain-text for message content (string or content-part list)."""
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict) and item.get("type") == "text"
-            )
-        return str(content)
 
     def transform_request(
         self,
@@ -602,14 +581,14 @@ class OCIChatConfig(BaseConfig):
             preamble_override = None
             if system_messages:
                 preamble = "\n".join(
-                    self._extract_text_content(m["content"]) for m in system_messages
+                    _extract_text_content(m["content"]) for m in system_messages
                 )
                 if preamble:
                     preamble_override = preamble
 
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
-                message=self._extract_text_content(user_messages[-1]["content"]),
+                message=_extract_text_content(user_messages[-1]["content"]),
                 chatHistory=adapt_messages_to_cohere_standard(messages),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params),
@@ -661,7 +640,9 @@ class OCIChatConfig(BaseConfig):
 
         vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            model_response = handle_cohere_response(response_json, model, model_response)
+            model_response = handle_cohere_response(
+                response_json, model, model_response
+            )
         else:
             model_response = handle_generic_response(
                 response_json, model, model_response, raw_response
@@ -682,7 +663,7 @@ class OCIChatConfig(BaseConfig):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        signed_json_body: bytes = b"",
     ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
@@ -693,7 +674,7 @@ class OCIChatConfig(BaseConfig):
             response = client.post(
                 api_base,
                 headers=headers,
-                data=signed_json_body if signed_json_body is not None else json.dumps(data),
+                data=signed_json_body or json.dumps(data),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -730,7 +711,7 @@ class OCIChatConfig(BaseConfig):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        signed_json_body: bytes = b"",
     ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
@@ -741,7 +722,7 @@ class OCIChatConfig(BaseConfig):
             response = await client.post(
                 api_base,
                 headers=headers,
-                data=signed_json_body if signed_json_body is not None else json.dumps(data),
+                data=signed_json_body or json.dumps(data),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -791,18 +772,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
             return handle_cohere_stream_chunk(dict_chunk)
         return handle_generic_stream_chunk(dict_chunk)
 
-    # Delegating shims so any code that calls these as instance methods keeps working.
-    def _handle_cohere_stream_chunk(self, dict_chunk: dict) -> ModelResponseStream:
-        return handle_cohere_stream_chunk(dict_chunk)
 
-    def _handle_generic_stream_chunk(self, dict_chunk: dict) -> ModelResponseStream:
-        return handle_generic_stream_chunk(dict_chunk)
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatibility re-exports
-# Keep all symbols that test files import directly from this module.
-# ---------------------------------------------------------------------------
 __all__ = [
     "OCIChatConfig",
     "OCIStreamWrapper",
@@ -811,15 +781,4 @@ __all__ = [
     "STREAMING_TIMEOUT",
     "get_vendor_from_model",
     "version",
-    # generic helpers (imported in tests)
-    "open_ai_to_generic_oci_role_map",
-    "adapt_messages_to_generic_oci_standard",
-    "adapt_messages_to_generic_oci_standard_content_message",
-    "adapt_messages_to_generic_oci_standard_tool_call",
-    "adapt_messages_to_generic_oci_standard_tool_response",
-    "adapt_tool_definition_to_oci_standard",
-    "adapt_tools_to_openai_standard",
-    # cohere helpers
-    "adapt_messages_to_cohere_standard",
-    "adapt_tool_definitions_to_cohere_standard",
 ]

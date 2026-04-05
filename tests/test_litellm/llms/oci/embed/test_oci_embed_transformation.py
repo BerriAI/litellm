@@ -67,7 +67,10 @@ class TestOCIEmbedConfig:
             optional_params={"oci_region": "us-chicago-1"},
             litellm_params={},
         )
-        assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
+        assert (
+            url
+            == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
+        )
 
     def test_get_complete_url_respects_api_base(self):
         """api_base is returned as-is (caller supplies complete URL for dedicated/custom endpoints)."""

@@ -206,7 +206,9 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
         if serving_mode_type == "DEDICATED":
             endpoint_id = optional_params.get("oci_endpoint_id", model)
-            serving_mode = OCIServingMode(servingType="DEDICATED", endpointId=endpoint_id)
+            serving_mode = OCIServingMode(
+                servingType="DEDICATED", endpointId=endpoint_id
+            )
         else:
             serving_mode = OCIServingMode(servingType="ON_DEMAND", modelId=model)
 
