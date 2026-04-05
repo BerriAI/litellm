@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.83.3.rc.1 - MCP Toolsets, Team Routing, and Guardrails"
+title: "[Preview] v1.83.3.rc.1 - Introducing MCP Skills Marketplace"
 slug: "v1-83-3-rc-1"
 date: 2026-04-04T00:00:00
 authors:
@@ -64,8 +64,8 @@ pip install litellm==1.83.3rc1
 
 | Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
-| Brave Search | `brave/search` | - | - | - | Search tool integration metadata in cost map |
-| AWS Bedrock | `nvidia.nemotron-super-3-120b` | 256K | Added | Added | Chat completions, function calling, system messages |
+| Brave Search | `brave/search` | - | - | - | Search tool integration metadata in cost map ([PR #25042](https://github.com/BerriAI/litellm/pull/25042)) |
+| AWS Bedrock | `nvidia.nemotron-super-3-120b` | 256K | Added | Added | Chat completions, function calling, system messages ([PR #24588](https://github.com/BerriAI/litellm/pull/24588)) |
 | OCI GenAI | Multiple new chat + embedding entries | Varies | Updated | Updated | Expanded chat + embedding model catalog |
 
 #### Features
@@ -127,6 +127,9 @@ pip install litellm==1.83.3rc1
     - Add project-level guardrails support in project create/edit flows - [PR #25100](https://github.com/BerriAI/litellm/pull/25100)
     - Allow adding team guardrails from the UI - [PR #25038](https://github.com/BerriAI/litellm/pull/25038)
 
+- **UI Cleanup**
+    - Migrate Tremor Text/Badge to antd Tag and native spans - [PR #24750](https://github.com/BerriAI/litellm/pull/24750)
+
 #### Bugs
 
 - Fix logs page showing unfiltered results when backend filter returns zero rows - [PR #24745](https://github.com/BerriAI/litellm/pull/24745)
@@ -173,7 +176,7 @@ pip install litellm==1.83.3rc1
 ## Performance / Loadbalancing / Reliability improvements
 
 - Integrate router health-check failures with cooldown behavior and transient 429/408 handling - [PR #25150](https://github.com/BerriAI/litellm/pull/25150), [PR #24988](https://github.com/BerriAI/litellm/pull/24988)
-- Add distributed lock for key rotation job execution - [PR #25150](https://github.com/BerriAI/litellm/pull/25150), [PR #23364](https://github.com/BerriAI/litellm/pull/23364)
+- Add distributed lock for key rotation job execution - [PR #25150](https://github.com/BerriAI/litellm/pull/25150), [PR #23364](https://github.com/BerriAI/litellm/pull/23364), [PR #23834](https://github.com/BerriAI/litellm/pull/23834)
 - Improve team routing reliability with deterministic grouping, isolation fixes, stale alias controls, and order-based fallback - [PR #25154](https://github.com/BerriAI/litellm/pull/25154), [PR #25148](https://github.com/BerriAI/litellm/pull/25148)
 - Regenerate GCP IAM token per async Redis cluster connection (fix token TTL failures) - [PR #25155](https://github.com/BerriAI/litellm/pull/25155), [PR #24426](https://github.com/BerriAI/litellm/pull/24426)
 - Restore MCP server fields dropped by schema sync migration - [PR #24078](https://github.com/BerriAI/litellm/pull/24078)
@@ -193,6 +196,9 @@ pip install litellm==1.83.3rc1
 - Harden npm and Docker supply chain workflows and release pipeline checks - [PR #24838](https://github.com/BerriAI/litellm/pull/24838), [PR #24877](https://github.com/BerriAI/litellm/pull/24877), [PR #24881](https://github.com/BerriAI/litellm/pull/24881), [PR #24905](https://github.com/BerriAI/litellm/pull/24905), [PR #24951](https://github.com/BerriAI/litellm/pull/24951), [PR #25023](https://github.com/BerriAI/litellm/pull/25023), [PR #25034](https://github.com/BerriAI/litellm/pull/25034), [PR #25036](https://github.com/BerriAI/litellm/pull/25036), [PR #25037](https://github.com/BerriAI/litellm/pull/25037), [PR #25136](https://github.com/BerriAI/litellm/pull/25136), [PR #25158](https://github.com/BerriAI/litellm/pull/25158)
 - Resolve CodeQL/security workflow issues and fix broken action SHA references - [PR #24880](https://github.com/BerriAI/litellm/pull/24880), [PR #24815](https://github.com/BerriAI/litellm/pull/24815)
 - Re-add Codecov reporting in GHA matrix workflows - [PR #24804](https://github.com/BerriAI/litellm/pull/24804)
+- Fix(docker): load enterprise hooks in non-root runtime image - [PR #24917](https://github.com/BerriAI/litellm/pull/24917)
+- Apply Black formatting to 14 files - [PR #24532](https://github.com/BerriAI/litellm/pull/24532)
+- Fix lint issues - [PR #24932](https://github.com/BerriAI/litellm/pull/24932)
 
 ## New Contributors
 
