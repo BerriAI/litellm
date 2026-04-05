@@ -2125,6 +2125,7 @@ def _is_async_request(
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
         or kwargs.get("acreate_fine_tuning_job", False) is True
+        or kwargs.get("acreate_file", False) is True
         or is_pass_through is True
     ):
         return True
