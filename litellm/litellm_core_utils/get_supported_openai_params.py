@@ -170,6 +170,9 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "hpc_ai":
+        if request_type == "chat_completion":
+            return litellm.HpcAiConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "wandb":
         if request_type == "chat_completion":
             return litellm.WandbConfig().get_supported_openai_params(model=model)

@@ -254,6 +254,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+hpc_ai_key: Optional[str] = None
 wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
@@ -569,6 +570,7 @@ llama_models: Set = set()
 nscale_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
+hpc_ai_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
@@ -795,6 +797,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
             nebius_embedding_models.add(key)
+        elif value.get("litellm_provider") == "hpc_ai":
+            hpc_ai_models.add(key)
         elif value.get("litellm_provider") == "aiml":
             aiml_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
@@ -947,6 +951,7 @@ model_list = list(
     | sambanova_models
     | azure_text_models
     | novita_models
+    | hpc_ai_models
     | assemblyai_models
     | jina_ai_models
     | snowflake_models
@@ -1043,6 +1048,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
+    "hpc_ai": hpc_ai_models,
     "aiml": aiml_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
@@ -1826,6 +1832,7 @@ if TYPE_CHECKING:
         GigaChatEmbeddingConfig as GigaChatEmbeddingConfig,
     )
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
+    from .llms.hpc_ai.chat.transformation import HpcAiConfig as HpcAiConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import (
         DashScopeChatConfig as DashScopeChatConfig,

@@ -144,6 +144,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.DeepInfra)).toBe("deepinfra/<any-model-on-deepinfra>");
     });
 
+    it("should return hpc_ai placeholder for HPC_AI provider", () => {
+      expect(getPlaceholder(Providers.HPC_AI)).toBe("hpc_ai/minimax/minimax-m2.5");
+    });
+
     it("should return fal_ai placeholder for FalAI provider", () => {
       expect(getPlaceholder(Providers.FalAI)).toBe("fal_ai/fal-ai/flux-pro/v1.1-ultra");
     });

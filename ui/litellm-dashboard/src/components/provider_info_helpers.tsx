@@ -45,6 +45,7 @@ export enum Providers {
   GradientAI = "GradientAI",
   Groq = "Groq",
   HEROKU = "Heroku",
+  HPC_AI = "HPC-AI",
   Hosted_Vllm = "vllm",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
@@ -151,6 +152,7 @@ export const provider_map: Record<string, string> = {
   GradientAI: "gradient_ai",
   Groq: "groq",
   HEROKU: "heroku",
+  HPC_AI: "hpc_ai",
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
   HYPERBOLIC: "hyperbolic",
@@ -251,6 +253,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
   [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
   [Providers.Groq]: `${asset_logos_folder}groq.svg`,
+  [Providers.HPC_AI]: `${asset_logos_folder}hpc_ai.svg`,
   [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
   [Providers.HUGGINGFACE]: `${asset_logos_folder}huggingface.svg`,
   [Providers.HYPERBOLIC]: `${asset_logos_folder}hyperbolic.svg`,
@@ -358,6 +361,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "volcengine/<any-model-on-volcengine>";
   } else if (selectedProvider == Providers.DeepInfra) {
     return "deepinfra/<any-model-on-deepinfra>";
+  } else if (selectedProvider === Providers.HPC_AI) {
+    return "hpc_ai/minimax/minimax-m2.5";
   } else if (selectedProvider == Providers.FalAI) {
     return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
   } else if (selectedProvider == Providers.RunwayML) {

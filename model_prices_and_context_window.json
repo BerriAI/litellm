@@ -20369,6 +20369,32 @@
             "/v1/images/generations"
         ]
     },
+    "hpc_ai/minimax/minimax-m2.5": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "hpc_ai",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 204800,
+        "max_tokens": 204800,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.hpc-ai.com/models-console/models/minimax/minimax-m2.5",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true
+    },
+    "hpc_ai/moonshotai/kimi-k2.5": {
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "hpc_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.25e-06,
+        "source": "https://www.hpc-ai.com/models-console/models/moonshotai/kimi-k2.5",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true
+    },
     "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "hyperbolic",
