@@ -2,6 +2,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     List,
     Literal,
     Optional,
@@ -297,9 +298,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         filters = (
             list(filter_results.values())
             if isinstance(filter_results, dict)
-            else filter_results
-            if isinstance(filter_results, list)
-            else []
+            else filter_results if isinstance(filter_results, list) else []
         )
 
         # Prefer sanitized text from deidentifyResult if present
@@ -753,11 +752,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     # returns a proper JSON error response with the correct status code.
                     # (Raising from a generator hits create_response's generic except → 500.)
                     detail = (
-                        e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+                        e.detail
+                        if isinstance(e.detail, dict)
+                        else {"message": str(e.detail)}
                     )
                     error_value = detail.get("error", detail)
                     if isinstance(error_value, dict):
-                        error_obj = dict(error_value)
+                        error_obj: Dict[str, Any] = dict(error_value)
                     else:
                         error_obj = {"message": str(error_value)}
                     error_obj["code"] = str(e.status_code)

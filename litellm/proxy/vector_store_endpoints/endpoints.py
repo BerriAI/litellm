@@ -68,10 +68,10 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
         HTTPException: If user doesn't have access to the vector store
     """
     if litellm.vector_store_registry is not None:
-        vector_store_to_run: Optional[
-            LiteLLM_ManagedVectorStore
-        ] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-            vector_store_id=vector_store_id
+        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
+            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+                vector_store_id=vector_store_id
+            )
         )
         if vector_store_to_run is not None:
             # Check access control if user_api_key_dict is provided
