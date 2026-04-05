@@ -393,7 +393,12 @@ class VertexBase:
                     raise ValueError(
                         "Model parameter is required for Gemini custom API base URLs"
                     )
-                url = "{}/models/{}:{}".format(api_base, model, endpoint)
+                if api_base.endswith(f"/models/{model}:{endpoint}"):
+                    url = api_base
+                elif api_base.endswith(f"/models/{model}"):
+                    url = f"{api_base}:{endpoint}"
+                else:
+                    url = "{}/models/{}:{}".format(api_base.rstrip("/"), model, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
