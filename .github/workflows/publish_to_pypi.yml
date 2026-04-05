@@ -1,0 +1,136 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  preflight-checks:
+    name: Preflight Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # No environment — read-only checks, no approval needed
+    outputs:
+      needs_publish: ${{ steps.check-litellm.outputs.needs_publish }}
+      version: ${{ steps.check-litellm.outputs.version }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Check litellm version on PyPI
+        id: check-litellm
+        run: |
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Checking if litellm $VERSION exists on PyPI..."
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/litellm/$VERSION/json")
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "litellm $VERSION already exists on PyPI. Skipping publish."
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "litellm $VERSION not found on PyPI. Publish needed."
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sanity check proxy-extras version
+        run: |
+          # Read pinned version from requirements.txt
+          REQ_VERSION=$(grep -oP 'litellm-proxy-extras==\K[0-9.]+' requirements.txt)
+          if [ -z "$REQ_VERSION" ]; then
+            echo "::error::Could not find litellm-proxy-extras version in requirements.txt"
+            exit 1
+          fi
+          echo "requirements.txt pins litellm-proxy-extras==$REQ_VERSION"
+
+          # Read pinned version from pyproject.toml dependency
+          PYPROJECT_VERSION=$(python3 -c "
+          import re
+          with open('pyproject.toml') as f:
+              content = f.read()
+          match = re.search(r'litellm-proxy-extras\s*=\s*\{version\s*=\s*\"([^\"]+)\"', content)
+          if match:
+              print(match.group(1).lstrip('^~>='))
+          else:
+              import sys
+              print('::error::Could not find litellm-proxy-extras dependency in pyproject.toml', file=sys.stderr)
+              sys.exit(1)
+          ")
+          echo "pyproject.toml pins litellm-proxy-extras version: $PYPROJECT_VERSION"
+
+          # Check that both pinned versions match
+          if [ "$REQ_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::Version mismatch: requirements.txt has $REQ_VERSION but pyproject.toml has $PYPROJECT_VERSION"
+            exit 1
+          fi
+
+          # Check that the pinned version exists on PyPI
+          echo "Checking if litellm-proxy-extras $REQ_VERSION exists on PyPI..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/litellm-proxy-extras/$REQ_VERSION/json")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::litellm-proxy-extras $REQ_VERSION is not published on PyPI yet. Publish it before releasing litellm."
+            exit 1
+          fi
+          echo "litellm-proxy-extras $REQ_VERSION exists on PyPI. Sanity check passed."
+
+  publish-litellm:
+    name: Publish litellm to PyPI
+    needs: preflight-checks
+    if: needs.preflight-checks.outputs.needs_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    environment: pypi-publish
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Copy model prices backup
+        run: cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build==1.4.2
+
+      - name: Build package
+        run: |
+          rm -rf build dist
+          python -m build
+
+      - name: Verify build artifacts
+        env:
+          EXPECTED_VERSION: ${{ needs.preflight-checks.outputs.version }}
+        run: |
+          echo "Contents of dist/:"
+          ls -la dist/
+          # Ensure we have both sdist and wheel
+          ls dist/*.tar.gz
+          ls dist/*.whl
+          # Verify built version matches expected
+          ls dist/ | grep -q "litellm-${EXPECTED_VERSION}" || {
+            echo "::error::Built artifacts do not match expected version $EXPECTED_VERSION"
+            ls dist/
+            exit 1
+          }
+
+      - name: Validate package metadata
+        run: |
+          pip install twine==6.2.0
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
