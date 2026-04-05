@@ -38,6 +38,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
+    get_org_object,
     get_user_object,
     vector_store_access_check,
 )
@@ -1780,3 +1781,40 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_returns_cached_org():
+    """
+    Verify that get_org_object() correctly returns a cached organization object
+    instead of falling through to a DB query. Regression test for a missing
+    `await` on async_get_cache that caused the cache to be bypassed on every call.
+    """
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+
+    cached_org = LiteLLM_OrganizationTable(
+        organization_id="test-org-123",
+        organization_alias="Test Org",
+        budget_id="budget-1",
+        models=["gpt-4"],
+        created_by="admin",
+        updated_by="admin",
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=cached_org)
+
+    mock_prisma = MagicMock()
+    # If cache works, find_unique should never be called
+    mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock()
+
+    result = await get_org_object(
+        org_id="test-org-123",
+        prisma_client=mock_prisma,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert result is not None
+    assert result.organization_id == "test-org-123"
+    mock_cache.async_get_cache.assert_awaited_once()
+    mock_prisma.db.litellm_organizationtable.find_unique.assert_not_awaited()
