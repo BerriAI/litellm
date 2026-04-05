@@ -66,7 +66,7 @@ class TestMapFinishReasonAnthropic:
             ("end_turn", "stop"),
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
-            ("compaction", "length"),
+            ("compaction", "stop"),
             ("content_filtered", "content_filter"),
         ],
     )
