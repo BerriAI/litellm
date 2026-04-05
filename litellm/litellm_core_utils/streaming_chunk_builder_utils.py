@@ -2,6 +2,8 @@ import base64
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+import litellm
+
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -716,6 +718,34 @@ class ChunkProcessor:
                 returned_usage.prompt_tokens_details.web_search_requests = (
                     web_search_requests
                 )
+
+        # Ensure completion_tokens >= reasoning_tokens (OpenAI spec compliance).
+        # Some backends (e.g., vLLM) report reasoning_tokens and
+        # completion_tokens separately instead of including reasoning tokens
+        # in the completion_tokens total.  When reasoning_tokens exceeds
+        # completion_tokens it is clear that the backend excluded them from
+        # the total, so we add them to produce a spec-compliant value.
+        # Gate behind litellm.enforce_openai_completion_token_invariant so
+        # operators who rely on raw backend values can opt out.
+        if (
+            litellm.enforce_openai_completion_token_invariant
+            and returned_usage.completion_tokens_details is not None
+            and returned_usage.completion_tokens_details.reasoning_tokens is not None
+            and returned_usage.completion_tokens_details.reasoning_tokens
+            > returned_usage.completion_tokens
+        ):
+            returned_usage.completion_tokens = (
+                returned_usage.completion_tokens
+                + returned_usage.completion_tokens_details.reasoning_tokens
+            )
+            # Recompute total_tokens from all known sub-totals so we don't
+            # lose cache-related tokens that some backends include.
+            returned_usage.total_tokens = (
+                returned_usage.prompt_tokens
+                + returned_usage.completion_tokens
+                + (returned_usage._cache_creation_input_tokens or 0)
+                + (returned_usage._cache_read_input_tokens or 0)
+            )
 
         # Return a new usage object with the new values
 
