@@ -2111,3 +2111,196 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+
+
+# ---------------------------------------------------------------------------
+# AnthropicStreamWrapper tests
+# ---------------------------------------------------------------------------
+
+from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+    AnthropicStreamWrapper,
+)
+from litellm.types.utils import ModelResponseStream
+
+
+def _make_text_chunk(text: str, finish_reason=None) -> ModelResponseStream:
+    """Build a minimal streaming ModelResponseStream with a text delta."""
+    return ModelResponseStream(
+        id="chatcmpl-test",
+        object="chat.completion.chunk",
+        created=0,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(content=text, role="assistant"),
+                logprobs=None,
+            )
+        ],
+    )
+
+
+def _make_finish_chunk(finish_reason: str = "stop") -> ModelResponseStream:
+    return _make_text_chunk("", finish_reason=finish_reason)
+
+
+def _collect_sync(stream) -> list:
+    chunks = []
+    while True:
+        try:
+            chunks.append(next(stream))
+        except StopIteration:
+            break
+    return chunks
+
+
+class TestAnthropicStreamWrapperNoContentBlockStart:
+    """
+    Verify that AnthropicStreamWrapper correctly handles streams that omit
+    contentBlockStart events (e.g. AWS Bedrock Marketplace models).
+
+    In a well-formed stream the sequence is:
+        messageStart → contentBlockStart → contentBlockDelta* → contentBlockStop → messageDelta → messageStop
+
+    When contentBlockStart is absent the deltas arrive back-to-back:
+        messageStart → contentBlockDelta* → messageDelta → messageStop
+
+    The wrapper must synthesise the missing start/stop events and, critically,
+    must NOT drop the first delta of each content block.
+    """
+
+    def _make_wrapper(self, raw_chunks) -> AnthropicStreamWrapper:
+        return AnthropicStreamWrapper(
+            completion_stream=iter(raw_chunks),
+            model="test-model",
+        )
+
+    def test_first_delta_not_dropped(self):
+        """The very first text delta must appear in the output."""
+        raw = [
+            _make_text_chunk("Hello"),
+            _make_text_chunk(", world"),
+            _make_finish_chunk(),
+        ]
+        wrapper = self._make_wrapper(raw)
+        chunks = _collect_sync(wrapper)
+
+        types = [c["type"] for c in chunks]
+        assert "content_block_delta" in types
+
+        text_deltas = [
+            c["delta"]["text"]
+            for c in chunks
+            if c["type"] == "content_block_delta"
+            and c.get("delta", {}).get("type") == "text_delta"
+        ]
+        assert text_deltas, "No text deltas received"
+        full_text = "".join(text_deltas)
+        assert "Hello" in full_text, f"First delta dropped; got: {full_text!r}"
+
+    def test_multi_block_first_deltas_not_dropped(self):
+        """
+        When the stream transitions from text → tool_use without contentBlockStart,
+        the first delta of the tool_use block must not be dropped.
+        """
+        raw = [
+            _make_text_chunk("Sure, "),
+            _make_text_chunk("calling tool."),
+            # Tool call chunk — triggers a new content block
+            ModelResponseStream(
+                id="chatcmpl-test",
+                object="chat.completion.chunk",
+                created=0,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(
+                            role="assistant",
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id="call_abc",
+                                    function=Function(
+                                        name="get_weather",
+                                        arguments='{"city"',
+                                    ),
+                                    type="function",
+                                    index=0,
+                                )
+                            ],
+                        ),
+                        logprobs=None,
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-test",
+                object="chat.completion.chunk",
+                created=0,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(
+                            role="assistant",
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id=None,
+                                    function=Function(
+                                        name=None,
+                                        arguments=': "Boston"}',
+                                    ),
+                                    type="function",
+                                    index=0,
+                                )
+                            ],
+                        ),
+                        logprobs=None,
+                    )
+                ],
+            ),
+            _make_finish_chunk("tool_calls"),
+        ]
+        wrapper = self._make_wrapper(raw)
+        chunks = _collect_sync(wrapper)
+
+        types = [c["type"] for c in chunks]
+        assert types.count("content_block_start") >= 2, (
+            f"Expected at least 2 content_block_start events, got: {types}"
+        )
+
+        json_deltas = "".join(
+            c["delta"]["partial_json"]
+            for c in chunks
+            if c["type"] == "content_block_delta"
+            and c.get("delta", {}).get("type") == "input_json_delta"
+        )
+        assert '{"city"' in json_deltas, (
+            f"First tool delta dropped; accumulated json: {json_deltas!r}"
+        )
+
+    def test_event_sequence_is_valid(self):
+        """Output must follow the Anthropic SSE protocol ordering."""
+        raw = [
+            _make_text_chunk("Hi"),
+            _make_finish_chunk(),
+        ]
+        wrapper = self._make_wrapper(raw)
+        chunks = _collect_sync(wrapper)
+
+        types = [c["type"] for c in chunks]
+        assert types[0] == "message_start"
+        assert types[-1] == "message_stop"
+        assert "content_block_start" in types
+        assert "content_block_stop" in types
+        # content_block_start must precede content_block_delta
+        start_idx = types.index("content_block_start")
+        delta_idx = types.index("content_block_delta")
+        assert start_idx < delta_idx, (
+            f"content_block_start ({start_idx}) must come before content_block_delta ({delta_idx})"
+        )
