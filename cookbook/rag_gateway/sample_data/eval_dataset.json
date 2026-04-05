@@ -1,0 +1,42 @@
+[
+  {
+    "question": "What are the main components of RAG architecture?",
+    "ground_truth": "RAG architecture has three main components: a retriever that fetches relevant documents from a knowledge base, an embedder that converts text to vector representations, and a generator (LLM) that produces answers using retrieved context.",
+    "contexts": ["doc_2"]
+  },
+  {
+    "question": "How does LiteLLM help with multi-provider LLM integration?",
+    "ground_truth": "LiteLLM provides a unified interface for 100+ LLM providers, translates inputs to provider-specific formats, returns consistent OpenAI-compatible outputs, and includes features like automatic retries, fallback chains, timeouts, cost tracking, and comprehensive logging.",
+    "contexts": ["doc_3"]
+  },
+  {
+    "question": "What is the purpose of vector embeddings in semantic search?",
+    "ground_truth": "Vector embeddings are dense numerical representations that capture semantic meaning. They enable semantic search by allowing systems to find relevant documents through cosine similarity or dot product between query and document vectors, understanding context and meaning rather than just keywords.",
+    "contexts": ["doc_4"]
+  },
+  {
+    "question": "What retrieval strategies does LlamaIndex support?",
+    "ground_truth": "LlamaIndex supports various retrieval strategies including top-k similarity search, MMR (Maximum Marginal Relevance), and hybrid search that combines multiple approaches.",
+    "contexts": ["doc_5"]
+  },
+  {
+    "question": "What metrics does RAGAS use to evaluate RAG systems?",
+    "ground_truth": "RAGAS uses metrics including Faithfulness (answer grounded in context), Answer Relevancy (how well answer addresses question), Context Precision (relevance of retrieved documents), Context Recall (whether all necessary information was retrieved), and Answer Semantic Similarity (comparing to ground truth).",
+    "contexts": ["doc_7"]
+  },
+  {
+    "question": "What are best practices for production RAG systems?",
+    "ground_truth": "Best practices include implementing retry logic with exponential backoff, using fallback chains across providers, setting timeouts, optimal document chunking (256-512 tokens with overlap), hybrid search, caching, monitoring retrieval metrics, tracking costs, adding guardrails, and comprehensive logging.",
+    "contexts": ["doc_8"]
+  },
+  {
+    "question": "How can you optimize costs in LLM applications?",
+    "ground_truth": "Cost optimization strategies include using smaller models when appropriate, semantic caching, prompt compression, request batching, choosing cost-effective providers, setting token limits, monitoring per-query costs, rate limiting, and considering fine-tuned smaller models instead of large general-purpose ones.",
+    "contexts": ["doc_10"]
+  },
+  {
+    "question": "What are the key differences between LlamaIndex and Haystack?",
+    "ground_truth": "LlamaIndex focuses on data framework abstractions with various index types (VectorStoreIndex, ListIndex, TreeIndex) and response synthesizers. Haystack uses a pipeline architecture with components as nodes in a directed graph, excelling at complex multi-stage pipelines with question classification and answer validation.",
+    "contexts": ["doc_5", "doc_6"]
+  }
+]
