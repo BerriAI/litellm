@@ -227,10 +227,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if description is not None:
             function_params["description"] = cast(Union[dict, str], description)
 
-        return DatabricksTool(
+        databricks_tool = DatabricksTool(
             type="function",
             function=function_params,
         )
+
+        if tool.get("cache_control"):
+            databricks_tool["cache_control"] = cast(dict, tool.get("cache_control"))
+
+        return databricks_tool
+
+
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
         # if not claude, send as is
