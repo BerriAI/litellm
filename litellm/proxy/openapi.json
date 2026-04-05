@@ -70,19 +70,23 @@
               },
               "temperature": {
                 "type": "number",
-                "description": "The sampling temperature to be used"
+                "description": "The sampling temperature to be used",
+                "default": 1
               },
               "top_p": {
                 "type": "number",
-                "description": "An alternative to sampling with temperature"
+                "description": "An alternative to sampling with temperature",
+                "default": 1
               },
               "n": {
                 "type": "integer",
-                "description": "The number of chat completion choices to generate for each input message"
+                "description": "The number of chat completion choices to generate for each input message",
+                "default": 1
               },
               "stream": {
                 "type": "boolean",
-                "description": "If set to true, it sends partial message deltas"
+                "description": "If set to true, it sends partial message deltas",
+                "default": false
               },
               "stop": {
                 "type": "array",
@@ -97,11 +101,13 @@
               },
               "presence_penalty": {
                 "type": "number",
-                "description": "It is used to penalize new tokens based on their existence in the text so far"
+                "description": "It is used to penalize new tokens based on their existence in the text so far",
+                "default": 0
               },
               "frequency_penalty": {
                 "type": "number",
-                "description": "It is used to penalize new tokens based on their frequency in the text so far"
+                "description": "It is used to penalize new tokens based on their frequency in the text so far",
+                "default": 0
               },
               "logit_bias": {
                 "type": "object",
