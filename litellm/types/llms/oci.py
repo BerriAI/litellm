@@ -15,7 +15,6 @@ class OCIVendors(Enum):
     """
 
     COHERE = "COHERE"
-    GEMINI = "GEMINI"
     GENERIC = "GENERIC"
 
 
@@ -103,6 +102,9 @@ class OCIChatRequestPayload(BaseModel):
     frequencyPenalty: Optional[float] = None
     presencePenalty: Optional[float] = None
     responseFormat: Optional[Dict[str, Any]] = None
+    toolChoice: Optional[Union[str, Dict[str, Any]]] = None
+    logitBias: Optional[Dict[str, Any]] = None
+    logProbs: Optional[int] = None
 
 
 class OCIServingMode(BaseModel):
@@ -238,10 +240,14 @@ class CohereSystemMessage(CohereMessage):
 
 
 class CohereToolMessage(CohereMessage):
-    """Tool message in Cohere chat."""
+    """Tool message in Cohere chat.
+
+    The OCI Cohere API represents tool results via a ``toolResults`` list on the
+    TOOL-role history entry — not via a ``toolCallId`` string.
+    """
 
     role: Literal["TOOL"] = "TOOL"
-    toolCallId: str
+    toolResults: List[CohereToolResult]
 
 
 class CohereParameterDefinition(BaseModel):
@@ -268,10 +274,14 @@ class CohereToolCall(BaseModel):
 
 
 class CohereToolResult(BaseModel):
-    """Result of a tool call."""
+    """Result of a tool call.
 
-    callId: str
-    result: str
+    Matches the OCI SDK's CohereToolResult: each result carries the originating
+    tool call (name + parameters) and a list of output objects.
+    """
+
+    call: CohereToolCall
+    outputs: List[Dict[str, Any]]
 
 
 class CohereResponseFormat(BaseModel):
@@ -424,6 +434,7 @@ class OCIEmbedUsage(BaseModel):
 class OCIEmbedResponse(BaseModel):
     """Response body from POST /20231130/actions/embedText."""
 
+    id: Optional[str] = None  # present in the official SDK response
     embeddings: List[List[float]]
     modelId: str
     modelVersion: str

@@ -41,6 +41,8 @@ from litellm.types.llms.oci import (
     CohereStreamChunk,
     CohereTool,
     CohereToolCall,
+    CohereToolMessage,
+    CohereToolResult,
     OCIChatRequestPayload,
     OCICompletionPayload,
     OCICompletionResponse,
@@ -149,14 +151,15 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere uses the same parameter keys as GENERIC with two differences:
+        # Cohere uses the same parameter keys as GENERIC with three differences:
         # - tool_choice is unsupported
         # - stop sequences are named "stopSequences" not "stop"
+        # - n (numGenerations) is a GenericChatRequest-only field; CohereChatRequest has no equivalent
         # Build a *separate* frozen reference map so callers never mutate the canonical dict.
         self._openai_to_oci_cohere_param_map = {
             k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
-            if k not in ("tool_choice", "max_retries")
+            if k not in ("tool_choice", "max_retries", "n")
         }
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -560,8 +563,32 @@ class OCIChatConfig(BaseConfig):
     def adapt_messages_to_cohere_standard(
         self, messages: List[AllMessageValues]
     ) -> List[CohereMessage]:
-        """Build chat history for Cohere models."""
-        chat_history = []
+        """Build chat history for Cohere models.
+
+        Tool results are represented as OCI Cohere ``toolResults`` entries, where each
+        entry carries the originating tool call (name + parameters resolved from the
+        preceding assistant message) and the output text.
+        """
+        # First pass: build tool_call_id -> CohereToolCall lookup so tool-result
+        # messages can reference the originating call by name and parameters.
+        tool_call_lookup: Dict[str, CohereToolCall] = {}
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:  # type: ignore[union-attr]
+                    tc_id = tc.get("id", "")
+                    raw_args: Any = tc.get("function", {}).get("arguments", "{}")
+                    try:
+                        params: Dict[str, Any] = (
+                            json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        )
+                    except json.JSONDecodeError:
+                        params = {}
+                    tool_call_lookup[tc_id] = CohereToolCall(
+                        name=str(tc.get("function", {}).get("name", "")),
+                        parameters=params,
+                    )
+
+        chat_history: List[CohereMessage] = []
         for msg in messages[:-1]:  # All messages except the last one
             role = msg.get("role")
             content = msg.get("content")
@@ -612,15 +639,22 @@ class OCIChatConfig(BaseConfig):
                     CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls)
                 )
             elif role == "tool":
-                # Tool result messages: include the tool_call_id so Cohere can correlate
-                # the result back to the right tool call in the conversation history.
-                tool_call_id = msg.get("tool_call_id")  # type: ignore[union-attr]
+                # Construct a proper OCI Cohere tool-result message.
+                # The API expects toolResults with the originating call (name + params)
+                # and a list of output objects — not a flat toolCallId string.
+                tool_call_id = msg.get("tool_call_id", "")  # type: ignore[union-attr]
+                cohere_call = tool_call_lookup.get(
+                    tool_call_id,
+                    CohereToolCall(name="", parameters={}),
+                )
                 chat_history.append(
-                    CohereMessage(
-                        role="TOOL",
-                        message=content,
-                        toolCalls=None,
-                        toolCallId=tool_call_id,
+                    CohereToolMessage(
+                        toolResults=[
+                            CohereToolResult(
+                                call=cohere_call,
+                                outputs=[{"result": content}],
+                            )
+                        ]
                     )
                 )
 
@@ -1339,6 +1373,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
         if typed_chunk.message and typed_chunk.message.toolCalls:
             tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
 
+        # Map OCI finish reasons to OpenAI convention (same as Cohere path)
+        oci_finish_reason = typed_chunk.finishReason
+        if oci_finish_reason == "COMPLETE":
+            finish_reason: Optional[str] = "stop"
+        elif oci_finish_reason == "MAX_TOKENS":
+            finish_reason = "length"
+        elif oci_finish_reason == "TOOL_CALLS":
+            finish_reason = "tool_calls"
+        else:
+            finish_reason = oci_finish_reason  # None while streaming; unknown passed through
+
         return ModelResponseStream(
             choices=[
                 StreamingChoices(
@@ -1354,7 +1399,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
                         thinking_blocks=None,  # OCI does not have thinking blocks in the response
                         reasoning_content=None,  # OCI does not have reasoning content in the response
                     ),
-                    finish_reason=typed_chunk.finishReason,
+                    finish_reason=finish_reason,
                 )
             ]
         )
