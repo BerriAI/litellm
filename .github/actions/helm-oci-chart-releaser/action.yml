@@ -40,38 +40,55 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Helm | Setup
+      uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      with:
+        version: v3.20.0
+
     - name: Helm | Login
       shell: bash
-      run: echo ${{ inputs.registry_password }} | helm registry login -u ${{ inputs.registry_username }} --password-stdin ${{ inputs.registry }}
       env:
-        HELM_EXPERIMENTAL_OCI: '1'
-    
+        REGISTRY_PASSWORD: ${{ inputs.registry_password }}
+        REGISTRY_USERNAME: ${{ inputs.registry_username }}
+        REGISTRY: ${{ inputs.registry }}
+      run: echo "$REGISTRY_PASSWORD" | helm registry login -u "$REGISTRY_USERNAME" --password-stdin "$REGISTRY"
+
     - name: Helm | Dependency
       if: inputs.update_dependencies == 'true'
       shell: bash
-      run: helm dependency update ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }}
       env:
-        HELM_EXPERIMENTAL_OCI: '1'
+        CHART_PATH: ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }}
+      run: helm dependency update "$CHART_PATH"
 
     - name: Helm | Package
       shell: bash
-      run: helm package ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }} --version ${{ inputs.tag }} --app-version ${{ inputs.app_version }}
       env:
-        HELM_EXPERIMENTAL_OCI: '1'
+        CHART_PATH: ${{ inputs.path == null && format('{0}/{1}', 'charts', inputs.name) || inputs.path }}
+        TAG: ${{ inputs.tag }}
+        APP_VERSION: ${{ inputs.app_version }}
+      run: helm package "$CHART_PATH" --version "$TAG" --app-version "$APP_VERSION"
 
     - name: Helm | Push
       shell: bash
-      run: helm push ${{ inputs.name }}-${{ inputs.tag }}.tgz oci://${{ inputs.registry }}/${{ inputs.repository }}
       env:
-        HELM_EXPERIMENTAL_OCI: '1'
+        NAME: ${{ inputs.name }}
+        TAG: ${{ inputs.tag }}
+        REGISTRY: ${{ inputs.registry }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: helm push "${NAME}-${TAG}.tgz" "oci://${REGISTRY}/${REPOSITORY}"
 
     - name: Helm | Logout
       shell: bash
-      run: helm registry logout ${{ inputs.registry }}
       env:
-        HELM_EXPERIMENTAL_OCI: '1'
+        REGISTRY: ${{ inputs.registry }}
+      run: helm registry logout "$REGISTRY"
 
     - name: Helm | Output
       id: output
       shell: bash
-      run: echo "image=${{ inputs.registry }}/${{ inputs.repository }}/${{ inputs.name }}:${{ inputs.tag }}" >> $GITHUB_OUTPUT
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REPOSITORY: ${{ inputs.repository }}
+        NAME: ${{ inputs.name }}
+        TAG: ${{ inputs.tag }}
+      run: echo "image=${REGISTRY}/${REPOSITORY}/${NAME}:${TAG}" >> $GITHUB_OUTPUT
