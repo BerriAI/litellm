@@ -23,14 +23,15 @@ from litellm.types.llms.openai_evals import (
     RunDeleteResponse,
     UpdateEvalRequest,
 )
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.router import GenericLiteLLMParams
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
+    GenericLiteLLMParams = Any
     LiteLLMLoggingObj = Any
 
 
