@@ -15,6 +15,7 @@ USER root
 # Install build dependencies in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
     python3-dev \
     libssl-dev \
     pkg-config \

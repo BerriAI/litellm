@@ -771,7 +771,7 @@ async def _perform_health_check_and_save(
     max_concurrency=None,
 ):
     """Helper function to perform health check and save results to database"""
-    healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+    healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
         model_list=model_list,
         cli_model=cli_model,
         model=target_model,
