@@ -8360,10 +8360,6 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
-        elif litellm.LlmProviders.OCI == provider:
-            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
-
-            return OCIEmbeddingConfig()
         return None
 
     @staticmethod

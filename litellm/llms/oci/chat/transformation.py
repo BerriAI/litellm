@@ -989,9 +989,9 @@ class OCIChatConfig(BaseConfig):
         async def split_chunks(completion_stream: AsyncIterator[str]):
             async for item in completion_stream:
                 for chunk in item.split("\n\n"):
-                    if not chunk:
-                        continue
-                    yield chunk.strip()
+                    stripped = chunk.strip()
+                    if stripped:
+                        yield stripped
 
         streaming_response = OCIStreamWrapper(
             completion_stream=split_chunks(completion_stream),
