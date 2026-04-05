@@ -20,6 +20,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
+    XecGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
@@ -83,6 +86,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
+    XECGUARD = "xecguard"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
 
 
@@ -742,6 +746,7 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
+    XecGuardConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
