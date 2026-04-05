@@ -184,7 +184,7 @@ class AimGuardrail(CustomGuardrail):
 
     def _handle_block_action_on_output(
         self, analysis_result: Any, required_action: Any
-    ) -> dict | None:
+    ) -> Optional[dict]:
         detection_message = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
