@@ -1977,6 +1977,24 @@
         "interactions": true
       }
     },
+    "cortecs": {
+      "display_name": "Cortecs AI (`cortecs`)",
+      "url": "https://docs.litellm.ai/docs/providers/cortecs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",
