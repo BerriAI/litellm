@@ -4,12 +4,11 @@ import Image from '@theme/IdealImage';
 
 ## What is MLflow?
 
-**MLflow** is an end-to-end open source MLOps platform for [experiment tracking](https://www.mlflow.org/docs/latest/tracking.html), [model management](https://www.mlflow.org/docs/latest/models.html), [evaluation](https://www.mlflow.org/docs/latest/llms/llm-evaluate/index.html), [observability (tracing)](https://www.mlflow.org/docs/latest/llms/tracing/index.html), and [deployment](https://www.mlflow.org/docs/latest/deployment/index.html). MLflow empowers teams to collaboratively develop and refine LLM applications efficiently.
+**MLflow** is an open source developer platform for [observability (tracing)](https://www.mlflow.org/docs/latest/llms/tracing/index.html), [evaluation](https://www.mlflow.org/docs/latest/llms/llm-evaluate/index.html), and [prompt management](https://www.mlflow.org/docs/latest/llms/prompt-management/index.html). MLflow empowers teams to collaboratively develop and refine LLM applications and agents efficiently.
 
 MLflow’s integration with LiteLLM supports advanced observability compatible with OpenTelemetry.
 
-
-<Image img={require('../../img/mlflow_tracing.png')} />
+<Image img={require('../../img/mlflow_tool_calling_tracing.png')} />
 
 
 ## Getting Started
@@ -49,60 +48,96 @@ response = litellm.completion(
 )
 ```
 
-Open the MLflow UI and go to the `Traces` tab to view logged traces:
+In a terminal, start the MLflow server and open the UI by visiting the URL (e.g. `http://localhost:5000`) in your browser. Select the "Default" experiment to find the logged traces:
 
 ```bash
-mlflow ui
+mlflow server --port 5000
 ```
+
+<Image img={require('../../img/mlflow_tracing.png')} />
+
 
 ## Tracing Tool Calls
 
 MLflow integration with LiteLLM support tracking tool calls in addition to the messages.
 
 ```python
+import json
+import litellm
 import mlflow
+from mlflow.entities import SpanType
 
 # Enable MLflow auto-tracing for LiteLLM
 mlflow.litellm.autolog()
 
-# Define the tool function.
-def get_weather(location: str) -> str:
-    if location == "Tokyo":
+# Define the tool function. Decorate it with `@mlflow.trace` to create a span for its execution.
+@mlflow.trace(span_type=SpanType.TOOL)
+def get_weather(city: str) -> str:
+    if city == "Tokyo":
         return "sunny"
-    elif location == "Paris":
+    elif city == "Paris":
         return "rainy"
     return "unknown"
 
-# Define function spec
-get_weather_tool = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the current weather in a given location",
-        "parameters": {
-            "properties": {
-                "location": {
-                    "description": "The city and state, e.g., San Francisco, CA",
-                    "type": "string",
-                },
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
             },
-            "required": ["location"],
-            "type": "object",
         },
-    },
-}
+    }
+]
 
-# Call LiteLLM as usual
-response = litellm.completion(
-    model="gpt-4o-mini",
-    messages=[
-      {"role": "user", "content": "What's the weather like in Paris today?"}
-    ],
-    tools=[get_weather_tool]
-)
+_tool_functions = {"get_weather": get_weather}
+
+
+# Define a simple tool calling agent
+@mlflow.trace(span_type=SpanType.AGENT)
+def run_tool_agent(question: str):
+    messages = [{"role": "user", "content": question}]
+
+    # Invoke the model with the given question and available tools
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=messages,
+        tools=tools,
+    )
+    ai_msg = response.choices[0].message
+    messages.append(ai_msg)
+
+    # If the model request tool call(s), invoke the function with the specified arguments
+    if tool_calls := ai_msg.tool_calls:
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            if tool_func := _tool_functions.get(function_name):
+                args = json.loads(tool_call.function.arguments)
+                tool_result = tool_func(**args)
+            else:
+                raise RuntimeError("An invalid tool is returned from the assistant!")
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
+
+        # Sent the tool results to the model and get a new response
+        response = litellm.completion(model="gpt-4o-mini", messages=messages)
+
+    return response.choices[0].message.content
+
+
+# Run the tool calling agent
+question = "What's the weather like in Paris today?"
+answer = run_tool_agent(question)
 ```
-
-<Image img={require('../../img/mlflow_tool_calling_tracing.png')} />
 
 
 ## Evaluation
