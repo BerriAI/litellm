@@ -885,3 +885,153 @@ class TestOCIProviderEmbeddingConfig:
             f"Expected exactly 1 OCI branch in get_provider_embedding_config, found {oci_count}. "
             "A duplicate dead-code branch may have been reintroduced."
         )
+
+
+class TestOCICohereParamMapping:
+    """
+    Unit tests for Bug 3 (stop → stopSequences) and Bug 4 (hardcoded defaults removed).
+    """
+
+    def _make_config(self):
+        return OCIChatConfig()
+
+    def test_cohere_stop_maps_to_stop_sequences(self):
+        """Bug 3: Cohere API uses 'stopSequences', not 'stop'."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END", "STOP"]},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert "stopSequences" in result, "stop should map to stopSequences for Cohere"
+        assert result["stopSequences"] == ["END", "STOP"]
+        assert "stop" not in result
+
+    def test_generic_stop_maps_to_stop(self):
+        """GENERIC vendors (Meta, Google, xAI) keep 'stop' as-is."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"stop": ["END"]},
+            optional_params={},
+            model="meta.llama-3.3-70b-instruct",
+            drop_params=False,
+        )
+        assert result.get("stop") == ["END"]
+        assert "stopSequences" not in result
+
+    def test_cohere_no_hardcoded_defaults(self):
+        """Bug 4: Cohere calls must not inject maxTokens/temperature/topK/topP/frequencyPenalty
+        when the user hasn't provided them."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        for injected in ("maxTokens", "temperature", "topK", "topP", "frequencyPenalty"):
+            assert injected not in result, (
+                f"'{injected}' should not be injected when user did not provide it"
+            )
+
+    def test_cohere_explicit_params_still_passed(self):
+        """User-provided Cohere params must still be forwarded correctly."""
+        config = self._make_config()
+        result = config.map_openai_params(
+            non_default_params={"max_tokens": 200, "temperature": 0.5},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=False,
+        )
+        assert result.get("maxTokens") == 200
+        assert result.get("temperature") == 0.5
+
+
+class TestOCIStreamingSignedBody:
+    """
+    Unit test for Bug 1: sync and async streaming paths must use signed_json_body
+    when provided, not re-serialize data with json.dumps().
+    """
+
+    def test_get_custom_stream_wrapper_uses_signed_body(self, monkeypatch):
+        """
+        When signed_json_body is provided, the POST must use that exact bytes object,
+        not json.dumps(data) — otherwise the RSA-SHA256 signature is invalid.
+        """
+        import httpx
+        from unittest.mock import MagicMock, patch
+
+        config = OCIChatConfig()
+        signed_bytes = b'{"signed": true}'
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data={"key": "value"},
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=signed_bytes,
+        )
+
+        assert posted_data["data"] == signed_bytes, (
+            "Streaming must use signed_json_body, not re-serialize data"
+        )
+
+    def test_get_custom_stream_wrapper_fallback_without_signed_body(self, monkeypatch):
+        """When signed_json_body is None, fall back to json.dumps(data)."""
+        import json
+        from unittest.mock import MagicMock
+
+        config = OCIChatConfig()
+        posted_data = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter([])
+
+        mock_client = MagicMock()
+
+        def capture_post(url, **kwargs):
+            posted_data["data"] = kwargs.get("data")
+            return mock_response
+
+        mock_client.post.side_effect = capture_post
+
+        mock_logging = MagicMock()
+        payload = {"key": "value"}
+
+        config.get_sync_custom_stream_wrapper(
+            api_base="https://example.com",
+            headers={},
+            data=payload,
+            messages=[],
+            model="meta.llama-3.3-70b-instruct",
+            custom_llm_provider="oci",
+            logging_obj=mock_logging,
+            client=mock_client,
+            signed_json_body=None,
+        )
+
+        assert posted_data["data"] == json.dumps(payload), (
+            "Without signed_json_body, must fall back to json.dumps(data)"
+        )
