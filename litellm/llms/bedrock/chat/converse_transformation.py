@@ -573,10 +573,19 @@ class AmazonConverseConfig(BaseConfig):
             return ToolChoiceValuesBlock(auto={})
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+
+            # An empty dict {} has no "type" field — it is not a specific-function
+            # tool_choice, it is the client's way of saying "use default tool mode".
+            # Map it to "any" (required) so Bedrock forces the model to call at
+            # least one tool.  This matches the intent: agents like Cursor always
+            # send tools alongside {} and expect a tool call back, not plain text.
+            if not tool_choice:
+                return ToolChoiceValuesBlock(any={})
+
             tool_name = tool_choice.get("function", {}).get("name", "")
             if not tool_name or not tool_name.strip():
                 # Bedrock rejects toolChoice.tool.name="" — fall back to auto.
-                # This happens when clients (e.g. Cursor) send tool_choice with a blank tool name.
+                # This happens when clients send tool_choice with a blank tool name.
                 verbose_logger.warning(
                     "tool_choice specifies an empty tool name; falling back to tool_choice='auto' "
                     "because Bedrock requires toolChoice.tool.name to match [a-zA-Z0-9_-]+."
@@ -1120,10 +1129,30 @@ class AmazonConverseConfig(BaseConfig):
             return ContentBlock(cachePoint=cache_point)
 
     def _transform_system_message(
-        self, messages: List[AllMessageValues], model: Optional[str] = None
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        system_kwarg: Optional[List[dict]] = None,
     ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
         system_prompt_indices = []
         system_content_blocks: List[SystemContentBlock] = []
+
+        # Process blocks from the top-level `system` kwarg (Anthropic block format:
+        # [{"type": "text", "text": "...", "cache_control": {...}}]).  These are
+        # prepended so the kwarg system prompt appears before any role:system messages
+        # extracted from the messages array.
+        if system_kwarg:
+            for block in system_kwarg:
+                if block.get("type") == "text" and block.get("text"):
+                    system_content_blocks.append(
+                        SystemContentBlock(text=block["text"])
+                    )
+                    cache_block = self._get_cache_point_block(
+                        block, block_type="system", model=model
+                    )
+                    if cache_block:
+                        system_content_blocks.append(cache_block)
+
         for idx, message in enumerate(messages):
             if message["role"] == "system":
                 system_prompt_indices.append(idx)
@@ -1495,8 +1524,16 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
+        # Pop the `system` kwarg before _prepare_request_params sees it.
+        # If left in optional_params it is not in AmazonConverseConfig.__annotations__
+        # and falls through to additionalModelRequestFields instead of the proper
+        # top-level system field.
+        _raw_system = optional_params.pop("system", None)
+        system_kwarg: Optional[List[dict]] = (
+            _raw_system if isinstance(_raw_system, list) else None
+        )
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=model
+            messages, model=model, system_kwarg=system_kwarg
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -1553,8 +1590,16 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: Optional[dict] = None,
     ) -> RequestObject:
+        # Pop the `system` kwarg before _prepare_request_params sees it.
+        # If left in optional_params it is not in AmazonConverseConfig.__annotations__
+        # and falls through to additionalModelRequestFields instead of the proper
+        # top-level system field.
+        _raw_system = optional_params.pop("system", None)
+        system_kwarg: Optional[List[dict]] = (
+            _raw_system if isinstance(_raw_system, list) else None
+        )
         messages, system_content_blocks = self._transform_system_message(
-            messages, model=model
+            messages, model=model, system_kwarg=system_kwarg
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
