@@ -3,6 +3,7 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
@@ -190,7 +191,9 @@ class SemanticMCPToolFilter:
             matched_tool_names = self._extract_tool_names_from_matches(matches)
 
             if not matched_tool_names:
-                return available_tools
+                # No semantic matches — return empty so only non-MCP tools
+                # (added back by the hook) reach the LLM.
+                return []
 
             return self._get_tools_by_names(matched_tool_names, available_tools)
 
