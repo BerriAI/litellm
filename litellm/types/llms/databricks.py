@@ -60,7 +60,7 @@ class DatabricksFunction(TypedDict, total=False):
 class DatabricksTool(TypedDict, total=False):
     function: DatabricksFunction
     type: Literal["function"]
-    cache_control: Optional[dict]
+    cache_control: Required[dict]
 
 
 class DatabricksMessage(TypedDict, total=False):

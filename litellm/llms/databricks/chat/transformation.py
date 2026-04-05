@@ -231,9 +231,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             type="function",
             function=function_params,
         )
-
-        if tool.get("cache_control"):
-            databricks_tool["cache_control"] = cast(dict, tool.get("cache_control"))
+        
+        cache_control = tool.get("cache_control")
+        if cache_control:
+            databricks_tool["cache_control"] = cast(dict, cache_control)
 
         return databricks_tool
 
