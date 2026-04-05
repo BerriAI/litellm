@@ -165,8 +165,10 @@ async def get_key_models_with_db_access_groups(
         db_models = await _get_models_from_db_access_groups(
             access_group_ids=user_api_key_dict.access_group_ids,
         )
-        if db_models:
-            key_models = db_models
+        # Fail-closed: if the access group is configured but resolves to nothing
+        # (deleted group, DB unavailable, or empty group), use a sentinel so
+        # get_complete_model_list() does NOT fall through to team_models.
+        key_models = db_models if db_models else ["__access_group_no_models__"]
 
     return key_models
 
