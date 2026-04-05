@@ -1632,6 +1632,9 @@ if TYPE_CHECKING:
     from .llms.volcengine.responses.transformation import (
         VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig,
     )
+    from .llms.dashscope.responses.transformation import (
+        DashScopeResponsesAPIConfig as DashScopeResponsesAPIConfig,
+    )
     from .llms.manus.responses.transformation import (
         ManusResponsesAPIConfig as ManusResponsesAPIConfig,
     )
