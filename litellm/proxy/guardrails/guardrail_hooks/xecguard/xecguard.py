@@ -51,6 +51,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
+    TextCompletionResponse,
 )
 
 if TYPE_CHECKING:
