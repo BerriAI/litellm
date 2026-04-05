@@ -3825,3 +3825,47 @@ def test_sync_streaming_uses_custom_client():
     # Verify that gemini_client is in the partial's keywords
     assert "gemini_client" in partial_make_sync_call.keywords
     assert partial_make_sync_call.keywords["gemini_client"] is mock_client
+
+
+def test_vertex_ai_empty_response_with_stop_finish_reason():
+    """
+    Test that empty responses with finish_reason=STOP return empty string content.
+    
+    Regression test for https://github.com/BerriAI/litellm/issues/24442
+    gemini-2.5-flash-lite can return finish_reason=STOP with no parts/text content
+    in long-running agentic tasks. Response looks like:
+    {"candidates":[{"content":{"role":"model"},"finishReason":"STOP","index":0}]}
+    """
+    completion_response = {
+        "candidates": [
+            {
+                "content": {"role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 50,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 50,
+        },
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-2.5-flash-lite",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # Should return empty string content, not None
+    assert result.choices[0].message.content == ""
+    assert result.choices[0].finish_reason == "stop"
