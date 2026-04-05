@@ -320,6 +320,66 @@ def _set_cooldown_deployments(
     return False
 
 
+async def async_set_cooldown_deployments(
+    litellm_router_instance: LitellmRouter,
+    original_exception: Any,
+    exception_status: Union[str, int],
+    deployment: Optional[str] = None,
+    time_to_cooldown: Optional[float] = None,
+) -> bool:
+    """
+    Async version of _set_cooldown_deployments. Uses async_set_cache to avoid
+    blocking the event loop when writing cooldown state to Redis.
+
+    Returns:
+    - True if the deployment was put in cooldown
+    - False if not
+    """
+    verbose_router_logger.debug("checks 'should_run_cooldown_logic'")
+
+    if (
+        _should_run_cooldown_logic(
+            litellm_router_instance=litellm_router_instance,
+            deployment=deployment,
+            exception_status=exception_status,
+            original_exception=original_exception,
+            time_to_cooldown=time_to_cooldown,
+        )
+        is False
+        or deployment is None
+    ):
+        verbose_router_logger.debug("should_run_cooldown_logic returned False")
+        return False
+
+    exception_status_int = cast_exception_status_to_int(exception_status)
+    verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
+
+    if _should_cooldown_deployment(
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        exception_status=exception_status,
+        original_exception=original_exception,
+    ):
+        await litellm_router_instance.cooldown_cache.async_add_deployment_to_cooldown(
+            model_id=deployment,
+            original_exception=original_exception,
+            exception_status=exception_status_int,
+            cooldown_time=time_to_cooldown,
+        )
+
+        # Trigger cooldown callback handler
+        asyncio.create_task(
+            router_cooldown_event_callback(
+                litellm_router_instance=litellm_router_instance,
+                deployment_id=deployment,
+                exception_status=exception_status,
+                cooldown_time=time_to_cooldown,
+            )
+        )
+        return True
+    return False
+
+
 async def _async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Optional[Span],
