@@ -156,11 +156,13 @@ async def get_key_models_with_db_access_groups(
     )
 
     if not key_models and user_api_key_dict.access_group_ids:
+        # Inline import to avoid a circular dependency:
+        # model_checks → auth_checks → proxy utils → model_checks
         from litellm.proxy.auth.auth_checks import (
-            _get_models_from_access_groups,
+            _get_models_from_access_groups as _get_models_from_db_access_groups,
         )
 
-        db_models = await _get_models_from_access_groups(
+        db_models = await _get_models_from_db_access_groups(
             access_group_ids=user_api_key_dict.access_group_ids,
         )
         if db_models:
