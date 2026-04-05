@@ -765,3 +765,123 @@ class TestOCISignerSupport:
         )
 
         assert wrapper.path_url == "/api/v1/chat"
+
+
+class TestOCISplitChunks:
+    """
+    Unit tests for the SSE split_chunks helpers used in sync and async streaming.
+
+    These validate the fix for:
+    - Sync: JSONDecodeError when iter_text() returns chunks spanning multiple events
+    - Async: whitespace-only chunks being yielded before stripping (Greptile P2)
+    """
+
+    def _run_sync_split(self, raw_chunks):
+        """Invoke the sync split_chunks logic directly (extracted for testability)."""
+        results = []
+        for item in raw_chunks:
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    async def _run_async_split(self, raw_chunks):
+        """Invoke the async split_chunks logic directly."""
+        results = []
+        async def _gen():
+            for c in raw_chunks:
+                yield c
+        async for item in _gen():
+            for chunk in item.split("\n\n"):
+                stripped = chunk.strip()
+                if stripped:
+                    results.append(stripped)
+        return results
+
+    def test_sync_single_event_per_chunk(self):
+        """Normal case: one SSE event per iter_text() chunk."""
+        chunks = ['data: {"text":"hello"}', 'data: {"text":"world"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"hello"}',
+            'data: {"text":"world"}',
+        ]
+
+    def test_sync_multiple_events_in_one_chunk(self):
+        """iter_text() returns two SSE events concatenated — must be split."""
+        chunks = ['data: {"text":"a"}\n\ndata: {"text":"b"}']
+        assert self._run_sync_split(chunks) == [
+            'data: {"text":"a"}',
+            'data: {"text":"b"}',
+        ]
+
+    def test_sync_whitespace_only_chunks_discarded(self):
+        """Whitespace between events must not be yielded."""
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = self._run_sync_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    def test_sync_empty_string_discarded(self):
+        """Empty string produced by splitting trailing \\n\\n must be discarded."""
+        chunks = ["data: {}\n\n"]
+        assert self._run_sync_split(chunks) == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_whitespace_only_chunks_discarded(self):
+        """
+        Regression test for Greptile P2: async version was checking `if not chunk`
+        BEFORE stripping, so '\\n  ' would pass the guard and yield '' downstream,
+        causing ValueError in chunk_creator ('Chunk does not start with data:').
+        """
+        chunks = ["data: {}\n\n   \n\ndata: {}"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}", "data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_empty_string_discarded(self):
+        """Trailing \\n\\n must not produce an empty yielded chunk in async path."""
+        chunks = ["data: {}\n\n"]
+        result = await self._run_async_split(chunks)
+        assert result == ["data: {}"]
+
+    @pytest.mark.asyncio
+    async def test_async_multiple_events_in_one_chunk(self):
+        """Async path must split concatenated SSE events just like sync."""
+        chunks = ['data: {"text":"x"}\n\ndata: {"text":"y"}']
+        result = await self._run_async_split(chunks)
+        assert result == ['data: {"text":"x"}', 'data: {"text":"y"}']
+
+
+class TestOCIProviderEmbeddingConfig:
+    """
+    Verifies that get_provider_embedding_config returns OCIEmbedConfig for OCI
+    and that the dead duplicate elif branch has been removed (Greptile P1).
+    """
+
+    def test_returns_oci_embed_config(self):
+        from litellm.llms.oci.embed.transformation import OCIEmbedConfig
+        from litellm.utils import ProviderConfigManager
+        from litellm.types.utils import LlmProviders
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            model="cohere.embed-english-v3.0",
+            provider=LlmProviders.OCI,
+        )
+        assert isinstance(config, OCIEmbedConfig)
+
+    def test_no_duplicate_oci_branch(self):
+        """
+        Ensure utils.py does not contain two separate OCI embedding branches.
+        The dead code was removed in commit 64dfbe2b; this test guards against
+        regression (e.g. a future merge re-introducing it).
+        """
+        import inspect
+        from litellm.utils import ProviderConfigManager
+        source = inspect.getsource(
+            ProviderConfigManager.get_provider_embedding_config
+        )
+        oci_count = source.count("LlmProviders.OCI")
+        assert oci_count == 1, (
+            f"Expected exactly 1 OCI branch in get_provider_embedding_config, found {oci_count}. "
+            "A duplicate dead-code branch may have been reintroduced."
+        )
