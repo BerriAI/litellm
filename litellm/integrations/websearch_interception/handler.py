@@ -755,6 +755,11 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
+            # Preserve extra_headers for authentication (e.g. GitHub Copilot)
+            extra_headers = (kwargs.get("litellm_params") or {}).get("extra_headers")
+            if extra_headers:
+                kwargs_for_followup["extra_headers"] = extra_headers
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             if logging_obj is not None:
@@ -975,6 +980,11 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if not k.startswith("_websearch_interception")
                 and k not in internal_params
             }
+
+            # Preserve extra_headers for authentication (e.g. GitHub Copilot)
+            extra_headers = (kwargs.get("litellm_params") or {}).get("extra_headers")
+            if extra_headers:
+                kwargs_for_followup["extra_headers"] = extra_headers
 
             # Get full model name from kwargs
             full_model_name = model
