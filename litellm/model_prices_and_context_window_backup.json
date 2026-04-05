@@ -1875,7 +1875,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "azure_ai/model_router": {
         "input_cost_per_token": 1.4e-07,
@@ -10357,7 +10358,8 @@
         "mode": "chat",
         "output_cost_per_token": 5.9997e-07,
         "output_dbu_cost_per_token": 8.571e-06,
-        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "supports_reasoning": true
     },
     "databricks/databricks-gpt-oss-20b": {
         "input_cost_per_token": 7e-08,
@@ -10372,7 +10374,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.0001999999999996e-07,
         "output_dbu_cost_per_token": 4.285999999999999e-06,
-        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "supports_reasoning": true
     },
     "databricks/databricks-gte-large-en": {
         "input_cost_per_token": 1.2999000000000001e-07,
@@ -11754,7 +11757,8 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_reasoning": true
     },
     "deepinfra/openai/gpt-oss-20b": {
         "max_tokens": 131072,
@@ -11765,7 +11769,8 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_reasoning": true
     },
     "deepinfra/zai-org/GLM-4.5": {
         "max_tokens": 131072,
@@ -20048,7 +20053,8 @@
         "output_cost_per_token": 0,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "lemonade/gpt-oss-120b-mxfp-GGUF": {
         "input_cost_per_token": 0,
@@ -20060,7 +20066,8 @@
         "output_cost_per_token": 0,
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "lemonade/Gemma-3-4b-it-GGUF": {
         "input_cost_per_token": 0,
@@ -24305,7 +24312,8 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 0.0,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_reasoning": true
     },
     "ollama/gpt-oss:20b-cloud": {
         "input_cost_per_token": 0.0,
@@ -24315,7 +24323,8 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 0.0,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_reasoning": true
     },
     "ollama/internlm2_5-20b-chat": {
         "input_cost_per_token": 0.0,
@@ -26939,7 +26948,8 @@
         "litellm_provider": "replicate",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_reasoning": true
     },
     "replicate/anthropic/claude-4.5-haiku": {
         "input_cost_per_token": 1e-06,
@@ -27181,7 +27191,8 @@
         "litellm_provider": "replicate",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_reasoning": true
     },
     "replicate/deepseek-ai/deepseek-v3.1": {
         "input_cost_per_token": 6.72e-07,
@@ -28518,7 +28529,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "together_ai/openai/gpt-oss-20b": {
         "input_cost_per_token": 5e-08,
@@ -28530,7 +28542,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
         "litellm_provider": "together_ai",
@@ -32193,7 +32206,8 @@
         "input_cost_per_token": 0.015,
         "output_cost_per_token": 0.06,
         "litellm_provider": "wandb",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "wandb/openai/gpt-oss-20b": {
         "max_tokens": 131072,
@@ -32202,7 +32216,8 @@
         "input_cost_per_token": 0.005,
         "output_cost_per_token": 0.02,
         "litellm_provider": "wandb",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "wandb/zai-org/GLM-4.5": {
         "max_tokens": 131072,
@@ -32646,7 +32661,8 @@
         "mode": "chat",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_reasoning": true
     },
     "watsonx/sdaia/allam-1-13b-instruct": {
         "max_tokens": 8192,
