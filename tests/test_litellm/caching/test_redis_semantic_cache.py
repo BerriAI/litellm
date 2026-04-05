@@ -144,3 +144,90 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
         # Verify methods were called
         redis_semantic_cache._get_async_embedding.assert_called_once()
         redis_semantic_cache.llmcache.acheck.assert_called_once()
+
+
+
+def test_redis_semantic_cache_embeddings_cache_enabled(monkeypatch):
+    # Create proper mocks for redisvl modules
+    mock_embeddings_cache_instance = MagicMock()
+    mock_embeddings_cache_class = MagicMock(return_value=mock_embeddings_cache_instance)
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+            "redisvl.extensions.cache.embeddings": MagicMock(
+                EmbeddingsCache=mock_embeddings_cache_class
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        # Set environment variables
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            embedding_cache_enabled=True,
+            embedding_cache_name="test_embed_cache",
+            embedding_cache_ttl=123,
+        )
+
+        # Ensure embeddings cache is initialized when enabled
+        assert cache.embedding_cache_enabled is True
+        assert cache.embeddings_cache is not None
+        assert cache.embeddings_cache is mock_embeddings_cache_instance
+
+        # Verify EmbeddingsCache was called with correct parameters
+        mock_embeddings_cache_class.assert_called_once_with(
+            name="test_embed_cache",
+            redis_url="redis://:test_password@localhost:6379",
+            ttl=123,
+        )
+
+
+@pytest.mark.asyncio
+async def test_redis_semantic_cache_async_embedding_uses_cache(monkeypatch):
+    # Patch redisvl modules and EmbeddingsCache class specifically
+    embeddings_cache_mock_cls = MagicMock()
+    embeddings_cache_instance = AsyncMock()
+    embeddings_cache_mock_cls.return_value = embeddings_cache_instance
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(),
+            "redisvl.utils.vectorize": MagicMock(),
+            "redisvl.extensions.cache.embeddings": MagicMock(
+                EmbeddingsCache=embeddings_cache_mock_cls
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        # Set environment variables
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        # Embeddings cache returns a cached vector
+        embeddings_cache_instance.aget.return_value = {"embedding": [0.1, 0.2, 0.3]}
+
+        cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            embedding_cache_enabled=True,
+        )
+
+        # Call internal async embedding helper
+        result = await cache._get_async_embedding("hello world")
+
+        # Should have used the embeddings cache and not fallen back to provider
+        embeddings_cache_instance.aget.assert_awaited_once()
+        assert result == [0.1, 0.2, 0.3]
