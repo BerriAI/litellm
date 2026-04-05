@@ -46,6 +46,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
+    _is_deadlock_error,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
@@ -63,7 +64,6 @@ if TYPE_CHECKING:
 else:
     PrismaClient = Any
     ProxyLogging = Any
-
 
 class DBSpendUpdateWriter:
     """
@@ -1128,10 +1128,8 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                user_id,
-                                response_cost,
-                            ) in user_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
+                            for user_id, response_cost in sorted(user_list_transactions.items()):
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1146,9 +1144,12 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
+                    # Randomized backoff to reduce repeated collisions across pods
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
                 except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
@@ -1183,10 +1184,8 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                token,
-                                response_cost,
-                            ) in key_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
+                            for token, response_cost in sorted(key_list_transactions.items()):
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={
@@ -1204,9 +1203,12 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
+                    # Randomized backoff to reduce repeated collisions across pods
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
                 except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
@@ -1227,10 +1229,8 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                team_id,
-                                response_cost,
-                            ) in team_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
+                            for team_id, response_cost in sorted(team_list_transactions.items()):
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -1250,9 +1250,12 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
+                    # Randomized backoff to reduce repeated collisions across pods
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
                 except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
@@ -1285,10 +1288,8 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                key,
-                                response_cost,
-                            ) in team_member_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
+                            for key, response_cost in sorted(team_member_list_transactions.items()):
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
@@ -1308,9 +1309,12 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(2**i)  # Exponential backoff
+                    # Randomized backoff to reduce repeated collisions across pods
+                    await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
                 except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2**(i+1)))
+                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
@@ -1342,10 +1346,8 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                org_id,
-                                response_cost,
-                            ) in org_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks
+                            for org_id, response_cost in sorted(org_list_transactions.items()):
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1360,16 +1362,16 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    # Optionally, sleep for a bit before retrying
-                    await asyncio.sleep(
-                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
-                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
-                        # and thus they are more likely to deadlock again.
-                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
-                        # repeated deadlocks, and therefore of exceeding the retry limit.
-                        random.uniform(2**i, 2 ** (i + 1))
-                    )
+                    # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                    # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                    # and thus they are more likely to deadlock again.
+                    # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                    # repeated deadlocks, and therefore of exceeding the retry limit.
+                    await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))
                 except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))
+                        continue
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
@@ -1753,14 +1755,17 @@ class DBSpendUpdateWriter:
                             start_time=start_time,
                             proxy_logging_obj=proxy_logging_obj,
                         )
-                    await asyncio.sleep(
-                        # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
-                        # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
-                        # and thus they are more likely to deadlock again.
-                        # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
-                        # repeated deadlocks, and therefore of exceeding the retry limit.
-                        random.uniform(2**i, 2 ** (i + 1))
-                    )
+                    # Sleep a random amount to avoid retrying and deadlocking again: when two transactions deadlock they are
+                    # cancelled basically at the same time, so if they wait the same time they will also retry at the same time
+                    # and thus they are more likely to deadlock again.
+                    # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
+                    # repeated deadlocks, and therefore of exceeding the retry limit.
+                    await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))
+                except Exception as e:
+                    if _is_deadlock_error(e) and i < n_retry_times:
+                        await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))
+                        continue
+                    raise
 
         except Exception as e:
             if "transactions_to_process" in locals():
