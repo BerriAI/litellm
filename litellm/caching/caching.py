@@ -99,6 +99,8 @@ class Cache:
         gcs_path_service_account: Optional[str] = None,
         gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_embedding_api_base: Optional[str] = None,
+        redis_semantic_cache_embedding_api_key: Optional[str] = None,
         redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
@@ -205,6 +207,8 @@ class Cache:
                 password=password,
                 similarity_threshold=similarity_threshold,
                 embedding_model=redis_semantic_cache_embedding_model,
+                embedding_api_base=redis_semantic_cache_embedding_api_base,
+                embedding_api_key=redis_semantic_cache_embedding_api_key,
                 index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
