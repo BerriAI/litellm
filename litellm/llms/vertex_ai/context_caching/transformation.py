@@ -14,6 +14,7 @@ from litellm.utils import is_cached_message
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
+    _transform_part_to_httpx_format,
     _transform_system_message,
 )
 
@@ -169,6 +170,8 @@ def transform_openai_messages_to_gemini_context_caching(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
+    is_vertex_ai = custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]
+
     transformed_system_messages, new_messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
@@ -179,7 +182,7 @@ def transform_openai_messages_to_gemini_context_caching(
 
     model_name = "models/{}".format(model)
 
-    if custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
+    if is_vertex_ai:
         model_name = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/{model_name}"
 
     data = CachedContentRequestBody(
@@ -195,4 +198,21 @@ def transform_openai_messages_to_gemini_context_caching(
     if transformed_system_messages is not None:
         data["system_instruction"] = transformed_system_messages
 
-    return data
+    if is_vertex_ai:
+        if "contents" in data:
+            data["contents"] = _transform_part_to_httpx_format(
+                {"contents": data["contents"]}, parent_key=None
+            )["contents"]
+        if "system_instruction" in data:
+            data["systemInstruction"] = _transform_part_to_httpx_format(
+                {"system_instruction": data["system_instruction"]}, parent_key=None
+            )["systemInstruction"]
+            del data["system_instruction"]
+        if "tools" in data:
+            data["tools"] = _transform_part_to_httpx_format(
+                {"tools": data["tools"]}, parent_key=None
+            )["tools"]
+
+    from typing import cast
+
+    return cast(CachedContentRequestBody, data)
