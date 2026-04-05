@@ -156,6 +156,8 @@ LATENCY_BUCKETS = (
     180.0,
     240.0,
     300.0,
+    420.0,  # 7 minutes
+    600.0,  # 10 minutes (typical default LLM request timeout)
     float("inf"),
 )
 
