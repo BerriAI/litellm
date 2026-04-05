@@ -44,7 +44,7 @@ guardrails:
 ### Supported Params
 
 - **`guardrail`**: Use `noma_v2` (recommended), or `noma` with `use_v2: true` for migration
-- **`mode`**: `pre_call`, `post_call`, `during_call`, `pre_mcp_call`, `during_mcp_call`
+- **`mode`**: `pre_call`, `post_call`, `during_call` (MCP-specific modes `pre_mcp_call` and `during_mcp_call` are deprecated - use `pre_call`/`post_call` instead)
 - **`api_key`**: Noma API key (required for Noma SaaS, optional for self-managed deployments)
 - **`api_base`**: Noma API base URL (defaults to `https://api.noma.security/`)
 - **`application_id`**: Application identifier. If omitted, v2 checks dynamic `extra_body.application_id`, then configured/env `application_id`; otherwise it is omitted.
@@ -141,8 +141,8 @@ guardrails:
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel with the LLM call. Response not returned until guardrail check completes
-- `pre_mcp_call`: Scan MCP tool call inputs before execution
-- `during_mcp_call`: Monitor MCP tool calls in real-time
+- ~~`pre_mcp_call`~~: **Deprecated** - Use `pre_call` instead
+- ~~`during_mcp_call`~~: **Deprecated** - Use `pre_call` or `post_call` instead
 
 ### 2. Start LiteLLM Gateway
 
