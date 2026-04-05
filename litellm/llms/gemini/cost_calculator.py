@@ -31,11 +31,21 @@ def cost_per_token(
 def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> float:
     """
     Calculates the cost per web search request for a given model, prompt tokens, and completion tokens.
+
+    Uses custom pricing from model_info if available (via `web_search_cost_per_request` key),
+    otherwise falls back to the default of $0.014 (Google's Gemini 3 family rate).
+    The previous hardcoded default of $0.035 is obsolete.
     """
     from litellm.types.utils import PromptTokensDetailsWrapper
 
     # cost per web search request
-    cost_per_web_search_request = 35e-3
+    # Check for custom override in model_info first
+    custom_cost = model_info.get("web_search_cost_per_request")
+    if custom_cost is not None and isinstance(custom_cost, (int, float)) and custom_cost > 0:
+        cost_per_web_search_request = custom_cost
+    else:
+        # Default Gemini 3 family rate ($0.014 per request)
+        cost_per_web_search_request = 14e-3
 
     number_of_web_search_requests = 0
     # Get number of web search requests
