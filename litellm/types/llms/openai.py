@@ -788,22 +788,6 @@ class GenericChatCompletionMessage(TypedDict, total=False):
     content: Required[Union[str, List]]
 
 
-ValidUserMessageContentTypes = [
-    "text",
-    "image_url",
-    "input_audio",
-    "audio_url",
-    "document",
-    "guarded_text",
-    "video_url",
-    "file",
-    # Anthropic/Bedrock multi-turn tool use: clients like Cursor send tool results
-    # back in user messages as {"type": "tool_result", ...}. Allow them through so
-    # downstream provider transformations can handle them correctly.
-    "tool_result",
-    "tool_use",
-]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
-
 ValidUserMessageContentTypesLiteral = Literal[
     "text",
     "image_url",
@@ -813,6 +797,8 @@ ValidUserMessageContentTypesLiteral = Literal[
     "guarded_text",
     "video_url",
     "file",
+    "tool_result",
+    "tool_use",
 ]
 
 ValidUserMessageContentTypes = [

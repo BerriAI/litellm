@@ -574,11 +574,15 @@ class AmazonConverseConfig(BaseConfig):
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
 
-            # An empty dict {} has no "type" field — it is not a specific-function
-            # tool_choice, it is the client's way of saying "use default tool mode".
-            # Map it to "any" (required) so Bedrock forces the model to call at
-            # least one tool.  This matches the intent: agents like Cursor always
-            # send tools alongside {} and expect a tool call back, not plain text.
+            # An empty dict {} is sent by agentic clients (e.g. Cursor IDE) that
+            # always provide tools and expect the model to invoke one.  We map it
+            # to "any" (must call ≥1 tool) rather than "auto" (may skip tools)
+            # because:
+            #   1. These clients never send {} without tools — they want a tool call.
+            #   2. With "auto", the model often returns plain text instead, which
+            #      breaks the agent loop (tool edits show as chat text).
+            # If a caller truly wants optional tool use, they should send
+            # tool_choice="auto" explicitly.
             if not tool_choice:
                 return ToolChoiceValuesBlock(any={})
 
