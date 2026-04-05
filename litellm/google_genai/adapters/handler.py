@@ -1,4 +1,14 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    Iterator,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
@@ -121,6 +131,7 @@ class GenerateContentToCompletionHandler:
     ) -> Union[
         Dict[str, Any],
         AsyncIterator[bytes],
+        Iterator[bytes],
         Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
     ]:
         """Handle generate_content call using completion adapter"""
@@ -162,7 +173,7 @@ class GenerateContentToCompletionHandler:
                     return generate_content_response
                 else:
                     # Transform streaming completion response to generate_content format
-                    transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+                    transformed_stream = GOOGLE_GENAI_ADAPTER.sync_translate_completion_output_params_streaming(
                         completion_response
                     )
                     if transformed_stream is not None:

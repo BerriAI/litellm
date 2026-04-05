@@ -5,6 +5,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Iterator,
     Dict,
     List,
     Literal,
@@ -228,6 +229,23 @@ class AnthropicAdapter:
         )
         # Return the SSE-wrapped version for proper event formatting
         return anthropic_wrapper.async_anthropic_sse_wrapper()
+
+    def sync_translate_completion_output_params_streaming(
+        self,
+        completion_stream: Any,
+        model: str,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
+    ) -> Union[Iterator[bytes], None]:
+        """
+        Synchronous version of translate_completion_output_params_streaming.
+        """
+        anthropic_wrapper = AnthropicStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            tool_name_mapping=tool_name_mapping,
+        )
+        # Use the synchronous wrapper for synchronous iteration
+        return anthropic_wrapper.anthropic_sse_wrapper()
 
 
 class LiteLLMAnthropicMessagesAdapter:
@@ -550,9 +568,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            assistant_content_list: List[
-                Dict[str, Any]
-            ] = []  # For content blocks with cache_control
+            assistant_content_list: List[Dict[str, Any]] = (
+                []
+            )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
             thinking_blocks: List[
@@ -663,7 +681,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
