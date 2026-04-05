@@ -5,8 +5,10 @@ These functions are injected into the custom code execution environment
 and provide safe, sandboxed functionality for common guardrail operations.
 """
 
+import ipaddress
 import json
 import re
+import socket
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 from urllib.parse import urlparse
 
@@ -354,6 +356,122 @@ def get_url_domain(url: str) -> Optional[str]:
 
 
 # =============================================================================
+# SSRF Protection
+# =============================================================================
+
+# Private/reserved IP networks that must not be reachable from guardrail code.
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),  # "This" network
+    ipaddress.ip_network("10.0.0.0/8"),  # RFC 1918
+    ipaddress.ip_network("100.64.0.0/10"),  # Carrier-grade NAT
+    ipaddress.ip_network("127.0.0.0/8"),  # Loopback
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
+    ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918
+    ipaddress.ip_network("192.0.0.0/24"),  # IETF protocol assignments
+    ipaddress.ip_network("192.0.2.0/24"),  # TEST-NET-1
+    ipaddress.ip_network("192.88.99.0/24"),  # 6to4 relay anycast
+    ipaddress.ip_network("192.168.0.0/16"),  # RFC 1918
+    ipaddress.ip_network("198.18.0.0/15"),  # Benchmarking
+    ipaddress.ip_network("198.51.100.0/24"),  # TEST-NET-2
+    ipaddress.ip_network("203.0.113.0/24"),  # TEST-NET-3
+    ipaddress.ip_network("224.0.0.0/4"),  # Multicast
+    ipaddress.ip_network("240.0.0.0/4"),  # Reserved for future use
+    ipaddress.ip_network("255.255.255.255/32"),  # Broadcast
+    # IPv6
+    ipaddress.ip_network("::1/128"),  # Loopback
+    ipaddress.ip_network("fc00::/7"),  # Unique local
+    ipaddress.ip_network("fe80::/10"),  # Link-local
+    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6
+    ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
+]
+
+
+def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if *addr* belongs to any blocked network."""
+    return any(addr in network for network in _BLOCKED_NETWORKS)
+
+
+def _validate_url_for_ssrf(
+    url: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Validate a URL against SSRF attacks by resolving the hostname and
+    checking that none of the resolved IP addresses are private/reserved.
+
+    To prevent TOCTOU / DNS-rebinding attacks, this function returns the
+    first validated public IP so the caller can connect directly to it
+    instead of letting httpx re-resolve the hostname.
+
+    Returns:
+        (error, validated_ip) — *error* is a human-readable message when the
+        URL is blocked (validated_ip will be None), or None when the URL is
+        safe (validated_ip will contain the resolved address to use).
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return "URL has no hostname", None
+
+    # Block raw IP addresses in private ranges (skip DNS)
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if _is_private_ip(addr):
+            return (
+                f"Requests to private/reserved IP address {hostname} are not allowed",
+                None,
+            )
+        # Raw public IP — no DNS needed, pin to itself
+        return None, hostname
+    except ValueError:
+        pass  # Not a raw IP — resolve via DNS below
+
+    # Resolve hostname and check every resulting address
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addrinfos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return f"Could not resolve hostname: {hostname}", None
+
+    if not addrinfos:
+        return f"No addresses found for hostname: {hostname}", None
+
+    for family, _type, _proto, _canonname, sockaddr in addrinfos:
+        ip_str = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+            if _is_private_ip(addr):
+                return (
+                    f"Hostname {hostname} resolves to private/reserved address "
+                    f"{ip_str}, request blocked"
+                ), None
+        except ValueError:
+            continue
+
+    # All addresses are public — return the first one to pin the connection
+    first_ip = addrinfos[0][4][0]
+    return None, first_ip
+
+
+def _build_pinned_url(original_url: str, validated_ip: str) -> Tuple[str, str]:
+    """
+    Rewrite *original_url* so the hostname is replaced by *validated_ip*,
+    and return (rewritten_url, original_hostname) so the caller can set
+    a ``Host`` header preserving the original hostname for TLS / vhosts.
+    """
+    parsed = urlparse(original_url)
+    original_host = parsed.hostname or ""
+    # Bracket IPv6 addresses for URL syntax
+    ip_host = f"[{validated_ip}]" if ":" in validated_ip else validated_ip
+    # Preserve explicit port if present
+    if parsed.port:
+        netloc = f"{ip_host}:{parsed.port}"
+    else:
+        netloc = ip_host
+    pinned = parsed._replace(netloc=netloc).geturl()
+    return pinned, original_host
+
+
+# =============================================================================
 # HTTP Request Primitives (Async)
 # =============================================================================
 
@@ -452,9 +570,29 @@ async def http_request(
             body={"text": "content to check"}
         )
     """
-    # Validate URL
+    # Validate URL syntax
     if not is_valid_url(url):
         return _http_error_response(f"Invalid URL: {url}")
+
+    # SSRF protection: block requests to private/reserved IP ranges.
+    # _validate_url_for_ssrf resolves DNS once and returns a validated IP
+    # so that we can pin the connection to it, preventing TOCTOU /
+    # DNS-rebinding attacks where the hostname re-resolves to a different
+    # (private) address between check and use.
+    ssrf_error, validated_ip = _validate_url_for_ssrf(url)
+    if ssrf_error:
+        verbose_proxy_logger.warning(
+            "Custom code guardrail SSRF blocked: %s (url=%s)", ssrf_error, url
+        )
+        return _http_error_response(ssrf_error)
+
+    # Rewrite the URL to connect directly to the validated IP, and
+    # preserve the original Host header for TLS SNI / virtual hosts.
+    pinned_url, original_host = _build_pinned_url(url, validated_ip or "")
+    if headers is None:
+        headers = {}
+    if original_host and "Host" not in headers:
+        headers["Host"] = original_host
 
     # Validate and normalize method
     method = method.upper()
@@ -478,7 +616,7 @@ async def http_request(
 
     try:
         response = await _execute_http_request(
-            client, method, url, headers, body, timeout
+            client, method, pinned_url, headers, body, timeout
         )
         return _http_success_response(response)
 
