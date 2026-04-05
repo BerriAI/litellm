@@ -75,10 +75,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       }
     };
 
-    // Only fetch if not provided via props
-    if (!providerParamsProp) {
-      fetchProviderParams();
-    }
+    fetchProviderParams();
   }, [accessToken, providerParamsProp]);
 
   // If no provider is selected, don't render anything
@@ -110,7 +107,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   }
 
   console.log("Value:", value);
-  
+
   // Fields to skip for content filter provider (handled in dedicated steps)
   const contentFilterFieldsToSkip = new Set([
     "patterns",
@@ -121,9 +118,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     "pattern_redaction_format",
     "keyword_redaction_tag",
   ]);
-  
+
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
-  
+  const isXecguardProvider = providerKey === "xecguard";
+
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
@@ -190,10 +188,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select
               placeholder={field.description}
-              defaultValue={fieldValue !== undefined ? String(fieldValue) : field.default_value}
+              defaultValue={fieldValue !== undefined ? fieldValue : field.default_value}
             >
-              <Select.Option value="true">True</Select.Option>
-              <Select.Option value="false">False</Select.Option>
+              <Select.Option value={true}>True</Select.Option>
+              <Select.Option value={false}>False</Select.Option>
             </Select>
           ) : field.type === "percentage" && field.min != null && field.max != null ? (
             <Slider

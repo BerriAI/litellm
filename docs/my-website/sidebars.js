@@ -91,7 +91,8 @@ const sidebars = {
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
           "proxy/guardrails/zscaler_ai_guard",
-          "proxy/guardrails/javelin"
+          "proxy/guardrails/javelin",
+          "proxy/guardrails/xecguard"
         ].sort(),
       ],
     },
@@ -325,7 +326,6 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
-                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
@@ -1052,8 +1052,7 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing",
-        "proxy/health_check_routing"
+        "wildcard_routing"
       ],
     },
     {
