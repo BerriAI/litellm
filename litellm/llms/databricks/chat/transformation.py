@@ -227,10 +227,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if description is not None:
             function_params["description"] = cast(Union[dict, str], description)
 
-        return DatabricksTool(
+        databricks_tool = DatabricksTool(
             type="function",
             function=function_params,
         )
+        
+        cache_control = tool.get("cache_control")
+        if cache_control:
+            databricks_tool["cache_control"] = cast(dict, cache_control)
+
+        return databricks_tool
+
+
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
         # if not claude, send as is
@@ -349,6 +357,29 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return True
 
         return False
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        messages = self._transform_messages(messages=messages, model=model)
+        optional_params.pop("max_retries", None)
+
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
 
     @overload
     def _transform_messages(

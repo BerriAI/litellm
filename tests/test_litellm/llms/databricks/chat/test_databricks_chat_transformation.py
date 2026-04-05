@@ -123,6 +123,12 @@ def test_convert_anthropic_tool_to_databricks_tool_without_description():
     assert databricks_tool is not None
     assert databricks_tool["type"] == "function"
     assert databricks_tool["function"].get("description") is None
+    assert "cache_control" not in databricks_tool
+
+    anthropic_tool["cache_control"] = {"type": "ephemeral"}
+    databricks_tool = config.convert_anthropic_tool_to_databricks_tool(anthropic_tool)
+    assert databricks_tool is not None
+    assert databricks_tool.get("cache_control") == {"type": "ephemeral"}
 
 
 def test_transform_choices_with_citations():

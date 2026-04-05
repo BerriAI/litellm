@@ -57,9 +57,10 @@ class DatabricksFunction(TypedDict, total=False):
     strict: bool
 
 
-class DatabricksTool(TypedDict):
+class DatabricksTool(TypedDict, total=False):
     function: DatabricksFunction
     type: Literal["function"]
+    cache_control: Required[dict]
 
 
 class DatabricksMessage(TypedDict, total=False):
