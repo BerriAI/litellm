@@ -1,4 +1,11 @@
-from typing import Optional
+import base64
+import datetime
+import hashlib
+import json
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Protocol, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -17,3 +24,361 @@ class OCIError(BaseLLMException):
             message=message,
             headers=headers,
         )
+
+
+# ---------------------------------------------------------------------------
+# OCI signing protocol and helpers
+# ---------------------------------------------------------------------------
+
+
+class OCISignerProtocol(Protocol):
+    """
+    Protocol for OCI request signers (e.g., oci.signer.Signer).
+
+    Compatible with the OCI Python SDK's Signer class.
+    See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
+    """
+
+    def do_request_sign(
+        self, request: Any, *, enforce_content_headers: bool = False
+    ) -> None: ...
+
+
+@dataclass
+class OCIRequestWrapper:
+    """
+    Wrapper for HTTP requests compatible with OCI signer interface.
+
+    Wraps request data in the format expected by OCI SDK signers, which require
+    objects with method, url, headers, body, and path_url attributes.
+    """
+
+    method: str
+    url: str
+    headers: dict
+    body: bytes
+
+    @property
+    def path_url(self) -> str:
+        """Returns the path + query string for OCI signing."""
+        parsed = urlparse(self.url)
+        return parsed.path + ("?" + parsed.query if parsed.query else "")
+
+
+def sha256_base64(data: bytes) -> str:
+    digest = hashlib.sha256(data).digest()
+    return base64.b64encode(digest).decode()
+
+
+def build_signature_string(
+    method: str, path: str, headers: dict, signed_headers: list
+) -> str:
+    lines = []
+    for header in signed_headers:
+        if header == "(request-target)":
+            value = f"{method.lower()} {path}"
+        else:
+            value = headers[header]
+        lines.append(f"{header}: {value}")
+    return "\n".join(lines)
+
+
+def load_private_key_from_str(key_str: str) -> Any:
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except ImportError as e:
+        raise ImportError(
+            "cryptography package is required for OCI authentication. "
+            "Please install it with: pip install cryptography"
+        ) from e
+
+    key = serialization.load_pem_private_key(
+        key_str.encode("utf-8"),
+        password=None,
+    )
+    if not isinstance(key, rsa.RSAPrivateKey):
+        raise TypeError(
+            "The provided private key is not an RSA key, which is required for OCI signing."
+        )
+    return key
+
+
+def load_private_key_from_file(file_path: str) -> Any:
+    """Loads a private key from a file path."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            key_str = f.read().strip()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Private key file not found: {file_path}")
+    except OSError as e:
+        raise OSError(f"Failed to read private key file '{file_path}': {e}") from e
+
+    if not key_str:
+        raise ValueError(f"Private key file is empty: {file_path}")
+
+    return load_private_key_from_str(key_str)
+
+
+# ---------------------------------------------------------------------------
+# Env-var credential resolution
+# ---------------------------------------------------------------------------
+
+_OCI_REGION_ENV = "OCI_REGION"
+_OCI_USER_ENV = "OCI_USER"
+_OCI_FINGERPRINT_ENV = "OCI_FINGERPRINT"
+_OCI_TENANCY_ENV = "OCI_TENANCY"
+_OCI_KEY_FILE_ENV = "OCI_KEY_FILE"
+_OCI_KEY_ENV = "OCI_KEY"
+_OCI_COMPARTMENT_ID_ENV = "OCI_COMPARTMENT_ID"
+
+
+def resolve_oci_credentials(optional_params: dict) -> dict:
+    """
+    Merge OCI credentials from optional_params (explicit, always wins) and
+    environment variables (fallback).
+
+    Returns a dict with resolved values for:
+        oci_region, oci_user, oci_fingerprint, oci_tenancy,
+        oci_key, oci_key_file, oci_compartment_id
+    """
+    return {
+        "oci_region": optional_params.get("oci_region")
+        or os.environ.get(_OCI_REGION_ENV)
+        or "us-ashburn-1",
+        "oci_user": optional_params.get("oci_user") or os.environ.get(_OCI_USER_ENV),
+        "oci_fingerprint": optional_params.get("oci_fingerprint")
+        or os.environ.get(_OCI_FINGERPRINT_ENV),
+        "oci_tenancy": optional_params.get("oci_tenancy")
+        or os.environ.get(_OCI_TENANCY_ENV),
+        "oci_key": optional_params.get("oci_key") or os.environ.get(_OCI_KEY_ENV),
+        "oci_key_file": optional_params.get("oci_key_file")
+        or os.environ.get(_OCI_KEY_FILE_ENV),
+        "oci_compartment_id": optional_params.get("oci_compartment_id")
+        or os.environ.get(_OCI_COMPARTMENT_ID_ENV),
+    }
+
+
+def get_oci_base_url(optional_params: dict, api_base: Optional[str] = None) -> str:
+    """Return the OCI inference base URL, respecting any explicit api_base override."""
+    if api_base:
+        return api_base.rstrip("/")
+    creds = resolve_oci_credentials(optional_params)
+    region = creds["oci_region"]
+    return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+
+
+# ---------------------------------------------------------------------------
+# Signing implementations (shared by chat, embed, and rerank configs)
+# ---------------------------------------------------------------------------
+
+
+def sign_with_oci_signer(
+    headers: dict,
+    optional_params: dict,
+    request_data: dict,
+    api_base: str,
+) -> Tuple[dict, bytes]:
+    """Sign a request using an OCI SDK Signer object passed in optional_params."""
+    oci_signer = optional_params.get("oci_signer")
+    body = json.dumps(request_data).encode("utf-8")
+    method = str(optional_params.get("method", "POST")).upper()
+
+    if method not in {"POST", "GET", "PUT", "DELETE", "PATCH"}:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+    prepared_headers = {**headers}
+    prepared_headers.setdefault("content-type", "application/json")
+    prepared_headers.setdefault("content-length", str(len(body)))
+
+    request_wrapper = OCIRequestWrapper(
+        method=method, url=api_base, headers=prepared_headers, body=body
+    )
+
+    if oci_signer is None:
+        raise ValueError("oci_signer cannot be None when calling sign_with_oci_signer")
+
+    try:
+        oci_signer.do_request_sign(request_wrapper, enforce_content_headers=True)
+    except Exception as e:
+        raise OCIError(
+            status_code=500,
+            message=(
+                f"Failed to sign request with provided oci_signer: {str(e)}. "
+                "The signer must implement the OCI SDK Signer interface with a "
+                "do_request_sign(request, enforce_content_headers=True) method. "
+                "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
+            ),
+        ) from e
+
+    headers.update(request_wrapper.headers)
+    return headers, body
+
+
+def sign_with_manual_credentials(
+    headers: dict,
+    optional_params: dict,
+    request_data: dict,
+    api_base: str,
+) -> Tuple[dict, None]:
+    """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
+    creds = resolve_oci_credentials(optional_params)
+    oci_user = creds["oci_user"]
+    oci_fingerprint = creds["oci_fingerprint"]
+    oci_tenancy = creds["oci_tenancy"]
+    oci_key = creds["oci_key"]
+    oci_key_file = creds["oci_key_file"]
+
+    if (
+        not oci_user
+        or not oci_fingerprint
+        or not oci_tenancy
+        or not (oci_key or oci_key_file)
+    ):
+        raise OCIError(
+            status_code=401,
+            message=(
+                "Missing required OCI credentials: oci_user, oci_fingerprint, oci_tenancy, "
+                "and at least one of oci_key or oci_key_file. "
+                "These can also be supplied via environment variables: "
+                f"{_OCI_USER_ENV}, {_OCI_FINGERPRINT_ENV}, {_OCI_TENANCY_ENV}, {_OCI_KEY_ENV} (or {_OCI_KEY_FILE_ENV}). "
+                "Alternatively, provide an oci_signer object from the OCI SDK."
+            ),
+        )
+
+    method = str(optional_params.get("method", "POST")).upper()
+    body = json.dumps(request_data).encode("utf-8")
+    parsed = urlparse(api_base)
+    path = parsed.path or "/"
+    host = parsed.netloc
+
+    date = datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    content_type = headers.get("content-type", "application/json")
+    content_length = str(len(body))
+    x_content_sha256 = sha256_base64(body)
+
+    headers_to_sign: Dict[str, str] = {
+        "date": date,
+        "host": host,
+        "content-type": content_type,
+        "content-length": content_length,
+        "x-content-sha256": x_content_sha256,
+    }
+
+    signed_header_names = [
+        "date",
+        "(request-target)",
+        "host",
+        "content-length",
+        "content-type",
+        "x-content-sha256",
+    ]
+    signing_string = build_signature_string(method, path, headers_to_sign, signed_header_names)
+
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+    except ImportError as e:
+        raise ImportError(
+            "cryptography package is required for OCI authentication. "
+            "Please install it with: pip install cryptography"
+        ) from e
+
+    # Resolve the private key — prefer inline PEM content over file path
+    oci_key_content: Optional[str] = None
+    if oci_key:
+        if not isinstance(oci_key, str):
+            raise OCIError(
+                status_code=400,
+                message=(
+                    f"oci_key must be a string containing the PEM private key content. "
+                    f"Got type: {type(oci_key).__name__}"
+                ),
+            )
+        oci_key_content = oci_key.replace("\\n", "\n").replace("\r\n", "\n")
+
+    private_key = (
+        load_private_key_from_str(oci_key_content)
+        if oci_key_content
+        else load_private_key_from_file(oci_key_file)
+        if oci_key_file
+        else None
+    )
+
+    if private_key is None:
+        raise OCIError(
+            status_code=400,
+            message="Private key is required for OCI authentication. Provide either oci_key or oci_key_file.",
+        )
+
+    signature = private_key.sign(
+        signing_string.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    signature_b64 = base64.b64encode(signature).decode()
+
+    key_id = f"{oci_tenancy}/{oci_user}/{oci_fingerprint}"
+    authorization = (
+        'Signature version="1",'
+        f'keyId="{key_id}",'
+        'algorithm="rsa-sha256",'
+        f'headers="{" ".join(signed_header_names)}",'
+        f'signature="{signature_b64}"'
+    )
+
+    headers.update(
+        {
+            "authorization": authorization,
+            "date": date,
+            "host": host,
+            "content-type": content_type,
+            "content-length": content_length,
+            "x-content-sha256": x_content_sha256,
+        }
+    )
+    return headers, None
+
+
+def sign_oci_request(
+    headers: dict,
+    optional_params: dict,
+    request_data: dict,
+    api_base: str,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    stream: Optional[bool] = None,
+    fake_stream: Optional[bool] = None,
+) -> Tuple[dict, Optional[bytes]]:
+    """
+    Route to the appropriate OCI signing method based on what credentials are present.
+
+    If ``oci_signer`` is in optional_params, use the OCI SDK signer object.
+    Otherwise use manual RSA-SHA256 signing with explicit credentials (which can
+    also be supplied via OCI_* environment variables).
+
+    Returns:
+        Tuple of (signed_headers, body_bytes_or_None)
+    """
+    if optional_params.get("oci_signer") is not None:
+        return sign_with_oci_signer(headers, optional_params, request_data, api_base)
+    return sign_with_manual_credentials(headers, optional_params, request_data, api_base)
+
+
+def validate_oci_environment(
+    headers: dict,
+    optional_params: dict,
+    api_key: Optional[str] = None,
+) -> dict:
+    """
+    Populate common OCI request headers (content-type, user-agent).
+
+    Full credential validation is deferred to signing time so that credentials
+    supplied via environment variables are resolved at call time rather than
+    at construction time.
+    """
+    from litellm.llms.custom_httpx.http_handler import version
+
+    headers.setdefault("content-type", "application/json")
+    headers.setdefault("user-agent", f"litellm/{version}")
+    return headers
