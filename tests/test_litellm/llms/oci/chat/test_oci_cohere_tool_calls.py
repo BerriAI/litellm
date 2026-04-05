@@ -5,10 +5,14 @@ import json
 from unittest.mock import patch, MagicMock
 
 from litellm import ModelResponse
+from litellm.llms.oci.chat.cohere import (
+    adapt_messages_to_cohere_standard,
+    adapt_tool_definitions_to_cohere_standard,
+)
 from litellm.llms.oci.chat.transformation import (
     OCIChatConfig,
-    get_vendor_from_model,
     OCIStreamWrapper,
+    get_vendor_from_model,
 )
 from litellm.types.llms.oci import OCIVendors
 
@@ -75,7 +79,7 @@ class TestOCICohereToolCalls:
         ]
 
         # Transform tools
-        cohere_tools = config.adapt_tool_definitions_to_cohere_standard(openai_tools)
+        cohere_tools = adapt_tool_definitions_to_cohere_standard(openai_tools)
 
         # Verify transformation
         assert len(cohere_tools) == 2
@@ -95,7 +99,10 @@ class TestOCICohereToolCalls:
 
         # Check unit parameter
         unit_param = weather_tool.parameterDefinitions["unit"]
-        assert unit_param.description == "Temperature unit (celsius or fahrenheit). Allowed values: ['celsius', 'fahrenheit']"
+        assert (
+            unit_param.description
+            == "Temperature unit (celsius or fahrenheit). Allowed values: ['celsius', 'fahrenheit']"
+        )
         assert unit_param.type == "str"
         assert unit_param.isRequired == False
 
@@ -156,7 +163,7 @@ class TestOCICohereToolCalls:
         assert chat_request["apiFormat"] == "COHERE"
         assert chat_request["message"] == "What's the weather like in Tokyo?"
         assert chat_request["chatHistory"] == []
-        
+
         # Verify tools are transformed correctly
         assert "tools" in chat_request
         assert len(chat_request["tools"]) == 1
@@ -317,7 +324,7 @@ class TestOCICohereToolCalls:
             },
         ]
 
-        chat_history = config.adapt_messages_to_cohere_standard(messages)
+        chat_history = adapt_messages_to_cohere_standard(messages)
 
         # First message is the user message
         assert chat_history[0].role == "USER"
@@ -358,7 +365,7 @@ class TestOCICohereToolCalls:
             },
         ]
 
-        chat_history = config.adapt_messages_to_cohere_standard(messages)
+        chat_history = adapt_messages_to_cohere_standard(messages)
 
         # Verify chat history structure (excludes last message)
         assert len(chat_history) == 2
@@ -524,7 +531,7 @@ class TestOCICohereToolCalls:
         ]
 
         # The function should handle missing function key gracefully
-        cohere_tools = config.adapt_tool_definitions_to_cohere_standard(invalid_tools)
+        cohere_tools = adapt_tool_definitions_to_cohere_standard(invalid_tools)
 
         # Should create a tool with empty name and description
         assert len(cohere_tools) == 1
@@ -679,7 +686,7 @@ class TestOCICoherePreambleOverride:
             {"role": "user", "content": "Second question"},
         ]
 
-        chat_history = config.adapt_messages_to_cohere_standard(messages)
+        chat_history = adapt_messages_to_cohere_standard(messages)
 
         # Should contain user and assistant only, no system
         # Note: adapt_messages_to_cohere_standard excludes the last message
@@ -706,7 +713,7 @@ class TestOCICohereStreaming:
         stream_wrapper = self._create_stream_wrapper()
 
         # chunk_creator is the public dispatch entry point
-        assert hasattr(stream_wrapper, 'chunk_creator')
+        assert hasattr(stream_wrapper, "chunk_creator")
         assert callable(stream_wrapper.chunk_creator)
 
     def test_cohere_streaming_chunk_parsing(self):

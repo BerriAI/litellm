@@ -4,12 +4,33 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, Optional, Protocol, Tuple
 from urllib.parse import urlparse
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    _CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    _CRYPTOGRAPHY_AVAILABLE = False
+
+try:
+    from litellm._version import version as _litellm_version
+except ImportError:
+    _litellm_version = "0.0.0"
+
+
+def _require_cryptography() -> None:
+    if not _CRYPTOGRAPHY_AVAILABLE:
+        raise ImportError(
+            "cryptography package is required for OCI authentication. "
+            "Please install it with: pip install cryptography"
+        )
 
 
 class OCIError(BaseLLMException):
@@ -84,20 +105,12 @@ def build_signature_string(
 
 
 def load_private_key_from_str(key_str: str) -> Any:
-    try:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-    except ImportError as e:
-        raise ImportError(
-            "cryptography package is required for OCI authentication. "
-            "Please install it with: pip install cryptography"
-        ) from e
-
-    key = serialization.load_pem_private_key(
+    _require_cryptography()
+    key = serialization.load_pem_private_key(  # type: ignore[union-attr]
         key_str.encode("utf-8"),
         password=None,
     )
-    if not isinstance(key, rsa.RSAPrivateKey):
+    if not isinstance(key, rsa.RSAPrivateKey):  # type: ignore[union-attr]
         raise TypeError(
             "The provided private key is not an RSA key, which is required for OCI signing."
         )
@@ -220,7 +233,7 @@ def sign_with_manual_credentials(
     optional_params: dict,
     request_data: dict,
     api_base: str,
-) -> Tuple[dict, None]:
+) -> Tuple[dict, bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
     creds = resolve_oci_credentials(optional_params)
     oci_user = creds["oci_user"]
@@ -252,7 +265,9 @@ def sign_with_manual_credentials(
     path = parsed.path or "/"
     host = parsed.netloc
 
-    date = datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    date = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
     content_type = headers.get("content-type", "application/json")
     content_length = str(len(body))
     x_content_sha256 = sha256_base64(body)
@@ -273,16 +288,11 @@ def sign_with_manual_credentials(
         "content-type",
         "x-content-sha256",
     ]
-    signing_string = build_signature_string(method, path, headers_to_sign, signed_header_names)
+    signing_string = build_signature_string(
+        method, path, headers_to_sign, signed_header_names
+    )
 
-    try:
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import padding
-    except ImportError as e:
-        raise ImportError(
-            "cryptography package is required for OCI authentication. "
-            "Please install it with: pip install cryptography"
-        ) from e
+    _require_cryptography()
 
     # Resolve the private key — prefer inline PEM content over file path
     oci_key_content: Optional[str] = None
@@ -300,9 +310,7 @@ def sign_with_manual_credentials(
     private_key = (
         load_private_key_from_str(oci_key_content)
         if oci_key_content
-        else load_private_key_from_file(oci_key_file)
-        if oci_key_file
-        else None
+        else load_private_key_from_file(oci_key_file) if oci_key_file else None
     )
 
     if private_key is None:
@@ -313,8 +321,8 @@ def sign_with_manual_credentials(
 
     signature = private_key.sign(
         signing_string.encode("utf-8"),
-        padding.PKCS1v15(),
-        hashes.SHA256(),
+        padding.PKCS1v15(),  # type: ignore[union-attr]
+        hashes.SHA256(),  # type: ignore[union-attr]
     )
     signature_b64 = base64.b64encode(signature).decode()
 
@@ -337,7 +345,7 @@ def sign_with_manual_credentials(
             "x-content-sha256": x_content_sha256,
         }
     )
-    return headers, None
+    return headers, body
 
 
 def sign_oci_request(
@@ -349,7 +357,7 @@ def sign_oci_request(
     model: Optional[str] = None,
     stream: Optional[bool] = None,
     fake_stream: Optional[bool] = None,
-) -> Tuple[dict, Optional[bytes]]:
+) -> Tuple[dict, bytes]:
     """
     Route to the appropriate OCI signing method based on what credentials are present.
 
@@ -358,11 +366,13 @@ def sign_oci_request(
     also be supplied via OCI_* environment variables).
 
     Returns:
-        Tuple of (signed_headers, body_bytes_or_None)
+        Tuple of (signed_headers, signed_body_bytes)
     """
     if optional_params.get("oci_signer") is not None:
         return sign_with_oci_signer(headers, optional_params, request_data, api_base)
-    return sign_with_manual_credentials(headers, optional_params, request_data, api_base)
+    return sign_with_manual_credentials(
+        headers, optional_params, request_data, api_base
+    )
 
 
 def validate_oci_environment(
@@ -377,10 +387,8 @@ def validate_oci_environment(
     supplied via environment variables are resolved at call time rather than
     at construction time.
     """
-    from litellm.llms.custom_httpx.http_handler import version
-
     headers.setdefault("content-type", "application/json")
-    headers.setdefault("user-agent", f"litellm/{version}")
+    headers.setdefault("user-agent", f"litellm/{_litellm_version}")
     return headers
 
 
@@ -447,7 +455,8 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
     if isinstance(obj, dict):
         if "anyOf" in obj and "type" not in obj:
             non_null = [
-                t for t in obj["anyOf"]
+                t
+                for t in obj["anyOf"]
                 if not (isinstance(t, dict) and t.get("type") == "null")
             ]
             if non_null:
@@ -504,7 +513,9 @@ def sanitize_oci_schema(schema: Any) -> Any:
     return sanitized
 
 
-def enrich_cohere_param_description(description: str, param_schema: Dict[str, Any]) -> str:
+def enrich_cohere_param_description(
+    description: str, param_schema: Dict[str, Any]
+) -> str:
     """Embed schema constraints into a Cohere parameter description.
 
     ``CohereParameterDefinition`` only has ``type``, ``description``, and

@@ -789,9 +789,11 @@ class TestOCISplitChunks:
     async def _run_async_split(self, raw_chunks):
         """Invoke the async split_chunks logic directly."""
         results = []
+
         async def _gen():
             for c in raw_chunks:
                 yield c
+
         async for item in _gen():
             for chunk in item.split("\n\n"):
                 stripped = chunk.strip()
@@ -877,9 +879,8 @@ class TestOCIProviderEmbeddingConfig:
         """
         import inspect
         from litellm.utils import ProviderConfigManager
-        source = inspect.getsource(
-            ProviderConfigManager.get_provider_embedding_config
-        )
+
+        source = inspect.getsource(ProviderConfigManager.get_provider_embedding_config)
         oci_count = source.count("LlmProviders.OCI")
         assert oci_count == 1, (
             f"Expected exactly 1 OCI branch in get_provider_embedding_config, found {oci_count}. "
@@ -930,10 +931,16 @@ class TestOCICohereParamMapping:
             model="cohere.command-latest",
             drop_params=False,
         )
-        for injected in ("maxTokens", "temperature", "topK", "topP", "frequencyPenalty"):
-            assert injected not in result, (
-                f"'{injected}' should not be injected when user did not provide it"
-            )
+        for injected in (
+            "maxTokens",
+            "temperature",
+            "topK",
+            "topP",
+            "frequencyPenalty",
+        ):
+            assert (
+                injected not in result
+            ), f"'{injected}' should not be injected when user did not provide it"
 
     def test_cohere_explicit_params_still_passed(self):
         """User-provided Cohere params must still be forwarded correctly."""
@@ -993,9 +1000,9 @@ class TestOCIStreamingSignedBody:
             signed_json_body=signed_bytes,
         )
 
-        assert posted_data["data"] == signed_bytes, (
-            "Streaming must use signed_json_body, not re-serialize data"
-        )
+        assert (
+            posted_data["data"] == signed_bytes
+        ), "Streaming must use signed_json_body, not re-serialize data"
 
     def test_get_custom_stream_wrapper_fallback_without_signed_body(self, monkeypatch):
         """When signed_json_body is None, fall back to json.dumps(data)."""
@@ -1032,6 +1039,6 @@ class TestOCIStreamingSignedBody:
             signed_json_body=None,
         )
 
-        assert posted_data["data"] == json.dumps(payload), (
-            "Without signed_json_body, must fall back to json.dumps(data)"
-        )
+        assert posted_data["data"] == json.dumps(
+            payload
+        ), "Without signed_json_body, must fall back to json.dumps(data)"
