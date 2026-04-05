@@ -6,8 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -95,17 +93,4 @@ jobs:
             --reruns 1 \
             --reruns-delay 1 \
             --dist=loadscope \
-            --durations=20 \
-            --cov=litellm \
-            --cov-report=xml:coverage-proxy-legacy-${{ matrix.test-group.name }}.xml \
-            --cov-config=pyproject.toml
-
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
-        with:
-          use_oidc: true
-          files: coverage-proxy-legacy-${{ matrix.test-group.name }}.xml
-          flags: proxy-legacy-${{ matrix.test-group.name }}
-          root_dir: ${{ github.workspace }}
-          fail_ci_if_error: false
+            --durations=20

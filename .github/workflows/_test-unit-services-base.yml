@@ -37,11 +37,6 @@ on:
         required: false
         type: boolean
         default: false
-      coverage-name:
-        description: "Coverage report name for Codecov (empty = skip coverage)"
-        required: false
-        type: string
-        default: ""
     secrets:
       REDIS_HOST:
         required: false
@@ -58,8 +53,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 jobs:
   run:
@@ -147,24 +140,18 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
-          COVERAGE_NAME: ${{ inputs.coverage-name }}
           DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
           REDIS_HOST: ${{ inputs.enable-redis && secrets.REDIS_HOST || '' }}
           REDIS_PORT: ${{ inputs.enable-redis && secrets.REDIS_PORT || '' }}
           REDIS_PASSWORD: ${{ inputs.enable-redis && secrets.REDIS_PASSWORD || '' }}
         run: |
-          COV_FLAGS=""
-          if [ -n "${COVERAGE_NAME}" ]; then
-            COV_FLAGS="--cov=litellm --cov-report=xml:coverage-${COVERAGE_NAME}.xml --cov-config=pyproject.toml"
-          fi
           if [ "${WORKERS}" = "0" ]; then
             poetry run pytest ${TEST_PATH:?} \
               --tb=short -vv \
               --maxfail="${MAX_FAILURES}" \
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
-              --durations=20 \
-              ${COV_FLAGS}
+              --durations=20
           else
             poetry run pytest ${TEST_PATH:?} \
               --tb=short -vv \
@@ -173,16 +160,5 @@ jobs:
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
               --dist=loadscope \
-              --durations=20 \
-              ${COV_FLAGS}
+              --durations=20
           fi
-
-      - name: Upload coverage to Codecov
-        if: ${{ always() && inputs.coverage-name != '' }}
-        uses: codecov/codecov-action@aa56896cf108bd10b5eb883cd1d24196da57f695 # v5.5.4
-        with:
-          use_oidc: true
-          files: coverage-${{ inputs.coverage-name }}.xml
-          flags: ${{ inputs.coverage-name }}
-          root_dir: ${{ github.workspace }}
-          fail_ci_if_error: false
