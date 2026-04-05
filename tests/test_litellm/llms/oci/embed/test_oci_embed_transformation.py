@@ -70,6 +70,7 @@ class TestOCIEmbedConfig:
         assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/embedText"
 
     def test_get_complete_url_respects_api_base(self):
+        """api_base is returned as-is (caller supplies complete URL for dedicated/custom endpoints)."""
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com",
@@ -78,9 +79,10 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert url == "https://custom.endpoint.example.com/20231130/actions/embedText"
+        assert url == "https://custom.endpoint.example.com"
 
     def test_get_complete_url_strips_trailing_slash(self):
+        """Trailing slash is stripped from api_base."""
         cfg = self._config()
         url = cfg.get_complete_url(
             api_base="https://custom.endpoint.example.com/",
@@ -89,8 +91,7 @@ class TestOCIEmbedConfig:
             optional_params={},
             litellm_params={},
         )
-        assert not url.endswith("//")
-        assert url.endswith("/20231130/actions/embedText")
+        assert url == "https://custom.endpoint.example.com"
 
     # ------------------------------------------------------------------
     # transform_embedding_request
@@ -232,7 +233,8 @@ class TestOCIEmbedConfig:
                 "embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
                 "modelId": "cohere.embed-v3.0",
                 "modelVersion": "3.0.0",
-                "usage": {"promptTokens": 10, "totalTokens": 10},
+                # Actual OCI API returns per-input token counts
+                "inputTextTokenCounts": [5, 5],
             },
         )
         result = cfg.transform_embedding_response(
@@ -322,14 +324,19 @@ class TestOCIEmbedConfig:
         )
         assert result["outputDimensions"] == 512
 
-    def test_map_openai_params_encoding_format_raises_without_drop(self):
+    def test_map_openai_params_encoding_format_not_supported(self):
+        """encoding_format is not a supported OCI param — it is silently ignored by map_openai_params.
+
+        The litellm framework handles unsupported-param rejection above this layer,
+        based on get_supported_openai_params() not including 'encoding_format'.
+        """
         cfg = self._config()
-        with pytest.raises(OCIError):
-            cfg.map_openai_params(
-                non_default_params={"encoding_format": "float"},
-                optional_params={},
-                model="cohere.embed-v3.0",
-            )
+        result = cfg.map_openai_params(
+            non_default_params={"encoding_format": "float"},
+            optional_params={},
+            model="cohere.embed-v3.0",
+        )
+        assert "encoding_format" not in result
 
     def test_map_openai_params_encoding_format_dropped_silently(self):
         cfg = self._config()
