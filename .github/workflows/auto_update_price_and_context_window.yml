@@ -5,12 +5,18 @@ on:
     - cron: "0 0 * * 0" # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   auto_update_price_and_context_window:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
       - name: Install Dependencies
         run: |
           pip install 'aiohttp==3.13.3'
