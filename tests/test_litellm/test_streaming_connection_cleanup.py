@@ -7,6 +7,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import anyio
 import httpx
 import pytest
@@ -63,6 +64,39 @@ async def test_aiohttp_transport_response_uses_stream_not_content():
     )
 
     assert isinstance(response.stream, AiohttpResponseStream)
+
+
+@pytest.mark.asyncio
+async def test_get_valid_client_session_closes_old_session_on_loop_mismatch():
+    """Loop-mismatch recreation should close the old session in the background."""
+
+    class FakeLoop:
+        def __init__(self, closed: bool = False):
+            self._closed = closed
+
+        def is_closed(self):
+            return self._closed
+
+    old_session = aiohttp.ClientSession()
+    old_session._loop = FakeLoop()  # type: ignore[attr-defined]
+    new_session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=lambda: new_session)
+    transport.client = old_session
+
+    LiteLLMAiohttpTransport._background_close_tasks.clear()
+    try:
+        session = transport._get_valid_client_session()
+        pending_tasks = list(LiteLLMAiohttpTransport._background_close_tasks)
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks)
+
+        assert session is new_session
+        assert old_session.closed is True
+        assert LiteLLMAiohttpTransport._background_close_tasks == set()
+    finally:
+        LiteLLMAiohttpTransport._background_close_tasks.clear()
+        if not new_session.closed:
+            await new_session.close()
 
 
 @pytest.mark.asyncio

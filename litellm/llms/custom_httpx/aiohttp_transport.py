@@ -4,7 +4,7 @@ import os
 import ssl
 import typing
 import urllib.request
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, ClassVar, Dict, Optional, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -149,6 +149,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     Credit to: https://github.com/karpetrosyan/httpx-aiohttp for this implementation
     """
 
+    _background_close_tasks: ClassVar[set[asyncio.Task[Any]]] = set()
+
     def __init__(
         self,
         client: Union[ClientSession, Callable[[], ClientSession]],
@@ -161,6 +163,41 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
+
+    @classmethod
+    def _discard_background_close_task(cls, task: asyncio.Task[Any]) -> None:
+        cls._background_close_tasks.discard(task)
+        with contextlib.suppress(asyncio.CancelledError):
+            close_error = task.exception()
+            if close_error is not None:
+                verbose_logger.debug(
+                    "Error closing old session in background task: %s",
+                    close_error,
+                )
+
+    @classmethod
+    def _prune_background_close_tasks(cls) -> None:
+        for task in tuple(cls._background_close_tasks):
+            if task.done():
+                cls._discard_background_close_task(task)
+
+    def _schedule_session_close(self, session: ClientSession) -> None:
+        if session.closed:
+            return
+
+        cls = type(self)
+        cls._prune_background_close_tasks()
+
+        close_coro = session.close()
+        try:
+            task = asyncio.create_task(close_coro)
+        except RuntimeError:
+            close_coro.close()
+            verbose_logger.debug("Old session from different loop, relying on GC")
+            return
+
+        cls._background_close_tasks.add(task)
+        task.add_done_callback(cls._discard_background_close_task)
 
     def _get_valid_client_session(self) -> ClientSession:
         """
@@ -203,14 +240,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Close old session to prevent leaks
                 old_session = self.client
                 try:
-                    if not old_session.closed:
-                        try:
-                            asyncio.create_task(old_session.close())
-                        except RuntimeError:
-                            # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug(
-                                "Old session from different loop, relying on GC"
-                            )
+                    self._schedule_session_close(old_session)
                 except Exception as e:
                     verbose_logger.debug(f"Error closing old session: {e}")
 
@@ -220,12 +250,21 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 else:
                     self.client = ClientSession()
 
-        except (RuntimeError, AttributeError):
+        except (RuntimeError, AttributeError) as e:
             # If we can't check the loop or session is invalid, recreate it
+            old_session = self.client
+            try:
+                self._schedule_session_close(old_session)
+            except Exception as close_error:
+                verbose_logger.debug(f"Error closing old session: {close_error}")
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            verbose_logger.debug(
+                "Error checking session loop, created new session: %s",
+                e,
+            )
 
         return self.client
 
@@ -319,6 +358,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     f"Session closed during request, retrying with new session: {e}"
                 )
                 # Force creation of a new session
+                old_session = self.client
+                if isinstance(old_session, ClientSession):
+                    self._schedule_session_close(old_session)
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:

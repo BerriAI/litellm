@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
+from litellm.llms.custom_httpx import aiohttp_transport as aiohttp_transport_module
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
     AiohttpTransport,
@@ -517,30 +518,172 @@ async def test_handle_closed_session_before_request():
 
 
 @pytest.mark.asyncio
-async def test_handle_session_closed_during_request():
-    """Test that sessions closed during request are handled with retry"""
-    counts = {"sessions": 0, "requests": 0}
-    fail_count = {"count": 0}
+async def test_schedule_session_close_handles_missing_running_loop(monkeypatch):
+    """If create_task cannot run, the close coroutine should still be explicitly closed."""
+
+    coro_closed = {"value": False}
+
+    class MockCloseCoro:
+        def close(self):
+            coro_closed["value"] = True
 
     class MockSession:
-        def __init__(self):
-            self.closed = False
-            try:
-                self._loop = __import__("asyncio").get_running_loop()
-            except RuntimeError:
-                self._loop = None
+        closed = False
 
-        def request(self, *args, **kwargs):
-            counts["requests"] += 1
-            return _make_mock_response(should_fail=True, fail_count=fail_count)
+        def close(self):
+            return MockCloseCoro()
+
+    session = MockSession()
+
+    transport = LiteLLMAiohttpTransport(client=session)
+    LiteLLMAiohttpTransport._background_close_tasks.clear()
+
+    def raise_runtime_error(_coro):
+        raise RuntimeError("no running event loop")
+
+    monkeypatch.setattr(asyncio, "create_task", raise_runtime_error)
+
+    try:
+        transport._schedule_session_close(session)
+
+        assert coro_closed["value"] is True
+    finally:
+        LiteLLMAiohttpTransport._background_close_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_discard_background_close_task_logs_failed_close(monkeypatch):
+    """Failed background close tasks should be removed and logged."""
+
+    debug_messages = []
+
+    def capture_debug(message, *args, **kwargs):
+        if args:
+            debug_messages.append(message % args)
+        else:
+            debug_messages.append(message)
+
+    async def fail_close():
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(aiohttp_transport_module.verbose_logger, "debug", capture_debug)
+
+    task = asyncio.create_task(fail_close())
+    LiteLLMAiohttpTransport._background_close_tasks.clear()
+    LiteLLMAiohttpTransport._background_close_tasks.add(task)
+
+    try:
+        await asyncio.gather(task, return_exceptions=True)
+        LiteLLMAiohttpTransport._discard_background_close_task(task)
+
+        assert task not in LiteLLMAiohttpTransport._background_close_tasks
+        assert any("Error closing old session in background task: close failed" in msg for msg in debug_messages)
+    finally:
+        LiteLLMAiohttpTransport._background_close_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_schedule_session_close_prunes_stale_done_tasks():
+    """Scheduling a new close should prune completed stale tasks from the tracking set."""
+
+    async def completed_task():
+        return None
+
+    stale_task = asyncio.create_task(completed_task())
+    await stale_task
+
+    session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=session)
+
+    LiteLLMAiohttpTransport._background_close_tasks.clear()
+    LiteLLMAiohttpTransport._background_close_tasks.add(stale_task)
+
+    try:
+        transport._schedule_session_close(session)
+        pending_tasks = list(LiteLLMAiohttpTransport._background_close_tasks)
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks)
+
+        assert stale_task not in LiteLLMAiohttpTransport._background_close_tasks
+        assert LiteLLMAiohttpTransport._background_close_tasks == set()
+        assert session.closed is True
+    finally:
+        LiteLLMAiohttpTransport._background_close_tasks.clear()
+        if not session.closed:
+            await session.close()
+
+
+@pytest.mark.asyncio
+async def test_get_valid_client_session_closes_old_session_on_loop_check_runtime_error(monkeypatch):
+    """Loop-check exceptions should still attempt to close the old session before recreation."""
+
+    old_session = aiohttp.ClientSession()
+    new_session = aiohttp.ClientSession()
+    scheduled_sessions = []
+
+    transport = LiteLLMAiohttpTransport(client=lambda: new_session)
+    transport.client = old_session
+
+    def mock_schedule(session):
+        scheduled_sessions.append(session)
+
+    monkeypatch.setattr(
+        transport,
+        "_schedule_session_close",
+        mock_schedule,
+    )
+
+    def raise_runtime_error():
+        raise RuntimeError("loop unavailable")
+
+    monkeypatch.setattr(asyncio, "get_running_loop", raise_runtime_error)
+
+    try:
+        session = transport._get_valid_client_session()
+
+        assert session is new_session
+        assert scheduled_sessions == [old_session]
+    finally:
+        await old_session.close()
+        await new_session.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_session_closed_during_request():
+    """Test that sessions closed during request are handled with retry"""
+    counts = {"sessions": 0}
+    scheduled_sessions = []
 
     def factory():
         counts["sessions"] += 1
-        return MockSession()
+        return aiohttp.ClientSession()
 
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
+    original_schedule = transport._schedule_session_close
+    call_count = {"value": 0}
 
-    assert counts["requests"] == 2  # First request failed, second succeeded
-    assert counts["sessions"] == 2  # Created 2 sessions for retry
-    assert response.status_code == 200
+    def tracked_schedule(session):
+        scheduled_sessions.append(session)
+        return original_schedule(session)
+
+    transport._schedule_session_close = tracked_schedule  # type: ignore[method-assign]
+
+    async def tracked_make_request(*args, **kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise RuntimeError("Session is closed")
+        return await _make_mock_response().__aenter__()
+
+    transport._make_aiohttp_request = tracked_make_request  # type: ignore[method-assign]
+
+    try:
+        response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
+
+        assert call_count["value"] == 2  # First request failed, second succeeded
+        assert counts["sessions"] == 2  # Created 2 sessions for retry
+        assert response.status_code == 200
+        assert len(scheduled_sessions) == 1
+        assert scheduled_sessions[0].closed is False
+    finally:
+        if isinstance(transport.client, aiohttp.ClientSession) and not transport.client.closed:
+            await transport.client.close()
