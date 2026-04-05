@@ -57,7 +57,7 @@ OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
 class OCIToolCall(BaseModel):
     """Represents a tool call made by the model."""
 
-    id: str
+    id: Optional[str] = None  # absent in some provider responses (e.g. Google via OCI)
     type: Literal["FUNCTION"] = "FUNCTION"
     name: str
     arguments: str  # Arguments should be a JSON-serialized string
@@ -141,7 +141,9 @@ class OCIResponseUsage(BaseModel):
     """Token usage in the OCI response."""
 
     promptTokens: int
-    completionTokens: int
+    # completionTokens may be absent for reasoning models when all the output
+    # budget is consumed by reasoning tokens before any visible content is produced.
+    completionTokens: Optional[int] = None
     totalTokens: int
     completionTokensDetails: Optional[OCICompletionTokenDetails] = None
     promptTokensDetails: Optional[OCIPromptTokensDetails] = None
@@ -151,7 +153,9 @@ class OCIResponseChoice(BaseModel):
     """A completion choice in the OCI response."""
 
     index: int
-    message: OCIMessage
+    # message is absent when a reasoning model exhausts max_tokens in the
+    # reasoning phase without producing any visible content.
+    message: Optional[OCIMessage] = None
     finishReason: Optional[str] = None
     logprobs: Optional[Dict[str, Any]] = None
 
@@ -394,3 +398,35 @@ class CohereChatResult(BaseModel):
     modelId: str
     modelVersion: str
     chatResponse: CohereChatResponse
+
+
+# ---------------------------------------------------------------------------
+# OCI Embed types
+# ---------------------------------------------------------------------------
+
+
+class OCIEmbedRequest(BaseModel):
+    """Request body for POST /20231130/actions/embedText."""
+
+    compartmentId: str
+    servingMode: OCIServingMode
+    inputs: List[str]
+    inputType: Optional[str] = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
+    truncate: Optional[str] = "END"  # NONE | START | END
+    outputDimensions: Optional[int] = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
+
+
+class OCIEmbedUsage(BaseModel):
+    promptTokens: int
+    totalTokens: int
+
+
+class OCIEmbedResponse(BaseModel):
+    """Response body from POST /20231130/actions/embedText."""
+
+    embeddings: List[List[float]]
+    modelId: str
+    modelVersion: str
+    usage: Optional[OCIEmbedUsage] = None
+
+
