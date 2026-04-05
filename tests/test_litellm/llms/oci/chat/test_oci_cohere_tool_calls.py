@@ -90,13 +90,13 @@ class TestOCICohereToolCalls:
         # Check location parameter
         location_param = weather_tool.parameterDefinitions["location"]
         assert location_param.description == "The city or location to get weather for"
-        assert location_param.type == "string"
+        assert location_param.type == "str"
         assert location_param.isRequired == True
         
         # Check unit parameter
         unit_param = weather_tool.parameterDefinitions["unit"]
-        assert unit_param.description == "Temperature unit (celsius or fahrenheit)"
-        assert unit_param.type == "string"
+        assert unit_param.description == "Temperature unit (celsius or fahrenheit). Allowed values: ['celsius', 'fahrenheit']"
+        assert unit_param.type == "str"
         assert unit_param.isRequired == False
         
         # Check second tool
@@ -107,7 +107,7 @@ class TestOCICohereToolCalls:
         
         expression_param = calc_tool.parameterDefinitions["expression"]
         assert expression_param.description == "Mathematical expression to evaluate"
-        assert expression_param.type == "string"
+        assert expression_param.type == "str"
         assert expression_param.isRequired == True
 
     def test_cohere_request_with_tools(self):
