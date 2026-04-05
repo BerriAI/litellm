@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: ${{ github.event_name == 'pull_request' && 'write' || 'none' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -28,10 +28,10 @@ jobs:
           persist-credentials: false
 
       - name: Verify commits with Auths
-        uses: auths-dev/auths-verify-github-action@57e304ef368d30474e5b6a04106cacde6a8ce492 # v1
+        uses: auths-dev/verify@v1
         with:
-          allowed-signers: .auths/allowed_signers
+          token: .auths/allowed_signers
           fail-on-unsigned: 'false'
           skip-merge-commits: 'true'
-          post-pr-comment: 'true'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          post-pr-comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          github-token: ${{ github.event_name == 'pull_request' && secrets.GITHUB_TOKEN || '' }}

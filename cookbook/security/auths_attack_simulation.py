@@ -22,7 +22,7 @@ How Auths closes this gap:
   This simulation uses the Auths Python SDK to demonstrate the core
   cryptographic primitive: sign an action with a maintainer's key, then
   show that verification succeeds for the legitimate release and fails
-  for a tampered or unauthorized one.
+  for an unauthorized or tampered one.
 
 Usage:
   pip install auths
@@ -41,7 +41,7 @@ def main() -> None:
     print()
 
     try:
-        from auths import sign_action, verify_action_envelope
+        from auths import generate_inmemory_keypair, sign_action, verify_action_envelope
     except ImportError:
         print("The 'auths' Python SDK is not installed.")
         print()
@@ -51,23 +51,9 @@ def main() -> None:
         print("Or visit: https://github.com/auths-dev/auths")
         sys.exit(0)
 
-    # Derive the public key from the private seed for verification.
-    # In production, the maintainer's public key comes from their Auths
-    # identity (did:keri:...) and is listed in .auths/allowed_signers.
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-        MAINTAINER_SEED_HEX = "a" * 64  # Simulated maintainer private key seed
-        seed_bytes = bytes.fromhex(MAINTAINER_SEED_HEX)
-        private_key = Ed25519PrivateKey.from_private_bytes(seed_bytes)
-        MAINTAINER_PK_HEX = private_key.public_key().public_bytes_raw().hex()
-    except ImportError:
-        print("This simulation requires the 'cryptography' package.")
-        print("Install it with: pip install cryptography")
-        sys.exit(0)
-
-    ATTACKER_SEED_HEX = "b" * 64  # Attacker has a different key
-    MAINTAINER_DID = "did:keri:EBfxc_LiteLLM_Maintainer"
+    # Generate ephemeral identities — no filesystem, no keychain needed
+    maintainer_priv, maintainer_pub, maintainer_did = generate_inmemory_keypair()
+    attacker_priv, _attacker_pub, attacker_did = generate_inmemory_keypair()
 
     # ── Step 1: Legitimate maintainer signs a release ──────────────────
     print("[1] Legitimate maintainer signs release v1.82.6...")
@@ -81,20 +67,17 @@ def main() -> None:
     })
 
     legitimate_envelope = sign_action(
-        MAINTAINER_SEED_HEX,
-        "release",
-        release_payload,
-        MAINTAINER_DID,
+        maintainer_priv, "release", release_payload, maintainer_did,
     )
 
-    result = verify_action_envelope(legitimate_envelope, MAINTAINER_PK_HEX)
-    print(f"    Signed by: {MAINTAINER_DID}")
+    result = verify_action_envelope(legitimate_envelope, maintainer_pub)
+    print(f"    Signed by: {maintainer_did}")
     print(f"    Verification: {'PASSED' if result.valid else 'FAILED'}")
     print()
 
     # ── Step 2: Attacker publishes with stolen PyPI token ──────────────
     print("[2] Attacker publishes v1.82.7 using stolen PyPI token...")
-    print("    (Attacker has registry credentials but NOT the signing key)")
+    print("    (Attacker has registry credentials but NOT the maintainer's signing key)")
     print()
 
     malicious_payload = json.dumps({
@@ -106,15 +89,12 @@ def main() -> None:
 
     # Attacker signs with their own key — NOT the maintainer's
     attacker_envelope = sign_action(
-        ATTACKER_SEED_HEX,
-        "release",
-        malicious_payload,
-        "did:keri:EATTACKER_unknown_identity",
+        attacker_priv, "release", malicious_payload, attacker_did,
     )
 
     # Verify against the MAINTAINER's public key (the only trusted key)
-    result = verify_action_envelope(attacker_envelope, MAINTAINER_PK_HEX)
-    print(f"    Signed by: did:keri:EATTACKER_unknown_identity")
+    result = verify_action_envelope(attacker_envelope, maintainer_pub)
+    print(f"    Signed by: {attacker_did}")
     print(f"    Verification against maintainer key: {'PASSED' if result.valid else 'FAILED'}")
     if result.error:
         print(f"    Reason: {result.error}")
@@ -129,8 +109,8 @@ def main() -> None:
     envelope["payload"]["digest"] = "sha256:malicious_payload_hash..."
     tampered_json = json.dumps(envelope)
 
-    result = verify_action_envelope(tampered_json, MAINTAINER_PK_HEX)
-    print(f"    Original signer: {MAINTAINER_DID}")
+    result = verify_action_envelope(tampered_json, maintainer_pub)
+    print(f"    Original signer: {maintainer_did}")
     print(f"    Tampered payload version: 1.82.7")
     print(f"    Verification: {'PASSED' if result.valid else 'FAILED'}")
     if result.error:

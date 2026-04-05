@@ -15,7 +15,7 @@ package and a verified maintainer identity**.
 [Auths](https://github.com/auths-dev/auths) provides Ed25519 signatures bound to
 KERI-based decentralized identifiers (DIDs). With Auths:
 
-- Every commit carries a signature from the maintainer's cryptographic identity
+- Every commit and artifact carries a signature from the maintainer's cryptographic identity
 - The signature is bound to the maintainer's device keychain (not a registry account)
 - Stealing PyPI/npm credentials is insufficient without the signing key
 - Verification happens locally — no network calls to a central authority
@@ -29,19 +29,24 @@ release must trace back to a signed commit by an authorized maintainer. A packag
 published without a matching signed commit has no valid attestation chain and would be
 flagged by consumers and CI pipelines that verify signatures.
 
-This workflow adds the commit-signing layer. A full deployment would also use
-`auths artifact sign` in the release workflow to bind published packages to signed
-commits, closing the gap completely.
+This workflow adds the commit-signing layer via the
+[`auths-dev/verify`](https://github.com/auths-dev/verify) GitHub Action. A full
+deployment would also use `auths artifact sign` (via
+[`auths-dev/sign`](https://github.com/auths-dev/sign)) in the release workflow to
+bind published packages to signed commits.
 
 ## Running the Simulation
 
-The simulation script demonstrates the commit-signing layer — it shows that commits
-from unauthorized parties are detected:
+The simulation script uses the Auths Python SDK to demonstrate the core cryptographic
+primitive — it shows that only the holder of the maintainer's private key can produce
+a valid signature:
 
 ```bash
-brew tap auths-dev/auths-cli && brew install auths
+pip install auths
 python auths_attack_simulation.py
 ```
+
+No CLI installation, git, or ssh-keygen needed — the script uses the SDK directly.
 
 ## Adding Auths to Your Workflow
 
