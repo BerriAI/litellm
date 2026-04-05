@@ -148,6 +148,32 @@ def test_cost_calculator_with_usage(monkeypatch):
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
 
 
+def test_anthropic_messages_and_passthrough_route_calculate_spend(monkeypatch):
+    """Spend should be calculated for anthropic_messages and allm_passthrough_route."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    mr = ModelResponse(usage=usage, model="bedrock/eu.anthropic.claude-sonnet-4-6")
+
+    for call_type in ("anthropic_messages", "allm_passthrough_route"):
+        result = response_cost_calculator(
+            response_object=mr,
+            model="bedrock/eu.anthropic.claude-sonnet-4-6",
+            custom_llm_provider="bedrock",
+            call_type=call_type,
+            optional_params={},
+            cache_hit=None,
+            base_model=None,
+        )
+        assert result is not None, f"Spend should be calculated for {call_type}"
+        assert result > 0, f"Spend should be > 0 for {call_type}"
+
+
 def test_transcription_cost_uses_token_pricing():
     from litellm import completion_cost
 
