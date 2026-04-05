@@ -37,6 +37,9 @@ import {
   serviceHealthCheck,
   setCallbacksCall,
 } from "./networking";
+import {
+  buildCallbackPayload,
+} from "./Settings/LoggingAndAlerts/LoggingCallbacks/callbackPayloadHelpers";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
@@ -203,18 +206,9 @@ const getDynamicParamsForCallback = (
   return fallbackVariables ? Object.keys(fallbackVariables) : [];
 };
 
-// Shared helper function to build callback payload
-const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
-  return {
-    environment_variables: formValues,
-    litellm_settings: {
-      success_callback: [callbackName],
-    },
-  };
-};
-
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
+  const [callbackSettings, setCallbackSettings] = useState<Record<string, unknown>>({});
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
@@ -265,9 +259,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       const normalized = Object.fromEntries(
         Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
       );
+      const params = selectedEditCallback.params as Record<string, unknown> | undefined;
+      const paramFields =
+        params &&
+        Object.fromEntries(
+          Object.entries(params).map(([k, v]) => [
+            k,
+            Array.isArray(v) ? (v as string[]).join(", ") : v ?? "",
+          ])
+        );
       editForm.setFieldsValue({
         ...normalized,
+        ...paramFields,
         callback: selectedEditCallback.name,
+        callback_type: selectedEditCallback.type ?? "success",
       });
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
@@ -294,26 +299,30 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!accessToken || !userRole || !userID) {
       return;
     }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
+    getCallbacksCall(accessToken, userID, userRole)
+      .then((data) => {
+        setCallbacks(data.callbacks);
+        setAllCallbacks(data.available_callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
+        // setCallbacks(callbacks_data);
 
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+        let alerts_data = data.alerts;
+        if (alerts_data) {
+          if (alerts_data.length > 0) {
+            let _alert_info = alerts_data[0];
+            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
 
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
+            let active_alerts = _alert_info.active_alerts;
+            setActiveAlerts(active_alerts);
+            setCatchAllWebhookURL(catch_all_webhook);
+            setAlertToWebhooks(_alert_info.alerts_to_webhook);
+          }
         }
-      }
 
-      setAlerts(alerts_data);
-    });
+        setAlerts(alerts_data);
+      })
+      // Display backend errors as user notifications so fetch failures aren't silent.
+      .catch((err) => NotificationsManager.fromBackend(err));
   }, [accessToken, userRole, userID]);
 
   const isAlertOn = (alertName: string) => {
@@ -332,7 +341,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName);
+    const callbackType = (formValues.callback_type ?? selectedEditCallback?.type ?? "success") as "success" | "failure" | "success_and_failure";
+    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, callbackType, callbackSettings);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -355,6 +365,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       if (userID && userRole) {
         const updatedData = await getCallbacksCall(accessToken, userID, userRole);
         setCallbacks(updatedData.callbacks);
+        setCallbackSettings(updatedData.callback_settings ?? {});
       }
     } catch (error) {
       NotificationsManager.fromBackend(error);
@@ -414,7 +425,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
     NotificationsManager.success("Alerts updated successfully");
   };
-  const handleSaveChanges = (callback: any) => {
+  const handleSaveChanges = async (callback: any) => {
     if (!accessToken) {
       return;
     }
@@ -426,19 +437,28 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       ]),
     );
 
-    const payload = {
-      environment_variables: updatedVariables,
-      litellm_settings: {
-        success_callback: [callback.name],
-      },
-    };
+    const callbackType = (callback.type ?? "success") as "success" | "failure" | "success_and_failure";
+    const formValues = { ...updatedVariables, callback: callback.name };
+    const payload = buildCallbackPayload(
+      formValues,
+      callback.name,
+      callbacks,
+      true,
+      callbackType,
+      callbackSettings,
+    );
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
+      NotificationsManager.success("Callback updated successfully");
+      if (userID && userRole) {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
+      }
     } catch (error) {
       NotificationsManager.fromBackend(error);
     }
-    NotificationsManager.success("Callback updated successfully");
   };
 
   const handleOk = () => {
@@ -543,10 +563,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       await deleteCallback(accessToken, callbackToDelete.name);
       NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
 
-      // Refresh the callbacks list
+      // Refresh the callbacks list and callback settings
       if (userID && userRole) {
         const data = await getCallbacksCall(accessToken, userID, userRole);
         setCallbacks(data.callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
       }
 
       setShowDeleteConfirmModal(false);
@@ -718,6 +739,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         <Form
           form={addForm}
           onFinish={addNewCallbackCall}
+          initialValues={{ callback_type: "success" }}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -727,6 +749,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             selectedCallback={selectedCallback}
             onCallbackChange={handleSelectedCallbackChange}
           />
+
+          <FormItem name="callback_type" label="Mode" rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: "success", label: "Success" },
+                { value: "failure", label: "Failure" },
+                { value: "success_and_failure", label: "Success & Failure" },
+              ]}
+            />
+          </FormItem>
 
           <DynamicParamsFields
             params={selectedCallbackParams}
@@ -773,6 +805,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         >
           {selectedEditCallback && (
             <>
+              <FormItem name="callback_type" hidden>
+                <input type="hidden" />
+              </FormItem>
               <CallbackSelector
                 callbackConfigs={callbackConfigs}
                 selectedCallback={selectedEditCallback.name}
