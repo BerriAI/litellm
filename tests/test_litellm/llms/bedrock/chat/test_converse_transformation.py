@@ -1282,17 +1282,21 @@ async def test_assistant_message_cache_control():
     assert result[0]["role"] == "user"
     assert result[1]["role"] == "assistant"
 
-    # Assistant message should have text content and cachePoint
+    # Bedrock rejects cachePoint in assistant messages ("There is nothing
+    # available to cache"), so assistant content must NOT contain cachePoint.
     assistant_content = result[1]["content"]
-    assert len(assistant_content) == 2
+    assert len(assistant_content) == 1
     assert assistant_content[0]["text"] == "Hi there!"
-    assert "cachePoint" in assistant_content[1]
-    assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
 @pytest.mark.asyncio
 async def test_assistant_message_list_content_cache_control():
-    """Test assistant messages with list content and cache_control."""
+    """Test that cache_control on assistant list content does NOT produce cachePoint blocks.
+
+    Bedrock rejects cachePoint in assistant messages with 'There is nothing
+    available to cache'.  Prompt caching only supports cache points in system,
+    tools, and user messages.
+    """
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
         _bedrock_converse_messages_pt,
@@ -1316,12 +1320,10 @@ async def test_assistant_message_list_content_cache_control():
 
     assert result == async_result
 
-    # Assistant message should have text content and cachePoint
+    # No cachePoint in assistant content
     assistant_content = result[1]["content"]
-    assert len(assistant_content) == 2
+    assert len(assistant_content) == 1
     assert assistant_content[0]["text"] == "This should be cached"
-    assert "cachePoint" in assistant_content[1]
-    assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
 @pytest.mark.asyncio
@@ -3601,3 +3603,254 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     tools = result["toolConfig"]["tools"]
     # No cachePoint should be appended
     assert all("cachePoint" not in tool for tool in tools)
+
+
+# ---------------------------------------------------------------------------
+# Tests for Anthropic-format client compatibility (Cursor IDE / Bedrock)
+# ---------------------------------------------------------------------------
+
+
+def test_map_tool_choice_empty_dict_returns_any():
+    """Empty tool_choice {} should map to 'any' (force tool use), not 'auto'."""
+    config = AmazonConverseConfig()
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-sonnet-4-6", tool_choice={}, drop_params=False
+    )
+    assert result == {"any": {}}
+
+
+def test_map_tool_choice_auto_string_returns_auto():
+    """Verify 'auto' string still maps to auto (regression guard)."""
+    config = AmazonConverseConfig()
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-sonnet-4-6", tool_choice="auto", drop_params=False
+    )
+    assert result == {"auto": {}}
+
+
+def test_map_tool_choice_specific_function():
+    """Verify a specific function tool_choice still works."""
+    config = AmazonConverseConfig()
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-sonnet-4-6",
+        tool_choice={"type": "function", "function": {"name": "my_tool"}},
+        drop_params=False,
+    )
+    assert result == {"tool": {"name": "my_tool"}}
+
+
+def test_bedrock_tools_pt_anthropic_format():
+    """Anthropic-format tools (name + input_schema at top level) should be parsed correctly."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    anthropic_tools = [
+        {
+            "name": "edit_file",
+            "description": "Edit a file on disk",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+        {
+            "name": "read_file",
+            "description": "Read a file from disk",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                },
+                "required": ["path"],
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(anthropic_tools)
+    assert len(result) == 2
+
+    spec0 = result[0]["toolSpec"]
+    assert spec0["name"] == "edit_file"
+    assert spec0["description"] == "Edit a file on disk"
+    assert spec0["inputSchema"]["json"]["type"] == "object"
+    assert "path" in spec0["inputSchema"]["json"]["properties"]
+
+    spec1 = result[1]["toolSpec"]
+    assert spec1["name"] == "read_file"
+
+
+def test_bedrock_tools_pt_openai_format_still_works():
+    """OpenAI-format tools should continue to work (regression guard)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    openai_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(openai_tools)
+    assert len(result) == 1
+    assert result[0]["toolSpec"]["name"] == "get_weather"
+    assert result[0]["toolSpec"]["description"] == "Get the weather"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_messages_tool_result_in_user_content():
+    """Anthropic-format tool_result in user message content should be converted to Bedrock toolResult."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "I'll help.",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "/tmp/test.txt"}'},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_123",
+                    "content": "file contents here",
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-sonnet-4-6",
+        llm_provider="bedrock_converse",
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-sonnet-4-6",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result == async_result
+
+    # The tool_result user message should contain a toolResult block
+    user_msg = result[-1]
+    assert user_msg["role"] == "user"
+    tool_result_blocks = [b for b in user_msg["content"] if "toolResult" in b]
+    assert len(tool_result_blocks) >= 1
+    assert tool_result_blocks[0]["toolResult"]["toolUseId"] == "call_123"
+    assert tool_result_blocks[0]["toolResult"]["content"][0]["text"] == "file contents here"
+
+    # No cachePoint should appear after tool_result
+    cache_blocks = [b for b in user_msg["content"] if "cachePoint" in b]
+    assert len(cache_blocks) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_messages_tool_use_in_assistant_content():
+    """Anthropic-format tool_use in assistant content list should be converted to Bedrock toolUse."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Edit the file"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll edit that file."},
+                {
+                    "type": "tool_use",
+                    "id": "call_456",
+                    "name": "edit_file",
+                    "input": {"path": "/tmp/test.txt", "content": "new content"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_456",
+                    "content": "File written successfully",
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-sonnet-4-6",
+        llm_provider="bedrock_converse",
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-sonnet-4-6",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result == async_result
+
+    # The assistant message should have text + toolUse
+    assistant_msg = result[1]
+    assert assistant_msg["role"] == "assistant"
+    text_blocks = [b for b in assistant_msg["content"] if "text" in b]
+    tool_use_blocks = [b for b in assistant_msg["content"] if "toolUse" in b]
+    assert len(text_blocks) >= 1
+    assert text_blocks[0]["text"] == "I'll edit that file."
+    assert len(tool_use_blocks) >= 1
+    assert tool_use_blocks[0]["toolUse"]["name"] == "edit_file"
+    assert tool_use_blocks[0]["toolUse"]["toolUseId"] == "call_456"
+
+    # No cachePoint in assistant content
+    cache_blocks = [b for b in assistant_msg["content"] if "cachePoint" in b]
+    assert len(cache_blocks) == 0
+
+
+def test_system_kwarg_routed_to_system_field():
+    """Top-level system kwarg should go to the Bedrock system field, not additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "system": [
+            {"type": "text", "text": "You are a helpful assistant.", "cache_control": {"type": "ephemeral"}},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-sonnet-4-6",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+
+    # system kwarg content should be in the top-level system field
+    assert len(result["system"]) >= 1
+    system_texts = [b for b in result["system"] if "text" in b]
+    assert any(b["text"] == "You are a helpful assistant." for b in system_texts)
+
+    # system should NOT be in additionalModelRequestFields
+    additional = result.get("additionalModelRequestFields", {})
+    assert "system" not in additional
