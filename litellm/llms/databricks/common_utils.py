@@ -314,6 +314,8 @@ class DatabricksBase:
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
         custom_user_agent: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
     ) -> Tuple[str, dict]:
         """
         Validate and configure the Databricks environment.
@@ -330,6 +332,8 @@ class DatabricksBase:
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
+            client_id: OAuth client ID from litellm_params (falls back to env var)
+            client_secret: OAuth client secret from litellm_params (falls back to env var)
 
         Returns:
             Tuple of (api_base, headers) with authentication configured
@@ -337,8 +341,9 @@ class DatabricksBase:
         from litellm._logging import verbose_logger
 
         # Check for OAuth M2M credentials (recommended for production)
-        client_id = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        # Per-model litellm_params take priority over global env vars
+        client_id = client_id or os.getenv("DATABRICKS_CLIENT_ID")
+        client_secret = client_secret or os.getenv("DATABRICKS_CLIENT_SECRET")
 
         # Determine api_base first
         if api_base is None:
