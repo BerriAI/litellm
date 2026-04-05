@@ -138,7 +138,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Models to Make Public</Title>
+          <Title>Update Model Public Status</Title>
           <div className="flex items-center space-x-2">
             <Checkbox
               checked={allModelsSelected}
