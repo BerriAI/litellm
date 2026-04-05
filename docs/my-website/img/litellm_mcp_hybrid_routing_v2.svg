@@ -1,0 +1,79 @@
+<svg width="100%" viewBox="0 0 680 420" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arr-dash" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#aaa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    </style>
+  </defs>
+
+  <!-- ── Clients ── -->
+  <rect x="30" y="80" width="140" height="40" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="100" y="105" text-anchor="middle" font-size="13" font-weight="500" fill="#2C2C2A">curl / Inspector</text>
+
+  <rect x="30" y="290" width="140" height="40" rx="8" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="1"/>
+  <text x="100" y="315" text-anchor="middle" font-size="13" font-weight="500" fill="#26215C">VSCode / Cursor</text>
+
+  <!-- ── LiteLLM proxy dashed border ── -->
+  <rect x="235" y="55" width="210" height="310" rx="12" fill="none" stroke="#ccc" stroke-width="1" stroke-dasharray="5 4"/>
+  <text x="340" y="42" text-anchor="middle" font-size="11" fill="#888">LiteLLM proxy</text>
+
+  <!-- ── Router ── -->
+  <rect x="260" y="170" width="160" height="40" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="340" y="195" text-anchor="middle" font-size="13" font-weight="500" fill="#2C2C2A">Request router</text>
+
+  <!-- ── Stateless manager ── -->
+  <rect x="252" y="255" width="176" height="52" rx="8" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="1"/>
+  <text x="340" y="276" text-anchor="middle" font-size="13" font-weight="500" fill="#085041">Stateless manager</text>
+  <text x="340" y="295" text-anchor="middle" font-size="11" fill="#0F6E56">no session ID</text>
+
+  <!-- ── Stateful manager ── -->
+  <rect x="252" y="330" width="176" height="52" rx="8" fill="#EEEDFE" stroke="#AFA9EC" stroke-width="1"/>
+  <text x="340" y="351" text-anchor="middle" font-size="13" font-weight="500" fill="#26215C">Stateful manager</text>
+  <text x="340" y="370" text-anchor="middle" font-size="11" fill="#534AB7">issues mcp-session-id</text>
+
+  <!-- ── Backend ── -->
+  <rect x="510" y="275" width="140" height="40" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="1"/>
+  <text x="580" y="300" text-anchor="middle" font-size="13" font-weight="500" fill="#2C2C2A">Backend MCP</text>
+
+  <!-- ── Arrows ── -->
+
+  <!-- curl → router -->
+  <path d="M170 100 L215 100 L215 190 L258 190" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- VSCode → router -->
+  <path d="M170 310 L215 310 L215 200 L258 200" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- router → stateless -->
+  <line x1="340" y1="210" x2="340" y2="253" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="355" y="236" font-size="11" fill="#555">no session ID</text>
+
+  <!-- router → stateful (right side detour) -->
+  <path d="M420 190 L455 190 L455 356 L430 356" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="458" y="255" font-size="11" fill="#555">initialize or</text>
+  <text x="458" y="270" font-size="11" fill="#555">has session ID</text>
+
+  <!-- stateless → backend -->
+  <line x1="428" y1="281" x2="508" y2="291" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- stateful → backend -->
+  <path d="M428 356 L468 356 L468 315 L508 305" fill="none" stroke="#888" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- backend → stateful: progress (dashed) -->
+  <path d="M510 310 L468 310 L468 330 L430 348" fill="none" stroke="#aaa" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-dash)"/>
+  <text x="472" y="325" font-size="11" fill="#888">progress</text>
+
+  <!-- stateful → VSCode: session ID (dashed) -->
+  <path d="M252 356 L205 356 L205 330 L170 330" fill="none" stroke="#aaa" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr-dash)"/>
+  <text x="100" y="375" text-anchor="middle" font-size="11" fill="#888">mcp-session-id</text>
+
+  <!-- Legend -->
+  <line x1="30" y1="408" x2="55" y2="408" stroke="#888" stroke-width="1.5"/>
+  <text x="60" y="412" font-size="11" fill="#555">request</text>
+  <line x1="130" y1="408" x2="155" y2="408" stroke="#aaa" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="160" y="412" font-size="11" fill="#555">response / notification</text>
+</svg>
