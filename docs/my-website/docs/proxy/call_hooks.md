@@ -33,7 +33,7 @@ This function is called just before a litellm completion call is made, and allow
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 from typing import Any, AsyncGenerator, Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -45,14 +45,7 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
 
     #### CALL HOOKS - proxy only #### 
 
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-        ]): 
+    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral): 
         data["model"] = "my-new-model"
         return data 
 
