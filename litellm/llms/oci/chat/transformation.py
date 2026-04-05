@@ -145,10 +145,12 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere uses the same parameter keys as GENERIC except tool_choice is unsupported.
+        # Cohere uses the same parameter keys as GENERIC with two differences:
+        # - tool_choice is unsupported
+        # - stop sequences are named "stopSequences" not "stop"
         # Build a *separate* frozen reference map so callers never mutate the canonical dict.
         self._openai_to_oci_cohere_param_map = {
-            k: v
+            k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
             if k not in ("tool_choice", "max_retries")
         }
@@ -486,14 +488,6 @@ class OCIChatConfig(BaseConfig):
         selected_params: Dict = {}
         if vendor == OCIVendors.COHERE:
             open_ai_to_oci_param_map = self._openai_to_oci_cohere_param_map
-            # Add default values for Cohere API
-            selected_params = {
-                "maxTokens": 600,
-                "temperature": 1,
-                "topK": 0,
-                "topP": 0.75,
-                "frequencyPenalty": 0,
-            }
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
 
@@ -922,7 +916,7 @@ class OCIChatConfig(BaseConfig):
             response = client.post(
                 api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=signed_json_body if signed_json_body is not None else json.dumps(data),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -973,7 +967,7 @@ class OCIChatConfig(BaseConfig):
             response = await client.post(
                 api_base,
                 headers=headers,
-                data=json.dumps(data),
+                data=signed_json_body if signed_json_body is not None else json.dumps(data),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
