@@ -421,9 +421,13 @@ class OCIEmbedRequest(BaseModel):
     compartmentId: str
     servingMode: OCIServingMode
     inputs: List[str]
-    inputType: Optional[str] = None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
+    inputType: Optional[str] = (
+        None  # SEARCH_DOCUMENT | SEARCH_QUERY | CLASSIFICATION | CLUSTERING | IMAGE
+    )
     truncate: Optional[str] = "END"  # NONE | START | END
-    outputDimensions: Optional[int] = None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
+    outputDimensions: Optional[int] = (
+        None  # cohere.embed-v4.0+; valid: 256, 512, 1024, 1536
+    )
 
 
 class OCIEmbedUsage(BaseModel):
@@ -442,5 +446,3 @@ class OCIEmbedResponse(BaseModel):
     inputTextTokenCounts: Optional[List[int]] = None
     # Some deployments may return a usage object instead
     usage: Optional[OCIEmbedUsage] = None
-
-

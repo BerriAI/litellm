@@ -11,8 +11,6 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from litellm.llms.oci.common_utils import (
     OCI_JSON_TO_PYTHON_TYPES,
     OCIError,
