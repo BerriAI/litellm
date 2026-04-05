@@ -5037,9 +5037,9 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
             return char
         return "_"
 
-    # If the string is empty, return a default valid identifier
-    if input_tool_name is None or len(input_tool_name) == 0:
-        return input_tool_name
+    # If the string is empty or None, return as-is — callers must handle this
+    if not input_tool_name:
+        return ""
     bedrock_tool_name = copy.copy(input_tool_name)
     # If it doesn't start with a letter, prepend 'a'
     if not bedrock_tool_name[0].isalpha():
@@ -5161,6 +5161,18 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
+
+        # Bedrock rejects tools whose name is empty or blank — skip them with a warning
+        # This can happen when MCP tools sent by clients (e.g. Cursor) have missing metadata
+        if not name or not name.strip():
+            verbose_logger.warning(
+                "Skipping tool with empty name when converting to Bedrock format. "
+                "Bedrock requires tool names to be non-empty and match [a-zA-Z0-9_-]+. "
+                "Tool: %s",
+                tool,
+            )
+            continue
+
         _tool_description = tool.get("function", {}).get("description", None)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
