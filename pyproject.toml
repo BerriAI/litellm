@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.83.0"
+version = "1.83.3"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -18,7 +18,7 @@ Repository = "https://github.com/BerriAI/litellm"
 documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from `pip install litellm[proxy]==1.83.0` PyPI resolution.
+# Dependencies pinned from `pip install litellm[proxy]==1.83.3` PyPI resolution.
 # Docker builds use requirements.txt (different pins). These two paths are independent.
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
@@ -181,7 +181,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.83.0"
+version = "1.83.3"
 version_files = [
     "pyproject.toml:^version"
 ]
