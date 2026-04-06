@@ -431,6 +431,121 @@ def test_process_chunk_failed_response_triggers_failure_logging(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_logging_failed_response_uses_response_error_message():
+    openai_types = streaming_module._get_openai_response_types()
+    logging_obj = _FakeLoggingObj()
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    iterator.completed_response = openai_types.ResponseFailedEvent(
+        type=openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        response=ResponsesAPIResponse(
+            id="resp_failed_real",
+            created_at=int(datetime.now().timestamp()),
+            status="failed",
+            model="test-model",
+            object="response",
+            output=[],
+            error={"message": "provider failed"},
+        ),
+    )
+
+    iterator._handle_logging_failed_response()
+    await asyncio.sleep(0.2)
+
+    assert logging_obj.failure_calls == 1
+    assert logging_obj.async_failure_calls == 1
+
+
+def test_process_chunk_returns_none_for_invalid_json_and_non_dict_payload():
+    class _NoopConfig:
+        def transform_streaming_response(self, **kwargs):
+            raise AssertionError("should not be called")
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_NoopConfig(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+
+    assert iterator._process_chunk("not-json") is None
+    assert iterator._process_chunk(json.dumps(["not", "a", "dict"])) is None
+
+
+def test_process_chunk_cost_annotation_failure_is_nonfatal(monkeypatch):
+    original_include_cost = litellm.include_cost_in_streaming_usage
+    litellm.include_cost_in_streaming_usage = True
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _CompletedConfig:
+        def transform_streaming_response(self, **kwargs):
+            return openai_types.ResponseCompletedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse(
+                    id="resp_cost_failure",
+                    created_at=int(datetime.now().timestamp()),
+                    status="completed",
+                    model="test-model",
+                    object="response",
+                    output=[],
+                    usage=openai_types.ResponseAPIUsage(
+                        input_tokens=1,
+                        output_tokens=2,
+                        total_tokens=3,
+                    ),
+                ),
+            )
+
+    logging_obj = _FakeLoggingObj()
+    logging_obj._response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_CompletedConfig(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    completion_handler = MagicMock()
+    monkeypatch.setattr(
+        iterator, "_handle_logging_completed_response", completion_handler
+    )
+
+    try:
+        event = iterator._process_chunk(json.dumps({"type": "response.completed"}))
+    finally:
+        litellm.include_cost_in_streaming_usage = original_include_cost
+
+    assert iterator.completed_response is event
+    assert event.response.usage.cost is None
+    completion_handler.assert_called_once()
+
+
+def test_get_completed_response_object_accepts_direct_response():
+    logging_obj = _FakeLoggingObj()
+    iterator = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    direct_response = _make_completed_response("resp_direct").response
+    iterator.completed_response = direct_response
+
+    assert iterator._get_completed_response_object() is direct_response
+
+
+@pytest.mark.asyncio
 async def test_responses_streaming_completed_event_persists_async_cache():
     logging_obj = _FakeLoggingObj()
     original_cache = litellm.cache
