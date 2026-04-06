@@ -409,6 +409,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
     validate_membership,
 )
+from litellm.proxy.management_endpoints.tool_management_endpoints import (
+    router as tool_management_router,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -12881,6 +12884,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
+app.include_router(tool_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
