@@ -22,7 +22,11 @@ from litellm.caching.caching import Cache
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse
+from litellm.caching.caching_handler import (
+    LLMCachingHandler,
+    CachingHandlerResponse,
+    _should_defer_streaming_cache_hit_callbacks,
+)
 from litellm.caching.caching import LiteLLMCacheType
 from litellm.types.utils import CallTypes
 from litellm.types.rerank import RerankResponse
@@ -927,6 +931,37 @@ def test_sync_get_cache_still_eagerly_logs_streaming_completion_hits():
 
     assert cached_response.cached_result is not None
     logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+
+
+def test_should_defer_streaming_cache_hit_callbacks_only_for_responses_streams():
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.responses.value,
+            kwargs={"stream": True},
+        )
+        is True
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.aresponses.value,
+            kwargs={"stream": True},
+        )
+        is True
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.completion.value,
+            kwargs={"stream": True},
+        )
+        is False
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.responses.value,
+            kwargs={"stream": False},
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio

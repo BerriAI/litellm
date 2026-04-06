@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 from datetime import datetime
 import json
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses import streaming_iterator as streaming_module
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
@@ -76,6 +78,87 @@ def _make_completed_response(response_id: str = "resp_test") -> ResponseComplete
             ],
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_log_background_task_failure_logs_task_exceptions(monkeypatch):
+    error_logger = MagicMock()
+    monkeypatch.setattr(streaming_module.verbose_logger, "error", error_logger)
+
+    async def _boom():
+        raise RuntimeError("boom")
+
+    task = asyncio.create_task(_boom())
+    with suppress(RuntimeError):
+        await task
+
+    streaming_module._log_background_task_failure(task, task_name="cache write")
+
+    error_logger.assert_called_once()
+    assert error_logger.call_args.args == (
+        "%s failed: %s",
+        "cache write",
+        task.exception(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_log_background_task_failure_ignores_cancelled_tasks(monkeypatch):
+    error_logger = MagicMock()
+    monkeypatch.setattr(streaming_module.verbose_logger, "error", error_logger)
+
+    task = asyncio.create_task(asyncio.sleep(1))
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    streaming_module._log_background_task_failure(task, task_name="cache write")
+
+    error_logger.assert_not_called()
+
+
+def test_content_part_done_event_supports_refusal_and_reasoning_text():
+    refusal_event = streaming_module._build_content_part_done_event(
+        item_id="msg_1",
+        output_index=0,
+        content_index=0,
+        part_payload={"type": "refusal", "refusal": "no"},
+    )
+    reasoning_event = streaming_module._build_content_part_done_event(
+        item_id="msg_1",
+        output_index=0,
+        content_index=1,
+        part_payload={"type": "reasoning_text", "reasoning": "because"},
+    )
+    unsupported_event = streaming_module._build_content_part_done_event(
+        item_id="msg_1",
+        output_index=0,
+        content_index=2,
+        part_payload={"type": "image"},
+    )
+
+    assert refusal_event.part.type == "refusal"
+    assert refusal_event.part.refusal == "no"
+    assert reasoning_event.part.type == "reasoning_text"
+    assert reasoning_event.part.reasoning == "because"
+    assert unsupported_event is None
+
+
+def test_dump_response_object_handles_model_and_unknown_values():
+    response = ResponsesAPIResponse(
+        id="resp_dump",
+        created_at=int(datetime.now().timestamp()),
+        status="completed",
+        model="gpt-4.1-mini",
+        object="response",
+        output=[],
+    )
+
+    assert streaming_module._dump_response_object(response)["id"] == "resp_dump"
+    assert streaming_module._dump_response_object({"type": "message"}) == {
+        "type": "message"
+    }
+    assert streaming_module._dump_response_object(object()) == {}
 
 
 @pytest.mark.asyncio
@@ -211,6 +294,142 @@ async def test_responses_streaming_failure_triggers_failure_handlers():
     assert logging_obj.async_failure_calls >= 1
 
 
+def test_process_chunk_requires_provider_config():
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=None,
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+
+    with pytest.raises(ValueError, match="responses_api_provider_config is required"):
+        iterator._process_chunk(json.dumps({"type": "response.completed"}))
+
+
+def test_process_chunk_wraps_encrypted_content_with_model_id():
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _EncryptedConfig:
+        def transform_streaming_response(self, **kwargs):
+            return openai_types.OutputItemAddedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=0,
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(
+                    id="rs_123",
+                    type="reasoning",
+                    encrypted_content="ciphertext",
+                ),
+            )
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_EncryptedConfig(),
+        logging_obj=_FakeLoggingObj(),
+        litellm_metadata={
+            "encrypted_content_affinity_enabled": True,
+            "model_info": {"id": "model-123"},
+        },
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+
+    event = iterator._process_chunk(json.dumps({"type": "response.output_item.added"}))
+
+    assert event.item.encrypted_content.startswith("litellm_enc:")
+    assert event.item.encrypted_content.endswith(";ciphertext")
+
+
+def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch):
+    original_include_cost = litellm.include_cost_in_streaming_usage
+    litellm.include_cost_in_streaming_usage = True
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _CompletedConfig:
+        def transform_streaming_response(self, **kwargs):
+            return openai_types.ResponseCompletedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse(
+                    id="resp_live",
+                    created_at=int(datetime.now().timestamp()),
+                    status="completed",
+                    model="test-model",
+                    object="response",
+                    output=[],
+                    usage=openai_types.ResponseAPIUsage(
+                        input_tokens=1,
+                        output_tokens=2,
+                        total_tokens=3,
+                    ),
+                ),
+            )
+
+    logging_obj = _FakeLoggingObj()
+    logging_obj._response_cost_calculator = MagicMock(return_value=1.23)
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_CompletedConfig(),
+        logging_obj=logging_obj,
+        litellm_metadata={"model_info": {"id": "model-123"}},
+        custom_llm_provider="openai",
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    completion_handler = MagicMock()
+    monkeypatch.setattr(
+        iterator, "_handle_logging_completed_response", completion_handler
+    )
+
+    try:
+        event = iterator._process_chunk(json.dumps({"type": "response.completed"}))
+    finally:
+        litellm.include_cost_in_streaming_usage = original_include_cost
+
+    assert iterator.completed_response is event
+    assert event.response.id != "resp_live"
+    assert event.response.id.startswith("resp_")
+    assert event.response.usage.cost == 1.23
+    completion_handler.assert_called_once()
+
+
+def test_process_chunk_failed_response_triggers_failure_logging(monkeypatch):
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _FailedConfig:
+        def transform_streaming_response(self, **kwargs):
+            return openai_types.ResponseFailedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                response=ResponsesAPIResponse(
+                    id="resp_failed",
+                    created_at=int(datetime.now().timestamp()),
+                    status="failed",
+                    model="test-model",
+                    object="response",
+                    output=[],
+                    error={"message": "provider failed"},
+                ),
+            )
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_FailedConfig(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    failure_handler = MagicMock()
+    monkeypatch.setattr(iterator, "_handle_logging_failed_response", failure_handler)
+
+    event = iterator._process_chunk(json.dumps({"type": "response.failed"}))
+
+    assert iterator.completed_response is event
+    failure_handler.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_responses_streaming_completed_event_persists_async_cache():
     logging_obj = _FakeLoggingObj()
@@ -313,6 +532,161 @@ def test_responses_streaming_completed_event_persists_sync_cache():
         == iterator.completed_response.response.id
     )
     litellm.cache = original_cache
+
+
+def test_build_synthetic_response_events_covers_annotations_function_calls_and_refusals():
+    original_include_cost = litellm.include_cost_in_streaming_usage
+    litellm.include_cost_in_streaming_usage = True
+    logging_obj = _FakeLoggingObj()
+    logging_obj._response_cost_calculator = MagicMock(side_effect=RuntimeError("boom"))
+    transformed = ResponsesAPIResponse(
+        id="resp_events",
+        created_at=int(datetime.now().timestamp()),
+        status="completed",
+        model="gpt-4.1-mini",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_events",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "hello world",
+                        "annotations": [{"type": "file_citation", "file_id": "file_1"}],
+                    },
+                    {
+                        "type": "refusal",
+                        "refusal": "no thanks",
+                    },
+                ],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_events",
+                "call_id": "call_123",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    )
+
+    try:
+        events = streaming_module._build_synthetic_response_events(
+            transformed=transformed,
+            logging_obj=logging_obj,
+            chunk_size=5,
+        )
+    finally:
+        litellm.include_cost_in_streaming_usage = original_include_cost
+
+    event_types = [
+        event.type.value if hasattr(event.type, "value") else str(event.type)
+        for event in events
+    ]
+
+    assert "response.output_text.annotation.added" in event_types
+    assert "response.refusal.delta" in event_types
+    assert "response.refusal.done" in event_types
+    assert "response.function_call_arguments.delta" in event_types
+    assert "response.function_call_arguments.done" in event_types
+    assert event_types[-1] == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_mock_responses_streaming_iterator_async_iteration_logs_completion(
+    monkeypatch,
+):
+    hook_calls = {"post_call": 0, "metadata": 0}
+
+    async def fake_post_call(request_data, response, call_type):
+        hook_calls["post_call"] += 1
+
+    def fake_update_metadata(**kwargs):
+        hook_calls["metadata"] += 1
+
+    monkeypatch.setattr(
+        streaming_module,
+        "async_post_call_success_deployment_hook",
+        fake_post_call,
+    )
+    monkeypatch.setattr(
+        streaming_module,
+        "update_response_metadata",
+        fake_update_metadata,
+    )
+
+    class _MockTransformConfig:
+        def transform_response_api_response(self, **kwargs):
+            return _make_completed_response("resp_mock").response
+
+    logging_obj = _FakeLoggingObj()
+
+    iterator = MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_MockTransformConfig(),
+        logging_obj=logging_obj,
+        request_data={"model": "test-model", "stream": True},
+        call_type=CallTypes.responses.value,
+    )
+
+    streamed_events = [event async for event in iterator]
+    await asyncio.sleep(0.2)
+
+    assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert logging_obj.success_calls == 1
+    assert logging_obj.async_success_calls == 1
+    assert hook_calls["post_call"] == 1
+    assert hook_calls["metadata"] == 1
+
+
+def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkeypatch):
+    hook_calls = {"post_call": 0, "metadata": 0}
+
+    async def fake_post_call(request_data, response, call_type):
+        hook_calls["post_call"] += 1
+
+    def fake_update_metadata(**kwargs):
+        hook_calls["metadata"] += 1
+
+    monkeypatch.setattr(
+        streaming_module,
+        "async_post_call_success_deployment_hook",
+        fake_post_call,
+    )
+    monkeypatch.setattr(
+        streaming_module,
+        "update_response_metadata",
+        fake_update_metadata,
+    )
+
+    class _MockTransformConfig:
+        def transform_response_api_response(self, **kwargs):
+            return _make_completed_response("resp_mock_sync").response
+
+    logging_obj = _FakeLoggingObj()
+    iterator = MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_MockTransformConfig(),
+        logging_obj=logging_obj,
+        request_data={"model": "test-model", "stream": True},
+        call_type=CallTypes.responses.value,
+    )
+
+    streamed_events = list(iterator)
+    asyncio.run(asyncio.sleep(0.2))
+
+    assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert logging_obj.success_calls == 1
+    assert logging_obj.async_success_calls == 1
+    assert hook_calls["post_call"] == 1
+    assert hook_calls["metadata"] == 1
 
 
 @pytest.mark.asyncio
