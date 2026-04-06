@@ -9978,6 +9978,7 @@ async def _filter_models_by_team_id(
 
     # Get models accessible to this team (similar to _add_team_models_to_all_models)
     team_accessible_model_ids: Set[str] = set()
+    access_groups = llm_router.get_model_access_groups() if llm_router else {}
 
     if (
         not team_object.models  # empty list = all model access
@@ -10001,8 +10002,16 @@ async def _filter_models_by_team_id(
                 if can_add_model:
                     team_accessible_model_ids.add(model_id)
     else:
-        # Team has access to specific models
+        # Team has access to specific models — resolve access group names first
+        resolved_model_names: Set[str] = set()
         for model_name in team_object.models:
+            if model_name in access_groups:
+                # This is an access group name — expand to member model names
+                resolved_model_names.update(access_groups[model_name])
+            else:
+                resolved_model_names.add(model_name)
+
+        for model_name in resolved_model_names:
             _models = (
                 llm_router.get_model_list(model_name=model_name, team_id=team_id)
                 if llm_router
@@ -10022,8 +10031,15 @@ async def _filter_models_by_team_id(
             and SpecialModelNames.all_proxy_models.value not in team_object.models
         ):
             # Team has specific models - check database for those model names
+            # Resolve access group names to actual model names for the DB query
+            _resolved_names: list[str] = []
+            for _m in team_object.models:
+                if _m in access_groups:
+                    _resolved_names.extend(access_groups[_m])
+                else:
+                    _resolved_names.append(_m)
             db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where={"model_name": {"in": team_object.models}}
+                where={"model_name": {"in": _resolved_names}}
             )
             for db_model in db_models:
                 model_id = db_model.model_id
