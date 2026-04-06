@@ -596,9 +596,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields[
-                            "reasoning_content"
-                        ] = reasoning_content
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
 
                     message = Message(
                         content=content,
@@ -787,9 +787,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params[
-                    "audio_transcription_duration"
-                ] = response_object["_audio_transcription_duration"]
+                model_response_object._hidden_params["audio_transcription_duration"] = (
+                    response_object["_audio_transcription_duration"]
+                )
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
