@@ -174,11 +174,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                     "type": "web_search_result",
                     "url": url,
                     "title": title or url,
-                    "encrypted_content": "",
+                    "encrypted_content": snippet or "",
                     "page_age": None,
                 }
-                if snippet:
-                    hit["snippet"] = snippet
                 search_hits.append(hit)
 
         tool_use_id = f"srvtoolu_{str(uuid.uuid4()).replace('-', '')[:24]}"
@@ -204,7 +202,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         ]
 
         response: Dict[str, Any] = {
-            "id": f"msg_{str(uuid.uuid4())}",
+            "id": f"msg_{str(uuid.uuid4()).replace('-', '')[:20]}",
             "type": "message",
             "role": "assistant",
             "model": model,
