@@ -514,11 +514,13 @@ def test_remove_scope_from_cache_control():
 
 def test_bedrock_messages_strips_output_config():
     """
-    Ensure output_config is stripped from the request before sending to
-    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+    Ensure output_config is stripped from the request for models that do not
+    support it (i.e., non-Claude-4.6 models).
 
     Regression test for: https://github.com/BerriAI/litellm/issues/22797
     """
+    from unittest.mock import patch
+
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -530,27 +532,70 @@ def test_bedrock_messages_strips_output_config():
         },
     }
 
-    result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
-        messages=messages,
-        anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=False,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
     assert (
         "output_config" not in result
-    ), "output_config should be stripped — Bedrock Invoke rejects it"
+    ), "output_config should be stripped for models that don't support it"
     # Other params should be preserved
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_preserves_output_config_for_claude_4_6():
+    """
+    Ensure output_config is preserved for Claude 4.6 models on Bedrock Invoke,
+    which support the output_config (effort) parameter.
+    """
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "high",
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-6-v1",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    assert (
+        "output_config" in result
+    ), "output_config should be preserved for Claude 4.6 models"
+    assert result["output_config"] == {"effort": "high"}
     assert result.get("max_tokens") == 4096
 
 
 def test_bedrock_messages_strips_output_config_with_output_format():
     """
-    When both output_config and output_format are present, both should be
-    stripped (output_format is converted to inline schema, output_config
-    is simply dropped).
+    When both output_config and output_format are present, output_format
+    is converted to inline schema and output_config is stripped for
+    non-Claude-4.6 models.
     """
+    from unittest.mock import patch
+
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -567,13 +612,17 @@ def test_bedrock_messages_strips_output_config_with_output_format():
         },
     }
 
-    result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
-        messages=messages,
-        anthropic_messages_optional_request_params=optional_params,
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=False,
+    ):
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
     assert "output_config" not in result
     assert "output_format" not in result

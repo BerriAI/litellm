@@ -22,6 +22,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -169,7 +170,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        anthropic_request.pop("output_config", None)
+        if not _supports_factory(model=model, custom_llm_provider=None, key="supports_output_config"):
+            anthropic_request.pop("output_config", None)
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 
