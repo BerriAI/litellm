@@ -17,7 +17,13 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import TranscriptionResponse
 
 
@@ -55,8 +61,6 @@ def test_completion_cost_anthropic_dated_snapshot_model_id():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.types.utils import Choices, Message
 
     response = ModelResponse(
         id="msg_test",
