@@ -1649,6 +1649,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    default_team_member_models: Optional[List[str]] = (
+        None  # default allowed_models seeded onto new team members
+    )
 
 
 class NewTeamRequest(TeamBase):
@@ -1742,6 +1745,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    default_team_member_models: Optional[List[str]] = (
+        None  # default allowed_models seeded onto new team members
+    )
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1943,6 +1949,9 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    allowed_models: Optional[List[str]] = (
+        None  # per-member model scope; empty = inherit team models
+    )
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -3735,6 +3744,10 @@ class TeamMemberAddRequest(MemberAddRequest):
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
     )
+    allowed_models: Optional[List[str]] = Field(
+        default=None,
+        description="List of models this team member can access. If not set, inherits the team's default_team_member_models or all team models.",
+    )
 
 
 class TeamMemberDeleteRequest(MemberDeleteRequest):
@@ -3750,6 +3763,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
     )
+    allowed_models: Optional[List[str]] = Field(
+        default=None,
+        description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3757,6 +3774,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    allowed_models: Optional[List[str]] = None
 
 
 class TeamModelAddRequest(BaseModel):

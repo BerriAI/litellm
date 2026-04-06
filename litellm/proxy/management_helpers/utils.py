@@ -2,7 +2,7 @@
 ## Helper utils for the management endpoints (keys/users/teams)
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -148,6 +148,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    allowed_models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -206,17 +207,18 @@ async def add_new_member(
                 },
             )
 
-    # Check if trying to set a budget for team member
-
-    if max_budget_in_team is not None:
+    # Check if trying to set a budget or model scope for team member
+    if max_budget_in_team is not None or allowed_models is not None:
         # create a new budget item for this member
-        response = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": max_budget_in_team,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-        )
+        budget_data: dict = {
+            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        }
+        if max_budget_in_team is not None:
+            budget_data["max_budget"] = max_budget_in_team
+        if allowed_models is not None:
+            budget_data["allowed_models"] = allowed_models
+        response = await prisma_client.db.litellm_budgettable.create(data=budget_data)
 
         _budget_id = response.budget_id
     else:
