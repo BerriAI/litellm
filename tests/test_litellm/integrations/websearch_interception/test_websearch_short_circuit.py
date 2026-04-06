@@ -62,7 +62,7 @@ class TestTryShortCircuitSearch:
     @pytest.mark.asyncio
     async def test_native_format_search_hits(self):
         """Search results are structured as web_search_result hits"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
@@ -73,10 +73,10 @@ class TestTryShortCircuitSearch:
             )
 
             result = await logger.try_short_circuit_search(
-                model="anthropic/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "Search query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                custom_llm_provider="anthropic",
+                custom_llm_provider="github_copilot",
             )
 
         assert result is not None
@@ -90,7 +90,7 @@ class TestTryShortCircuitSearch:
     @pytest.mark.asyncio
     async def test_server_tool_use_has_query(self):
         """server_tool_use block contains the original search query"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
@@ -98,10 +98,10 @@ class TestTryShortCircuitSearch:
             mock_search.return_value = "Title: R\nURL: https://x.com\nSnippet: s"
 
             result = await logger.try_short_circuit_search(
-                model="anthropic/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "trending AI topics"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                custom_llm_provider="anthropic",
+                custom_llm_provider="github_copilot",
             )
 
         stu = result["content"][0]
@@ -113,7 +113,7 @@ class TestTryShortCircuitSearch:
     @pytest.mark.asyncio
     async def test_tool_use_id_links_blocks(self):
         """server_tool_use.id matches web_search_tool_result.tool_use_id"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
@@ -121,10 +121,10 @@ class TestTryShortCircuitSearch:
             mock_search.return_value = "Title: R\nURL: https://x.com\nSnippet: s"
 
             result = await logger.try_short_circuit_search(
-                model="anthropic/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                custom_llm_provider="anthropic",
+                custom_llm_provider="github_copilot",
             )
 
         assert result["content"][0]["id"] == result["content"][1]["tool_use_id"]
@@ -132,7 +132,7 @@ class TestTryShortCircuitSearch:
     @pytest.mark.asyncio
     async def test_usage_includes_web_search_requests(self):
         """Usage includes server_tool_use.web_search_requests count"""
-        logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         with patch.object(
             logger, "_execute_search", new_callable=AsyncMock
@@ -140,10 +140,10 @@ class TestTryShortCircuitSearch:
             mock_search.return_value = "Title: R\nURL: https://x.com\nSnippet: s"
 
             result = await logger.try_short_circuit_search(
-                model="anthropic/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-4",
                 messages=[{"role": "user", "content": "query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                custom_llm_provider="anthropic",
+                custom_llm_provider="github_copilot",
             )
 
         assert result["usage"]["server_tool_use"]["web_search_requests"] == 1
@@ -210,26 +210,42 @@ class TestTryShortCircuitSearch:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_short_circuits_all_enabled_providers_uniformly(self):
-        """All enabled providers (including anthropic, bedrock) go through
-        the same short-circuit funnel — no provider is skipped."""
-        for provider in ["anthropic", "bedrock", "github_copilot"]:
-            logger = WebSearchInterceptionLogger(enabled_providers=[provider])
+    async def test_does_not_short_circuit_native_providers(self):
+        """Providers with native Anthropic Messages support (anthropic, bedrock,
+        vertex_ai) are skipped — their API handles web search natively."""
+        for provider in ["anthropic", "bedrock"]:
+            logger = WebSearchInterceptionLogger(
+                enabled_providers=[provider, "github_copilot"]
+            )
 
-            with patch.object(
-                logger, "_execute_search", new_callable=AsyncMock
-            ) as mock_search:
-                mock_search.return_value = "Title: R\nURL: https://x.com\nSnippet: s"
+            result = await logger.try_short_circuit_search(
+                model=f"{provider}/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider=provider,
+            )
 
-                result = await logger.try_short_circuit_search(
-                    model=f"{provider}/claude-sonnet-4",
-                    messages=[{"role": "user", "content": "search query"}],
-                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
-                    custom_llm_provider=provider,
-                )
+            assert result is None, f"Short-circuit should NOT fire for native provider {provider}"
 
-            assert result is not None, f"Short-circuit should fire for {provider}"
-            assert result["content"][0]["type"] == "server_tool_use"
+    @pytest.mark.asyncio
+    async def test_short_circuits_non_native_providers(self):
+        """Non-native providers (github_copilot, etc.) get short-circuited."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = "Title: R\nURL: https://x.com\nSnippet: s"
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": "search query"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        assert result["content"][0]["type"] == "server_tool_use"
 
     @pytest.mark.asyncio
     async def test_does_not_short_circuit_no_messages(self):

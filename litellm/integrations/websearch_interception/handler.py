@@ -81,13 +81,15 @@ class WebSearchInterceptionLogger(CustomLogger):
         Short-circuit web-search-only requests by executing the search directly.
 
         Claude Code sends web search as a separate, standalone /v1/messages
-        request with a simple prompt and only web_search tool(s). We execute
-        the search via the configured provider (SearXNG/Tavily/Perplexity)
-        and return a synthetic response in native Anthropic format
-        (server_tool_use + web_search_tool_result) so Claude Code's
-        WebSearchTool parser works correctly.
+        request with a simple prompt and only web_search tool(s). For providers
+        that don't natively support web search, we execute the search via the
+        configured provider (SearXNG/Tavily/Perplexity) and return a synthetic
+        response in native Anthropic format (server_tool_use +
+        web_search_tool_result) so Claude Code's WebSearchTool parser works.
 
-        All providers are handled uniformly through this single funnel.
+        Providers with native Anthropic Messages support (anthropic, bedrock,
+        vertex_ai, azure_ai) are skipped — their API handles web search
+        natively and returns the correct format already.
 
         Args:
             model: Model name from the request
@@ -109,6 +111,25 @@ class WebSearchInterceptionLogger(CustomLogger):
             and provider_str not in self.enabled_providers
         ):
             return None
+
+        # Skip providers with native Anthropic Messages support — their API
+        # handles web_search_20250305 natively, returning server_tool_use +
+        # web_search_tool_result in the correct format already.
+        try:
+            provider_enum = LlmProviders(provider_str)
+            anthropic_config = (
+                ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model, provider=provider_enum
+                )
+            )
+            if anthropic_config is not None:
+                verbose_logger.debug(
+                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
+                    "(provider has native web search support)"
+                )
+                return None
+        except (ValueError, Exception):
+            pass  # unknown provider enum → safe to short-circuit
 
         # All tools must be web search tools
         if not all(is_web_search_tool(t) for t in tools):
