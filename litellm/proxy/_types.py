@@ -596,6 +596,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/model_hub",
             "/public/agent_hub",
             "/public/mcp_hub",
+            "/public/skill_hub",
             "/public/litellm_model_cost_map",
         ]
     )
@@ -868,6 +869,14 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
 
 
+class BudgetLimitEntry(LiteLLMPydanticObjectBase):
+    """A single budget window with its own limit and independent reset schedule."""
+
+    budget_duration: str  # e.g. "24h", "7d", "30d"
+    max_budget: float  # max spend in USD for this window
+    reset_at: Optional[datetime] = None  # populated at creation/reset time
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -887,6 +896,9 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
 
     budget_duration: Optional[str] = None
+    budget_limits: Optional[List[BudgetLimitEntry]] = (
+        None  # multiple concurrent budget windows
+    )
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
@@ -991,6 +1003,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "permissions",
             "model_max_budget",
             "router_settings",
+            "budget_limits",
         ]
         for field in dict_fields:
             value = values.get(field)
@@ -1644,6 +1657,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
     budget_duration: Optional[str] = None
+    budget_limits: Optional[List[BudgetLimitEntry]] = (
+        None  # multiple concurrent budget windows
+    )
 
     models: list = []
     blocked: bool = False
@@ -1745,6 +1761,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     enforced_file_expires_after: Optional[dict] = None
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    budget_limits: Optional[List[BudgetLimitEntry]] = (
+        None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = (
         None  # default allowed_models seeded onto new team members
     )
@@ -1893,6 +1911,7 @@ class LiteLLM_TeamTable(TeamBase):
             "model_max_budget",
             "model_aliases",
             "router_settings",
+            "budget_limits",
         ]
 
         if isinstance(values, BaseModel):
@@ -2378,6 +2397,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
     router_settings: Optional[dict] = None
+    budget_limits: Optional[List[dict]] = None  # multiple concurrent budget windows
     model_config = ConfigDict(protected_namespaces=())
 
 

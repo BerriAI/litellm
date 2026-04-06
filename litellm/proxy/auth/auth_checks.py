@@ -534,6 +534,17 @@ async def common_checks(  # noqa: PLR0915
                 valid_token=valid_token,
             )
 
+        # 3.1. Multi-window budget check for team
+        with tracer.trace("litellm.proxy.auth.common_checks.team_multi_budget_check"):
+            await _team_multi_budget_check(team_object=team_object)
+
+        # 3.2. Multi-window budget check for key
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.virtual_key_multi_budget_check"
+        ):
+            if valid_token is not None:
+                await _virtual_key_multi_budget_check(valid_token=valid_token)
+
         # 3.0.5. If team is over soft budget (alert only, doesn't block)
         with tracer.trace("litellm.proxy.auth.common_checks.team_soft_budget_check"):
             await _team_soft_budget_check(
@@ -2982,6 +2993,43 @@ async def _virtual_key_max_budget_check(
             )
 
 
+async def _virtual_key_multi_budget_check(
+    valid_token: UserAPIKeyAuth,
+):
+    """
+    Raises BudgetExceededError if any budget window in valid_token.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:key:{token}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a key update.
+
+    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
+    per-window spend resets to zero within the current window period. This is an acceptable
+    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
+    """
+    if not valid_token.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in valid_token.budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+        )
+        if window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: Key over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
+            )
+
+
 async def _virtual_key_soft_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -3220,6 +3268,39 @@ async def _team_max_budget_check(
                 current_cost=spend,
                 max_budget=team_object.max_budget,
                 message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
+            )
+
+
+async def _team_multi_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+):
+    """
+    Raises BudgetExceededError if any budget window in team_object.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:team:{team_id}:window:{budget_duration}.
+    Using budget_duration (not list index) keeps counters stable when windows are reordered
+    or removed during a team update.
+    """
+    if team_object is None or not team_object.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in team_object.budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+        )
+        if window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
             )
 
 
