@@ -81,11 +81,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         Short-circuit web-search-only requests by executing the search directly.
 
         Claude Code sends web search as a separate, standalone /v1/messages
-        request with a simple prompt and only web_search tool(s). For providers
-        that don't natively support web search (e.g. github_copilot), there is
-        no need to route this through the backend LLM — we can detect the
-        pattern, execute the search via Tavily/Perplexity, and return a
-        synthetic Anthropic response immediately.
+        request with a simple prompt and only web_search tool(s). We execute
+        the search via the configured provider (SearXNG/Tavily/Perplexity)
+        and return a synthetic response in native Anthropic format
+        (server_tool_use + web_search_tool_result) so Claude Code's
+        WebSearchTool parser works correctly.
+
+        All providers are handled uniformly through this single funnel.
 
         Args:
             model: Model name from the request
@@ -107,28 +109,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             and provider_str not in self.enabled_providers
         ):
             return None
-
-        # Only short-circuit for providers without native Anthropic Messages
-        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
-        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
-        # includes a follow-up LLM call to synthesize the answer from search
-        # results.  Short-circuiting those would skip that synthesis step and
-        # return raw search text — a regression for existing users.
-        try:
-            provider_enum = LlmProviders(provider_str)
-            anthropic_config = (
-                ProviderConfigManager.get_provider_anthropic_messages_config(
-                    model=model, provider=provider_enum
-                )
-            )
-            if anthropic_config is not None:
-                verbose_logger.debug(
-                    f"WebSearchInterception: Skipping short-circuit for {provider_str} "
-                    "(provider has native Anthropic Messages support, using agentic loop)"
-                )
-                return None
-        except (ValueError, Exception):
-            pass  # unknown provider enum → safe to short-circuit
 
         # All tools must be web search tools
         if not all(is_web_search_tool(t) for t in tools):
@@ -157,21 +137,71 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             search_result_text = f"Search failed: {e}"
 
-        # Build synthetic Anthropic response
+        # Parse search results into structured hits for web_search_tool_result
+        search_hits = []
+        for block in search_result_text.split("\n\n"):
+            title, url, snippet = "", "", ""
+            for line in block.strip().splitlines():
+                if line.startswith("Title: "):
+                    title = line[7:]
+                elif line.startswith("URL: "):
+                    url = line[5:]
+                elif line.startswith("Snippet: "):
+                    snippet = line[9:]
+            if url:
+                hit: Dict[str, Any] = {
+                    "type": "web_search_result",
+                    "url": url,
+                    "title": title or url,
+                    "encrypted_content": "",
+                    "page_age": None,
+                }
+                if snippet:
+                    hit["snippet"] = snippet
+                search_hits.append(hit)
+
+        tool_use_id = f"srvtoolu_{str(uuid.uuid4()).replace('-', '')[:24]}"
+
+        # Build response in native Anthropic format so Claude Code's
+        # WebSearchTool parser sees server_tool_use + web_search_tool_result.
+        content: List[Dict[str, Any]] = [
+            {
+                "type": "server_tool_use",
+                "id": tool_use_id,
+                "name": "web_search",
+                "input": {"query": query},
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": tool_use_id,
+                "content": search_hits,
+            },
+            {
+                "type": "text",
+                "text": search_result_text,
+            },
+        ]
+
         response: Dict[str, Any] = {
             "id": f"msg_{str(uuid.uuid4())}",
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": [{"type": "text", "text": search_result_text}],
+            "content": content,
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "server_tool_use": {
+                    "web_search_requests": 1,
+                },
+            },
         }
 
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, "
-            f"returning synthetic response ({len(search_result_text)} chars)"
+            f"returning native format ({len(search_hits)} hits)"
         )
         return response
 
