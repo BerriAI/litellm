@@ -376,7 +376,7 @@ async def _upsert_budget_and_membership(
     If max_budget, tpm_limit, rpm_limit, and budget_duration are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
-    if max_budget is None and tpm_limit is None and rpm_limit is None and budget_duration is None:
+    if max_budget is None and tpm_limit is None and rpm_limit is None and budget_duration is None and not clear_budget_duration:
         # disconnect the budget since all limits are None
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
