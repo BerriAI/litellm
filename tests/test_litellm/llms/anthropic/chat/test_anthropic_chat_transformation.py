@@ -1939,6 +1939,23 @@ def test_transform_request_uses_dynamic_max_tokens():
 
     assert result["max_tokens"] == 64000
 
+def test_transform_request_adds_tool_code_execution_when_container_upload_in_messages():
+    """
+    Test that transform_request correctly adds the required code_execution tool to the request
+    when max_tokens is not explicitly provided.
+
+    Fixes: https://github.com/BerriAI/litellm/pull/25217
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}, {type: "file", file: {file_id: 'uploadedFileId'}}]
+
+    result = config.transform_request(
+        model="claude-sonnet-4-5",
+        messages=messages
+    )
+
+    assert len(result["tools"]) >= 1
 
 def test_transform_request_respects_user_max_tokens():
     """
