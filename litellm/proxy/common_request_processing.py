@@ -595,6 +595,7 @@ class ProxyBaseLLMRequestProcessing:
             "alist_batches",
             "acancel_batch",
             "afile_content",
+            "afile_content_streaming",
             "afile_retrieve",
             "afile_delete",
             "atext_completion",
