@@ -24,7 +24,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import TranscriptionResponse
+from litellm.utils import TranscriptionResponse, _invalidate_model_cost_lowercase_map
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():
@@ -61,6 +61,7 @@ def test_completion_cost_anthropic_dated_snapshot_model_id():
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
+    _invalidate_model_cost_lowercase_map()
 
     response = ModelResponse(
         id="msg_test",
