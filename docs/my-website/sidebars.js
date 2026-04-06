@@ -1092,6 +1092,7 @@ const sidebars = {
         "migration",
         "data_security",
         "data_retention",
+        "eu-ai-act-compliance",
         "proxy/security_encryption_faq",
         "migration_policy",
         {
