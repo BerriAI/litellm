@@ -534,6 +534,142 @@ def test_responses_streaming_completed_event_persists_sync_cache():
     litellm.cache = original_cache
 
 
+def test_log_completed_response_sync_direct_path(monkeypatch):
+    hook_calls = {"post_call": 0, "metadata": 0}
+
+    async def fake_post_call(request_data, response, call_type):
+        hook_calls["post_call"] += 1
+
+    def fake_update_metadata(**kwargs):
+        hook_calls["metadata"] += 1
+
+    monkeypatch.setattr(
+        streaming_module,
+        "async_post_call_success_deployment_hook",
+        fake_post_call,
+    )
+    monkeypatch.setattr(
+        streaming_module,
+        "update_response_metadata",
+        fake_update_metadata,
+    )
+
+    logging_obj = _FakeLoggingObj()
+    iterator = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    iterator._persist_completed_response_before_logging = False
+    iterator.completed_response = _make_completed_response("resp_log_sync")
+
+    iterator._log_completed_response(is_async=False)
+    asyncio.run(asyncio.sleep(0.2))
+
+    assert logging_obj.success_calls == 1
+    assert logging_obj.async_success_calls == 1
+    assert hook_calls["post_call"] == 1
+    assert hook_calls["metadata"] == 1
+
+
+def test_log_completed_response_falls_back_when_model_validate_fails(monkeypatch):
+    class _BadSerializableResponse:
+        @classmethod
+        def model_validate(cls, value):
+            raise RuntimeError("nope")
+
+        def model_dump(self):
+            return {"id": "bad"}
+
+    logging_obj = _FakeLoggingObj()
+    iterator = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    iterator._persist_completed_response_before_logging = False
+    iterator.completed_response = _BadSerializableResponse()
+    monkeypatch.setattr(iterator, "_run_post_success_hooks", MagicMock())
+
+    iterator._log_completed_response(is_async=False)
+    asyncio.run(asyncio.sleep(0.2))
+
+    assert logging_obj.success_calls == 1
+    assert logging_obj.async_success_calls == 1
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "already_cached",
+        "not_completed",
+        "missing_caching_handler",
+        "not_streaming",
+        "store_disabled",
+        "missing_cache_backend",
+    ],
+)
+def test_persist_completed_response_to_cache_guard_branches(monkeypatch, scenario):
+    logging_obj = _FakeLoggingObj()
+    iterator = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=logging_obj,
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    openai_types = streaming_module._get_openai_response_types()
+    completed_event = _make_completed_response("resp_guard")
+    iterator.completed_response = completed_event
+
+    if scenario == "already_cached":
+        iterator._completed_response_cached = True
+    elif scenario == "not_completed":
+        iterator.completed_response = openai_types.ResponseIncompleteEvent(
+            type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=completed_event.response,
+        )
+    elif scenario == "missing_caching_handler":
+        logging_obj._llm_caching_handler = None
+    else:
+        logging_obj._llm_caching_handler = SimpleNamespace(
+            request_kwargs={
+                "model": "test-model",
+                "input": "hello",
+                "stream": scenario != "not_streaming",
+                "cache_key": "request-cache-key",
+                "metadata": None,
+                "custom_llm_provider": "openai",
+            },
+            preset_cache_key=None,
+            original_function=litellm.responses,
+            dual_cache=None,
+            _should_store_result_in_cache=lambda original_function, kwargs: (
+                scenario != "store_disabled"
+            ),
+        )
+        if scenario == "missing_cache_backend":
+            monkeypatch.setattr(streaming_module.litellm, "cache", None)
+        else:
+            monkeypatch.setattr(
+                streaming_module.litellm,
+                "cache",
+                SimpleNamespace(add_cache=MagicMock(), async_add_cache=AsyncMock()),
+            )
+
+    iterator._persist_completed_response_to_cache(is_async=False)
+
+    expected_cached_flag = scenario == "already_cached"
+    assert iterator._completed_response_cached is expected_cached_flag
+
+
 def test_build_synthetic_response_events_covers_annotations_function_calls_and_refusals():
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
