@@ -230,7 +230,7 @@ class TestWrapSendWithDebugHeaders:
         )
 
         message = {"type": "http.response.start", "status": 200, "headers": []}
-        asyncio.get_event_loop().run_until_complete(wrapped(message))
+        asyncio.run(wrapped(message))
 
         assert len(captured) == 1
         headers = dict(captured[0]["headers"])
@@ -247,6 +247,6 @@ class TestWrapSendWithDebugHeaders:
         )
 
         body_msg = {"type": "http.response.body", "body": b"hello"}
-        asyncio.get_event_loop().run_until_complete(wrapped(body_msg))
+        asyncio.run(wrapped(body_msg))
 
         assert captured[0] == body_msg

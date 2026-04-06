@@ -6,13 +6,14 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import all_litellm_params
 
@@ -46,6 +47,26 @@ def _get_agent(agent_id: str):
     return agent
 
 
+def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
+    """Raise 400 if agent requires x-litellm-trace-id on inbound calls and it is missing."""
+    agent_litellm_params = agent.litellm_params or {}
+    if not agent_litellm_params.get("require_trace_id_on_calls_to_agent"):
+        return
+
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers_dict = dict(request.headers)
+    trace_id = get_chain_id_from_headers(headers_dict)
+    if not trace_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Agent '{agent.agent_id}' requires x-litellm-trace-id header "
+                "on all inbound requests."
+            ),
+        )
+
+
 async def _handle_stream_message(
     api_base: Optional[str],
     request_id: str,
@@ -55,6 +76,7 @@ async def _handle_stream_message(
     metadata: Optional[dict] = None,
     proxy_server_request: Optional[dict] = None,
     *,
+    agent_extra_headers: Optional[Dict[str, str]] = None,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     request_data: Optional[dict] = None,
     proxy_logging_obj: Optional[Any] = None,
@@ -69,6 +91,7 @@ async def _handle_stream_message(
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
 
     if not A2A_SDK_AVAILABLE:
+
         async def _error_stream():
             yield json.dumps(
                 {
@@ -104,9 +127,15 @@ async def _handle_stream_message(
                 agent_id=agent_id,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
+                agent_extra_headers=agent_extra_headers,
             )
 
-            if use_proxy_hooks and user_api_key_dict is not None and request_data is not None and proxy_logging_obj is not None:
+            if (
+                use_proxy_hooks
+                and user_api_key_dict is not None
+                and request_data is not None
+                and proxy_logging_obj is not None
+            ):
                 from litellm.proxy.common_request_processing import (
                     ProxyBaseLLMRequestProcessing,
                 )
@@ -119,20 +148,27 @@ async def _handle_stream_message(
                     return json.dumps(obj) + "\n"
 
                 def _ndjson_error(proxy_exc: Any) -> str:
-                    return json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {
-                                "code": -32603,
-                                "message": getattr(
-                                    proxy_exc, "message", f"Streaming error: {proxy_exc!s}"
-                                ),
-                            },
-                        }
-                    ) + "\n"
+                    return (
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": -32603,
+                                    "message": getattr(
+                                        proxy_exc,
+                                        "message",
+                                        f"Streaming error: {proxy_exc!s}",
+                                    ),
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
 
-                async for line in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                async for (
+                    line
+                ) in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
                     response=a2a_stream,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
@@ -151,7 +187,12 @@ async def _handle_stream_message(
                         yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
-            if use_proxy_hooks and proxy_logging_obj is not None and user_api_key_dict is not None and request_data is not None:
+            if (
+                use_proxy_hooks
+                and proxy_logging_obj is not None
+                and user_api_key_dict is not None
+                and request_data is not None
+            ):
                 transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                     user_api_key_dict=user_api_key_dict,
                     original_exception=e,
@@ -248,7 +289,7 @@ async def get_agent_card(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def invoke_agent_a2a(
+async def invoke_agent_a2a(  # noqa: PLR0915
     agent_id: str,
     request: Request,
     fastapi_response: Response,
@@ -324,6 +365,8 @@ async def invoke_agent_a2a(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        _enforce_inbound_trace_id(agent, request)
+
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
@@ -344,6 +387,10 @@ async def invoke_agent_a2a(
         )
 
         # Set up data dict for litellm processing
+        if "metadata" not in body:
+            body["metadata"] = {}
+        body["metadata"]["agent_id"] = agent.agent_id
+
         body.update(
             {
                 "model": f"a2a_agent/{agent_name}",
@@ -367,6 +414,36 @@ async def invoke_agent_a2a(
             version=version,
         )
 
+        # Build merged headers for the backend agent
+        static_headers: Dict[str, str] = dict(agent.static_headers or {})
+
+        raw_headers = dict(request.headers)
+        normalized = {k.lower(): v for k, v in raw_headers.items()}
+
+        dynamic_headers: Dict[str, str] = {}
+
+        # 1. Admin-configured extra_headers: forward named headers from client request
+        if agent.extra_headers:
+            for header_name in agent.extra_headers:
+                val = normalized.get(header_name.lower())
+                if val is not None:
+                    dynamic_headers[header_name] = val
+
+        # 2. Convention-based forwarding: x-a2a-{agent_id_or_name}-{header_name}
+        #    Matches both agent_id (UUID) and agent_name (alias), case-insensitive.
+        for alias in (agent.agent_id.lower(), agent.agent_name.lower()):
+            prefix = f"x-a2a-{alias}-"
+            for key, val in normalized.items():
+                if key.startswith(prefix):
+                    header_name = key[len(prefix) :]
+                    if header_name:
+                        dynamic_headers[header_name] = val
+
+        agent_extra_headers = merge_agent_headers(
+            dynamic_headers=dynamic_headers or None,
+            static_headers=static_headers or None,
+        )
+
         # Route through SDK functions
         if method == "message/send":
             from a2a.types import MessageSendParams, SendMessageRequest
@@ -382,6 +459,8 @@ async def invoke_agent_a2a(
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
+                litellm_logging_obj=logging_obj,
+                agent_extra_headers=agent_extra_headers,
             )
 
             response = await proxy_logging_obj.post_call_success_hook(
@@ -406,6 +485,7 @@ async def invoke_agent_a2a(
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
+                agent_extra_headers=agent_extra_headers,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,

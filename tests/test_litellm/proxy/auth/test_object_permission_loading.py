@@ -44,6 +44,11 @@ async def test_get_key_object_loads_object_permission():
         vector_stores=["store1"],
     )
     
+    # Mock proxy_logging_obj to handle async service hooks
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    
     # Mock get_object_permission to return the permission
     with patch(
         "litellm.proxy.auth.auth_checks.get_object_permission",
@@ -51,6 +56,9 @@ async def test_get_key_object_loads_object_permission():
     ), patch(
         "litellm.proxy.auth.auth_checks._cache_key_object",
         AsyncMock()
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj
     ):
         result = await get_key_object(
             hashed_token="test_token_hash",
@@ -84,9 +92,17 @@ async def test_get_key_object_no_permission_id():
     }
     mock_prisma_client.get_data = AsyncMock(return_value=mock_token_data)
     
+    # Mock proxy_logging_obj to handle async service hooks
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    
     with patch(
         "litellm.proxy.auth.auth_checks._cache_key_object",
         AsyncMock()
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj
     ):
         result = await get_key_object(
             hashed_token="test_token_hash",
@@ -124,6 +140,11 @@ async def test_get_team_object_loads_object_permission():
         vector_stores=["team_store1"],
     )
     
+    # Mock proxy_logging_obj to handle async service hooks
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    mock_proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    
     with patch(
         "litellm.proxy.auth.auth_checks._get_team_db_check",
         AsyncMock(return_value=mock_team)
@@ -138,6 +159,9 @@ async def test_get_team_object_loads_object_permission():
         return_value=True
     ), patch(
         "litellm.proxy.auth.auth_checks._update_last_db_access_time"
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging_obj
     ):
         result = await get_team_object(
             team_id="test_team",

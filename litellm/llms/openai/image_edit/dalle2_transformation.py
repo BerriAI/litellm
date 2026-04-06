@@ -22,7 +22,7 @@ else:
 class DallE2ImageEditConfig(OpenAIImageEditConfig):
     """
     DALL-E-2 specific configuration for image edit API.
-    
+
     DALL-E-2 only supports editing a single image (not an array).
     Uses "image" field name instead of "image[]".
     """
@@ -40,7 +40,7 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         Transform image edit request for DALL-E-2.
 
         DALL-E-2 only accepts a single image with field name "image" (not "image[]").
-        """        
+        """
         request_params = {
             "model": model,
             **image_edit_optional_request_params,
@@ -49,10 +49,9 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
             request_params["image"] = image
         if prompt is not None:
             request_params["prompt"] = prompt
-            
+
         request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
-
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
@@ -103,4 +102,3 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
-

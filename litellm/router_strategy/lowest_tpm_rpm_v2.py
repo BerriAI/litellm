@@ -47,9 +47,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(
-        self, router_cache: DualCache, routing_args: dict = {}
-    ):
+    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
         BaseRoutingStrategy.__init__(
@@ -335,13 +333,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     ):
         lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
+        deployment_lookup = {
+            deployment.get("model_info", {}).get("id"): deployment
+            for deployment in healthy_deployments
+        }
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
-            _deployment = None
             item = item.split(":")[0]
-            for m in healthy_deployments:
-                if item == m["model_info"]["id"]:
-                    _deployment = m
+            _deployment = deployment_lookup.get(item)
             if _deployment is None:
                 continue  # skip to next one
             elif item_tpm is None:

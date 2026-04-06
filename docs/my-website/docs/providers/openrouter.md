@@ -210,3 +210,90 @@ response = image_generation(
 # Cost is available in the response metadata
 print(f"Request cost: ${response._hidden_params['additional_headers']['llm_provider-x-litellm-response-cost']}")
 ```
+
+## Image Edit
+
+OpenRouter supports image editing through select models like Google Gemini image models. LiteLLM routes image edit requests to OpenRouter's chat completions endpoint with the source image sent as a base64 data URL and `modalities: ["image", "text"]`.
+
+### Supported Models
+
+| Model | Description |
+|-------|-------------|
+| `openrouter/google/gemini-2.5-flash-image` | Gemini 2.5 Flash with image editing |
+
+See all available image models on [OpenRouter's model list](https://openrouter.ai/models?modality=image).
+
+### Supported Parameters
+
+| Parameter | OpenRouter Mapping | Notes |
+|-----------|--------------------|-------|
+| `size` | `image_config.aspect_ratio` | `1024x1024` → `1:1`, `1536x1024` → `3:2`, `1024x1536` → `2:3`, `1792x1024` → `16:9`, `1024x1792` → `9:16` |
+| `quality` | `image_config.image_size` | `low`/`standard` → `1K`, `medium` → `2K`, `high`/`hd` → `4K` |
+| `n` | `n` | Number of images |
+
+:::note
+`quality=high` (4K) is only supported by `google/gemini-3-pro-image-preview` and `google/gemini-3.1-flash-image-preview`. The `google/gemini-2.5-flash-image` model supports up to `medium` (2K).
+:::
+
+### Usage
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Basic image edit
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Make the sky a vibrant purple sunset",
+)
+
+print(response)
+```
+
+### Advanced Usage with Parameters
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Edit with size and quality parameters
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("photo.png", "rb"),
+    prompt="Add northern lights to the sky",
+    size="1536x1024",   # Maps to aspect_ratio 3:2
+    quality="high",      # Maps to image_size 4K
+)
+
+# Access the edited image
+image_data = response.data[0]
+if image_data.b64_json:
+    import base64
+    with open("edited.png", "wb") as f:
+        f.write(base64.b64decode(image_data.b64_json))
+```
+
+### Multiple Images Edit
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene",
+)
+
+print(response)
+```

@@ -158,8 +158,16 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret_str(api_key)
+        # OpenRouter: when the router/proxy already set custom_llm_provider,
+        # the model may still carry LiteLLM's "openrouter/" routing prefix.
+        # Native IDs like "openrouter/auto" must stay intact for the API; IDs
+        # like "openrouter/anthropic/claude-3.5-sonnet" must become
+        # "anthropic/claude-3.5-sonnet" (OpenRouter expects provider/model).
+        if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+            remainder = model[len("openrouter/") :]
+            if "/" in remainder:
+                return remainder, custom_llm_provider, dynamic_api_key, api_base
+            return model, custom_llm_provider, dynamic_api_key, api_base
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
@@ -194,8 +202,8 @@ def get_llm_provider(  # noqa: PLR0915
                 )
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(
-                    "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
-                        dynamic_api_key
+                    "dynamic_api_key needs to be a string. Got type={}".format(
+                        type(dynamic_api_key).__name__
                     )
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base
@@ -271,10 +279,16 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
-                    elif endpoint == "api.minimax.io/anthropic" or endpoint == "api.minimaxi.com/anthropic":
+                    elif (
+                        endpoint == "api.minimax.io/anthropic"
+                        or endpoint == "api.minimaxi.com/anthropic"
+                    ):
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
-                    elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
+                    elif (
+                        endpoint == "api.minimax.io/v1"
+                        or endpoint == "api.minimaxi.com/v1"
+                    ):
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
                     elif endpoint == "platform.publicai.co/v1":
@@ -553,6 +567,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "bedrock_mantle":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = (
@@ -571,7 +592,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         if api_base is None:
             api_base = litellm.BasetenConfig.get_api_base_for_model(model)
         else:
-            api_base = api_base or get_secret_str("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
+            api_base = (
+                api_base
+                or get_secret_str("BASETEN_API_BASE")
+                or "https://inference.baseten.co/v1"
+            )
         dynamic_api_key = api_key or get_secret_str("BASETEN_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
@@ -596,9 +621,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif custom_llm_provider == "ollama":
         api_base = (
-            api_base
-            or get_secret("OLLAMA_API_BASE")
-            or "http://localhost:11434"
+            api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
@@ -912,17 +935,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     elif custom_llm_provider == "langgraph":
         # LangGraph is a custom provider, just need to set api_base
         api_base = (
-            api_base
-            or get_secret_str("LANGGRAPH_API_BASE")
-            or "http://localhost:2024"
+            api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
         )
         dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
     elif custom_llm_provider == "manus":
         # Manus is OpenAI compatible for responses API
         api_base = (
-            api_base
-            or get_secret_str("MANUS_API_BASE")
-            or "https://api.manus.im"
+            api_base or get_secret_str("MANUS_API_BASE") or "https://api.manus.im"
         )
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 

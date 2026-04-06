@@ -31,9 +31,6 @@ vi.mock("../networking", async () => {
     vectorStoreListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
-    mcpToolsCall: vi.fn().mockResolvedValue({
-      data: [],
-    }),
     agentListCall: vi.fn().mockResolvedValue({
       data: [],
     }),
@@ -54,6 +51,16 @@ vi.mock("../networking", async () => {
 
 vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [
+      { organization_id: "org-1", organization_alias: "Engineering" },
+      { organization_id: "org-2", organization_alias: "Sales" },
+    ],
+    isLoading: false,
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
@@ -374,7 +381,7 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable guardrails selector when user is not premium", async () => {
+  it("should disable guardrails selector when user is not premium and has no write access role", async () => {
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
@@ -494,7 +501,50 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should disable cancel button during submission", async () => {
+  it("should display 'AI APIs' label for the llm_api key type option", async () => {
+    const keyDataWithLlmApiRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithLlmApiRoutes}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Type")).toBeInTheDocument();
+    });
+
+    // The selected key type label should show "AI APIs" (not "LLM API")
+    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
+    expect(keyTypeSection).toBeInTheDocument();
+
+    // Open the dropdown to see all options
+    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
+    await userEvent.click(selectElement);
+
+    await waitFor(() => {
+      // Verify "AI APIs" appears as an option label
+      const options = document.querySelectorAll(".ant-select-item-option");
+      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
+      expect(hasAIAPIs).toBe(true);
+
+      // Verify old "LLM API" label does NOT appear
+      const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
+      expect(hasLLMAPI).toBe(false);
+    });
+  });
+
+  it("should display cancel button during submission", async () => {
     let resolveSubmit: (() => void) | undefined;
     const submitPromise = new Promise<void>((resolve) => {
       resolveSubmit = resolve;
@@ -535,5 +585,92 @@ describe("KeyEditView", () => {
     if (resolveSubmit) {
       resolveSubmit();
     }
+  });
+
+  describe("organization dropdown", () => {
+    it("should render the organization dropdown", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+    });
+
+    it("should disable the organization dropdown for non-admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeTruthy();
+    });
+
+    it("should not disable the organization dropdown for admin users", async () => {
+      const { container } = renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Organization")).toBeInTheDocument();
+      });
+
+      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
+      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
+      expect(disabledSelect).toBeFalsy();
+    });
+
+    it("should initialize organization from keyData", async () => {
+      const keyWithOrg = {
+        ...MOCK_KEY_DATA,
+        organization_id: "org-1",
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyWithOrg}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Engineering")).toBeInTheDocument();
+      });
+    });
   });
 });

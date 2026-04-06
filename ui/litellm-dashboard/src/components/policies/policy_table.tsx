@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon, Button, Badge } from "@tremor/react";
 import { TrashIcon, PencilIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip, Tag } from "antd";
@@ -11,6 +11,32 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { Policy } from "./types";
+
+/** One row per policy name; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
+interface PolicyRow {
+  policy_name: string;
+  primaryPolicy: Policy;
+  versionCount: number;
+}
+
+function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
+  const byName = new Map<string, Policy[]>();
+  for (const p of policies) {
+    const name = p.policy_name || "(unnamed)";
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name)!.push(p);
+  }
+  const rows: PolicyRow[] = [];
+  for (const [policyName, versions] of byName) {
+    // Prefer production, then highest version_number
+    const primary =
+      versions.find((v) => v.version_status === "production") ??
+      [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0] ??
+      versions[0];
+    rows.push({ policy_name: policyName, primaryPolicy: primary, versionCount: versions.length });
+  }
+  return rows.sort((a, b) => a.policy_name.localeCompare(b.policy_name));
+}
 
 interface PolicyTableProps {
   policies: Policy[];
@@ -29,49 +55,48 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   onViewClick,
   isAdmin = false,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "policy_name", desc: false }]);
 
-  // Format date helper function
+  const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
     return date.toLocaleString();
   };
 
-  const columns: ColumnDef<Policy>[] = [
-    {
-      header: "Policy ID",
-      accessorKey: "policy_id",
-      cell: (info: any) => (
-        <Tooltip title={String(info.getValue() || "")}>
-          <Button
-            size="xs"
-            variant="light"
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-            onClick={() => info.getValue() && onViewClick(info.getValue())}
-          >
-            {info.getValue() ? `${String(info.getValue()).slice(0, 7)}...` : ""}
-          </Button>
-        </Tooltip>
-      ),
-    },
+  const columns: ColumnDef<PolicyRow>[] = [
     {
       header: "Name",
       accessorKey: "policy_name",
       cell: ({ row }) => {
-        const policy = row.original;
+        const { primaryPolicy, versionCount } = row.original;
         return (
-          <Tooltip title={policy.policy_name}>
-            <span className="text-xs font-medium">{policy.policy_name || "-"}</span>
-          </Tooltip>
+          <div className="flex items-center gap-2">
+            <Tooltip title={`${primaryPolicy.policy_name || "-"}${versionCount > 1 ? ` (${versionCount} versions)` : ""}`}>
+              <Button
+                size="xs"
+                variant="light"
+                className="font-medium text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
+                onClick={() => primaryPolicy.policy_id && onViewClick(primaryPolicy.policy_id)}
+              >
+                {primaryPolicy.policy_name || "-"}
+              </Button>
+            </Tooltip>
+            {versionCount > 1 && (
+              <Badge color="gray" size="xs">
+                {versionCount} version{versionCount !== 1 ? "s" : ""}
+              </Badge>
+            )}
+          </div>
         );
       },
     },
     {
       header: "Description",
-      accessorKey: "description",
+      accessorFn: (row) => row.primaryPolicy.description ?? "",
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         return (
           <Tooltip title={policy.description}>
             <span className="text-xs truncate max-w-[200px] block">
@@ -83,9 +108,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     },
     {
       header: "Inherits From",
-      accessorKey: "inherit",
+      accessorFn: (row) => row.primaryPolicy.inherit ?? "",
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         return policy.inherit ? (
           <Badge color="blue" size="xs">
             {policy.inherit}
@@ -97,9 +122,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     },
     {
       header: "Guardrails (Add)",
-      accessorKey: "guardrails_add",
+      accessorFn: (row) => (row.primaryPolicy.guardrails_add ?? []).join(", "),
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         const guardrails = policy.guardrails_add || [];
         if (guardrails.length === 0) {
           return <span className="text-xs text-gray-400">-</span>;
@@ -122,9 +147,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     },
     {
       header: "Guardrails (Remove)",
-      accessorKey: "guardrails_remove",
+      accessorFn: (row) => (row.primaryPolicy.guardrails_remove ?? []).join(", "),
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         const guardrails = policy.guardrails_remove || [];
         if (guardrails.length === 0) {
           return <span className="text-xs text-gray-400">-</span>;
@@ -147,9 +172,12 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     },
     {
       header: "Model Condition",
-      accessorKey: "condition",
+      accessorFn: (row) => {
+        const m = row.primaryPolicy.condition?.model;
+        return typeof m === "string" ? m : JSON.stringify(m ?? "");
+      },
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         const modelCondition = policy.condition?.model;
         if (!modelCondition) {
           return <span className="text-xs text-gray-400">-</span>;
@@ -169,9 +197,10 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
     },
     {
       header: "Created At",
-      accessorKey: "created_at",
+      id: "created_at",
+      accessorFn: (row) => row.primaryPolicy.created_at ?? "",
       cell: ({ row }) => {
-        const policy = row.original;
+        const policy = row.original.primaryPolicy;
         return (
           <Tooltip title={policy.created_at}>
             <span className="text-xs">{formatDate(policy.created_at)}</span>
@@ -183,7 +212,8 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       id: "actions",
       header: "Actions",
       cell: ({ row }) => {
-        const policy = row.original;
+        const { primaryPolicy } = row.original;
+        const policy = primaryPolicy;
         return (
           <div className="flex space-x-2">
             {isAdmin && (
@@ -216,7 +246,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   ];
 
   const table = useReactTable({
-    data: policies,
+    data: rows,
     columns,
     state: {
       sorting,
@@ -273,9 +303,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
                   </div>
                 </TableCell>
               </TableRow>
-            ) : policies.length > 0 ? (
+            ) : rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} className="h-8">
+                <TableRow key={row.original.policy_name} className="h-8">
                   {row.getVisibleCells().map((cell) => (
                     <TableCell
                       key={cell.id}

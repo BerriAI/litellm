@@ -59,7 +59,7 @@ class BaseSecretManager(ABC):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None
+        tags: Optional[Union[dict, list]] = None,
     ) -> Dict[str, Any]:
         """
         Asynchronously write a secret to the secret manager.

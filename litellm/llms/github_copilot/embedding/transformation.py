@@ -100,9 +100,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         # Use provided api_base or fall back to authenticator's base or default
         api_base = (
-            self.authenticator.get_api_base()
-            or api_base
-            or GITHUB_COPILOT_API_BASE
+            self.authenticator.get_api_base() or api_base or GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
@@ -121,7 +119,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Transform embedding request to GitHub Copilot format.
         """
-        
+
         # Ensure input is a list
         if isinstance(input, str):
             input = [input]
@@ -151,10 +149,10 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding response from GitHub Copilot format.
         """
         logging_obj.post_call(original_response=raw_response.text)
-        
+
         # GitHub Copilot returns standard OpenAI-compatible embedding response
         response_json = raw_response.json()
-        
+
         return convert_to_model_response_object(
             response_object=response_json,
             model_response_object=model_response,
@@ -189,4 +187,3 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         return OpenAIConfig().get_error_class(
             error_message=error_message, status_code=status_code, headers=headers
         )
-

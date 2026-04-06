@@ -55,7 +55,7 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
 
 
 def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-1.5-flash")
+    info = litellm.get_model_info("gemini/gemini-2.0-flash")
     print("info", info)
     assert info["supports_vision"] is True
 
@@ -83,9 +83,9 @@ def test_get_model_info_finetuned_models():
 
 
 def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-1.5-pro-002")
+    info = litellm.get_model_info("gemini-2.0-flash")
     print("info", info)
-    assert info["key"] == "gemini-1.5-pro-002"
+    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -121,14 +121,14 @@ def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     args = {
-        "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "custom_llm_provider": "bedrock",
     }
-    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
     info = litellm.get_model_info(**args)
     print("info", info)
-    assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    assert info["litellm_provider"] == "bedrock"
+    assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert info["litellm_provider"] == "bedrock_converse"
 
 
 @pytest.mark.parametrize(

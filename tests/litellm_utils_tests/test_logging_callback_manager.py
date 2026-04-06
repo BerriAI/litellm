@@ -269,11 +269,11 @@ async def test_slack_alerting_callback_registration(callback_manager):
             alert_types=["outage_alerts"]
         )
         assert len(litellm.callbacks) == 1  # Regular callback for outage alerts
-        assert len(litellm.success_callback) == 1  # Success callback for response_taking_too_long
         assert isinstance(litellm.callbacks[0], SlackAlerting)
-        # Get the method reference for comparison
+        # response_taking_too_long_callback is async, so it should be in the async success callback list
         response_taking_too_long_callback = proxy_logging.slack_alerting_instance.response_taking_too_long_callback
-        assert litellm.success_callback[0] == response_taking_too_long_callback
+        assert len(litellm._async_success_callback) == 1
+        assert litellm._async_success_callback[0] == response_taking_too_long_callback
 
         # Cleanup
         callback_manager._reset_all_callbacks()

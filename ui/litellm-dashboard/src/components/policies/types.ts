@@ -7,6 +7,9 @@ export interface Policy {
   guardrails_remove: string[];
   condition: PolicyCondition | null;
   pipeline?: GuardrailPipeline | null;
+  version_number?: number;
+  version_status?: "draft" | "published" | "production";
+  parent_version_id?: string | null;
   created_at?: string;
   updated_at?: string;
   created_by?: string;
@@ -21,6 +24,8 @@ export interface PipelineStep {
   guardrail: string;
   on_fail: "block" | "allow" | "next" | "modify_response";
   on_pass: "allow" | "block" | "next" | "modify_response";
+  /** If unset, API/technical errors use on_fail (backward compatible). */
+  on_error?: "block" | "allow" | "next" | "modify_response" | null;
   pass_data?: boolean;
   modify_response_message?: string | null;
 }
@@ -75,6 +80,12 @@ export interface PolicyAttachmentCreateRequest {
 
 export interface PolicyListResponse {
   policies: Policy[];
+  total_count: number;
+}
+
+export interface PolicyVersionListResponse {
+  policy_name: string;
+  versions: Policy[];
   total_count: number;
 }
 

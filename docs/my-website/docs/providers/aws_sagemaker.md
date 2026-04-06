@@ -526,3 +526,98 @@ print(f"response: {response}")
 ```
 
 
+
+## Nova Models on SageMaker
+
+LiteLLM supports Amazon Nova models (Nova Micro, Nova Lite, Nova 2 Lite) deployed on SageMaker Inference real-time endpoints. These custom/fine-tuned Nova models use an OpenAI-compatible API format.
+
+**Reference:** [AWS Blog - Amazon SageMaker Inference for Custom Amazon Nova Models](https://aws.amazon.com/blogs/aws/announcing-amazon-sagemaker-inference-for-custom-amazon-nova-models/)
+
+### Usage
+
+Use the `sagemaker_nova/` prefix with your SageMaker endpoint name:
+
+```python
+import litellm
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+# Basic chat completion
+response = litellm.completion(
+    model="sagemaker_nova/my-nova-endpoint",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    temperature=0.7,
+    max_tokens=512,
+)
+print(response.choices[0].message.content)
+```
+
+### Streaming
+
+```python
+response = litellm.completion(
+    model="sagemaker_nova/my-nova-endpoint",
+    messages=[{"role": "user", "content": "Write a short poem"}],
+    stream=True,
+    stream_options={"include_usage": True},
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Multimodal (Images)
+
+Nova models on SageMaker support image inputs using base64 data URIs:
+
+```python
+response = litellm.completion(
+    model="sagemaker_nova/my-nova-endpoint",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+            ]
+        }
+    ],
+)
+```
+
+### Proxy Config
+
+```yaml
+model_list:
+  - model_name: nova-micro
+    litellm_params:
+      model: sagemaker_nova/my-nova-micro-endpoint
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-east-1
+```
+
+### Supported Parameters
+
+All standard OpenAI parameters are supported, plus these Nova-specific parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `top_k` | integer | Limits token selection to top K most likely tokens |
+| `reasoning_effort` | `"low"` \| `"high"` | Reasoning effort level (Nova 2 Lite custom models only) |
+| `allowed_token_ids` | array[int] | Restrict output to specified token IDs |
+| `truncate_prompt_tokens` | integer | Truncate prompt to N tokens if it exceeds limit |
+
+```python
+response = litellm.completion(
+    model="sagemaker_nova/my-nova-endpoint",
+    messages=[{"role": "user", "content": "Think step by step: what is 2+2?"}],
+    top_k=40,
+    reasoning_effort="low",
+    logprobs=True,
+    top_logprobs=2,
+)
+```

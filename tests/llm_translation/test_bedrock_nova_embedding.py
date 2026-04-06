@@ -390,6 +390,109 @@ class TestNovaTransformationResponse:
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
         assert result.data[1].embedding == [0.4, 0.5, 0.6]
 
+    def test_image_embedding_response_with_image_count(self):
+        """Test that Nova image embedding response populates image_count for cost tracking."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "IMAGE",
+                        "embedding": [0.1, 0.2, 0.3],
+                    }
+                ]
+            }
+        ]
+
+        # Simulate batch_data with image in singleEmbeddingParams
+        batch_data = [
+            {
+                "schemaVersion": "nova-multimodal-embed-v1",
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": 3072,
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": "/9j/4AAQSkZJRg=="},
+                    },
+                },
+            }
+        ]
+
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+            batch_data=batch_data,
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens_details is not None
+        assert result.usage.prompt_tokens_details.image_count == 1
+
+    def test_text_embedding_response_no_image_count(self):
+        """Test that Nova text embedding response does not set image_count."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "TEXT",
+                        "embedding": [0.1, 0.2, 0.3],
+                        "truncatedCharLength": 20,
+                    }
+                ]
+            }
+        ]
+
+        batch_data = [
+            {
+                "schemaVersion": "nova-multimodal-embed-v1",
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": 3072,
+                    "text": {"value": "hello world", "truncationMode": "END"},
+                },
+            }
+        ]
+
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+            batch_data=batch_data,
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens_details is None
+
+    def test_nova_embedding_backward_compat_no_batch_data(self):
+        """Test that Nova transformer works without batch_data (backward compatibility)."""
+        config = AmazonNovaEmbeddingConfig()
+
+        response_list = [
+            {
+                "embeddings": [
+                    {
+                        "embeddingType": "TEXT",
+                        "embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
+                    }
+                ]
+            }
+        ]
+
+        # Call without batch_data — should not break
+        result = config._transform_response(
+            response_list=response_list,
+            model="amazon.nova-2-multimodal-embeddings-v1:0",
+        )
+
+        assert result.usage is not None
+        assert result.usage.total_tokens > 0
+        assert result.usage.prompt_tokens_details is None
+
     def test_async_invoke_response(self):
         """Test async invoke response transformation."""
         config = AmazonNovaEmbeddingConfig()

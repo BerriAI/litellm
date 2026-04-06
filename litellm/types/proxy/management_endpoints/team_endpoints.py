@@ -43,10 +43,20 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
     team_member_permissions: List[str]
 
 
+class TeamListItem(LiteLLM_TeamTable):
+    """A team item in the paginated list response, enriched with computed fields."""
+
+    members_count: int = 0
+    # Resources inherited from access groups (separate from direct assignments)
+    access_group_models: Optional[List[str]] = None
+    access_group_mcp_server_ids: Optional[List[str]] = None
+    access_group_agent_ids: Optional[List[str]] = None
+
+
 class TeamListResponse(BaseModel):
     """Response to get the list of teams"""
 
-    teams: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
+    teams: List[Union[TeamListItem, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
     total: int
     page: int
     page_size: int

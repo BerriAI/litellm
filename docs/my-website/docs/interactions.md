@@ -130,13 +130,12 @@ Point the Google GenAI SDK to LiteLLM Proxy:
 
 ```python showLineNumbers title="Google GenAI SDK with LiteLLM Proxy"
 from google import genai
-import os
 
 # Point SDK to LiteLLM Proxy
-os.environ["GOOGLE_GENAI_BASE_URL"] = "http://localhost:4000"
-os.environ["GEMINI_API_KEY"] = "sk-1234"  # Your LiteLLM API key
-
-client = genai.Client()
+client = genai.Client(
+    api_key="sk-1234",  # Your LiteLLM API key
+    http_options={"base_url": "http://localhost:4000"},
+)
 
 # Create an interaction
 interaction = client.interactions.create(
@@ -151,12 +150,11 @@ print(interaction.outputs[-1].text)
 
 ```python showLineNumbers title="Google GenAI SDK Streaming"
 from google import genai
-import os
 
-os.environ["GOOGLE_GENAI_BASE_URL"] = "http://localhost:4000"
-os.environ["GEMINI_API_KEY"] = "sk-1234"
-
-client = genai.Client()
+client = genai.Client(
+    api_key="sk-1234",  # Your LiteLLM API key
+    http_options={"base_url": "http://localhost:4000"},
+)
 
 for chunk in client.interactions.create_stream(
     model="gemini/gemini-2.5-flash",

@@ -3,7 +3,7 @@ from typing import Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy._types import KeyManagementRoutes, LitellmUserRoles
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
@@ -204,6 +204,10 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = Field(
         default=None,
         description="Default rpm limit for new automatically created teams",
+    )
+    team_member_permissions: Optional[List[KeyManagementRoutes]] = Field(
+        default=None,
+        description="Default permissions granted to members of newly created teams (e.g. /key/generate, /key/update, /key/delete). /key/info and /key/health are always included.",
     )
 
 

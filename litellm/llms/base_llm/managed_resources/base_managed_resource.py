@@ -39,27 +39,27 @@ else:
     Router = Any
 
 # Generic type for resource objects
-ResourceObjectType = TypeVar('ResourceObjectType')
+ResourceObjectType = TypeVar("ResourceObjectType")
 
 
 class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     """
     Base class for managing resources with target_model_names support.
-    
+
     This class provides common functionality for:
     - Storing unified resource IDs with model mappings
     - Retrieving resources by unified ID
     - Deleting resources across multiple models
     - Creating resources for multiple models
     - Filtering deployments based on model mappings
-    
+
     Subclasses should implement:
     - resource_type: str property
     - table_name: str property
     - create_resource_for_model: method to create resource on a specific model
     - get_unified_resource_id_format: method to generate unified ID format
     """
-    
+
     def __init__(
         self,
         internal_usage_cache: InternalUsageCache,
@@ -98,15 +98,15 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> str:
         """
         Generate the format string for the unified resource ID.
-        
+
         This should return a string that will be base64 encoded.
         Example for files:
             "litellm_proxy:application/json;unified_id,{uuid};target_model_names,{models};..."
-        
+
         Args:
             resource_object: The resource object returned from the provider
             target_model_names_list: List of target model names
-            
+
         Returns:
             Format string to be base64 encoded
         """
@@ -122,13 +122,13 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> ResourceObjectType:
         """
         Create a resource for a specific model.
-        
+
         Args:
             llm_router: LiteLLM router instance
             model: Model name to create resource for
             request_data: Request data for resource creation
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             Resource object from the provider
         """
@@ -149,7 +149,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> None:
         """
         Store unified resource ID with model mappings in cache and database.
-        
+
         Args:
             unified_resource_id: The unified resource ID (base64 encoded)
             resource_object: The resource object to store (can be None)
@@ -161,7 +161,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         verbose_logger.info(
             f"Storing LiteLLM Managed {self.resource_type} with id={unified_resource_id} in cache"
         )
-        
+
         # Prepare cache data
         cache_data = {
             "unified_resource_id": unified_resource_id,
@@ -171,11 +171,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "created_by": user_api_key_dict.user_id,
             "updated_by": user_api_key_dict.user_id,
         }
-        
+
         # Add additional fields if provided
         if additional_db_fields:
             cache_data.update(additional_db_fields)
-        
+
         # Store in cache
         if resource_object is not None:
             await self.internal_usage_cache.async_set_cache(
@@ -192,7 +192,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "created_by": user_api_key_dict.user_id,
             "updated_by": user_api_key_dict.user_id,
         }
-        
+
         # Add resource object if available
         if resource_object is not None:
             # Handle both dict and Pydantic models
@@ -200,14 +200,14 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 db_data["resource_object"] = resource_object.model_dump_json()  # type: ignore
             elif isinstance(resource_object, dict):
                 db_data["resource_object"] = json.dumps(resource_object)
-            
+
             # Extract storage metadata from hidden params if present
             hidden_params = getattr(resource_object, "_hidden_params", {}) or {}
             if "storage_backend" in hidden_params:
                 db_data["storage_backend"] = hidden_params["storage_backend"]
             if "storage_url" in hidden_params:
                 db_data["storage_url"] = hidden_params["storage_url"]
-        
+
         # Add additional fields to database
         if additional_db_fields:
             db_data.update(additional_db_fields)
@@ -215,7 +215,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         # Store in database
         table = getattr(self.prisma_client.db, self.table_name)
         result = await table.create(data=db_data)
-        
+
         verbose_logger.debug(
             f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} stored in db: {result}"
         )
@@ -227,11 +227,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieve unified resource by ID from cache or database.
-        
+
         Args:
             unified_resource_id: The unified resource ID to retrieve
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             Dictionary containing resource data or None if not found
         """
@@ -255,7 +255,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         if db_object:
             return db_object.model_dump()
-        
+
         return None
 
     async def delete_unified_resource_id(
@@ -265,11 +265,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> Optional[ResourceObjectType]:
         """
         Delete unified resource from cache and database.
-        
+
         Args:
             unified_resource_id: The unified resource ID to delete
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             The deleted resource object or None if not found
         """
@@ -278,22 +278,22 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         initial_value = await table.find_first(
             where={"unified_resource_id": unified_resource_id}
         )
-        
+
         if initial_value is None:
             raise Exception(
                 f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} not found"
             )
-        
+
         # Delete from cache
         await self.internal_usage_cache.async_set_cache(
             key=unified_resource_id,
             value=None,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
-        
+
         # Delete from database
         await table.delete(where={"unified_resource_id": unified_resource_id})
-        
+
         return initial_value.resource_object
 
     async def can_user_access_unified_resource_id(
@@ -304,20 +304,20 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> bool:
         """
         Check if user has access to the unified resource ID.
-        
+
         Uses get_unified_resource_id() which checks cache first before hitting the database,
         avoiding direct DB queries in the critical request path.
-        
+
         Args:
             unified_resource_id: The unified resource ID to check
             user_api_key_dict: User API key authentication details
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             True if user has access, False otherwise
         """
         user_id = user_api_key_dict.user_id
-        
+
         # Use cached method instead of direct DB query
         resource = await self.get_unified_resource_id(
             unified_resource_id, litellm_parent_otel_span
@@ -325,7 +325,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         if resource:
             return resource.get("created_by") == user_id
-        
+
         return False
 
     # ============================================================================
@@ -339,14 +339,14 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> Dict[str, Dict[str, str]]:
         """
         Get model-specific resource IDs for a list of unified resource IDs.
-        
+
         Args:
             resource_ids: List of unified resource IDs
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             Dictionary mapping unified_resource_id -> model_id -> provider_resource_id
-            
+
         Example:
             {
                 "unified_resource_id_1": {
@@ -365,11 +365,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
             if unified_resource_object:
                 model_mappings = unified_resource_object.get("model_mappings", {})
-                
+
                 # Handle both JSON string and dict
                 if isinstance(model_mappings, str):
                     model_mappings = json.loads(model_mappings)
-                
+
                 resource_id_mapping[resource_id] = model_mappings
 
         return resource_id_mapping
@@ -387,19 +387,19 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> List[ResourceObjectType]:
         """
         Create a resource for each model in the target list.
-        
+
         Args:
             llm_router: LiteLLM router instance
             request_data: Request data for resource creation
             target_model_names_list: List of target model names
             litellm_parent_otel_span: OpenTelemetry span for tracing
-            
+
         Returns:
             List of resource objects created for each model
         """
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
-        
+
         responses = []
         for model in target_model_names_list:
             individual_response = await self.create_resource_for_model(
@@ -418,11 +418,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> str:
         """
         Generate a unified resource ID from multiple resource objects.
-        
+
         Args:
             resource_objects: List of resource objects from different models
             target_model_names_list: List of target model names
-            
+
         Returns:
             Base64 encoded unified resource ID
         """
@@ -431,12 +431,12 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             resource_object=resource_objects[0],
             target_model_names_list=target_model_names_list,
         )
-        
+
         # Convert to URL-safe base64 and strip padding
         base64_unified_id = (
             base64.urlsafe_b64encode(unified_id_format.encode()).decode().rstrip("=")
         )
-        
+
         return base64_unified_id
 
     def extract_model_mappings_from_responses(
@@ -445,10 +445,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> Dict[str, str]:
         """
         Extract model mappings from resource objects.
-        
+
         Args:
             resource_objects: List of resource objects from different models
-            
+
         Returns:
             Dictionary mapping model_id -> provider_resource_id
         """
@@ -458,8 +458,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             # Get hidden params if available
             hidden_params = getattr(resource_object, "_hidden_params", {}) or {}
             model_resource_id_mapping = hidden_params.get("model_resource_id_mapping")
-            
-            if model_resource_id_mapping and isinstance(model_resource_id_mapping, dict):
+
+            if model_resource_id_mapping and isinstance(
+                model_resource_id_mapping, dict
+            ):
                 model_mappings.update(model_resource_id_mapping)
 
         return model_mappings
@@ -478,17 +480,17 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> List[Dict]:
         """
         Filter deployments based on model mappings for a resource.
-        
+
         This is used by the router to select only deployments that have
         the resource available.
-        
+
         Args:
             model: Model name
             healthy_deployments: List of healthy deployments
             request_kwargs: Request kwargs containing resource_id and mappings
             parent_otel_span: OpenTelemetry span for tracing
             resource_id_key: Key to use for resource ID in request_kwargs
-            
+
         Returns:
             Filtered list of deployments
         """
@@ -500,7 +502,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             Optional[Dict[str, Dict[str, str]]],
             request_kwargs.get("model_resource_id_mapping"),
         )
-        
+
         allowed_model_ids = []
         if resource_id and model_resource_id_mapping:
             model_id_dict = model_resource_id_mapping.get(resource_id, {})
@@ -522,7 +524,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     def get_unified_id_prefix(self) -> str:
         """
         Get the prefix for unified IDs for this resource type.
-        
+
         Returns:
             Prefix string (e.g., "litellm_proxy:")
         """
@@ -537,29 +539,29 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     ) -> Dict[str, Any]:
         """
         List resources created by a user.
-        
+
         Args:
             user_api_key_dict: User API key authentication details
             limit: Maximum number of resources to return
             after: Cursor for pagination
             additional_filters: Additional filters to apply
-            
+
         Returns:
             Dictionary with list of resources and pagination info
         """
         where_clause: Dict[str, Any] = {}
-        
+
         # Filter by user who created the resource
         if user_api_key_dict.user_id:
             where_clause["created_by"] = user_api_key_dict.user_id
-        
+
         if after:
             where_clause["id"] = {"gt": after}
-        
+
         # Add additional filters
         if additional_filters:
             where_clause.update(additional_filters)
-        
+
         # Fetch resources
         fetch_limit = limit or 20
         table = getattr(self.prisma_client.db, self.table_name)
@@ -568,7 +570,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             take=fetch_limit,
             order={"created_at": "desc"},
         )
-        
+
         resource_objects: List[Any] = []
         for resource in resources:
             try:
@@ -580,13 +582,13 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 resource_data = resource.resource_object
                 if isinstance(resource_data, str):
                     resource_data = json.loads(resource_data)
-                
+
                 # Set unified ID
                 if hasattr(resource_data, "id"):
                     resource_data.id = resource.unified_resource_id
                 elif isinstance(resource_data, dict):
                     resource_data["id"] = resource.unified_resource_id
-                
+
                 resource_objects.append(resource_data)
 
             except Exception as e:
@@ -595,7 +597,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                     f"{resource.unified_resource_id}: {e}"
                 )
                 continue
-        
+
         return {
             "object": "list",
             "data": resource_objects,

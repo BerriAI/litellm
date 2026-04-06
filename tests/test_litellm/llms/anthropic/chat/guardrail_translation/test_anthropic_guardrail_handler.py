@@ -231,6 +231,69 @@ class TestAnthropicMessagesHandlerInputProcessing:
             assert result == responses_so_far
 
 
+    @pytest.mark.asyncio
+    async def test_process_input_messages_with_anthropic_native_tools(self):
+        """Test that Anthropic native tools (tool_search_tool_regex) are preserved correctly
+        
+        This test verifies the fix for the bug where Anthropic native tools like
+        tool_search_tool_regex_20251119 were being converted to OpenAI format and then
+        not properly converted back, causing API errors.
+        
+        The guardrail converts tools to OpenAI format for processing, then they need to be
+        converted back to Anthropic format. Native Anthropic tools should be preserved as-is,
+        while regular tools should be converted to type="custom".
+        """
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-opus-4-6",
+            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex"
+                },
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather at a specific location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"]
+                            }
+                        },
+                        "required": ["location"]
+                    },
+                    "defer_loading": True
+                }
+            ]
+        }
+
+        result = await handler.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=MagicMock()
+        )
+
+        # Verify tools are in correct Anthropic format
+        tools = result["tools"]
+        assert len(tools) == 2
+        
+        # First tool should be preserved as Anthropic native tool
+        assert tools[0]["type"] == "tool_search_tool_regex_20251119"
+        assert tools[0]["name"] == "tool_search_tool_regex"
+        
+        # Second tool should be converted to Anthropic custom tool format
+        assert tools[1]["type"] == "custom"
+        assert tools[1]["name"] == "get_weather"
+        assert tools[1]["description"] == "Get the weather at a specific location"
+        assert "input_schema" in tools[1]
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

@@ -314,6 +314,12 @@ general_settings:
   health_check_details: False
 ```
 
+## Health Check Driven Routing
+
+Route traffic away from unhealthy deployments proactively — before user requests hit them. Supports per-error-type failure thresholds, transient error suppression, and automatic safety nets.
+
+See the full guide: [Health Check Driven Routing](./health_check_routing.md)
+
 ## Health Check Timeout
 
 The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
@@ -328,6 +334,22 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
+```
+
+## Health Check Max Tokens
+
+By default, health checks use `max_tokens=1` to minimize cost and latency. For wildcard models, the default is `max_tokens=10`.
+
+You can override this per-model by setting `health_check_max_tokens` in the `model_info` section of your config.yaml.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_max_tokens: 5 # 👈 OVERRIDE HEALTH CHECK MAX TOKENS
 ```
 
 ## `/health/readiness`

@@ -545,6 +545,9 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
     CRITICAL TEST: Validates that request counters are incremented by 1, not by token count.
     This test specifically catches the bug where litellm_proxy_total_requests_metric
     is incorrectly incremented by total_tokens instead of 1.
+
+    The metric is now ONLY incremented in async_log_success_event (for both streaming
+    and non-streaming) to prevent double-counting.
     """
     from datetime import datetime, timedelta
     from unittest.mock import MagicMock
@@ -583,18 +586,18 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
         },
     }
 
-    # Call the success event
+    # Call the success event - should increment for both streaming and non-streaming
     await mock_prometheus_logger.async_log_success_event(
         kwargs, None, kwargs["start_time"], kwargs["end_time"]
     )
 
-    # CRITICAL ASSERTION: Request counter should not be incremented
+    # CRITICAL ASSERTION: Request counter should be incremented by 1
     total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
     assert (
-        len(total_requests_metric.inc_calls) == 0
-    ), "Request metric should not be incremented"
+        len(total_requests_metric.inc_calls) == 1
+    ), "Request metric should be incremented once in async_log_success_event"
 
-    # Call the post-call logging hook
+    # Call the post-call logging hook - should NOT increment (to prevent double-counting)
     await mock_prometheus_logger.async_post_call_success_hook(
         data={},
         user_api_key_dict=UserAPIKeyAuth(
@@ -607,11 +610,11 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
         response=MagicMock(),
     )
 
-    # CRITICAL ASSERTION: Request counter be incremented by 1
+    # CRITICAL ASSERTION: Request counter should still be 1 (not incremented again)
     total_requests_metric = mock_prometheus_logger.litellm_proxy_total_requests_metric
     assert (
         len(total_requests_metric.inc_calls) == 1
-    ), "Request metric should not be incremented"
+    ), "Request metric should not be incremented again in async_post_call_success_hook"
 
     # Check that ALL request counter increments are by 1 (not by token count)
     for inc_value in total_requests_metric.inc_calls:
@@ -684,8 +687,8 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
     expected_total_tokens = num_requests * tokens_per_request  # 3 * 500 = 1500
 
     # With the bug, total_request_increments would be 1500 instead of 3
-    assert total_request_increments == 0, (
-        f"SEMANTIC BUG: Request counter total increments = 0, "
+    assert total_request_increments == num_requests, (
+        f"SEMANTIC BUG: Request counter total increments = {total_request_increments}, "
         f"expected {num_requests}. This suggests request counters are being incremented "
         f"by token counts instead of request counts."
     )

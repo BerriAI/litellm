@@ -237,6 +237,83 @@ async def test_bedrock_rerank_header_forwarding_async(model):
             pytest.fail(f"Failed to forward headers to {model}: {str(e)}")
 
 
+def test_bedrock_rerank_timeout_sync():
+    """
+    Test that the timeout parameter is passed through to the HTTP client for Bedrock rerank (sync).
+    """
+    client = HTTPHandler()
+    model = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
+    mock_credentials_info = create_mock_credentials()
+
+    with patch.object(client, "post") as mock_post, \
+         patch("litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params", return_value=mock_credentials_info), \
+         patch("botocore.auth.SigV4Auth") as mock_sigv4:
+
+        mock_sigv4.return_value = MagicMock()
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(bedrock_rerank_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_response.raise_for_status = lambda: None
+        mock_post.return_value = mock_response
+
+        litellm.rerank(
+            model=model,
+            query=test_query,
+            documents=test_documents,
+            top_n=3,
+            client=client,
+            timeout=0.001,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        )
+
+        assert mock_post.called
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs.get("timeout") == 0.001, (
+            f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_rerank_timeout_async():
+    """
+    Test that the timeout parameter is passed through to the HTTP client for Bedrock rerank (async).
+    """
+    client = AsyncHTTPHandler()
+    model = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
+    mock_credentials_info = create_mock_credentials()
+
+    with patch.object(client, "post", new_callable=AsyncMock) as mock_post, \
+         patch("litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params", return_value=mock_credentials_info), \
+         patch("botocore.auth.SigV4Auth") as mock_sigv4:
+
+        mock_sigv4.return_value = MagicMock()
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(bedrock_rerank_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_response.raise_for_status = lambda: None
+        mock_post.return_value = mock_response
+
+        await litellm.arerank(
+            model=model,
+            query=test_query,
+            documents=test_documents,
+            top_n=3,
+            client=client,
+            timeout=0.001,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        )
+
+        assert mock_post.called
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs.get("timeout") == 0.001, (
+            f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
+        )
+
+
 def test_bedrock_rerank_extra_headers_and_headers_merge():
     """
     Test that both extra_headers and headers parameters are correctly merged for Bedrock rerank.

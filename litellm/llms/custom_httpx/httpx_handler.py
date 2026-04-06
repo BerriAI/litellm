@@ -8,6 +8,7 @@ try:
 except Exception:
     version = "0.0.0"
 
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -20,6 +21,7 @@ def get_default_headers() -> dict:
         return {"User-Agent": user_agent}
 
     return {"User-Agent": f"litellm/{version}"}
+
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):

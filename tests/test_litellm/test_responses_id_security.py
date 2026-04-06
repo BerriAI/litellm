@@ -545,7 +545,7 @@ class TestAsyncPostCallSuccessHook:
                 response=mock_response,
             )
 
-            mock_encrypt.assert_called_once_with(mock_response, mock_user_api_key_dict)
+            mock_encrypt.assert_called_once_with(mock_response, mock_user_api_key_dict, request_cache=None)
             assert result == mock_response
 
     @pytest.mark.asyncio

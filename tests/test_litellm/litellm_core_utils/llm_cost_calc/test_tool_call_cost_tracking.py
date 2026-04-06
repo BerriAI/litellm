@@ -121,17 +121,20 @@ def test_get_cost_for_built_in_tools_file_search():
 
 def test_get_cost_for_anthropic_web_search():
     """
-    Test that the cost for a web search is 0.00 when no response object is provided
+    Test that Anthropic web search cost is tracked when usage.server_tool_use.web_search_requests
+    is set. Use claude-3-7-sonnet-20250219 (has search_context_cost_per_query) and
+    custom_llm_provider=anthropic so get_cost_for_anthropic_web_search is invoked.
     """
     from litellm.types.utils import ServerToolUse, Usage
 
-    model = "claude-3-7-sonnet-latest"
+    model = "claude-3-7-sonnet-20250219"
     usage = Usage(server_tool_use=ServerToolUse(web_search_requests=1))
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
         usage=usage,
         response_object=None,
         standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
     )
     assert cost > 0.0
 

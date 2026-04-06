@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -26,6 +27,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -52,9 +54,6 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
-
-    # Beta header patterns that are not supported by Bedrock Invoke API
-    # These will be filtered out to prevent 400 "invalid beta flag" errors
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -118,10 +117,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         self, anthropic_messages_request: Dict, model: Optional[str] = None
     ) -> None:
         """
-        Remove `ttl` field from cache_control in messages.
-        Bedrock doesn't support the ttl field in cache_control.
+        Remove unsupported fields from cache_control for Bedrock.
 
-        Update: Bedock supports `5m` and `1h` for Claude 4.5 models.
+        Bedrock only supports `type` and `ttl` in cache_control. It does NOT support:
+        - `scope` (e.g., "global") - always removed
+        - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
+
+        Processes both `system` and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -131,23 +133,36 @@ class AmazonAnthropicClaudeMessagesConfig(
         if model:
             is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
 
+        def _sanitize_cache_control(cache_control: dict) -> None:
+            if not isinstance(cache_control, dict):
+                return
+            # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
+            cache_control.pop("scope", None)
+            # Remove ttl for models that don't support it
+            if "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if is_claude_4_5 and ttl in ["5m", "1h"]:
+                    return
+                cache_control.pop("ttl", None)
+
+        def _process_content_list(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize_cache_control(item["cache_control"])
+
+        # Process system (list of content blocks)
+        if "system" in anthropic_messages_request:
+            system = anthropic_messages_request["system"]
+            if isinstance(system, list):
+                _process_content_list(system)
+
+        # Process messages
         if "messages" in anthropic_messages_request:
             for message in anthropic_messages_request["messages"]:
                 if isinstance(message, dict) and "content" in message:
                     content = message["content"]
                     if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and "cache_control" in item:
-                                cache_control = item["cache_control"]
-                                if (
-                                    isinstance(cache_control, dict)
-                                    and "ttl" in cache_control
-                                ):
-                                    ttl = cache_control["ttl"]
-                                    if is_claude_4_5 and ttl in ["5m", "1h"]:
-                                        continue
-
-                                    cache_control.pop("ttl", None)
+                        _process_content_list(content)
 
     def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
         """
@@ -180,6 +195,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4",  # Opus 4
             "sonnet-4",
             "sonnet_4",  # Sonnet 4
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -251,6 +274,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4.6",
             "opus-4-6",
             "opus_4_6",
+            # sonnet 4.6
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -285,7 +313,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if self._supports_tool_search_on_bedrock(model):
                 beta_set.add("tool-search-tool-2025-10-19")
 
     def _convert_output_format_to_inline_schema(
@@ -389,6 +417,16 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
+        # 5b. Strip `output_config` — Bedrock Invoke doesn't support it
+        # Fixes: https://github.com/BerriAI/litellm/issues/22797
+        anthropic_messages_request.pop("output_config", None)
+
+        # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
+        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
+        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # Ref: https://github.com/BerriAI/litellm/issues/22847
+        remove_custom_field_from_tools(anthropic_messages_request)
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
@@ -399,7 +437,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = anthropic_model_info.get_anthropic_beta_list(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -420,13 +459,16 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set=beta_set,
         )
 
-        # --- Custom logic: if tool-search-tool-2025-10-19 is present, add tool-examples-2025-10-29 ---
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
-        # ------------------------------------------------------------------------------
-    
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+
+        filtered_auto_betas = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
+            provider="bedrock",
+        )
+        filtered_betas = sorted(user_beta_set.union(set(filtered_auto_betas)))
+        if filtered_betas:
+            anthropic_messages_request["anthropic_beta"] = filtered_betas
 
         return anthropic_messages_request
 
@@ -460,6 +502,12 @@ class AmazonAnthropicClaudeMessagesConfig(
     ):
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
+
+        Bedrock's Anthropic-compatible streaming puts cache usage fields
+        (cache_creation_input_tokens, cache_read_input_tokens) only on
+        message_stop, not on message_start or message_delta. Claude Code's
+        SDK only merges usage from message_delta, so we promote those fields
+        from message_stop onto message_delta before yielding.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -470,8 +518,80 @@ class AmazonAnthropicClaudeMessagesConfig(
             request_body=request_body,
         )
 
-        async for chunk in handler.async_sse_wrapper(completion_stream):
+        patched_stream = self._promote_message_stop_usage(completion_stream)
+
+        async for chunk in handler.async_sse_wrapper(patched_stream):
             yield chunk
+
+    @staticmethod
+    async def _promote_message_stop_usage(
+        completion_stream: AsyncIterator[
+            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
+        ],
+    ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
+        """
+        Promote cache usage fields from message_stop onto message_delta.
+
+        Bedrock reports input_tokens (uncached only) on message_start, and
+        the full breakdown (input_tokens, cache_creation_input_tokens,
+        cache_read_input_tokens) only on message_stop. Claude Code's SDK
+        merges usage from message_start and message_delta but ignores
+        message_stop. This method buffers message_delta and, when
+        message_stop arrives with cache usage, merges those fields into the
+        message_delta usage and also updates the input_tokens on
+        message_delta to include the full count (uncached + cache_creation +
+        cache_read).
+        """
+        _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
+        pending_delta = None
+
+        async for chunk in completion_stream:
+            if not isinstance(chunk, dict):
+                if pending_delta is not None:
+                    yield pending_delta
+                    pending_delta = None
+                yield chunk
+                continue
+
+            chunk_type = chunk.get("type")
+
+            if chunk_type == "message_delta":
+                pending_delta = chunk
+                continue
+
+            if chunk_type == "message_stop" and pending_delta is not None:
+                stop_usage = dict(chunk.get("usage") or {})
+                delta_usage = dict(pending_delta.get("usage") or {})
+
+                for field in _CACHE_FIELDS:
+                    if field in stop_usage:
+                        delta_usage[field] = stop_usage[field]
+
+                raw_input = stop_usage.get("input_tokens")
+                if raw_input is not None:
+                    uncached = raw_input if isinstance(raw_input, int) else 0
+                    raw_cc = delta_usage.get("cache_creation_input_tokens", 0)
+                    cache_creation = raw_cc if isinstance(raw_cc, int) else 0
+                    raw_cr = delta_usage.get("cache_read_input_tokens", 0)
+                    cache_read = raw_cr if isinstance(raw_cr, int) else 0
+                    delta_usage["input_tokens"] = uncached + cache_creation + cache_read
+
+                if delta_usage:
+                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+
+                yield pending_delta
+                pending_delta = None
+                yield chunk
+                continue
+
+            if pending_delta is not None:
+                yield pending_delta
+                pending_delta = None
+
+            yield chunk
+
+        if pending_delta is not None:
+            yield pending_delta
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

@@ -6,4 +6,4 @@
 -- With this index, PostgreSQL can use an Index Scan for O(log n) performance.
 --
 -- Related: GitHub Issue #18411
-CREATE INDEX "LiteLLM_UserTable_user_email_lower_idx" ON "LiteLLM_UserTable"(LOWER("user_email"));
+CREATE INDEX IF NOT EXISTS "LiteLLM_UserTable_user_email_lower_idx" ON "LiteLLM_UserTable"(LOWER("user_email"));

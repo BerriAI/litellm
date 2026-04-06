@@ -131,7 +131,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   tooltip="Select the team for which you want to add this model"
                 >
                   <TeamDropdown
-                    teams={teams}
                     onChange={(value) => {
                       setTeamAdminSelectedTeam(value);
                     }}
@@ -325,7 +324,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       },
                     ]}
                   >
-                    <TeamDropdown teams={teams} disabled={!premiumUser} />
+                    <TeamDropdown disabled={!premiumUser} />
                   </Form.Item>
                 )}
                 {isAdmin && (
@@ -358,6 +357,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   teams={teams}
                   guardrailsList={guardrailsList || []}
                   tagsList={tagsList || {}}
+                  accessToken={accessToken || ""}
                 />
               </>
             )}

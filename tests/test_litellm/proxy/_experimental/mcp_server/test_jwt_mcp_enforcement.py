@@ -160,6 +160,32 @@ async def test_mcp_route_check_passes_for_team():
 
 
 @pytest.mark.asyncio
+async def test_mcp_route_check_passes_for_team_server_subpaths():
+    """
+    Verify that allowed_routes_check returns True for /v1/mcp/server sub-paths with default settings.
+    Regression test for JWT users accessing /v1/mcp/server/register and similar endpoints.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    jwt_auth = LiteLLM_JWTAuth()
+
+    for route in [
+        "/v1/mcp/server/register",
+        "/v1/mcp/server/health",
+        "/v1/mcp/server/abc/approve",
+    ]:
+        is_allowed = allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_auth,
+        )
+        assert is_allowed is True, (
+            f"Route {route} should be allowed for TEAM role with default settings"
+        )
+
+
+@pytest.mark.asyncio
 async def test_e2e_jwt_team_mcp_permissions_enforced(monkeypatch):
     """
     End-to-end test verifying that team MCP permissions are properly enforced
@@ -184,6 +210,7 @@ async def test_e2e_jwt_team_mcp_permissions_enforced(monkeypatch):
     proxy_server_module.prisma_client = MagicMock()  # Mock prisma client
     proxy_server_module.user_api_key_cache = DualCache()
     proxy_server_module.proxy_logging_obj = MagicMock()
+    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     # Team "ABC" has MCP servers assigned via object_permission
@@ -389,6 +416,7 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
     proxy_server_module.prisma_client = MagicMock()
     proxy_server_module.user_api_key_cache = DualCache()
     proxy_server_module.proxy_logging_obj = MagicMock()
+    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     # Team MCP servers

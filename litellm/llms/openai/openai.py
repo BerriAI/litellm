@@ -522,17 +522,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         from litellm._logging import verbose_logger
         from litellm.integrations.custom_logger import CustomLogger
 
-        callbacks = litellm.callbacks + (
-            logging_obj.dynamic_success_callbacks or []
-        )
+        callbacks = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         # Avoid logging full callback objects to prevent leaking sensitive data
-        verbose_logger.debug(
-            "LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks)
-        )
+        verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
         tools = optional_params.get("tools", [])
         # Avoid logging full tools payloads; they may contain sensitive parameters
         verbose_logger.debug(
-            "LiteLLM.AgenticHooks: tools_count=%s", len(tools) if isinstance(tools, list) else 1 if tools else 0
+            "LiteLLM.AgenticHooks: tools_count=%s",
+            len(tools) if isinstance(tools, list) else 1 if tools else 0,
         )
         # Get custom_llm_provider from litellm_params
         custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
@@ -541,37 +538,46 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             try:
                 if isinstance(callback, CustomLogger):
                     # Check if the callback has the chat completion agentic loop methods
-                    if not hasattr(callback, 'async_should_run_chat_completion_agentic_loop'):
+                    if not hasattr(
+                        callback, "async_should_run_chat_completion_agentic_loop"
+                    ):
                         continue
-                        
+
                     # First: Check if agentic loop should run (using chat completion method)
-                    should_run, tool_calls = (
-                        await callback.async_should_run_chat_completion_agentic_loop(
-                            response=response,
-                            model=model,
-                            messages=messages,
-                            tools=tools,
-                            stream=stream,
-                            custom_llm_provider=custom_llm_provider,
-                            kwargs=litellm_params,
-                        )
+                    (
+                        should_run,
+                        tool_calls,
+                    ) = await callback.async_should_run_chat_completion_agentic_loop(
+                        response=response,
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        stream=stream,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=litellm_params,
                     )
 
                     if should_run:
                         # Second: Execute agentic loop
-                        kwargs_with_provider = litellm_params.copy() if litellm_params else {}
-                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-                        
+                        kwargs_with_provider = (
+                            litellm_params.copy() if litellm_params else {}
+                        )
+                        kwargs_with_provider[
+                            "custom_llm_provider"
+                        ] = custom_llm_provider
+
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
+                        agentic_response = (
+                            await callback.async_run_chat_completion_agentic_loop(
+                                tools=tool_calls,
+                                model=model,
+                                messages=messages,
+                                response=response,
+                                optional_params=optional_params,
+                                logging_obj=logging_obj,
+                                stream=stream,
+                                kwargs=kwargs_with_provider,
+                            )
                         )
                         # First hook that runs agentic loop wins
                         return agentic_response
@@ -693,6 +699,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 organization=organization,
                                 drop_params=drop_params,
                                 stream_options=stream_options,
+                                shared_session=shared_session,
                             )
                         else:
                             return self.acompletion(
@@ -950,7 +957,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     stream=False,
                     litellm_params=litellm_params,
                 )
-                
+
                 if agentic_response is not None:
                     final_response_obj = agentic_response
 
@@ -1063,6 +1070,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         headers=None,
         drop_params: Optional[bool] = None,
         stream_options: Optional[dict] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         response = None
         data = provider_config.transform_request(
@@ -1087,6 +1095,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    shared_session=shared_session,
                 )
                 ## LOGGING
                 logging_obj.pre_call(
@@ -1398,6 +1407,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         max_retries=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ):
         response = None
         try:
@@ -1411,6 +1421,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            if headers:
+                data["extra_headers"] = headers
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1443,6 +1455,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aimg_generation=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ) -> ImageResponse:
         data = {}
         try:
@@ -1452,7 +1465,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization)  # type: ignore
+                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization, headers=headers)  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1477,6 +1490,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
+            if headers:
+                data["extra_headers"] = headers
             _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
 
             response = _response.model_dump()
@@ -1929,7 +1944,7 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response = await openai_client.batches.create(**create_batch_data)
+        response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     def create_batch(
@@ -1965,7 +1980,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+        response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
         return LiteLLMBatch(**response.model_dump())
 
@@ -1975,7 +1990,7 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
-        response = await openai_client.batches.retrieve(**retrieve_batch_data)
+        response = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     def retrieve_batch(
@@ -2011,7 +2026,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)
+        response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
 
     async def acancel_batch(

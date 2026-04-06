@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
 
 import litellm
@@ -55,22 +55,21 @@ def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
         return None
 
     # Coerce non-string values (int, bool, etc.) to str before sanitizing
-    if not isinstance(value, str):
-        value = str(value)
+    str_value: str = value if isinstance(value, str) else str(value)
 
     # Remove Unicode line/paragraph separators that break text format
-    value = value.replace("\u2028", "").replace("\u2029", "")
+    str_value = str_value.replace("\u2028", "").replace("\u2029", "")
 
     # Remove carriage returns
-    value = value.replace("\r", "")
+    str_value = str_value.replace("\r", "")
 
     # Replace newlines with spaces
-    value = value.replace("\n", " ")
+    str_value = str_value.replace("\n", " ")
 
     # Escape backslashes and double quotes per Prometheus exposition format
-    value = value.replace("\\", "\\\\").replace('"', '\\"')
+    str_value = str_value.replace("\\", "\\\\").replace('"', '\\"')
 
-    return value
+    return str_value
 
 
 @dataclass
@@ -160,6 +159,23 @@ LATENCY_BUCKETS = (
     float("inf"),
 )
 
+# Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
+BATCH_DURATION_BUCKETS = (
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    900.0,
+    1800.0,
+    3600.0,
+    7200.0,
+    14400.0,
+    28800.0,
+    43200.0,
+    86400.0,
+    float("inf"),
+)
+
 
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
@@ -185,6 +201,9 @@ class UserAPIKeyLabelNames(Enum):
     CLIENT_IP = "client_ip"
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
+    STREAM = "stream"
+    ORG_ID = "org_id"
+    ORG_ALIAS = "org_alias"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -207,6 +226,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
+    "litellm_remaining_org_budget_metric",
+    "litellm_org_max_budget_metric",
+    "litellm_org_budget_remaining_hours_metric",
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
@@ -237,6 +259,17 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_tokens_for_model",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
+    "litellm_in_flight_requests",
+    # Managed batch metrics
+    "litellm_managed_batch_created_total",
+    "litellm_managed_file_size_bytes",
+    "litellm_managed_batch_duration_seconds",
+    "litellm_managed_file_created_total",
+    "litellm_managed_file_deleted_total",
+    "litellm_check_batch_cost_jobs_polled",
+    "litellm_check_batch_cost_jobs_processed_total",
+    "litellm_check_batch_cost_errors_total",
+    "litellm_check_batch_cost_last_run_timestamp",
 ]
 
 
@@ -489,6 +522,21 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
+    litellm_remaining_org_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_max_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
     litellm_remaining_api_key_budget_metric = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -617,6 +665,43 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
+    # Managed batch metrics
+    _batch_user_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_managed_batch_created_total = _batch_user_labels
+
+    litellm_managed_file_size_bytes: List[
+        str
+    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
+
+    litellm_managed_batch_duration_seconds = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_managed_file_created_total = _batch_user_labels
+
+    litellm_managed_file_deleted_total: List[
+        str
+    ] = []  # only "result" label, added at metric creation
+
+    litellm_check_batch_cost_jobs_polled: List[str] = []
+
+    litellm_check_batch_cost_jobs_processed_total = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_check_batch_cost_errors_total: List[str] = []  # label: error_type (custom)
+
+    litellm_check_batch_cost_last_run_timestamp: List[str] = []
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
@@ -637,6 +722,14 @@ class PrometheusMetricLabels:
                 for tag in litellm.custom_prometheus_tags
             ]
         )
+
+        # Conditionally add stream label to litellm_proxy_total_requests_metric
+        if (
+            label_name == "litellm_proxy_total_requests_metric"
+            and litellm.prometheus_emit_stream_label is True
+            and UserAPIKeyLabelNames.STREAM.value not in default_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
         return default_labels + custom_labels
 
@@ -709,6 +802,22 @@ class UserAPIKeyLabelValues(BaseModel):
     user_agent: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
     ] = None
+    stream: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
+    ] = None
+    org_id: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ID.value)
+    ] = None
+    org_alias: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ALIAS.value)
+    ] = None
+
+    @field_validator("stream", mode="before")
+    @classmethod
+    def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return str(v)
 
 
 class PrometheusMetricsConfig(BaseModel):

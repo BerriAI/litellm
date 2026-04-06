@@ -48,7 +48,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Extract Vertex AI specific configs from vector_store_config
         litellm_params = dict(self.vector_store_config)
-        
+
         # Get project, location, and credentials using VertexBase methods
         self.project_id = self.safe_get_vertex_ai_project(litellm_params)
         self.location = self.get_vertex_ai_location(litellm_params) or "us-central1"
@@ -170,9 +170,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             if "vectorDbConfig" not in request_body:
                 request_body["vectorDbConfig"] = {}
             request_body["vectorDbConfig"]["ragEmbeddingModelConfig"] = {
-                "vertexPredictionEndpoint": {
-                    "endpoint": embedding_model
-                }
+                "vertexPredictionEndpoint": {"endpoint": embedding_model}
             }
 
         verbose_logger.debug(f"Creating RAG corpus: {url}")
@@ -197,8 +195,10 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             raise Exception(error_msg)
 
         response_data = response.json()
-        verbose_logger.debug(f"Create corpus response: {json.dumps(response_data, indent=2)}")
-        
+        verbose_logger.debug(
+            f"Create corpus response: {json.dumps(response_data, indent=2)}"
+        )
+
         # The response is a long-running operation
         # Check if it's already done or if we need to poll
         if response_data.get("done"):
@@ -264,21 +264,25 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 raise Exception(error_msg)
 
             operation_data = response.json()
-            
+
             if operation_data.get("done"):
                 # Check for errors
                 if "error" in operation_data:
                     error = operation_data["error"]
                     raise Exception(f"Operation failed: {error}")
-                
+
                 # Extract corpus name from response
                 corpus_name = operation_data.get("response", {}).get("name", "")
                 if corpus_name:
                     return corpus_name
                 else:
-                    raise Exception(f"No corpus name in operation response: {operation_data}")
-            
-            verbose_logger.debug(f"Operation not done yet, attempt {attempt + 1}/{max_retries}")
+                    raise Exception(
+                        f"No corpus name in operation response: {operation_data}"
+                    )
+
+            verbose_logger.debug(
+                f"Operation not done yet, attempt {attempt + 1}/{max_retries}"
+            )
             await asyncio.sleep(retry_delay)
 
         raise Exception(f"Operation timed out after {max_retries} attempts")
@@ -311,10 +315,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Construct upload URL using vertex base URL helper
         base_url = get_vertex_base_url(self.location)
-        url = (
-            f"{base_url}/upload/v1beta1/"
-            f"{rag_corpus_id}/ragFiles:upload"
-        )
+        url = f"{base_url}/upload/v1beta1/" f"{rag_corpus_id}/ragFiles:upload"
 
         # Build metadata for the file with snake_case keys (as per upload API docs)
         metadata: Dict[str, Any] = {
@@ -333,21 +334,19 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         if chunking_strategy and isinstance(chunking_strategy, dict):
             chunk_size = chunking_strategy.get("chunk_size")
             chunk_overlap = chunking_strategy.get("chunk_overlap")
-            
+
             if chunk_size or chunk_overlap:
                 if "upload_rag_file_config" not in metadata:
                     metadata["upload_rag_file_config"] = {}
-                
+
                 metadata["upload_rag_file_config"]["rag_file_transformation_config"] = {
-                    "rag_file_chunking_config": {
-                        "fixed_length_chunking": {}
-                    }
+                    "rag_file_chunking_config": {"fixed_length_chunking": {}}
                 }
-                
+
                 chunking_config = metadata["upload_rag_file_config"][
                     "rag_file_transformation_config"
                 ]["rag_file_chunking_config"]["fixed_length_chunking"]
-                
+
                 if chunk_size:
                     chunking_config["chunk_size"] = chunk_size
                 if chunk_overlap:
@@ -359,7 +358,11 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         # Prepare multipart form data
         files = {
             "metadata": (None, json.dumps(metadata), "application/json"),
-            "file": (filename, file_content, content_type or "application/octet-stream"),
+            "file": (
+                filename,
+                file_content,
+                content_type or "application/octet-stream",
+            ),
         }
         client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.RAG,
@@ -387,7 +390,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             file_id = response_data.get("ragFile", {}).get("name", "")
             if not file_id:
                 file_id = response_data.get("name", "")
-            
+
             verbose_logger.debug(f"Upload complete. File ID: {file_id}")
             return file_id
         except Exception as e:
@@ -418,18 +421,11 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Construct import URL using vertex base URL helper
         base_url = get_vertex_base_url(self.location)
-        url = (
-            f"{base_url}/v1beta1/"
-            f"{rag_corpus_id}/ragFiles:import"
-        )
+        url = f"{base_url}/v1beta1/" f"{rag_corpus_id}/ragFiles:import"
 
         # Build request body with camelCase keys (Vertex AI API format)
         request_body: Dict[str, Any] = {
-            "importRagFilesConfig": {
-                "gcsSource": {
-                    "uris": gcs_uris
-                }
-            }
+            "importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}
         }
 
         # Add chunking configuration if provided
@@ -437,7 +433,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         if chunking_strategy and isinstance(chunking_strategy, dict):
             chunk_size = chunking_strategy.get("chunk_size")
             chunk_overlap = chunking_strategy.get("chunk_overlap")
-            
+
             if chunk_size or chunk_overlap:
                 request_body["importRagFilesConfig"]["ragFileChunkingConfig"] = {
                     "chunkSize": chunk_size or 1024,
@@ -445,9 +441,13 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 }
 
         # Add max embedding requests per minute if specified
-        max_embedding_qpm = self.vector_store_config.get("max_embedding_requests_per_min")
+        max_embedding_qpm = self.vector_store_config.get(
+            "max_embedding_requests_per_min"
+        )
         if max_embedding_qpm:
-            request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = max_embedding_qpm
+            request_body["importRagFilesConfig"][
+                "maxEmbeddingRequestsPerMin"
+            ] = max_embedding_qpm
 
         verbose_logger.debug(f"Importing files from GCS: {url}")
         verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")
@@ -473,6 +473,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         response_data = response.json()
         operation_name = response_data.get("name", "")
-        
+
         verbose_logger.debug(f"Import operation started: {operation_name}")
         return operation_name

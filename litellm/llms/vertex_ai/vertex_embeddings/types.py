@@ -50,7 +50,11 @@ class EmbeddingParameters(TypedDict, total=False):
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingBGEInput], List[TextEmbeddingFineTunedInput]]
+    instances: Union[
+        List[TextEmbeddingInput],
+        List[TextEmbeddingBGEInput],
+        List[TextEmbeddingFineTunedInput],
+    ]
     parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
 
 

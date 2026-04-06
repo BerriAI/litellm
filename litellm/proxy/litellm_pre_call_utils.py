@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
@@ -19,13 +20,30 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
     v.value.lower() for v in SpecialHeaders._member_map_.values()
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+
+
+def _sanitize_for_log(value: Any) -> str:
+    """
+    Basic log sanitization helper to reduce log-injection risk.
+
+    Removes newline and carriage-return characters so user-controlled
+    values cannot forge additional log lines when written to text logs.
+    """
+    try:
+        text = str(value)
+    except Exception:
+        # Fallback to repr if str() fails for any reason
+        text = repr(value)
+    # Strip CR/LF characters commonly used for log injection
+    return text.replace("\r", "").replace("\n", "")
 from litellm.router import Router
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -36,6 +54,11 @@ from litellm.types.utils import (
 )
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+# Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
+_MAX_STALE_ALIAS_WARNING_KEYS = 10_000
+_STALE_TEAM_ALIAS_WARNING_KEYS: OrderedDict[str, None] = OrderedDict()
+# Cache the stale alias bypass flag at module load to avoid hot-path secret lookups
+_ENABLE_TEAM_STALE_ALIAS_BYPASS: Optional[bool] = None
 
 
 if TYPE_CHECKING:
@@ -76,15 +99,36 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For all /thread or /assistant endpoints we need to call this "litellm_metadata"
 
-    For ALL other endpoints we call this "metadata
+    For ALL other endpoints we call this "metadata"
     """
-    if RouteChecks._is_assistants_api_request(request):
+    path = request.url.path
+
+    if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
-    if any(route in request.url.path for route in LITELLM_METADATA_ROUTES):
+    if any(route in path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
 
     return "metadata"
+
+
+def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    """
+    Extract chain id for call chaining from request headers.
+
+    x-litellm-trace-id and x-litellm-session-id are interchangeable; when both
+    are present, x-litellm-trace-id takes precedence. Header keys are matched
+    case-insensitively so this works with raw header dicts from any transport.
+
+    Used by MCP (and other paths that have raw_headers but no Request) to set
+    litellm_trace_id/litellm_session_id for spend logs and logging consistency.
+    """
+    if not headers:
+        return None
+    normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
+    return normalized.get("x-litellm-trace-id") or normalized.get(
+        "x-litellm-session-id"
+    )
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
@@ -234,20 +278,60 @@ def _get_dynamic_logging_metadata(
 
 
 def clean_headers(
-    headers: Headers, litellm_key_header_name: Optional[str] = None
+    headers: Headers,
+    litellm_key_header_name: Optional[str] = None,
+    forward_llm_provider_auth_headers: bool = False,
+    authenticated_with_header: Optional[str] = None,
 ) -> dict:
     """
     Removes litellm api key from headers
+
+    Args:
+        headers: Request headers
+        litellm_key_header_name: Custom header name for LiteLLM API key
+        forward_llm_provider_auth_headers: Whether to forward provider auth headers
+        authenticated_with_header: Which header was used for LiteLLM authentication
+            (e.g., "x-litellm-api-key", "authorization", "x-api-key")
+
+    Returns:
+        Cleaned headers dict
     """
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     clean_headers = {}
     litellm_key_lower = (
         litellm_key_header_name.lower() if litellm_key_header_name is not None else None
     )
-
     for header, value in headers.items():
         header_lower = header.lower()
+
+        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+            if (
+                authenticated_with_header is None
+                or authenticated_with_header.lower() != "authorization"
+            ):
+                clean_headers[header] = value
+            continue
+        # Special handling for x-api-key: forward it based on authenticated_with_header
+        elif header_lower == "x-api-key":
+            if forward_llm_provider_auth_headers and (
+                authenticated_with_header is None
+                or authenticated_with_header.lower() != "x-api-key"
+            ):
+                clean_headers[header] = value
+        elif (
+            forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE
+        ):
+            if litellm_key_lower and header_lower == litellm_key_lower:
+                continue
+            if header_lower == "authorization":
+                continue
+            # Never forward x-litellm-api-key (it's for proxy auth only)
+            if header_lower == "x-litellm-api-key":
+                continue
+            clean_headers[header] = value
         # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        if header_lower not in _SPECIAL_HEADERS_CACHE and (
+        elif header_lower not in _SPECIAL_HEADERS_CACHE and (
             litellm_key_lower is None or header_lower != litellm_key_lower
         ):
             clean_headers[header] = value
@@ -560,15 +644,27 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
+
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        trace_id_from_header = headers.get("x-litellm-trace-id")
+        # x-litellm-trace-id and x-litellm-session-id are interchangeable for call chaining
+        chain_id = headers.get("x-litellm-trace-id") or headers.get(
+            "x-litellm-session-id"
+        )
+
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
-            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
-        
-        if trace_id_from_header:
-            metadata_from_headers["trace_id"] = trace_id_from_header
-            verbose_proxy_logger.debug(f"Extracted trace_id from header: {trace_id_from_header}")
+            verbose_proxy_logger.debug(
+                f"Extracted agent_id from header: {agent_id_from_header}"
+            )
+
+        if chain_id:
+            metadata_from_headers["trace_id"] = chain_id
+            metadata_from_headers["session_id"] = chain_id
+            data["litellm_session_id"] = chain_id
+            data["litellm_trace_id"] = chain_id
+            verbose_proxy_logger.debug(
+                f"Extracted chain_id from header (trace-id/session-id): {chain_id}"
+            )
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -584,6 +680,8 @@ class LiteLLMProxyRequestSetup:
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_project_id=user_api_key_dict.project_id,
+            user_api_key_project_alias=user_api_key_dict.project_alias,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
@@ -617,6 +715,12 @@ class LiteLLMProxyRequestSetup:
         data[_metadata_variable_name][
             "user_api_key"
         ] = user_api_key_dict.api_key  # this is just the hashed token
+
+        # Key-owned agent_id for spend attribution; keep existing (e.g. from header) if key has none
+        _key_agent_id = getattr(user_api_key_dict, "agent_id", None)
+        _existing_agent_id = data[_metadata_variable_name].get("agent_id")
+        _resolved_agent_id = _key_agent_id or _existing_agent_id
+        data[_metadata_variable_name]["agent_id"] = _resolved_agent_id
 
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
@@ -750,7 +854,7 @@ class LiteLLMProxyRequestSetup:
         Add team-based callbacks from the config
         """
         team_config = proxy_config.load_team_config(team_id=team_id)
-        if len(team_config.keys()) == 0:
+        if not isinstance(team_config, dict) or len(team_config) == 0:
             return None
 
         callback_vars_dict = {**team_config.get("callback_vars", team_config)}
@@ -810,16 +914,48 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
-    from litellm.types.proxy.litellm_pre_call_utils import SecretFields
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
-    _headers = clean_headers(
+    _raw_headers: Dict[str, str] = RedactedDict(_safe_get_request_headers(request))
+
+    forward_llm_auth = False
+    if general_settings:
+        forward_llm_auth = general_settings.get(
+            "forward_llm_provider_auth_headers", False
+        )
+    if not forward_llm_auth:
+        forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
+    # Determine which header was used for authentication
+    # This enables forwarding provider keys (e.g., x-api-key) when they weren't used for LiteLLM auth
+    authenticated_with_header = None
+    if "x-litellm-api-key" in request.headers:
+        # If x-litellm-api-key is present, it was used for auth
+        authenticated_with_header = "x-litellm-api-key"
+    elif "authorization" in request.headers:
+        # Authorization header was used for auth
+        authenticated_with_header = "authorization"
+    else:
+        # x-api-key or another header was used for auth
+        authenticated_with_header = "x-api-key"
+
+    _headers: Dict[str, str] = clean_headers(
         request.headers,
         litellm_key_header_name=(
             general_settings.get("litellm_key_header_name")
             if general_settings is not None
             else None
         ),
+        forward_llm_provider_auth_headers=forward_llm_auth,
+        authenticated_with_header=authenticated_with_header,
     )
+    verbose_proxy_logger.debug(f"Request Headers: {_headers}")
+    verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
+
+    if forward_llm_auth and "x-api-key" in _headers:
+        data["api_key"] = _headers["x-api-key"]
+        verbose_proxy_logger.debug(
+            "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
+        )
 
     ##########################################################
     # Init - Proxy Server Request
@@ -848,12 +984,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
-    data.update(
-        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-            headers=_headers,
-            data=data,
-            _metadata_variable_name=_metadata_variable_name,
-        )
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=_headers,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
     )
 
     # Add headers to metadata for guardrails to access (fixes #17477)
@@ -872,7 +1006,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         general_settings, user_api_key_dict, _headers
     )
 
-    # Parse user info from headers
+    # Parse user info from headers (fallback to general_settings.user_header_name)
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
         if user_api_key_dict.end_user_id is None:
@@ -880,7 +1014,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
+    data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:
@@ -900,9 +1034,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
-    headers = request.headers
-    verbose_proxy_logger.debug("Request Headers: %s", headers)
-    cache_control_header = headers.get("Cache-Control", None)
+    cache_control_header = _headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
@@ -985,6 +1117,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 "spend_logs_metadata"
             ]
 
+    ## PROJECT-LEVEL TAGS
+    project_metadata = user_api_key_dict.project_metadata or {}
+    if "tags" in project_metadata and project_metadata["tags"] is not None:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=project_metadata["tags"],
+        )
+
     ## TEAM-LEVEL METADATA
     data = (
         LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1013,6 +1153,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_model_max_budget"
     ] = user_api_key_dict.model_max_budget
+    data[_metadata_variable_name][
+        "user_api_key_end_user_model_max_budget"
+    ] = user_api_key_dict.end_user_model_max_budget
 
     # User spend, budget - used by prometheus.py
     # Follow same pattern as team and API key budgets
@@ -1024,10 +1167,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    _headers = dict(request.headers)
-    _headers.pop(
-        "authorization", None
-    )  # do not store the original `sk-..` api key in the db
+    data[_metadata_variable_name][
+        "user_api_key_team_metadata"
+    ] = user_api_key_dict.team_metadata
+    data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
+        user_api_key_dict, "object_permission_id", None
+    )
+    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
+        user_api_key_dict, "team_object_permission_id", None
+    )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
 
@@ -1079,7 +1227,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Check if using tag based routing
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=llm_router,
-        headers=dict(request.headers),
+        headers=_headers,
         data=data,
     )
 
@@ -1108,17 +1256,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if disabled_callbacks and isinstance(disabled_callbacks, list):
             data["litellm_disabled_callbacks"] = disabled_callbacks
 
-    # Guardrails from key/team metadata
-    move_guardrails_to_metadata(
+    # Guardrails from key/team metadata and policy engine
+    await move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    # Guardrails from policy engine
-    add_guardrails_from_policy_engine(
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -1178,6 +1319,10 @@ def _update_model_if_team_alias_exists(
             "gpt-4o": "gpt-4o-team-1"
         }
         - requested_model = "gpt-4o-team-1"
+
+    Note: model_aliases for team models are deprecated. This function only applies
+    to legacy non-team-scoped aliases. Team-scoped deployments use team_public_model_name
+    and are resolved via map_team_model in route_llm_request.
     """
     _model = data.get("model")
     if (
@@ -1185,7 +1330,52 @@ def _update_model_if_team_alias_exists(
         and user_api_key_dict.team_model_aliases
         and _model in user_api_key_dict.team_model_aliases
     ):
-        data["model"] = user_api_key_dict.team_model_aliases[_model]
+        from litellm.proxy.proxy_server import llm_router
+
+        # Skip alias rewrite if this model resolves to team-specific deployments
+        # (team models use team_public_model_name, not model_aliases)
+        aliased_target = user_api_key_dict.team_model_aliases[_model]
+
+        # Optional bypass for stale aliases from pre-PR deployments:
+        # only enabled via feature flag to preserve backwards compatibility.
+        # Cached at module level to avoid hot-path secret lookups on every request.
+        global _ENABLE_TEAM_STALE_ALIAS_BYPASS
+        if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
+            _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool(
+                "LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False
+            )
+        enable_stale_alias_bypass = _ENABLE_TEAM_STALE_ALIAS_BYPASS
+        # Check if the alias points to a team-scoped UUID name
+        # (format: "model_name_{team_id}_{uuid}")
+        is_stale_team_alias = aliased_target.startswith(
+            f"model_name_{user_api_key_dict.team_id}_"
+        )
+        if is_stale_team_alias and llm_router:
+            # This is a stale alias from pre-PR deployments.
+            # Check if current team deployments exist for the public name.
+            key = (user_api_key_dict.team_id, _model)
+            if key in llm_router.team_model_to_deployment_indices:
+                if enable_stale_alias_bypass:
+                    # Team deployments exist; skip stale alias
+                    return
+                warning_key = f"{user_api_key_dict.team_id}:{_model}:{aliased_target}"
+                if warning_key not in _STALE_TEAM_ALIAS_WARNING_KEYS:
+                    _STALE_TEAM_ALIAS_WARNING_KEYS[warning_key] = None
+                    while (
+                        len(_STALE_TEAM_ALIAS_WARNING_KEYS)
+                        > _MAX_STALE_ALIAS_WARNING_KEYS
+                    ):
+                        _STALE_TEAM_ALIAS_WARNING_KEYS.popitem(last=False)
+                    verbose_proxy_logger.warning(
+                        "Stale team model alias detected for model='%s', team_id='%s'. "
+                        "New sibling deployments may be unreachable. "
+                        "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
+                        "team-scoped sibling routing.",
+                        _sanitize_for_log(_model),
+                        user_api_key_dict.team_id,
+                    )
+
+        data["model"] = aliased_target
     return
 
 
@@ -1296,17 +1486,19 @@ def _add_guardrails_from_key_or_team_metadata(
     team_metadata: Optional[dict],
     data: dict,
     metadata_variable_name: str,
+    project_metadata: Optional[dict] = None,
 ) -> None:
     """
-    Helper add guardrails from key or team metadata to request data
+    Helper add guardrails from key, team, or project metadata to request data
 
-    Key guardrails are set first, then team guardrails are appended (without duplicates).
+    Key guardrails are set first, then team and project guardrails are appended (without duplicates).
 
     Args:
         key_metadata: The key metadata dictionary to check for guardrails
         team_metadata: The team metadata dictionary to check for guardrails
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
+        project_metadata: The project metadata dictionary to check for guardrails
 
     """
     from litellm.proxy.utils import _premium_user_check
@@ -1332,6 +1524,15 @@ def _add_guardrails_from_key_or_team_metadata(
             _premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
 
+    # Add project-level guardrails (set automatically handles duplicates)
+    if project_metadata and "guardrails" in project_metadata:
+        if (
+            isinstance(project_metadata["guardrails"], list)
+            and len(project_metadata["guardrails"]) > 0
+        ):
+            _premium_user_check()
+            combined_guardrails.update(project_metadata["guardrails"])
+
     # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
@@ -1342,12 +1543,13 @@ def _add_guardrails_from_policies_in_metadata(
     team_metadata: Optional[dict],
     data: dict,
     metadata_variable_name: str,
+    project_metadata: Optional[dict] = None,
 ) -> None:
     """
-    Helper to resolve guardrails from policies attached to key/team metadata.
+    Helper to resolve guardrails from policies attached to key/team/project metadata.
 
     This function:
-    1. Gets policy names from key and team metadata
+    1. Gets policy names from key, team, and project metadata
     2. Resolves guardrails from those policies (including inheritance)
     3. Adds resolved guardrails to request metadata
 
@@ -1356,6 +1558,7 @@ def _add_guardrails_from_policies_in_metadata(
         team_metadata: The team metadata dictionary to check for policies
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
+        project_metadata: The project metadata dictionary to check for policies
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -1383,6 +1586,15 @@ def _add_guardrails_from_policies_in_metadata(
         ):
             _premium_user_check()
             policy_names.update(team_metadata["policies"])
+
+    # Add project-level policies
+    if project_metadata and "policies" in project_metadata:
+        if (
+            isinstance(project_metadata["policies"], list)
+            and len(project_metadata["policies"]) > 0
+        ):
+            _premium_user_check()
+            policy_names.update(project_metadata["policies"])
 
     if not policy_names:
         return
@@ -1449,7 +1661,7 @@ def _add_guardrails_from_policies_in_metadata(
     )
 
 
-def move_guardrails_to_metadata(
+async def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1462,20 +1674,49 @@ def move_guardrails_to_metadata(
     - Adds guardrails from policies attached to key/team metadata
     - Adds guardrails from policy engine based on team/key/model context
     """
-    # Check key-level guardrails
+    # Early-out: skip all guardrails processing when nothing is configured
+    key_metadata = user_api_key_dict.metadata
+    team_metadata = user_api_key_dict.team_metadata
+    project_metadata = user_api_key_dict.project_metadata or {}
+
+    has_key_config = key_metadata and (
+        "guardrails" in key_metadata or "policies" in key_metadata
+    )
+    has_team_config = team_metadata and (
+        "guardrails" in team_metadata or "policies" in team_metadata
+    )
+    has_project_config = project_metadata and (
+        "guardrails" in project_metadata or "policies" in project_metadata
+    )
+    has_request_config = (
+        "guardrails" in data or "guardrail_config" in data or "policies" in data
+    )
+
+    # Only check policy engine if no local config (avoid import + registry lookup)
+    if not (has_key_config or has_team_config or has_project_config or has_request_config):
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        if not get_policy_registry().is_initialized():
+            # Nothing configured anywhere - clean up request body fields and return
+            data.pop("policies", None)
+            return
+
+    # Check key/team/project-level guardrails
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
 
     #########################################################################################
-    # Add guardrails from policies attached to key/team metadata
+    # Add guardrails from policies attached to key/team/project metadata
     #########################################################################################
     _add_guardrails_from_policies_in_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
@@ -1483,7 +1724,7 @@ def move_guardrails_to_metadata(
     #########################################################################################
     # Add guardrails from policy engine based on team/key/model context
     #########################################################################################
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
@@ -1517,10 +1758,27 @@ def move_guardrails_to_metadata(
             ] = request_body_guardrail_config
 
 
+def _is_policy_version_id(s: str) -> bool:
+    """Return True if string is a policy version ID (starts with policy_<uuid> prefix)."""
+    from litellm.proxy.policy_engine.policy_registry import POLICY_VERSION_ID_PREFIX
+
+    return isinstance(s, str) and s.startswith(POLICY_VERSION_ID_PREFIX)
+
+
+def _extract_policy_id(s: str) -> Optional[str]:
+    """Extract raw UUID from policy_<uuid> string, or None if not a valid version ID."""
+    from litellm.proxy.policy_engine.policy_registry import POLICY_VERSION_ID_PREFIX
+
+    if not _is_policy_version_id(s):
+        return None
+    return s[len(POLICY_VERSION_ID_PREFIX) :].strip() or None
+
+
 def _match_and_track_policies(
     data: dict,
     context: "PolicyMatchContext",
     request_body_policies: Any,
+    policies_override: Optional[Dict[str, Any]] = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
     Match policies via attachments and request body, track them in metadata.
@@ -1533,9 +1791,7 @@ def _match_and_track_policies(
         add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
     )
-    from litellm.proxy.policy_engine.attachment_registry import (
-        get_attachment_registry,
-    )
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
@@ -1565,6 +1821,7 @@ def _match_and_track_policies(
     applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
         policy_names=list(all_policy_names),
         context=context,
+        policies=policies_override,
     )
 
     verbose_proxy_logger.debug(
@@ -1583,9 +1840,7 @@ def _match_and_track_policies(
         for name in applied_policy_names
         if name in policy_reasons
     }
-    add_policy_sources_to_metadata(
-        request_data=data, policy_sources=applied_reasons
-    )
+    add_policy_sources_to_metadata(request_data=data, policy_sources=applied_reasons)
 
     return applied_policy_names, policy_reasons
 
@@ -1594,20 +1849,30 @@ def _apply_resolved_guardrails_to_metadata(
     data: dict,
     metadata_variable_name: str,
     context: "PolicyMatchContext",
+    policy_names: Optional[List[str]] = None,
+    policies: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Apply resolved guardrails and pipelines to request metadata."""
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
     # Resolve guardrails from matching policies
-    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
+    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
+        context=context,
+        policies=policies,
+        policy_names=policy_names,
+    )
 
     verbose_proxy_logger.debug(
         f"Policy engine: resolved guardrails: {resolved_guardrails}"
     )
 
     # Resolve pipelines from matching policies
-    pipelines = PolicyResolver.resolve_pipelines_for_context(context=context)
+    pipelines = PolicyResolver.resolve_pipelines_for_context(
+        context=context,
+        policies=policies,
+        policy_names=policy_names,
+    )
 
     # Add resolved guardrails to request metadata
     if metadata_variable_name not in data:
@@ -1620,9 +1885,9 @@ def _apply_resolved_guardrails_to_metadata(
             pipelines
         )
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
-        data[metadata_variable_name]["_pipeline_managed_guardrails"] = (
-            pipeline_managed_guardrails
-        )
+        data[metadata_variable_name][
+            "_pipeline_managed_guardrails"
+        ] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
             f"Policy engine: resolved {len(pipelines)} pipeline(s), "
             f"managed guardrails: {pipeline_managed_guardrails}"
@@ -1647,7 +1912,7 @@ def _apply_resolved_guardrails_to_metadata(
     )
 
 
-def add_guardrails_from_policy_engine(
+async def add_guardrails_from_policy_engine(
     data: dict,
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1657,12 +1922,13 @@ def add_guardrails_from_policy_engine(
 
     This function:
     1. Extracts "policies" from request body (if present) for dynamic policy application
-    2. Gets matching policies based on team_alias, key_alias, and model (via attachments)
-    3. Combines dynamic policies with attachment-based policies
-    4. Resolves guardrails from all policies (including inheritance)
-    5. Adds guardrails to request metadata
-    6. Tracks applied policies in metadata for response headers
-    7. Removes "policies" from request body so it's not forwarded to LLM provider
+    2. Supports policy_<uuid> in policies to execute a specific version (e.g. published)
+    3. Gets matching policies based on team_alias, key_alias, and model (via attachments)
+    4. Combines dynamic policies with attachment-based policies
+    5. Resolves guardrails from all policies (including inheritance)
+    6. Adds guardrails to request metadata
+    7. Tracks applied policies in metadata for response headers
+    8. Removes "policies" from request body so it's not forwarded to LLM provider
 
     Args:
         data: The request data to update
@@ -1670,14 +1936,12 @@ def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     # Extract dynamic policies from request body (if present)
-    request_body_policies = data.pop("policies", None)
+    request_body_policies_raw = data.pop("policies", None)
 
     registry = get_policy_registry()
     verbose_proxy_logger.debug(
@@ -1692,9 +1956,11 @@ def add_guardrails_from_policy_engine(
 
     # Extract tags and build context
     all_tags = get_tags_from_request_body(data) or None
+    _team_alias = user_api_key_dict.team_alias
+    _key_alias = user_api_key_dict.key_alias
     context = PolicyMatchContext(
-        team_alias=user_api_key_dict.team_alias,
-        key_alias=user_api_key_dict.key_alias,
+        team_alias=_team_alias if isinstance(_team_alias, str) else None,
+        key_alias=_key_alias if isinstance(_key_alias, str) else None,
         model=data.get("model"),
         tags=all_tags,
     )
@@ -1704,19 +1970,65 @@ def add_guardrails_from_policy_engine(
         f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
     )
 
-    # Match and track policies based on attachments and request body
-    _match_and_track_policies(data, context, request_body_policies)
+    # Separate policy names from policy version IDs (policy_<uuid>)
+    request_body_names: List[str] = []
+    request_body_version_ids: List[str] = []
+    if request_body_policies_raw and isinstance(request_body_policies_raw, list):
+        for item in request_body_policies_raw:
+            if not isinstance(item, str):
+                continue
+            if _is_policy_version_id(item):
+                policy_id = _extract_policy_id(item)
+                if policy_id:
+                    request_body_version_ids.append(policy_id)
+            else:
+                request_body_names.append(item)
 
-    # Always resolve and apply guardrails, even if no policies matched above.
-    # PolicyResolver does its own independent matching and inheritance resolution,
-    # so guardrails can still be applied via inherited parent policies.
-    _apply_resolved_guardrails_to_metadata(data, metadata_variable_name, context)
+    # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
+    merged_policies: Dict[str, Any] = dict(registry.get_all_policies())
+    fetched_policy_names: List[str] = []
+    for policy_id in request_body_version_ids:
+        result = registry.get_policy_by_id_for_request(policy_id=policy_id)
+        if result is not None:
+            pname, policy = result
+            merged_policies[pname] = policy
+            fetched_policy_names.append(pname)
+            verbose_proxy_logger.debug(
+                f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}"
+            )
+        else:
+            verbose_proxy_logger.debug(
+                f"Policy engine: policy version {policy_id} not found in cache, skipping"
+            )
+
+    # Build request body list: names + policy names from fetched versions
+    request_body_policies = request_body_names + fetched_policy_names
+
+    # Match and track policies (with merged_policies when we have version overrides)
+    applied_policy_names, _ = _match_and_track_policies(
+        data,
+        context,
+        request_body_policies,
+        policies_override=merged_policies if request_body_version_ids else None,
+    )
+
+    # Resolve and apply guardrails. Use applied_policy_names so request-body policies
+    # (names + version IDs) are included. Use merged_policies when we have version overrides.
+    _apply_resolved_guardrails_to_metadata(
+        data,
+        metadata_variable_name,
+        context,
+        policy_names=applied_policy_names if applied_policy_names else None,
+        policies=merged_policies if request_body_version_ids else None,
+    )
 
 
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
@@ -1726,6 +2038,14 @@ def add_provider_specific_headers_to_request(
             anthropic_headers[header] = header_value
             added_header = True
 
+    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
+    # This needs to be handled via provider-specific headers to ensure it only
+    # goes to Anthropic-compatible providers, not all providers in the router
+    for header, value in headers.items():
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value):
+            anthropic_headers[header] = value
+            added_header = True
+            break
     if added_header is True:
         # Anthropic headers work across multiple providers
         # Store as comma-separated list so retrieval can match any of them

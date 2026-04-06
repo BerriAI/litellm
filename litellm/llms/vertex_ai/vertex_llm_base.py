@@ -21,7 +21,6 @@ from .common_utils import (
     all_gemini_url_modes,
     get_vertex_base_model_name,
     get_vertex_base_url,
-    is_global_only_vertex_model,
 )
 
 GOOGLE_IMPORT_ERROR_MESSAGE = (
@@ -49,8 +48,32 @@ class VertexBase:
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
-        if is_global_only_vertex_model(model):
-            return "global"
+        import litellm
+
+        # Try to get supported_regions directly from model_cost
+        # Check both with and without vertex_ai/ prefix
+        model_key = (
+            f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        )
+        model_info = litellm.model_cost.get(model_key, {})
+        supported_regions = model_info.get("supported_regions")
+
+        if supported_regions and len(supported_regions) > 0:
+            # If user didn't specify region, use the first supported region
+            if vertex_region is None:
+                return supported_regions[0]
+            # If user specified a region not supported by this model, override it
+            if vertex_region not in supported_regions:
+                verbose_logger.warning(
+                    "Vertex AI model '%s' does not support region '%s' "
+                    "(supported: %s). Routing to '%s'.",
+                    model,
+                    vertex_region,
+                    supported_regions,
+                    supported_regions[0],
+                )
+                return supported_regions[0]
+            return vertex_region
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -58,26 +81,26 @@ class VertexBase:
     ) -> Tuple[Any, str]:
         if credentials is not None:
             if isinstance(credentials, str):
+                _is_path = os.path.exists(
+                    credentials
+                )  # credentials is from server config (litellm_params), not user input
                 verbose_logger.debug(
-                    "Vertex: Loading vertex credentials from %s", credentials
-                )
-                verbose_logger.debug(
-                    "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
-                    credentials,
-                    os.path.exists(credentials),
+                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
+                    _is_path,
                     os.getcwd(),
                 )
 
                 try:
-                    if os.path.exists(credentials):
-                        json_obj = json.load(open(credentials))
+                    if _is_path:
+                        with open(credentials) as f:
+                            json_obj = json.load(f)
                     else:
                         json_obj = json.loads(credentials)
-                except Exception:
+                except Exception as e:
                     raise Exception(
-                        "Unable to load vertex credentials from environment. Got={}".format(
-                            credentials
-                        )
+                        "Unable to load vertex credentials from environment. "
+                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
+                        "Parse error: {}".format(type(e).__name__)
                     )
             elif isinstance(credentials, dict):
                 json_obj = credentials
@@ -96,10 +119,23 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    # Check if explicit AWS params are in the JSON (bypasses metadata)
+                    from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
+                        VertexAIAwsWifAuth,
                     )
+
+                    aws_params = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                    if aws_params:
+                        creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                            json_obj,
+                            aws_params=aws_params,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
+                    else:
+                        creds = self._credentials_from_identity_pool_with_aws(
+                            json_obj,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
@@ -201,7 +237,9 @@ class VertexBase:
     ) -> str:
         if api_base:
             return api_base
-        return get_vertex_base_url(vertex_location or self.get_default_vertex_location())
+        return get_vertex_base_url(
+            vertex_location or self.get_default_vertex_location()
+        )
 
     @staticmethod
     def create_vertex_url(
@@ -630,8 +668,8 @@ class VertexBase:
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
             raise ValueError(
-                "Could not resolve credentials token. Got None or non-string token - {}".format(
-                    _credentials.token
+                "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                    type(_credentials.token).__name__
                 )
             )
 

@@ -1487,3 +1487,320 @@ async def test_discovery_root_includes_server_name_prefix():
         assert response["scopes_supported"] == ["read", "write"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_redirects_with_state():
+    """Test OAuth callback endpoint properly decodes state and redirects to client callback URL."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Mock the state decoding
+    mock_state_data = {
+        "base_url": "http://localhost:3000/ui/mcp/oauth/callback",
+        "original_state": "test-uuid-state-123",
+        "code_challenge": "test_challenge",
+        "code_challenge_method": "S256",
+        "client_redirect_uri": "http://localhost:3000/ui/mcp/oauth/callback",
+    }
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = mock_state_data
+
+        # Call callback endpoint with code and state
+        response = await callback(
+            code="test_authorization_code_12345",
+            state="encrypted_state_value",
+        )
+
+        # Should redirect to the client callback URL with code and original state
+        assert response.status_code == 302
+        assert "http://localhost:3000/ui/mcp/oauth/callback" in response.headers["location"]
+        assert "code=test_authorization_code_12345" in response.headers["location"]
+        assert "state=test-uuid-state-123" in response.headers["location"]
+
+        # Verify state was decoded
+        mock_decode.assert_called_once_with("encrypted_state_value")
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_handles_invalid_state():
+    """Test OAuth callback returns error page when state decryption fails."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Mock state decoding to raise an exception
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.side_effect = Exception("Failed to decrypt state")
+
+        # Call callback endpoint with invalid state
+        response = await callback(
+            code="test_code",
+            state="invalid_encrypted_state",
+        )
+
+        # Should return HTML error page
+        assert response.status_code == 200
+        assert "Authentication incomplete" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorize_includes_scopes_from_server_config():
+    """Test that authorize endpoint includes scopes from server configuration."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Create server with specific scopes (e.g., GitLab requires 'ai_workflows')
+    oauth_server = MCPServer(
+        server_id="gitlab_server",
+        name="gitlab",
+        server_name="gitlab",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://gitlab.com/oauth/authorize",
+        token_url="https://gitlab.com/oauth/token",
+        client_id="test_client",
+        scopes=["api", "read_user", "ai_workflows"],  # GitLab-specific scopes
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "encrypted_state"
+
+        # Call authorize without explicit scope parameter
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=oauth_server,
+            client_id="test_client",
+            redirect_uri="http://localhost:3000/callback",
+            state="test_state",
+            code_challenge="test_challenge",
+            code_challenge_method="S256",
+            response_type="code",
+            scope=None,  # No scope in request, should use server's scopes
+        )
+
+        # Should redirect with scopes from server config
+        assert response.status_code in (307, 302)
+        redirect_url = response.headers["location"]
+        assert "scope=api+read_user+ai_workflows" in redirect_url or "scope=api%20read_user%20ai_workflows" in redirect_url
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorize_prefers_request_scope_over_server_config():
+    """Test that explicit scope parameter takes precedence over server configuration."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    oauth_server = MCPServer(
+        server_id="test_server",
+        name="test",
+        server_name="test",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        client_id="test_client",
+        scopes=["default_scope1", "default_scope2"],
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "encrypted_state"
+
+        # Call authorize WITH explicit scope parameter
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=oauth_server,
+            client_id="test_client",
+            redirect_uri="http://localhost:3000/callback",
+            state="test_state",
+            code_challenge="test_challenge",
+            code_challenge_method="S256",
+            response_type="code",
+            scope="custom_scope1 custom_scope2",  # Explicit scope should take precedence
+        )
+
+        # Should use the explicit scope, not server config
+        assert response.status_code in (307, 302)
+        redirect_url = response.headers["location"]
+        assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
+        assert "default_scope" not in redirect_url
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_refresh_token_grant():
+    """Test that token endpoint supports refresh_token grant type."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Clear registry
+    global_mcp_server_manager.registry.clear()
+
+    # Create mock OAuth2 server
+    oauth2_server = MCPServer(
+        server_id="google_mcp",
+        name="google_mcp",
+        server_name="google_mcp",
+        alias="google_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_secret",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        scopes=["openid", "email"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    # Mock httpx client response with new tokens
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "new_access_token",
+        "token_type": "Bearer",
+        "expires_in": 3599,
+        "refresh_token": "new_refresh_token",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_get_client.return_value = mock_async_client
+
+        response = await token_endpoint(
+            request=mock_request,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="test_client_id",
+            mcp_server_name="google_mcp",
+            client_secret="test_secret",
+            refresh_token="rt-test",
+            scope="openid email",
+        )
+
+    # Verify the POST was called with refresh_token grant data
+    mock_async_client.post.assert_called_once()
+    call_args = mock_async_client.post.call_args
+
+    assert call_args[1]["data"]["grant_type"] == "refresh_token"
+    assert call_args[1]["data"]["refresh_token"] == "rt-test"
+    assert call_args[1]["data"]["client_id"] == "test_client_id"
+    assert call_args[1]["data"]["client_secret"] == "test_secret"
+    assert call_args[1]["data"]["scope"] == "openid email"
+
+    # Verify response contains the new tokens
+    import json
+
+    token_data = json.loads(response.body)
+    assert token_data["access_token"] == "new_access_token"
+    assert token_data["refresh_token"] == "new_refresh_token"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_authorization_code_missing_code():
+    """Test that authorization_code grant rejects missing code param."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    server = MCPServer(
+        server_id="test_server",
+        name="test_server",
+        server_name="test_server",
+        alias="test_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://proxy.example/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code=None,
+            redirect_uri="https://example.com/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "code is required" in str(exc_info.value.detail)

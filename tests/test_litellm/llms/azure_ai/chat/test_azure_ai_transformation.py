@@ -8,6 +8,9 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
+from litellm.llms.azure_ai.azure_model_router.transformation import (
+    AzureModelRouterConfig,
+)
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 
 
@@ -117,3 +120,80 @@ def test_azure_ai_grok_stop_parameter_handling():
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
     assert "stop" in gpt_params, "GPT models should support stop parameter"
+
+
+def test_azure_model_router_response_shows_actual_model():
+    """
+    Test that Azure Model Router returns the actual model used in the response,
+    not the router model.
+    
+    According to the documentation, when using Azure Model Router, the response
+    should show the actual model that handled the request (e.g., gpt-5-nano-2025-08-07)
+    rather than the router model (e.g., model-router).
+    
+    Regression test for: Azure Model Router should show actual model in response
+    """
+    from httpx import Response
+
+    from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+    
+    config = AzureModelRouterConfig()
+    
+    # Mock raw response from Azure that includes the actual model used
+    raw_response_json = {
+        "id": "chatcmpl-test123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-5-nano-2025-08-07",  # Actual model used by the router
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+    
+    # Create mock Response object
+    mock_response = MagicMock(spec=Response)
+    mock_response.json.return_value = raw_response_json
+    mock_response.text = json.dumps(raw_response_json)
+    mock_response.headers = {}
+    
+    # Create ModelResponse object
+    model_response = ModelResponse()
+    
+    # Create mock logging object with required methods
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+    logging_obj.model_call_details = {}
+    
+    # Call transform_response with router model
+    result = config.transform_response(
+        model="model-router",  # This is the router model (without prefix)
+        raw_response=mock_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={"model": "azure_ai/model-router"},  # Original request model
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+    
+    # Verify that the response contains the actual model used, not the router model
+    assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
+        f"but got '{result.model}'"
+    )

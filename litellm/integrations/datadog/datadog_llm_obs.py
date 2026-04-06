@@ -48,13 +48,15 @@ class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
-            
+
             self.is_mock_mode = should_use_datadog_mock()
-            
+
             if self.is_mock_mode:
                 create_mock_datadog_client()
-                verbose_logger.debug("[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode")
-            
+                verbose_logger.debug(
+                    "[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode"
+                )
+
             # Configure DataDog endpoint (Agent or Direct API)
             # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
             # Check for agent mode FIRST - agent mode doesn't require DD_API_KEY or DD_SITE
@@ -189,9 +191,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"DataDogLLMObs: Flushing {len(self.log_queue)} events"
             )
-            
+
             if self.is_mock_mode:
-                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
+                verbose_logger.debug(
+                    "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
+                )
 
             # Prepare the payload
             payload = {
@@ -199,7 +203,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        tags=[get_datadog_tags()],
+                        tags=get_datadog_tags(),
                         spans=self.log_queue,
                     ),
                 ),
@@ -311,7 +315,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
             status="error" if error_info else "ok",
-            tags=[get_datadog_tags(standard_logging_object=standard_logging_payload)],
+            tags=get_datadog_tags(standard_logging_object=standard_logging_payload),
         )
 
         apm_trace_id = self._get_apm_trace_id()

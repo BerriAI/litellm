@@ -6,8 +6,11 @@ Covers the three root-cause fixes:
 1. ArizePhoenixLogger / ArizeLogger create *dedicated* TracerProviders.
 2. The ``otel`` dedup check does NOT match Arize subclasses.
 3. Arize loggers do NOT overwrite ``proxy_server.open_telemetry_logger``.
+4. Phoenix creates nested spans (parent + child) in proxy mode.
+5. Auto-initialization of Phoenix when env vars are detected.
 """
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -163,6 +166,47 @@ class TestProxyLoggerNotOverwritten(unittest.TestCase):
 
         _make_arize_logger(InMemorySpanExporter())
         assert proxy_server.open_telemetry_logger is None
+
+
+class TestPhoenixAutoInitWithOtelOnly(unittest.TestCase):
+    """When only 'otel' is configured but Phoenix env vars are set,
+    ArizePhoenixLogger should be auto-initialized and receive spans."""
+
+    def setUp(self):
+        """Save original callbacks to restore after each test."""
+        import litellm
+        self._original_callbacks = litellm.callbacks[:]
+
+    def tearDown(self):
+        """Restore original callbacks to prevent global state leakage."""
+        import litellm
+        litellm.callbacks = self._original_callbacks
+
+    @patch.dict(os.environ, {
+        "PHOENIX_COLLECTOR_HTTP_ENDPOINT": "http://localhost:6006/v1/traces",
+    }, clear=False)
+    def test_auto_init_creates_phoenix_logger(self):
+        from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+        from litellm.litellm_core_utils.litellm_logging import _maybe_auto_initialize_arize_phoenix
+
+        _in_memory_loggers = []
+        _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+
+        phoenix_loggers = [cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)]
+        assert len(phoenix_loggers) == 1, "Phoenix logger should be auto-initialized when env vars are set"
+
+    def test_no_auto_init_without_env_vars(self):
+        from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+        from litellm.litellm_core_utils.litellm_logging import _maybe_auto_initialize_arize_phoenix
+
+        env_keys = ["PHOENIX_API_KEY", "PHOENIX_COLLECTOR_HTTP_ENDPOINT", "PHOENIX_COLLECTOR_ENDPOINT"]
+        with patch.dict(os.environ, {k: "" for k in env_keys}, clear=False):
+            for k in env_keys:
+                os.environ.pop(k, None)
+            _in_memory_loggers = []
+            _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+            phoenix_loggers = [cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)]
+            assert len(phoenix_loggers) == 0
 
 
 if __name__ == "__main__":

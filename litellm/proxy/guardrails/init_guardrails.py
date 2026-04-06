@@ -34,7 +34,7 @@ def init_guardrails_v2(
         if initialized_guardrail:
             guardrail_list.append(initialized_guardrail)
 
-    verbose_proxy_logger.debug(f"\nGuardrail List:{guardrail_list}\n")
+    # verbose_proxy_logger.debug(f"\nGuardrail List:{guardrail_list}\n")
 
     # Populate router's guardrail_list for load balancing support
     _populate_router_guardrail_list(guardrail_list=guardrail_list)

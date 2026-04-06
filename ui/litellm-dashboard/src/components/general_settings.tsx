@@ -11,6 +11,7 @@ import {
   Text,
   Button,
   Icon,
+  Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import {
@@ -163,7 +164,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                             <InputNumber
                               step={1}
                               value={value.field_value}
-                              onChange={(newValue) => handleInputChange(value.field_name, newValue)} // Handle value change
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                            />
+                          ) : value.field_type == "Boolean" ? (
+                            <Switch
+                              checked={value.field_value === true || value.field_value === "true"}
+                              onChange={(checked) => handleInputChange(value.field_name, checked)}
                             />
                           ) : null}
                         </TableCell>

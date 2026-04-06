@@ -8,6 +8,7 @@
 import asyncio
 import json
 import os
+import warnings
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -58,6 +59,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 # Type aliases
 MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
+_LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -112,6 +114,17 @@ class NomaGuardrail(CustomGuardrail):
         anonymize_input: Optional[bool] = None,
         **kwargs,
     ):
+        global _LEGACY_NOMA_DEPRECATION_WARNED
+        if not _LEGACY_NOMA_DEPRECATION_WARNED:
+            warnings.warn(
+                "Guardrail provider 'noma' is deprecated. "
+                "Please migrate to 'noma_v2'. "
+                "The legacy 'noma' API will no longer be supported after March 31, 2026.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            _LEGACY_NOMA_DEPRECATION_WARNED = True
+
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )

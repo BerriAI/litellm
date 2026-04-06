@@ -62,18 +62,22 @@ class AzureSentinelLogger(CustomBatchLogger):
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
-        self.dcr_immutable_id = (
-            dcr_immutable_id or os.getenv("AZURE_SENTINEL_DCR_IMMUTABLE_ID")
+        self.dcr_immutable_id = dcr_immutable_id or os.getenv(
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID"
         )
         self.stream_name = stream_name or os.getenv(
             "AZURE_SENTINEL_STREAM_NAME", "Custom-LiteLLM"
         )
         self.endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
-        self.tenant_id = tenant_id or os.getenv("AZURE_SENTINEL_TENANT_ID") or os.getenv(
-            "AZURE_TENANT_ID"
+        self.tenant_id = (
+            tenant_id
+            or os.getenv("AZURE_SENTINEL_TENANT_ID")
+            or os.getenv("AZURE_TENANT_ID")
         )
-        self.client_id = client_id or os.getenv("AZURE_SENTINEL_CLIENT_ID") or os.getenv(
-            "AZURE_CLIENT_ID"
+        self.client_id = (
+            client_id
+            or os.getenv("AZURE_SENTINEL_CLIENT_ID")
+            or os.getenv("AZURE_CLIENT_ID")
         )
         self.client_secret = (
             client_secret
@@ -103,9 +107,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
 
         # Build API endpoint: {Endpoint}/dataCollectionRules/{DCR Immutable ID}/streams/{Stream Name}?api-version=2023-01-01
-        self.api_endpoint = (
-            f"{self.endpoint.rstrip('/')}/dataCollectionRules/{self.dcr_immutable_id}/streams/{self.stream_name}?api-version=2023-01-01"
-        )
+        self.api_endpoint = f"{self.endpoint.rstrip('/')}/dataCollectionRules/{self.dcr_immutable_id}/streams/{self.stream_name}?api-version=2023-01-01"
 
         # OAuth2 scope for Azure Monitor
         self.oauth_scope = "https://monitor.azure.com/.default"
@@ -139,7 +141,9 @@ class AzureSentinelLogger(CustomBatchLogger):
         assert self.client_id is not None, "client_id is required"
         assert self.client_secret is not None, "client_secret is required"
 
-        token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+        token_url = (
+            f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+        )
 
         token_data = {
             "client_id": self.client_id,
@@ -173,9 +177,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         return self.oauth_token
 
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Async Log success events to Azure Sentinel
 
@@ -209,9 +211,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
             pass
 
-    async def async_log_failure_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Async Log failure events to Azure Sentinel
 

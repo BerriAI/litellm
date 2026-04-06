@@ -96,7 +96,7 @@ model_list:
 
   - model_name: claude-bedrock
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-west-2
 ```
 
@@ -138,6 +138,7 @@ The `/v1/messages/count_tokens` endpoint automatically routes to the appropriate
 | Provider | Token Counting Method |
 |----------|----------------------|
 | Anthropic | [Anthropic Token Counting API](https://docs.anthropic.com/en/docs/build-with-claude/token-counting) |
+| OpenAI | [OpenAI Responses API `/input_tokens`](https://platform.openai.com/docs/api-reference/responses/input-tokens) — see [Token Counting](./count_tokens.md) |
 | Vertex AI (Claude) | Vertex AI Partner Models Token Counter |
 | Bedrock (Claude) | AWS Bedrock CountTokens API |
 | Gemini | Google AI Studio countTokens API |

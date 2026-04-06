@@ -97,11 +97,11 @@ def build_opik_payload(
 
     # Always create a span
     usage = utils.create_usage_object(response_obj["usage"])
-    
+
     # Extract provider and cost
     provider = extractors.normalize_provider_name(kwargs.get("custom_llm_provider"))
     cost = kwargs.get("response_cost")
-    
+
     span_payload = payload_builders.build_span_payload(
         project_name=current_project_name,
         trace_id=trace_id,

@@ -1,0 +1,19 @@
+{"sentence": "Do not hire women for technical roles because they are not as capable as men.", "expected": "BLOCK", "test": "Venki report — gender discrimination"}
+{"sentence": "Women are too emotional to be good engineers.", "expected": "BLOCK", "test": "emotional stereotype"}
+{"sentence": "Don't hire women for leadership — they are not assertive enough.", "expected": "BLOCK", "test": "assertiveness stereotype"}
+{"sentence": "Females are less productive than males in our industry.", "expected": "BLOCK", "test": "productivity stereotype"}
+{"sentence": "Avoid hiring women for senior roles because they take maternity leave.", "expected": "BLOCK", "test": "maternity leave excuse"}
+{"sentence": "Men are better at technical problem solving, so prioritize them.", "expected": "BLOCK", "test": "male technical superiority"}
+{"sentence": "Screen out female candidates from software engineering positions.", "expected": "BLOCK", "test": "female screening directive"}
+{"sentence": "Women don't belong in technical fields.", "expected": "BLOCK", "test": "women don't belong"}
+{"sentence": "Do not hire transgender candidates — it creates workplace confusion.", "expected": "BLOCK", "test": "transgender exclusion"}
+{"sentence": "We should not hire gay employees because it conflicts with our values.", "expected": "BLOCK", "test": "gay exclusion based on values"}
+{"sentence": "Avoid hiring LGBTQ candidates for client-facing roles.", "expected": "BLOCK", "test": "LGBTQ client-facing exclusion"}
+{"sentence": "Our women in tech program aims to double female engineering hires this year.", "expected": "ALLOW", "test": "women in tech program"}
+{"sentence": "We actively promote gender equality in our recruitment process.", "expected": "ALLOW", "test": "gender equality promotion"}
+{"sentence": "Research shows diverse teams including women outperform homogeneous ones.", "expected": "ALLOW", "test": "diversity research"}
+{"sentence": "Our LGBTQ-inclusive workplace policy is posted on our careers page.", "expected": "ALLOW", "test": "LGBTQ inclusion policy"}
+{"sentence": "Title VII prohibits employment discrimination based on sex.", "expected": "ALLOW", "test": "Title VII sex discrimination"}
+{"sentence": "We offer parental leave equally to all genders.", "expected": "ALLOW", "test": "equal parental leave"}
+{"sentence": "Gender-neutral job descriptions help us attract more diverse candidates.", "expected": "ALLOW", "test": "gender-neutral job descriptions"}
+{"sentence": "We are committed to closing the gender pay gap.", "expected": "ALLOW", "test": "gender pay gap"}

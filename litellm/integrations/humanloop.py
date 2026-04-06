@@ -162,11 +162,7 @@ class HumanloopLogger(CustomLogger):
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
         ignore_prompt_manager_optional_params: Optional[bool] = False,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+    ) -> Tuple[str, List[AllMessageValues], dict,]:
         humanloop_api_key = dynamic_callback_params.get(
             "humanloop_api_key"
         ) or get_secret_str("HUMANLOOP_API_KEY")

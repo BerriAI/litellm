@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getGuardrailsList,
@@ -16,10 +17,11 @@ import {
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, InfoCircleOutlined, SaveOutlined } from "@ant-design/icons";
+import { EditOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button, Form, Input, message, Select, Switch, Tabs, Tooltip } from "antd";
+import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tooltip } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
@@ -48,6 +50,7 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
 export interface TeamMembership {
   user_id: string;
@@ -92,6 +95,9 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+    access_group_models?: string[];
+    access_group_mcp_server_ids?: string[];
+    access_group_agent_ids?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -99,6 +105,7 @@ export interface TeamData {
       mcp_servers: string[];
       mcp_access_groups?: string[];
       mcp_tool_permissions?: Record<string, string[]>;
+      mcp_toolsets?: string[];
       vector_stores: string[];
       agents?: string[];
       agent_access_groups?: string[];
@@ -121,6 +128,7 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
+  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -155,6 +163,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
+  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -179,9 +188,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole } = useAuthorized();
+  const { userRole, userId } = useAuthorized();
+  const { data: userOrganizations = [] } = useOrganizations();
 
-  const canEditTeam = is_team_admin || is_proxy_admin;
+  // Check if user is org admin for this team's organization
+  const isOrgAdminForTeam = useMemo(() => {
+    const teamOrgId = teamData?.team_info?.organization_id;
+    if (!teamOrgId || !userId) return false;
+    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
+    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
+  }, [teamData, userOrganizations, userId]);
+
+  // Models currently selected in the team edit form, used to scope the per-model
+  // rate limit dropdown to models this team actually has access to.
+  const selectedModelsInForm = Form.useWatch("models", form) as string[] | undefined;
+  const availableRateLimitModels = useMemo(() => {
+    const selected = selectedModelsInForm ?? teamData?.team_info?.models ?? [];
+    if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
+      return userModels;
+    }
+    return unfurlWildcardModelsInList(selected, userModels);
+  }, [selectedModelsInForm, teamData, userModels]);
+
+  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(
     () => getTeamInfoDefaultTab(editTeam, canEditTeam),
@@ -353,7 +382,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
       };
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
 
@@ -375,7 +404,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       setIsEditMemberModalVisible(false);
 
-      message.destroy(); // Remove all existing toasts
+      MessageManager.destroy(); // Remove all existing toasts
 
       NotificationsManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
@@ -453,12 +482,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return v;
       };
 
+      const modelTpmLimit: Record<string, number> = {};
+      const modelRpmLimit: Record<string, number> = {};
+      for (const entry of (values.modelLimits ?? []) as { model?: string; tpm?: number; rpm?: number }[]) {
+        if (entry?.model) {
+          if (entry.tpm != null) modelTpmLimit[entry.model] = entry.tpm;
+          if (entry.rpm != null) modelRpmLimit[entry.model] = entry.rpm;
+        }
+      }
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
+        model_tpm_limit: modelTpmLimit,
+        model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
         soft_budget: sanitizeNumeric(values.soft_budget),
         budget_duration: values.budget_duration,
@@ -477,7 +517,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        organization_id: values.organization_id,
+        ...(values.organization_id !== info.organization_id
+          ? { organization_id: values.organization_id ?? null }
+          : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
@@ -497,9 +539,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       // Handle object_permission updates
-      const { servers, accessGroups } = values.mcp_servers_and_groups || {
+      const { servers, accessGroups, toolsets } = values.mcp_servers_and_groups || {
         servers: [],
         accessGroups: [],
+        toolsets: [],
       };
       const serverIds = new Set(servers || []);
       const mcpToolPermissions = Object.fromEntries(
@@ -515,6 +558,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       if (mcpToolPermissions) {
         updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
+      }
+      if (toolsets) {
+        updateData.object_permission.mcp_toolsets = toolsets;
       }
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
@@ -635,20 +681,43 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text>TPM: {info.tpm_limit || "Unlimited"}</Text>
                     <Text>RPM: {info.rpm_limit || "Unlimited"}</Text>
                     {info.max_parallel_requests && <Text>Max Parallel Requests: {info.max_parallel_requests}</Text>}
+                    {(() => {
+                      const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
+                      const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
+                      const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
+                      if (models.length === 0) return null;
+                      return (
+                        <div className="mt-3">
+                          <Text className="text-gray-500">Per-model limits:</Text>
+                          {models.map((m) => (
+                            <Text key={m} className="text-xs">
+                              {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
+                            </Text>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </Card>
 
                 <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {info.models.length === 0 ? (
+                    {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
                       <Badge color="red">All proxy models</Badge>
                     ) : (
-                      info.models.map((model, index) => (
-                        <Badge key={index} color="red">
-                          {model}
-                        </Badge>
-                      ))
+                      <>
+                        {info.models.map((model: string, index: number) => (
+                          <Badge key={`direct-${index}`} color="blue">
+                            {model}
+                          </Badge>
+                        ))}
+                        {(info.access_group_models || []).map((model: string, index: number) => (
+                          <Badge key={`ag-${index}`} color="green" title="From access group">
+                            {model}
+                          </Badge>
+                        ))}
+                      </>
                     )}
                   </div>
                 </Card>
@@ -727,6 +796,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             ),
           },
           {
+            key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
+            children: (
+              <TeamVirtualKeysTable
+                teamId={teamId}
+                teamAlias={info.team_alias}
+                organization={organization}
+              />
+            ),
+          },
+          {
             key: TEAM_INFO_TAB_KEYS.MEMBERS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS],
             children: (
@@ -769,6 +849,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       models: info.models,
                       tpm_limit: info.tpm_limit,
                       rpm_limit: info.rpm_limit,
+                      modelLimits: Array.from(
+                        new Set([
+                          ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
+                          ...Object.keys(info.metadata?.model_rpm_limit ?? {}),
+                        ]),
+                      ).map((model) => ({
+                        model,
+                        tpm: info.metadata?.model_tpm_limit?.[model],
+                        rpm: info.metadata?.model_rpm_limit?.[model],
+                      })),
                       max_budget: info.max_budget,
                       soft_budget: info.soft_budget,
                       budget_duration: info.budget_duration,
@@ -785,7 +875,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, ...rest }) => rest)(info.metadata),
+                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
                           null,
                           2,
                         )
@@ -801,6 +891,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       mcp_servers_and_groups: {
                         servers: info.object_permission?.mcp_servers || [],
                         accessGroups: info.object_permission?.mcp_access_groups || [],
+                        toolsets: info.object_permission?.mcp_toolsets || [],
                       },
                       mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
                       agents_and_groups: {
@@ -908,6 +999,91 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                       <NumericalInput step={1} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Model-Specific Rate Limits"
+                      tooltip="Set per-model TPM/RPM limits that apply across the whole team."
+                    >
+                      <Form.List name="modelLimits">
+                        {(fields, { add, remove }) => (
+                          <>
+                            {fields.map(({ key, name, ...restField }) => (
+                              <Space
+                                key={key}
+                                style={{ display: "flex", marginBottom: 8 }}
+                                align="baseline"
+                              >
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "model"]}
+                                  rules={[
+                                    { required: true, message: "Missing model" },
+                                    {
+                                      validator: (_, value) => {
+                                        if (!value) return Promise.resolve();
+                                        const all = form.getFieldValue("modelLimits") ?? [];
+                                        const dupes = all.filter(
+                                          (entry: { model?: string }) => entry?.model === value,
+                                        );
+                                        if (dupes.length > 1) {
+                                          return Promise.reject(new Error("Duplicate model"));
+                                        }
+                                        return Promise.resolve();
+                                      },
+                                    },
+                                  ]}
+                                  style={{ minWidth: 240 }}
+                                >
+                                  <Select
+                                    showSearch
+                                    placeholder="Select model"
+                                    allowClear
+                                    options={availableRateLimitModels.map((m) => ({
+                                      value: m,
+                                      label: m,
+                                    }))}
+                                  />
+                                </Form.Item>
+                                <Form.Item
+                                  {...restField}
+                                  name={[name, "tpm"]}
+                                  rules={[
+                                    {
+                                      validator: async (_, value) => {
+                                        const row = (form.getFieldValue("modelLimits") ?? [])[name] ?? {};
+                                        if (row.model && value == null && row.rpm == null) {
+                                          return Promise.reject(new Error("Set at least one of TPM or RPM"));
+                                        }
+                                        return Promise.resolve();
+                                      },
+                                    },
+                                  ]}
+                                >
+                                  <InputNumber placeholder="TPM Limit" min={0} />
+                                </Form.Item>
+                                <Form.Item {...restField} name={[name, "rpm"]}>
+                                  <InputNumber placeholder="RPM Limit" min={0} />
+                                </Form.Item>
+                                <MinusCircleOutlined
+                                  onClick={() => remove(name)}
+                                  style={{ color: "#ef4444" }}
+                                />
+                              </Space>
+                            ))}
+                            <Form.Item>
+                              <Button
+                                type="dashed"
+                                onClick={() => add()}
+                                block
+                                icon={<PlusOutlined />}
+                              >
+                                Add Model Limit
+                              </Button>
+                            </Form.Item>
+                          </>
+                        )}
+                      </Form.List>
                     </Form.Item>
 
                     <Form.Item
@@ -1052,8 +1228,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item label="Organization ID" name="organization_id">
-                      <Input type="" disabled />
+                    <Form.Item label="Organization" name="organization_id">
+                      <Select
+                        allowClear
+                        placeholder="Select an organization"
+                        showSearch
+                        optionFilterProp="label"
+                        options={userOrganizations.map((org) => ({
+                          value: org.organization_id,
+                          label: org.organization_alias || org.organization_id,
+                        }))}
+                      />
                     </Form.Item>
 
                     <Form.Item label="Logging Settings" name="logging_settings">
@@ -1137,6 +1322,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>
                       <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                      {(() => {
+                        const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
+                        const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
+                        const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
+                        if (models.length === 0) return null;
+                        return (
+                          <div className="mt-2">
+                            <Text className="text-gray-500">Per-model limits:</Text>
+                            {models.map((m) => (
+                              <div key={m} className="text-xs ml-2">
+                                {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div>
                       <Text className="font-medium">Team Budget</Text>
@@ -1291,6 +1492,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={() => setIsAddMemberModalVisible(false)}
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
+        teamId={teamId}
       />
 
       {/* Delete Member Confirmation Modal */}

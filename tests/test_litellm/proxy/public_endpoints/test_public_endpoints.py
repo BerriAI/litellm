@@ -110,6 +110,34 @@ def test_watsonx_provider_fields():
     assert "zen_api_key" in field_keys
 
 
+def test_azure_provider_fields_include_entra_id():
+    """Azure provider must expose Entra ID (Service Principal) credential fields so
+    the UI can input tenant_id / client_id / client_secret as an alternative to api_key."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    azure = next((p for p in providers if p["provider"] == "Azure"), None)
+    assert azure is not None
+
+    fields_by_key = {f["key"]: f for f in azure["credential_fields"]}
+    # API-key auth still supported
+    assert "api_key" in fields_by_key
+    # Entra ID fields
+    assert "tenant_id" in fields_by_key
+    assert "client_id" in fields_by_key
+    assert "client_secret" in fields_by_key
+    # client_secret must be masked in the UI
+    assert fields_by_key["client_secret"]["field_type"] == "password"
+    # Entra ID is an alternative to api_key, so none of these are individually required
+    assert fields_by_key["tenant_id"]["required"] is False
+    assert fields_by_key["client_id"]["required"] is False
+    assert fields_by_key["client_secret"]["required"] is False
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()
@@ -357,3 +385,164 @@ def test_public_model_hub_mixed_health_statuses():
         assert claude["health_checked_at"] is None
     app.dependency_overrides.clear()
 
+
+# ---------------------------------------------------------------------------
+# /public/endpoints
+# ---------------------------------------------------------------------------
+
+import litellm.proxy.public_endpoints.public_endpoints as _pe_module
+from litellm.proxy.public_endpoints.public_endpoints import _build_endpoints, _clean_display_name
+
+
+@pytest.fixture(autouse=False)
+def reset_endpoints_cache():
+    """Reset the module-level cache before and after each cache-related test."""
+    original = _pe_module._cached_endpoints
+    _pe_module._cached_endpoints = None
+    yield
+    _pe_module._cached_endpoints = original
+
+
+def _make_client():
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_get_supported_endpoints_returns_200(reset_endpoints_cache):
+    response = _make_client().get("/public/endpoints")
+    assert response.status_code == 200
+
+
+def test_get_supported_endpoints_response_shape(reset_endpoints_cache):
+    data = _make_client().get("/public/endpoints").json()
+    assert "endpoints" in data
+    assert isinstance(data["endpoints"], list)
+    assert len(data["endpoints"]) > 0
+
+
+def test_get_supported_endpoints_item_fields(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        assert "key" in item
+        assert "label" in item
+        assert "endpoint" in item
+        assert "providers" in item
+        assert isinstance(item["providers"], list)
+
+
+def test_get_supported_endpoints_provider_fields(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        for provider in item["providers"]:
+            assert "slug" in provider
+            assert "display_name" in provider
+
+
+def test_get_supported_endpoints_paths_start_with_slash(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        assert item["endpoint"].startswith("/"), f"Expected path starting with /, got: {item['endpoint']}"
+
+
+def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache):
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    keys = [item["key"] for item in endpoints]
+    assert "chat_completions" in keys
+
+    chat = next(item for item in endpoints if item["key"] == "chat_completions")
+    assert chat["endpoint"] == "/chat/completions"
+    assert chat["label"] == "Chat Completions"
+    assert len(chat["providers"]) > 0
+
+
+def test_get_supported_endpoints_display_names_have_no_slug_suffix(reset_endpoints_cache):
+    """Provider display_names must not contain the raw `` (`slug`) `` suffix."""
+    import re
+    suffix_re = re.compile(r"\(`[^`]+`\)")
+    endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
+    for item in endpoints:
+        for provider in item["providers"]:
+            assert not suffix_re.search(provider["display_name"]), (
+                f"display_name still contains slug suffix: {provider['display_name']!r}"
+            )
+
+
+def test_get_supported_endpoints_is_cached(reset_endpoints_cache):
+    """`_load_endpoints` is called only once; subsequent requests use the cache."""
+    client = _make_client()
+    with patch(
+        "litellm.proxy.public_endpoints.public_endpoints._load_endpoints",
+        wraps=_pe_module._load_endpoints,
+    ) as mock_load:
+        client.get("/public/endpoints")
+        client.get("/public/endpoints")
+        client.get("/public/endpoints")
+
+    mock_load.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _build_endpoints unit tests (transformation logic)
+# ---------------------------------------------------------------------------
+
+_MINIMAL_RAW = {
+    "providers": {
+        "openai": {
+            "display_name": "OpenAI (`openai`)",
+            "url": "https://example.com",
+            "endpoints": {"chat_completions": True, "embeddings": True, "images": False},
+        },
+        "anthropic": {
+            "display_name": "Anthropic (`anthropic`)",
+            "url": "https://example.com",
+            "endpoints": {"chat_completions": True, "embeddings": False, "images": False},
+        },
+    }
+}
+
+
+def test_build_endpoints_known_key_uses_metadata():
+    result = _build_endpoints(_MINIMAL_RAW)
+    chat = next(e for e in result if e["key"] == "chat_completions")
+    assert chat["label"] == "Chat Completions"
+    assert chat["endpoint"] == "/chat/completions"
+
+
+def test_build_endpoints_only_includes_supporting_providers():
+    result = _build_endpoints(_MINIMAL_RAW)
+    embeddings = next(e for e in result if e["key"] == "embeddings")
+    slugs = [p["slug"] for p in embeddings["providers"]]
+    assert slugs == ["openai"]
+
+
+def test_build_endpoints_unknown_key_derives_label_and_path():
+    raw = {
+        "providers": {
+            "someprovider": {
+                "display_name": "Some Provider (`someprovider`)",
+                "endpoints": {"my_custom_endpoint": True},
+            }
+        }
+    }
+    result = _build_endpoints(raw)
+    item = result[0]
+    assert item["key"] == "my_custom_endpoint"
+    assert item["label"] == "My Custom Endpoint"
+    assert item["endpoint"].startswith("/")
+
+
+def test_build_endpoints_empty_providers_returns_empty():
+    result = _build_endpoints({"providers": {}})
+    assert result == []
+
+
+def test_clean_display_name_strips_suffix():
+    assert _clean_display_name("OpenAI (`openai`)") == "OpenAI"
+    assert _clean_display_name("AI/ML API (`aiml`)") == "AI/ML API"
+    assert _clean_display_name("A2A (Agent-to-Agent) (`a2a`)") == "A2A (Agent-to-Agent)"
+
+
+def test_clean_display_name_passthrough_when_no_suffix():
+    assert _clean_display_name("OpenAI") == "OpenAI"
+    assert _clean_display_name("") == ""

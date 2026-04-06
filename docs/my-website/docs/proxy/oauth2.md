@@ -4,7 +4,7 @@ Use this if you want to use an Oauth2.0 token to make `/chat`, `/embeddings` req
 
 :::info
 
-This is an Enterprise Feature - [get in touch with us if you want a free trial to test if this feature meets your needs]((https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat))
+This is an Enterprise Feature - [get in touch with us if you want a free trial to test if this feature meets your needs]((https://enterprise.litellm.ai/demo))
 
 :::
 
@@ -60,4 +60,25 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## Debugging 
 
 Start the LiteLLM Proxy with [`--detailed_debug` mode and you should see more verbose logs](cli.md#detailed_debug)
+
+## Using OAuth2 + JWT Together
+
+If both `enable_oauth2_auth` and `enable_jwt_auth` are enabled, LiteLLM can split auth paths:
+- JWT validation for user tokens
+- OAuth2 introspection for machine tokens
+
+For JWT-shaped machine tokens, configure `litellm_jwtauth.routing_overrides`:
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: true
+  litellm_jwtauth:
+    routing_overrides:
+      - iss: "machine-issuer.example.com"
+        client_id: "MID_LITELLM"
+        path: "oauth2"
+```
+
+For full `routing_overrides` behavior and list-based selectors, see [`/proxy/token_auth`](./token_auth.md#route-jwt-shaped-machine-tokens-to-oauth2).
 

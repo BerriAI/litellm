@@ -4,7 +4,7 @@ WebSearch Tool Transformation
 Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 import json
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -81,9 +81,7 @@ class WebSearchTransformation:
             content = response.content or []
 
         if not content:
-            verbose_logger.debug(
-                "WebSearchInterception: Response has empty content"
-            )
+            verbose_logger.debug("WebSearchInterception: Response has empty content")
             return False, []
 
         # Find all WebSearch tool_use blocks
@@ -104,7 +102,9 @@ class WebSearchTransformation:
             # Check for LiteLLM standard or legacy web search tools
             # Handles: litellm_web_search, WebSearch, web_search
             if block_type == "tool_use" and block_name in (
-                LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
+                LITELLM_WEB_SEARCH_TOOL_NAME,
+                "WebSearch",
+                "web_search",
             ):
                 # Convert to dict for easier handling
                 tool_call = {
@@ -125,7 +125,7 @@ class WebSearchTransformation:
         response: Any,
     ) -> Tuple[bool, List[Dict]]:
         """Parse OpenAI-style response for WebSearch tool_calls"""
-        
+
         # Handle both dict and ModelResponse objects
         if isinstance(response, dict):
             choices = response.get("choices", [])
@@ -138,9 +138,7 @@ class WebSearchTransformation:
             choices = response.choices or []
 
         if not choices:
-            verbose_logger.debug(
-                "WebSearchInterception: Response has empty choices"
-            )
+            verbose_logger.debug("WebSearchInterception: Response has empty choices")
             return False, []
 
         # Get first choice's message
@@ -149,11 +147,9 @@ class WebSearchTransformation:
             message = first_choice.get("message", {})
         else:
             message = getattr(first_choice, "message", None)
-        
+
         if not message:
-            verbose_logger.debug(
-                "WebSearchInterception: First choice has no message"
-            )
+            verbose_logger.debug("WebSearchInterception: First choice has no message")
             return False, []
 
         # Get tool_calls from message
@@ -163,9 +159,7 @@ class WebSearchTransformation:
             openai_tool_calls = getattr(message, "tool_calls", None) or []
 
         if not openai_tool_calls:
-            verbose_logger.debug(
-                "WebSearchInterception: Message has no tool_calls"
-            )
+            verbose_logger.debug("WebSearchInterception: Message has no tool_calls")
             return False, []
 
         # Find all WebSearch tool calls
@@ -176,18 +170,30 @@ class WebSearchTransformation:
                 tool_id = tool_call.get("id")
                 tool_type = tool_call.get("type")
                 function = tool_call.get("function", {})
-                function_name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
-                function_arguments = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+                function_name = (
+                    function.get("name")
+                    if isinstance(function, dict)
+                    else getattr(function, "name", None)
+                )
+                function_arguments = (
+                    function.get("arguments")
+                    if isinstance(function, dict)
+                    else getattr(function, "arguments", None)
+                )
             else:
                 tool_id = getattr(tool_call, "id", None)
                 tool_type = getattr(tool_call, "type", None)
                 function = getattr(tool_call, "function", None)
                 function_name = getattr(function, "name", None) if function else None
-                function_arguments = getattr(function, "arguments", None) if function else None
+                function_arguments = (
+                    getattr(function, "arguments", None) if function else None
+                )
 
             # Check for LiteLLM standard or legacy web search tools
             if tool_type == "function" and function_name in (
-                LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search"
+                LITELLM_WEB_SEARCH_TOOL_NAME,
+                "WebSearch",
+                "web_search",
             ):
                 # Parse arguments (might be JSON string)
                 if isinstance(function_arguments, str):
@@ -224,6 +230,7 @@ class WebSearchTransformation:
         tool_calls: List[Dict],
         search_results: List[str],
         response_format: str = "anthropic",
+        thinking_blocks: Optional[List[Dict]] = None,
     ) -> Tuple[Dict, Union[Dict, List[Dict]]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
@@ -235,6 +242,10 @@ class WebSearchTransformation:
             tool_calls: List of tool_use/tool_calls dicts from transform_request
             search_results: List of search result strings (one per tool_call)
             response_format: Response format - "anthropic" or "openai" (default: "anthropic")
+            thinking_blocks: Optional list of thinking/redacted_thinking blocks
+                from the model's response. When present, prepended to the
+                assistant message content (required by Anthropic API when
+                thinking is enabled).
 
         Returns:
             (assistant_message, user_or_tool_messages):
@@ -247,19 +258,29 @@ class WebSearchTransformation:
             )
         else:
             return WebSearchTransformation._transform_response_anthropic(
-                tool_calls, search_results
+                tool_calls, search_results, thinking_blocks=thinking_blocks
             )
 
     @staticmethod
     def _transform_response_anthropic(
         tool_calls: List[Dict],
         search_results: List[str],
+        thinking_blocks: Optional[List[Dict]] = None,
     ) -> Tuple[Dict, Dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
-        # Build assistant message with tool_use blocks
-        assistant_message = {
-            "role": "assistant",
-            "content": [
+        # Build assistant message content
+        assistant_content: List[Dict] = []
+
+        # Prepend thinking blocks if present.
+        # When extended thinking is enabled, Anthropic requires the assistant
+        # message to start with thinking/redacted_thinking blocks before any
+        # tool_use blocks. Same pattern as anthropic_messages_pt in factory.py.
+        if thinking_blocks:
+            assistant_content.extend(thinking_blocks)
+
+        # Add tool_use blocks
+        assistant_content.extend(
+            [
                 {
                     "type": "tool_use",
                     "id": tc["id"],
@@ -267,7 +288,12 @@ class WebSearchTransformation:
                     "input": tc["input"],
                 }
                 for tc in tool_calls
-            ],
+            ]
+        )
+
+        assistant_message = {
+            "role": "assistant",
+            "content": assistant_content,
         }
 
         # Build user message with tool_result blocks
@@ -300,7 +326,9 @@ class WebSearchTransformation:
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": json.dumps(tc["input"]) if isinstance(tc["input"], dict) else str(tc["input"]),
+                        "arguments": json.dumps(tc["input"])
+                        if isinstance(tc["input"], dict)
+                        else str(tc["input"]),
                     },
                 }
                 for tc in tool_calls
