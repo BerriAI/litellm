@@ -1,6 +1,6 @@
 This is a table of PRs
 
-$ARGUMENT[0]
+$ARGUMENTS[0]
 
 from the above table,
 for each row,

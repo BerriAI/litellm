@@ -2,8 +2,8 @@
 .venv
 .venv_policy_test
 .env
-.claude
-!.claude/commands
+.claude/settings.local.json
+.claude/__pycache__
 .newenv
 newenv/*
 litellm/proxy/myenv/*
