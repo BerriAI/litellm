@@ -732,6 +732,40 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                     return await Oauth2Handler.check_oauth2_token(token=api_key)
 
+        # Allow explicit JWT routing overrides to still use OAuth2 even when
+        # `enable_oauth2_auth` is false. This keeps opaque-token OAuth2 disabled
+        # while supporting targeted machine JWT -> OAuth2 introspection flows.
+        if (
+            general_settings.get("enable_oauth2_auth", False) is not True
+            and general_settings.get("enable_jwt_auth", False) is True
+        ):
+            is_jwt = jwt_handler.is_jwt(token=api_key)
+            if is_jwt:
+                should_apply_oauth2_on_info_routes = bool(
+                    general_settings.get("oauth2_auth_on_info_routes", False)
+                )
+                should_consider_oauth2_override = RouteChecks.is_llm_api_route(
+                    route=route
+                ) or (
+                    should_apply_oauth2_on_info_routes
+                    and RouteChecks.is_info_route(route=route)
+                )
+                route_jwt_to_oauth2 = should_consider_oauth2_override and (
+                    _should_route_jwt_to_oauth2_override(
+                        token=api_key, jwt_handler=jwt_handler
+                    )
+                )
+                if route_jwt_to_oauth2:
+                    from litellm.proxy.proxy_server import premium_user
+
+                    if premium_user is not True:
+                        raise ValueError(
+                            "Oauth2 token validation is only available for premium users"
+                            + CommonProxyErrors.not_premium_user.value
+                        )
+
+                    return await Oauth2Handler.check_oauth2_token(token=api_key)
+
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
 

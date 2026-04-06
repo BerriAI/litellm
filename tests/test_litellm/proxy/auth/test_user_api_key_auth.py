@@ -975,6 +975,106 @@ class TestJWTOAuth2Coexistence:
             assert result.user_id == "machine-client-aud-list"
 
     @pytest.mark.asyncio
+    async def test_routing_override_routes_jwt_to_oauth2_when_oauth2_globally_disabled(
+        self,
+    ):
+        """
+        If enable_oauth2_auth is false, JWT tokens matching routing_overrides
+        should still route to OAuth2 introspection.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJtYWNoaW5lLWlzc3Vlci5leGFtcGxlLmNvbSIsImNsaWVudF9pZCI6Ik1JRF9MSVRFTExNIn0."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=jwt_token,
+            user_id="machine-client-override-oauth2-off",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+            return_value=mock_oauth2_response,
+        ) as mock_oauth2, patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+        ) as mock_jwt_auth:
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="machine-issuer.example.com",
+                            client_id="MID_LITELLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=jwt_token)
+            mock_jwt_auth.assert_not_called()
+            assert result.user_id == "machine-client-override-oauth2-off"
+
+    @pytest.mark.asyncio
+    async def test_opaque_token_does_not_use_oauth2_when_oauth2_globally_disabled(
+        self,
+    ):
+        """
+        With enable_oauth2_auth=false, opaque tokens must not be sent to OAuth2.
+        """
+        opaque_token = "sk-ui-session-token"
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {opaque_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+        ) as mock_oauth2:
+            with pytest.raises(Exception):
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {opaque_token}",
+                )
+
+            mock_oauth2.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_info_route_does_not_use_oauth2_by_default(self):
         """
         With both auth modes enabled, info routes should not force OAuth2 unless
