@@ -1956,6 +1956,25 @@ class TestAddLitellmMetadataFromRequestHeaders:
         assert result["litellm_metadata"]["trace_id"] == "from-header"
         assert result["litellm_metadata"]["session_id"] == "from-header"
 
+    def test_should_keep_top_level_ids_consistent_with_body_trace_id(self):
+        """litellm_session_id and litellm_trace_id should also reflect the body trace_id."""
+        data = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_metadata": {"trace_id": "from-body"},
+        }
+        headers = {"x-litellm-trace-id": "from-header", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="litellm_metadata",
+        )
+
+        assert result["litellm_metadata"]["trace_id"] == "from-body"
+        assert result["litellm_session_id"] == "from-body"
+        assert result["litellm_trace_id"] == "from-body"
+
     @pytest.mark.asyncio
     async def test_should_preserve_body_trace_id_in_full_pipeline_on_messages_route(self):
         """Body trace_id must survive the full add_litellm_data_to_request pipeline."""
