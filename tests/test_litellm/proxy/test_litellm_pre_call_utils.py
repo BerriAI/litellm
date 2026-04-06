@@ -1972,6 +1972,7 @@ class TestAddLitellmMetadataFromRequestHeaders:
         )
 
         assert result["litellm_metadata"]["trace_id"] == "from-body"
+        assert result["litellm_metadata"]["session_id"] == "from-body"  # must mirror trace_id
         assert result["litellm_session_id"] == "from-body"
         assert result["litellm_trace_id"] == "from-body"
 

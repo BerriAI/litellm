@@ -660,20 +660,25 @@ class LiteLLMProxyRequestSetup:
         if chain_id:
             metadata_from_headers["trace_id"] = chain_id
             metadata_from_headers["session_id"] = chain_id
-            # Only prefer body trace_id on litellm_metadata routes (/v1/messages, threads, etc.)
+            # Only prefer body values on litellm_metadata routes (/v1/messages, threads, etc.)
             # On /chat/completions, metadata["trace_id"] belongs to observability tools
             # (e.g. LangFuse) and should not override the header chain ID.
             _body_trace_id: Optional[str] = None
+            _body_session_id: Optional[str] = None
             if _metadata_variable_name == "litellm_metadata":
                 _body_metadata = data.get(_metadata_variable_name)
-                _body_trace_id = (
-                    _body_metadata.get("trace_id")
-                    if isinstance(_body_metadata, dict)
-                    else None
-                )
-            effective_id = _body_trace_id or chain_id
-            data["litellm_session_id"] = effective_id
-            data["litellm_trace_id"] = effective_id
+                if isinstance(_body_metadata, dict):
+                    _body_trace_id = _body_metadata.get("trace_id")
+                    _body_session_id = _body_metadata.get("session_id")
+            effective_trace_id = _body_trace_id or chain_id
+            # session_id mirrors trace_id when not explicitly set in the body
+            effective_session_id = _body_session_id or _body_trace_id or chain_id
+            data["litellm_session_id"] = effective_session_id
+            data["litellm_trace_id"] = effective_trace_id
+            # Sync metadata_from_headers so the merge loop below injects
+            # consistent values when the body doesn't set these keys.
+            metadata_from_headers["trace_id"] = effective_trace_id
+            metadata_from_headers["session_id"] = effective_session_id
             verbose_proxy_logger.debug(
                 f"Extracted chain_id from header (trace-id/session-id): {chain_id}"
             )
