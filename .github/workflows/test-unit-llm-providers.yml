@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write # zizmor: ignore[excessive-permissions] — required for Codecov OIDC upload in reusable workflow
+  pull-requests: write # zizmor: ignore[excessive-permissions] — required for Codecov PR comments in reusable workflow
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,6 +21,7 @@ jobs:
       test-path: "tests/test_litellm/llms/vertex_ai"
       workers: 1
       reruns: 2
+      artifact-name: llm-vertex-ai
 
   other-providers:
     name: All Other Providers
@@ -27,3 +30,4 @@ jobs:
       test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
       workers: 2
       reruns: 2
+      artifact-name: llm-other-providers
