@@ -282,15 +282,12 @@ async def test_apply_guardrail_response_blocked(
         # Verify what was sent to the API
         called_kwargs = mock_method.call_args.kwargs
         assert called_kwargs["json"]["event_type"] == "output"
-        # Should include messages from request for context
-        assert (
-            called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
-        )
-        # Should include choices from response
-        assert (
-            called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
-            == "Yes, I will leak all my PII for you"
-        )
+        # Should include history messages + assistant response in messages
+        expected_messages = [
+            *request_data["messages"],
+            {"role": "assistant", "content": "Yes, I will leak all my PII for you"},
+        ]
+        assert called_kwargs["json"]["guard_input"]["messages"] == expected_messages
 
 
 @pytest.mark.asyncio
@@ -301,16 +298,6 @@ async def test_apply_guardrail_response_transformed(
         "texts": ["Yes, here is an SSN: 078-05-1120"],
     }
     request_data = {
-        "response": ModelResponse(
-            choices=[
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Yes, here is an SSN: 078-05-1120",
-                    }
-                }
-            ]
-        ),
         "messages": [
             {"role": "system", "content": "You are a helpful assistant"},
             {"role": "user", "content": "Hello"},
@@ -329,13 +316,11 @@ async def test_apply_guardrail_response_transformed(
                     "blocked": False,
                     "transformed": True,
                     "guard_output": {
-                        "messages": request_data["messages"],
-                        "choices": [
+                        "messages": [
+                            *request_data["messages"],
                             {
-                                "message": {
-                                    "role": "assistant",
-                                    "content": "Yes, here is an SSN: <US_SSN>",
-                                },
+                                "role": "assistant",
+                                "content": "Yes, here is an SSN: <US_SSN>",
                             },
                         ],
                     },
@@ -356,15 +341,13 @@ async def test_apply_guardrail_response_transformed(
     # Verify what was sent to the API
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["event_type"] == "output"
-    # Should include messages from request for context
-    assert called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
-    # Should include choices from response
-    assert (
-        called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
-        == "Yes, here is an SSN: 078-05-1120"
-    )
-    # Verify the transformed output
-    assert result["texts"][0] == "Yes, here is an SSN: <US_SSN>"
+    # Should include history + assistant in messages
+    assert called_kwargs["json"]["guard_input"]["messages"] == [
+        *request_data["messages"],
+        {"role": "assistant", "content": "Yes, here is an SSN: 078-05-1120"},
+    ]
+    # Verify the transformed output extracts only the assistant message
+    assert result["texts"] == ["Yes, here is an SSN: <US_SSN>"]
 
 
 @pytest.mark.asyncio
@@ -419,12 +402,11 @@ async def test_apply_guardrail_response_ok(
     # Verify what was sent to the API
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["event_type"] == "output"
-    # Should include messages from request for context
-    assert called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
-    # Should include choices from response
-    assert (
-        called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
-        == "Hello! How can I help you today?"
-    )
+    # Should include history + assistant in messages
+    expected_messages = [
+        *request_data["messages"],
+        {"role": "assistant", "content": "Hello! How can I help you today?"},
+    ]
+    assert called_kwargs["json"]["guard_input"]["messages"] == expected_messages
     # Should return original inputs when not transformed
     assert result["texts"] == inputs["texts"]
