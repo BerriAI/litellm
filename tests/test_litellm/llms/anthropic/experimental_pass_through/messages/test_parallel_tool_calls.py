@@ -279,6 +279,7 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
         "content_block_start",  # "The weather is nice today"
+        "content_block_delta",  # "The weather is nice today." (trigger chunk)
         "content_block_stop",
         "content_block_start",  # Start of second tool_use content block
         "content_block_delta",  # {"city":
@@ -289,12 +290,28 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # " CHI"}
         "content_block_stop",  # End of third tool_use content block
         "content_block_start",  # "The weather is not so nice today"
+        "content_block_delta",  # "The weather is not so nice today." (trigger chunk)
         "content_block_stop",
         "message_delta",  # Stop reason with merged usage
         "message_stop",  # Final message stop
     ]
 
     assert expected_types == chunk_types
+
+    # Verify the content of the text content blocks is preserved across the
+    # transition (previously the trigger chunk was dropped, losing the first
+    # characters of every new content block - see
+    # test_first_chunk_on_block_transition.py for a dedicated regression test).
+    text_deltas = [
+        (chunk.get("delta") or {}).get("text", "")
+        for chunk in chunks
+        if chunk.get("type") == "content_block_delta"
+        and (chunk.get("delta") or {}).get("type") == "text_delta"
+    ]
+    assert text_deltas == [
+        "The weather is nice today.",
+        "The weather is not so nice today.",
+    ]
 
     get_weather_calls = 0
 
