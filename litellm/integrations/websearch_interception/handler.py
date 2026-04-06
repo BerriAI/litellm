@@ -805,8 +805,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 llm_router = None
 
-            # Determine search provider from router's search_tools
+            # Determine search provider and api_base from router's search_tools
             search_provider: Optional[str] = None
+            api_base: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
                     # Find specific search tool by name
@@ -817,9 +818,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get(
-                            "search_provider"
-                        )
+                        litellm_params = search_tool.get("litellm_params", {})
+                        search_provider = litellm_params.get("search_provider")
+                        api_base = litellm_params.get("api_base")
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
                             f"with provider '{search_provider}'"
@@ -833,9 +834,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get(
-                        "search_provider"
-                    )
+                    litellm_params = first_tool.get("litellm_params", {})
+                    search_provider = litellm_params.get("search_provider")
+                    api_base = api_base or litellm_params.get("api_base")
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
                     )
@@ -851,7 +852,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            result = await litellm.asearch(query=query, search_provider=search_provider, api_base=api_base)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
