@@ -660,13 +660,17 @@ class LiteLLMProxyRequestSetup:
         if chain_id:
             metadata_from_headers["trace_id"] = chain_id
             metadata_from_headers["session_id"] = chain_id
-            # Prefer body trace_id over header so all three fields stay consistent.
-            _body_metadata = data.get(_metadata_variable_name)
-            _body_trace_id = (
-                _body_metadata.get("trace_id")
-                if isinstance(_body_metadata, dict)
-                else None
-            )
+            # Only prefer body trace_id on litellm_metadata routes (/v1/messages, threads, etc.)
+            # On /chat/completions, metadata["trace_id"] belongs to observability tools
+            # (e.g. LangFuse) and should not override the header chain ID.
+            _body_trace_id: Optional[str] = None
+            if _metadata_variable_name == "litellm_metadata":
+                _body_metadata = data.get(_metadata_variable_name)
+                _body_trace_id = (
+                    _body_metadata.get("trace_id")
+                    if isinstance(_body_metadata, dict)
+                    else None
+                )
             effective_id = _body_trace_id or chain_id
             data["litellm_session_id"] = effective_id
             data["litellm_trace_id"] = effective_id
@@ -675,7 +679,8 @@ class LiteLLMProxyRequestSetup:
             )
 
         if isinstance(data[_metadata_variable_name], dict):
-            # Body values take priority — only inject from headers if the key isn't already set.
+            # Only inject header-derived values for keys NOT already set by the user
+            # in the request body. This ensures body values take priority over headers.
             for key, value in metadata_from_headers.items():
                 if key not in data[_metadata_variable_name]:
                     data[_metadata_variable_name][key] = value

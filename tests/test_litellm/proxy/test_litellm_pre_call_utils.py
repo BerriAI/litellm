@@ -1975,6 +1975,28 @@ class TestAddLitellmMetadataFromRequestHeaders:
         assert result["litellm_session_id"] == "from-body"
         assert result["litellm_trace_id"] == "from-body"
 
+    def test_should_not_bleed_metadata_trace_id_into_chain_ids_on_chat_completions_route(self):
+        """On /chat/completions, metadata["trace_id"] (e.g. LangFuse) must not override the header chain ID."""
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"trace_id": "langfuse-id"},
+        }
+        headers = {"x-litellm-trace-id": "chain-id", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="metadata",
+        )
+
+        # Header chain ID must win for top-level fields on this route.
+        assert result["litellm_session_id"] == "chain-id"
+        assert result["litellm_trace_id"] == "chain-id"
+        # The observability trace_id in the metadata dict must be untouched.
+        assert result["metadata"]["trace_id"] == "langfuse-id"
+
+
     @pytest.mark.asyncio
     async def test_should_preserve_body_trace_id_in_full_pipeline_on_messages_route(self):
         """Body trace_id must survive the full add_litellm_data_to_request pipeline."""
