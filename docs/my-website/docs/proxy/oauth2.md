@@ -39,6 +39,10 @@ model_list:
 general_settings: 
   master_key: sk-1234
   enable_oauth2_auth: true
+  # Optional: also apply OAuth2 introspection to info routes
+  # like /team/list, /key/list, /models
+  # Default is false
+  oauth2_auth_on_info_routes: false
 ```
 
 3. Use token in requests to LiteLLM 
@@ -66,6 +70,16 @@ Start the LiteLLM Proxy with [`--detailed_debug` mode and you should see more ve
 If both `enable_oauth2_auth` and `enable_jwt_auth` are enabled, LiteLLM can split auth paths:
 - JWT validation for user tokens
 - OAuth2 introspection for machine tokens
+
+By default, OAuth2 is enforced on LLM API routes only.  
+To also enforce OAuth2 on info routes (for example `/team/list`, `/key/list`, `/models`), set:
+
+```yaml title="config.yaml"
+general_settings:
+  enable_oauth2_auth: true
+  enable_jwt_auth: true
+  oauth2_auth_on_info_routes: true
+```
 
 For JWT-shaped machine tokens, configure `litellm_jwtauth.routing_overrides`:
 
